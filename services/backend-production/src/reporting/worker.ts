@@ -1,5 +1,5 @@
 import type { PostgresCommunityReportingAdapter } from "@moya/community-postgres";
-import type { PrivateReportingEvidenceStore } from "./evidence-store.js";
+import type { BackendApplicationOptions } from "@moya/backend-runtime";
 import type { TencentSesConfiguration } from "../auth/config.js";
 import { signTencentSes } from "../auth/signing.js";
 import { sendProviderRequest } from "../auth/transport.js";
@@ -70,7 +70,7 @@ export class ReportingMaintenanceWorker {
   constructor(
     private readonly adapter: PostgresCommunityReportingAdapter,
     private readonly send: (caseId: string) => Promise<void>,
-    private readonly evidence?: PrivateReportingEvidenceStore,
+    private readonly evidence?: BackendApplicationOptions["reportingEvidenceStore"],
   ) {}
   start(): void {
     if (!this.stopped) return;
@@ -101,17 +101,20 @@ export class ReportingMaintenanceWorker {
     } catch {
       console.error("[reporting] urgent_queue_unavailable");
     }
-    if (Date.now() - this.lastRetention < 60 * 60 * 1000) return;
+    if (this.stopped || Date.now() - this.lastRetention < 60 * 60 * 1000)
+      return;
     this.lastRetention = Date.now();
     try {
       if (this.evidence)
         await this.adapter.purgeExpiredEvidence(
           (id) => this.evidence!.delete(id),
           20,
+          () => this.stopped,
         );
+      if (this.stopped) return;
       await this.adapter.purgeExpiredCases(20);
     } catch {
-      console.error("[reporting] retention_unavailable");
+      if (!this.stopped) console.error("[reporting] retention_unavailable");
     }
   }
   async stop(): Promise<void> {

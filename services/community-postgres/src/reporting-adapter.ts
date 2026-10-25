@@ -915,7 +915,7 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
     actor: string,
     id: string,
     e: ReportingEvidenceRecord,
-    persist: () => Promise<void>,
+    persist: Parameters<CommunityReportingPort["addEvidence"]>[3],
     remove: () => Promise<void>,
   ) {
     const lease = opaque("evidence-upload");
@@ -939,7 +939,10 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
         )
           throw new CommunityConflictError("Evidence identity was reused");
         if (old.state === "ready")
-          return { ready: publicEvidence(this.evidenceDto(id, old)) };
+          return {
+            ready: publicEvidence(this.evidenceDto(id, old)),
+            reused: false,
+          };
         if (old.lease_until && old.lease_until.getTime() > Date.now())
           throw new CommunityConflictError(
             "Evidence upload is already in progress",
@@ -973,11 +976,16 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
           ],
         );
       }
-      return { ready: null };
+      return { ready: null, reused: old !== undefined };
     });
     if (reservation.ready) return reservation.ready;
+    let uncertain = false;
     try {
-      await persist();
+      const outcome = await persist();
+      if (outcome && outcome.status === "uncertain") {
+        uncertain = true;
+        throw new Error("REPORT_EVIDENCE_WRITE_UNCERTAIN");
+      }
       return await this.tx(async (db) => {
         const row = await this.canUpload(db, actor, id);
         const finalized = (
@@ -994,6 +1002,11 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
         return publicEvidence(this.evidenceDto(id, finalized));
       });
     } catch (error) {
+      // A remote write can finish after the failed request returns. A reused
+      // pending reservation can also carry an earlier uncertain attempt, even
+      // if this retry failed before PUT. Keep both tracked until a verified
+      // retry succeeds or the existing day-old pending cleanup removes them.
+      if (uncertain || reservation.reused) throw error;
       // Query committed truth before cleanup: an uncertain successful finalize or
       // another lease's retry must never lose its file. A failed cleanup remains
       // a tracked pending reservation for the maintenance reconciler.
@@ -1750,34 +1763,63 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
   async purgeExpiredEvidence(
     remove: (evidenceId: string) => Promise<void>,
     limit = 20,
+    shouldStop: () => boolean = () => false,
   ): Promise<number> {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
       throw new CommunityInputError();
-    return this.tx(async (db) => {
-      const cases = (
-        await db.query<{ id: string }>(
-          `SELECT c.id FROM community.report_cases c WHERE NOT c.legal_hold AND EXISTS(SELECT 1 FROM community.report_evidence e WHERE e.case_id=c.id AND ((e.state='pending' AND e.lease_until<CURRENT_TIMESTAMP-interval '1 day') OR (e.state='ready' AND c.closed_at<CURRENT_TIMESTAMP-CASE WHEN e.sensitive THEN interval '180 days' ELSE interval '3 years' END))) ORDER BY c.id LIMIT $1 FOR UPDATE OF c SKIP LOCKED`,
-          [limit],
-        )
-      ).rows;
-      let count = 0;
-      for (const c of cases) {
-        const evidence = (
+    if (shouldStop()) return 0;
+    const expired = `((e.state='pending' AND e.lease_until<CURRENT_TIMESTAMP-interval '1 day') OR (e.state='ready' AND c.closed_at<CURRENT_TIMESTAMP-CASE WHEN e.sensitive THEN interval '180 days' ELSE interval '3 years' END))`;
+    // This is only a bounded hint list, not deletion authority. Preserve the
+    // existing case limit; every object gets fresh locks and eligibility below.
+    const candidates = await this.tx(
+      async (db) =>
+        (
           await db.query<{ id: string }>(
-            `SELECT e.id FROM community.report_evidence e JOIN community.report_cases c ON c.id=e.case_id WHERE e.case_id=$1 AND NOT c.legal_hold AND ((e.state='pending' AND e.lease_until<CURRENT_TIMESTAMP-interval '1 day') OR (e.state='ready' AND c.closed_at<CURRENT_TIMESTAMP-CASE WHEN e.sensitive THEN interval '180 days' ELSE interval '3 years' END)) FOR UPDATE OF e`,
-            [c.id],
+            `WITH candidate_cases AS (
+            SELECT c.id FROM community.report_cases c WHERE NOT c.legal_hold
+              AND EXISTS(SELECT 1 FROM community.report_evidence e WHERE e.case_id=c.id AND ${expired})
+            ORDER BY c.id LIMIT $1 FOR UPDATE OF c SKIP LOCKED
           )
-        ).rows;
-        for (const e of evidence) {
-          await remove(e.id);
-          await db.query("DELETE FROM community.report_evidence WHERE id=$1", [
-            e.id,
-          ]);
-          count++;
-        }
-      }
-      return count;
-    });
+          SELECT e.id FROM community.report_evidence e
+          JOIN community.report_cases c ON c.id=e.case_id
+          WHERE c.id IN (SELECT id FROM candidate_cases) AND NOT c.legal_hold AND ${expired}
+          ORDER BY c.id,e.id`,
+            [limit],
+          )
+        ).rows,
+    );
+    let count = 0;
+    for (const candidate of candidates) {
+      if (shouldStop()) break;
+      const removed = await this.tx(async (db) => {
+        // Case first, then evidence: serialize holds/reopening with this one
+        // delete only. A deleted or busy case/attachment is left for another pass.
+        const lockedCase = await db.query(
+          `SELECT c.id FROM community.report_cases c
+          JOIN community.report_evidence e ON e.case_id=c.id
+          WHERE e.id=$1 AND NOT c.legal_hold FOR UPDATE OF c SKIP LOCKED`,
+          [candidate.id],
+        );
+        if (!lockedCase.rowCount || shouldStop()) return false;
+        const eligible = await db.query(
+          `SELECT e.id FROM community.report_evidence e
+          JOIN community.report_cases c ON c.id=e.case_id
+          WHERE e.id=$1 AND NOT c.legal_hold AND ${expired}
+          FOR UPDATE OF e SKIP LOCKED`,
+          [candidate.id],
+        );
+        if (!eligible.rowCount || shouldStop()) return false;
+        await remove(candidate.id);
+        // Finish this object's row delete even if stop arrives during I/O.
+        // A later stop/failure cannot roll this committed pair back.
+        await db.query("DELETE FROM community.report_evidence WHERE id=$1", [
+          candidate.id,
+        ]);
+        return true;
+      });
+      if (removed) count++;
+    }
+    return count;
   }
   async purgeExpiredCases(limit = 20): Promise<number> {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)

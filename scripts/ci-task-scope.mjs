@@ -38,6 +38,9 @@ const tooling = new Set([
   // Dependency-free maintenance for the shared local Turbo cache; its own
   // script test runs in the lightweight job.
   "scripts/turbo-cache-prune.mjs",
+  // Exact dependency-free archive tooling; unknown operations scripts stay unmapped.
+  "scripts/build-ops-archive-bundle.mjs",
+  "scripts/operations/archive-runtime-data.mjs",
   "scripts/cursor-review.mjs",
   "scripts/cursor-dialogue.mjs",
   "scripts/cursor-stream.mjs",

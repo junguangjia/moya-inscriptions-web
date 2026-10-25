@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly ArtVenn private operations archive
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=5m
+Persistent=true
+Unit=yoyi-ops-archive.service
+
+[Install]
+WantedBy=timers.target
