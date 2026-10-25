@@ -22,6 +22,8 @@ export const productionHttpLimits = Object.freeze({
   ordinaryMaxBytes: 1024 * 1024,
   profileMediaMaxBytes: 4 * 1024 * 1024,
   articleMaxBytes: 1040 * 1024,
+  // The relay's own report evidence limit (lib/public-api/server.ts).
+  reportEvidenceMaxBytes: 11_200_000,
 });
 
 type Limits = { [Key in keyof typeof productionHttpLimits]: number };
@@ -38,6 +40,8 @@ class BoundedIncomingMessage extends IncomingMessage {
 
 const componentUploadPath =
   /^\/api\/community\/publishing\/uploads\/media-component-[0-9a-f]{32}$/;
+const reportEvidencePath =
+  /^\/api\/community\/reports\/report-[0-9a-f]{32}\/evidence$/;
 
 /**
  * Next's CLI leaves Node's five-minute total body deadline in place. Own the
@@ -79,7 +83,9 @@ export const createProductionHttpServer = (
           : path === "/api/community/article-authoring" ||
               path?.startsWith("/api/community/article-authoring/")
             ? limits.articleMaxBytes
-            : limits.ordinaryMaxBytes;
+            : request.method === "POST" && reportEvidencePath.test(path ?? "")
+              ? limits.reportEvidenceMaxBytes
+              : limits.ordinaryMaxBytes;
       let received = 0;
       let bodyComplete = false;
       let stopped = false;

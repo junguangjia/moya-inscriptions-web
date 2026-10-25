@@ -16,6 +16,7 @@ import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
 const upload = `/api/community/publishing/uploads/media-component-${"a".repeat(32)}`;
+const evidence = `/api/community/reports/report-${"a".repeat(32)}/evidence`;
 const servers: Server[] = [];
 const scaledLimits = {
   requestDeadlineMs: 150,
@@ -181,6 +182,7 @@ describe("Production Web HTTP upload boundary", () => {
         "/api/community/article-authoring/draft",
         productionHttpLimits.articleMaxBytes + 1,
       ],
+      [evidence, productionHttpLimits.reportEvidenceMaxBytes + 1],
     ] as const) {
       const { request, response } = send(port, path, {
         "content-length": String(length),
@@ -190,6 +192,41 @@ describe("Production Web HTTP upload boundary", () => {
       request.destroy();
     }
     expect(calls).toBe(0);
+  });
+
+  it("lets a report evidence POST past the ordinary limit, up to the relay's evidence limit only", async () => {
+    let calls = 0;
+    const { port } = await listen(
+      async (request, response) => {
+        calls += 1;
+        await consume(request, response);
+      },
+      { ordinaryMaxBytes: 8, reportEvidenceMaxBytes: 16 },
+    );
+    const accepted = send(port, evidence, { "content-length": "12" });
+    accepted.request.end("123456789012");
+    expect((await accepted.response).status).toBe(200);
+    expect(calls).toBe(1);
+    for (const [path, method] of [
+      [`${evidence}/extra`, "POST"],
+      [evidence.replace("report-", "REPORT-"), "POST"],
+      [`/api/community/reports/report-${"a".repeat(31)}/evidence`, "POST"],
+      [evidence, "PUT"],
+    ] as const) {
+      const { request, response } = send(
+        port,
+        path,
+        { "content-length": "12" },
+        method,
+      );
+      request.end("123456789012");
+      expect((await response).status, `${method} ${path}`).toBe(413);
+    }
+    const over = send(port, evidence, { "content-length": "17" });
+    over.request.flushHeaders();
+    expect((await over.response).status).toBe(413);
+    over.request.destroy();
+    expect(calls).toBe(1);
   });
 
   it("counts chunked ordinary bytes without enlarging lookalike media/body limits", async () => {
