@@ -4,6 +4,8 @@
  * whose comments region continues to the left of the last image.
  */
 
+import type { MediaFeedFraming } from "@moya/contracts";
+
 /** The stage is never shorter than a square nor taller than 4:5. */
 export const FEED_STAGE_MIN_RATIO = 1;
 export const FEED_STAGE_MAX_RATIO = 1.25;
@@ -48,12 +50,54 @@ export const resolveStageAspect = (media: MediaSize | undefined): number => {
     : FEED_STAGE_MIN_RATIO;
 };
 
+/** Where an unframed taller image is cropped: the contract's MEDIA_FEED_CENTRE, kept local. */
+export const FEED_CENTRE_Y = 0.5;
+
+const taller = (media: MediaSize, boxRatio: number) =>
+  media.height / media.width > boxRatio + 0.001;
+
 /**
- * How an image fills the stage: a taller image is centre-cropped (`cover`),
- * any other is shown whole with blank above and below (`contain`).
+ * How an image fills a box of `boxRatio` (height / width): a taller image is
+ * cropped (`cover`) at the author's region, centred by default, unless the
+ * author keeps it whole (`feed.fit` 'contain', blank at the sides); any
+ * other is shown whole with blank above and below (`contain`).
  */
-export const slideFit = (media: MediaSize, stageRatio: number) =>
-  media.height / media.width > stageRatio + 0.001 ? "cover" : "contain";
+export const slideFit = (
+  media: MediaSize,
+  boxRatio: number,
+  feed?: MediaFeedFraming,
+): "cover" | "contain" =>
+  taller(media, boxRatio) && feed?.fit !== "contain" ? "cover" : "contain";
+
+/**
+ * The CSS vertical position (`--feed-slide-y`) of a cropped image at the
+ * author's region; undefined when centred or not cropped.
+ */
+export const slidePositionY = (
+  media: MediaSize,
+  boxRatio: number,
+  feed?: MediaFeedFraming,
+): string | undefined =>
+  feed?.fit === "cover" &&
+  feed.y !== FEED_CENTRE_Y &&
+  slideFit(media, boxRatio, feed) === "cover"
+    ? `${Math.round(feed.y * 10000) / 100}%`
+    : undefined;
+
+/**
+ * What the author's framing does to an image in a box of `boxRatio`: shows
+ * its chosen region or the whole image; undefined when it shows as it
+ * would unframed.
+ */
+export const slideFraming = (
+  media: MediaSize,
+  boxRatio: number,
+  feed?: MediaFeedFraming,
+): "region" | "whole" | undefined => {
+  if (feed === undefined || !taller(media, boxRatio)) return undefined;
+  if (feed.fit === "contain") return "whole";
+  return feed.y === FEED_CENTRE_Y ? undefined : "region";
+};
 
 interface StripElement {
   readonly scrollLeft: number;

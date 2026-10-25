@@ -334,10 +334,32 @@ export const mediaCropSchema = z
 
 export const mediaRotationSchema = z.literal([0, 90, 180, 270]);
 
-/** Rotate and optional crop only: no filters, overlays, text or trimming. */
+/** Where an absent `feed` frames a taller image: today's centred cover. */
+export const MEDIA_FEED_CENTRE = 0.5;
+
+/**
+ * How the phone feed stage and a work card frame this item's edited frame
+ * (after its rotation and crop). Presentation only: never pixels, a
+ * derivative or content identity, so `media_edit_key`,
+ * `work_content_sha256` and every derive job read rotation and crop alone.
+ * It matters only while the frame is taller than the box it is shown in:
+ * `cover` shows the region at `y`, the vertical position inside the
+ * overflow (0 top, 0.5 centre, 1 bottom); `contain` shows the whole frame
+ * with blank sides. Absent means a centred cover; clients omit it then.
+ */
+export const mediaFeedFramingSchema = z.discriminatedUnion("fit", [
+  z.strictObject({ fit: z.literal("contain") }),
+  z.strictObject({ fit: z.literal("cover"), y: z.number().min(0).max(1) }),
+]);
+
+/**
+ * Rotate and optional crop only: no filters, overlays, text or trimming.
+ * `feed` is the item's feed framing, which never changes its pixels.
+ */
 export const mediaEditSchema = z.strictObject({
   rotation: mediaRotationSchema,
   crop: mediaCropSchema.nullable(),
+  feed: mediaFeedFramingSchema.optional(),
 });
 
 /** The client's stable item key, independent of upload completion order. */
@@ -757,72 +779,87 @@ const isPublishedSrc = (src: string): boolean => !src.startsWith("/");
  * `motionSrc` names no item, so only paths are matched to the id; a Phase 4
  * PNG keeps its user media path and has no motion or renditions.
  */
+const workMediaFields = {
+  id: workMediaIdSchema,
+  src: deliveredStillSrcSchema,
+  width: dimensionSchema,
+  height: dimensionSchema,
+  kind: mediaItemKindSchema.optional(),
+  motionSrc: z
+    .union([publishingMediaSrcSchema, publishedMediaUrlSchema])
+    .optional(),
+  hasAudio: z.boolean().optional(),
+  renditions: mediaRenditionListSchema.optional(),
+  placeholderColor: placeholderColorSchema.optional(),
+};
+const refineWorkMedia = (
+  media: z.infer<z.ZodObject<typeof workMediaFields>>,
+  context: z.RefinementCtx,
+): void => {
+  const phase4 = media.id.startsWith("user-media-");
+  const parts = publishingMediaSrcParts(media.src);
+  const srcMatchesId = phase4
+    ? media.src === `/api/community/media/${media.id}`
+    : isPublishedSrc(media.src) ||
+      (parts === null
+        ? media.kind !== "live"
+        : parts.itemId === media.id && parts.variant !== "motion");
+  if (!srcMatchesId)
+    context.addIssue({
+      code: "custom",
+      path: ["src"],
+      message: "the media path must belong to this media id",
+    });
+  const live = media.kind === "live";
+  const motion =
+    media.motionSrc === undefined
+      ? null
+      : publishingMediaSrcParts(media.motionSrc);
+  const ownMotion =
+    media.motionSrc !== undefined &&
+    (isPublishedSrc(media.motionSrc) ||
+      (motion !== null &&
+        motion.itemId === media.id &&
+        motion.variant === "motion"));
+  if (
+    live
+      ? phase4 || !ownMotion
+      : media.motionSrc !== undefined || media.hasAudio !== undefined
+  )
+    context.addIssue({
+      code: "custom",
+      path: ["motionSrc"],
+      message:
+        "a Live Photo has its own motion path and only a Live Photo has motion or audio",
+    });
+  // A Live Photo switches as one group: its still (with the still's list)
+  // and its motion are both published or both on the authorized path.
+  if (
+    live &&
+    media.motionSrc !== undefined &&
+    isPublishedSrc(media.src) !== isPublishedSrc(media.motionSrc)
+  )
+    context.addIssue({
+      code: "custom",
+      path: ["motionSrc"],
+      message: "a Live Photo still and motion share one delivery form",
+    });
+  if (media.renditions !== undefined)
+    addMediaRenditionAnchorIssues(media, media.renditions, context);
+};
 export const workMediaSchema = z
-  .strictObject({
-    id: workMediaIdSchema,
-    src: deliveredStillSrcSchema,
-    width: dimensionSchema,
-    height: dimensionSchema,
-    kind: mediaItemKindSchema.optional(),
-    motionSrc: z
-      .union([publishingMediaSrcSchema, publishedMediaUrlSchema])
-      .optional(),
-    hasAudio: z.boolean().optional(),
-    renditions: mediaRenditionListSchema.optional(),
-    placeholderColor: placeholderColorSchema.optional(),
-  })
-  .superRefine((media, context) => {
-    const phase4 = media.id.startsWith("user-media-");
-    const parts = publishingMediaSrcParts(media.src);
-    const srcMatchesId = phase4
-      ? media.src === `/api/community/media/${media.id}`
-      : isPublishedSrc(media.src) ||
-        (parts === null
-          ? media.kind !== "live"
-          : parts.itemId === media.id && parts.variant !== "motion");
-    if (!srcMatchesId)
-      context.addIssue({
-        code: "custom",
-        path: ["src"],
-        message: "the media path must belong to this media id",
-      });
-    const live = media.kind === "live";
-    const motion =
-      media.motionSrc === undefined
-        ? null
-        : publishingMediaSrcParts(media.motionSrc);
-    const ownMotion =
-      media.motionSrc !== undefined &&
-      (isPublishedSrc(media.motionSrc) ||
-        (motion !== null &&
-          motion.itemId === media.id &&
-          motion.variant === "motion"));
-    if (
-      live
-        ? phase4 || !ownMotion
-        : media.motionSrc !== undefined || media.hasAudio !== undefined
-    )
-      context.addIssue({
-        code: "custom",
-        path: ["motionSrc"],
-        message:
-          "a Live Photo has its own motion path and only a Live Photo has motion or audio",
-      });
-    // A Live Photo switches as one group: its still (with the still's list)
-    // and its motion are both published or both on the authorized path.
-    if (
-      live &&
-      media.motionSrc !== undefined &&
-      isPublishedSrc(media.src) !== isPublishedSrc(media.motionSrc)
-    )
-      context.addIssue({
-        code: "custom",
-        path: ["motionSrc"],
-        message: "a Live Photo still and motion share one delivery form",
-      });
-    if (media.renditions !== undefined)
-      addMediaRenditionAnchorIssues(media, media.renditions, context);
-  });
+  .strictObject(workMediaFields)
+  .superRefine(refineWorkMedia);
+
+/**
+ * A user work's media entry: a work media entry plus its feed framing
+ * (`MediaEdit.feed`), sent only when it differs from the centred cover.
+ * Detail and the Viewer always show the whole image; Article media shapes
+ * use `workMediaSchema` and never carry it.
+ */
+export const userWorkMediaSchema = z
+  .strictObject({ ...workMediaFields, feed: mediaFeedFramingSchema.optional() })
+  .superRefine(refineWorkMedia);
 
 /**
  * How a Standard component's bytes were produced: `optimized` is browser
@@ -1479,6 +1516,7 @@ export type PublishingSessionState = z.infer<
 export type MediaCrop = z.infer<typeof mediaCropSchema>;
 export type MediaRotation = z.infer<typeof mediaRotationSchema>;
 export type MediaEdit = z.infer<typeof mediaEditSchema>;
+export type MediaFeedFraming = z.infer<typeof mediaFeedFramingSchema>;
 export type WorkDraftItem = z.infer<typeof workDraftItemSchema>;
 export type WorkDraftItemOrigin = z.infer<typeof workDraftItemOriginSchema>;
 export type WorkDraftContent = z.infer<typeof workDraftContentSchema>;
@@ -1502,6 +1540,7 @@ export type MediaProcessingProfile = z.infer<
   typeof mediaProcessingProfileSchema
 >;
 export type WorkMedia = z.infer<typeof workMediaSchema>;
+export type UserWorkMedia = z.infer<typeof userWorkMediaSchema>;
 export type MediaMetadata = z.infer<typeof mediaMetadataSchema>;
 export type MediaClientSource = z.infer<typeof mediaClientSourceSchema>;
 export type PublishingHolder = z.infer<typeof publishingHolderSchema>;

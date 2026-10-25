@@ -1,6 +1,14 @@
-import { resolveStageAspect } from "../../../authors/feed-post-strip-geometry";
+import {
+  FEED_CENTRE_Y,
+  resolveStageAspect,
+} from "../../../authors/feed-post-strip-geometry";
 
-import type { MediaCrop, MediaEdit, MediaRotation } from "@moya/contracts";
+import type {
+  MediaCrop,
+  MediaEdit,
+  MediaFeedFraming,
+  MediaRotation,
+} from "@moya/contracts";
 
 /**
  * Rotate/crop geometry shared by the item preview, the edit dialog and the
@@ -172,8 +180,48 @@ export const matchPreset = (
   );
 };
 
+/** Same pixels: rotation and crop. `feed` is presentation, compared by `sameFeed`. */
 export const sameEdit = (left: MediaEdit, right: MediaEdit): boolean =>
   left.rotation === right.rotation && sameCrop(left.crop, right.crop);
+
+/** Rounding of a stored feed position. */
+const FEED_PRECISION = 1e4;
+
+/**
+ * A feed framing as stored: `y` rounded and clamped, and the centred cover
+ * (the default) as absent.
+ */
+export const normalizeFeed = (
+  feed: MediaFeedFraming | undefined,
+): MediaFeedFraming | undefined => {
+  if (feed === undefined) return undefined;
+  if (feed.fit === "contain") return { fit: "contain" };
+  if (!Number.isFinite(feed.y)) return undefined;
+  const y = Math.round(clamp(feed.y, 0, 1) * FEED_PRECISION) / FEED_PRECISION;
+  return y === FEED_CENTRE_Y ? undefined : { fit: "cover", y };
+};
+
+export const sameFeed = (
+  left: MediaFeedFraming | undefined,
+  right: MediaFeedFraming | undefined,
+): boolean => {
+  const a = normalizeFeed(left);
+  const b = normalizeFeed(right);
+  if (a === undefined || b === undefined) return a === b;
+  return a.fit === "contain"
+    ? b.fit === "contain"
+    : b.fit === "cover" && a.y === b.y;
+};
+
+/** `edit` with `feed` as its framing, omitted when centred. */
+export const withFeed = (
+  edit: MediaEdit,
+  feed: MediaFeedFraming | undefined,
+): MediaEdit => {
+  const pixels = { rotation: edit.rotation, crop: edit.crop };
+  const framing = normalizeFeed(feed);
+  return framing === undefined ? pixels : { ...pixels, feed: framing };
+};
 
 export const sameCrop = (
   left: MediaCrop | null,

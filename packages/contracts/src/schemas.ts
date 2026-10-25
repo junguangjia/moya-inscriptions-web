@@ -72,6 +72,8 @@ export type {
 } from "./media-delivery.ts";
 
 import {
+  mediaFeedFramingSchema,
+  userWorkMediaSchema,
   workAuthorshipSchema,
   workCoverSrcSchema,
   workMediaIdSchema,
@@ -192,6 +194,9 @@ export {
   workDraftItemSchema,
   workMediaIdSchema,
   workMediaSchema,
+  userWorkMediaSchema,
+  mediaFeedFramingSchema,
+  MEDIA_FEED_CENTRE,
   workPublishingFailureCodeSchema,
   workRevisionIdSchema,
   workSnapshotIdSchema,
@@ -217,6 +222,7 @@ export type {
   MediaContentType,
   MediaCrop,
   MediaEdit,
+  MediaFeedFraming,
   MediaFailureCode,
   MediaItemKind,
   MediaItemState,
@@ -263,6 +269,7 @@ export type {
   WorkDraftItem,
   WorkDraftItemOrigin,
   WorkMedia,
+  UserWorkMedia,
   WorkPublishingFailureCode,
   WorkSnapshotKind,
   WorkSubmissionCommand,
@@ -969,7 +976,7 @@ export const workSchema = z
     title: z.string(),
     text: z.string(),
     /** Phase 4 PNG media or work publishing media items; avatars keep `authorMediaSchema`. */
-    media: z.array(workMediaSchema).max(WORK_ITEMS_HARD_MAXIMUM),
+    media: z.array(userWorkMediaSchema).max(WORK_ITEMS_HARD_MAXIMUM),
     /**
      * The id of the `media` entry the viewer's revision uses as its cover (the
      * public revision for third parties, the author revision for the author):
@@ -989,6 +996,12 @@ export const workSchema = z
      * full-frame `renditions` of `media`.
      */
     coverRenditions: mediaRenditionListSchema.optional(),
+    /**
+     * The cover still's feed framing (its item's `MediaEdit.feed`), sent only
+     * when the revision has no cover composition and the framing differs
+     * from the centred cover.
+     */
+    coverFeed: mediaFeedFramingSchema.optional(),
     /** Null until the first public exposure (a self-only or pending first submission). */
     firstPublishedAt: z.iso.datetime().nullable(),
     version,
@@ -1213,9 +1226,23 @@ const cardMediaSchema = z
 /**
  * One shown image of a card's item in its full framing, in the same delivery
  * form as the card's `media`; a Live Photo is its still plus the flag.
+ * `feed` is a work image's feed framing (`MediaEdit.feed`), sent only when it
+ * differs from the centred cover; never on a Catalog image.
  */
 const cardGalleryEntrySchema = z
-  .strictObject({ ...cardMediaFields, live: z.boolean().optional() })
+  .strictObject({
+    ...cardMediaFields,
+    live: z.boolean().optional(),
+    feed: mediaFeedFramingSchema.optional(),
+  })
+  .superRefine(addCardMediaAnchorIssues);
+/**
+ * The card image. `feed` is a work cover's feed framing, sent only when the
+ * revision has no cover composition and the framing differs from the
+ * centred cover; never on a Catalog image.
+ */
+const cardCoverMediaSchema = z
+  .strictObject({ ...cardMediaFields, feed: mediaFeedFramingSchema.optional() })
   .superRefine(addCardMediaAnchorIssues);
 export type CardGalleryEntry = z.infer<typeof cardGalleryEntrySchema>;
 
@@ -1239,7 +1266,7 @@ const contentCardFields = z.strictObject({
    * The card image: Catalog media, or a work's cover still in its cover
    * framing. `renditions` are card candidates with `src` as the anchor.
    */
-  media: cardMediaSchema.nullable(),
+  media: cardCoverMediaSchema.nullable(),
   /**
    * The item's shown images in their own order (Catalog position, revision
    * position), each in its full framing, at most CARD_GALLERY_MAXIMUM;
@@ -1290,6 +1317,20 @@ export const contentCardSchema = contentCardFields.superRefine(
   (card, context) => {
     if (card.media !== null)
       addCardMediaFormIssues(card.target.type, card.media, context, ["media"]);
+    if (card.target.type !== "work" && card.media?.feed !== undefined)
+      context.addIssue({
+        code: "custom",
+        path: ["media", "feed"],
+        message: "only a work image carries feed framing",
+      });
+    card.gallery?.forEach((entry, index) => {
+      if (card.target.type !== "work" && entry.feed !== undefined)
+        context.addIssue({
+          code: "custom",
+          path: ["gallery", index, "feed"],
+          message: "only a work image carries feed framing",
+        });
+    });
     if ((card.gallery === undefined) !== (card.mediaCount === undefined))
       context.addIssue({
         code: "custom",

@@ -30,6 +30,7 @@ import {
   workDraftContentSchema,
   workCoverSrcSchema,
   workDraftIdSchema,
+  userWorkMediaSchema,
   workMediaSchema,
   workSchema,
   workSubmissionCommandSchema,
@@ -1659,7 +1660,7 @@ describe("backward-compatible Phase 4 adjustments", () => {
       { ...legacy, hasAudio: false },
     ])
       expect(workMediaSchema.safeParse(invalid).success).toBe(false);
-    expect(workSchema.shape.media.element).toBe(workMediaSchema);
+    expect(workSchema.shape.media.element).toBe(userWorkMediaSchema);
   });
 
   it("accepts existing works and the new nullable first publication and author-only fields", () => {
