@@ -18,6 +18,7 @@ import type {
   OperatorReportReviewRequest,
   OperatorReportMetadataRequest,
   OperatorReportForwardRequest,
+  ReportingEvidenceWriteOutcome,
 } from "@moya/contracts/internal/community-operator";
 
 export interface ReportingEvidenceRecord extends CommunityReportEvidence {
@@ -59,7 +60,7 @@ export interface CommunityReportingPort {
     actor: string,
     id: string,
     evidence: ReportingEvidenceRecord,
-    persist: () => Promise<void>,
+    persist: () => Promise<void | ReportingEvidenceWriteOutcome>,
     remove: () => Promise<void>,
   ): Promise<CommunityReportEvidence>;
   evidence(
@@ -97,7 +98,7 @@ export interface CommunityReportingEvidenceStore {
     readonly id: string;
     readonly mimeType: string;
     readonly bytes: Uint8Array;
-  }): Promise<void>;
+  }): Promise<void | ReportingEvidenceWriteOutcome>;
   read(
     id: string,
   ): Promise<{ readonly bytes: Uint8Array; readonly mimeType: string } | null>;

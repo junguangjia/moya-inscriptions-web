@@ -4,6 +4,13 @@ import {
   communityReportSchema,
   communityReportStatusSchema,
 } from "../../reporting.ts";
+
+/** Server-only storage outcome: a remote write may still commit after failure.
+ * The pending reservation must survive until a later verified retry or expiry. */
+export interface ReportingEvidenceWriteOutcome {
+  readonly status: "uncertain";
+}
+
 export const operatorReportQuerySchema = z
   .object({
     status: communityReportStatusSchema.optional(),

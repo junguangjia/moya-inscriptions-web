@@ -6,6 +6,10 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
+    "./internal/reporting-evidence": {
+      "types": "./src/reporting/store.ts",
+      "import": "./dist/reporting/store.js"
+    },
     ".": {
       "types": "./src/index.ts",
       "import": "./dist/index.js"

@@ -915,7 +915,7 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
     actor: string,
     id: string,
     e: ReportingEvidenceRecord,
-    persist: () => Promise<void>,
+    persist: Parameters<CommunityReportingPort["addEvidence"]>[3],
     remove: () => Promise<void>,
   ) {
     const lease = opaque("evidence-upload");
@@ -939,7 +939,10 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
         )
           throw new CommunityConflictError("Evidence identity was reused");
         if (old.state === "ready")
-          return { ready: publicEvidence(this.evidenceDto(id, old)) };
+          return {
+            ready: publicEvidence(this.evidenceDto(id, old)),
+            reused: false,
+          };
         if (old.lease_until && old.lease_until.getTime() > Date.now())
           throw new CommunityConflictError(
             "Evidence upload is already in progress",
@@ -973,11 +976,16 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
           ],
         );
       }
-      return { ready: null };
+      return { ready: null, reused: old !== undefined };
     });
     if (reservation.ready) return reservation.ready;
+    let uncertain = false;
     try {
-      await persist();
+      const outcome = await persist();
+      if (outcome && outcome.status === "uncertain") {
+        uncertain = true;
+        throw new Error("REPORT_EVIDENCE_WRITE_UNCERTAIN");
+      }
       return await this.tx(async (db) => {
         const row = await this.canUpload(db, actor, id);
         const finalized = (
@@ -994,6 +1002,11 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
         return publicEvidence(this.evidenceDto(id, finalized));
       });
     } catch (error) {
+      // A remote write can finish after the failed request returns. A reused
+      // pending reservation can also carry an earlier uncertain attempt, even
+      // if this retry failed before PUT. Keep both tracked until a verified
+      // retry succeeds or the existing day-old pending cleanup removes them.
+      if (uncertain || reservation.reused) throw error;
       // Query committed truth before cleanup: an uncertain successful finalize or
       // another lease's retry must never lose its file. A failed cleanup remains
       // a tracked pending reservation for the maintenance reconciler.
