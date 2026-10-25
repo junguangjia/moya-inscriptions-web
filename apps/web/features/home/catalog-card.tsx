@@ -7,6 +7,11 @@ import {
   localCatalogRenditions,
 } from "../detail/local-catalog-media";
 import {
+  slideFit,
+  slideFraming,
+  slidePositionY,
+} from "../authors/feed-post-strip-geometry";
+import {
   MEDIA_SIZES,
   mediaLoading,
   placeholderStyle,
@@ -24,7 +29,11 @@ import { useContentQuickActions } from "../quick-actions/content-quick-actions";
 import { QuickActionCardAction } from "../quick-actions/quick-action-card-action";
 
 import type { ComponentType, CSSProperties, ReactNode } from "react";
-import type { CatalogSummary, PublicMedia } from "@moya/contracts";
+import type {
+  CatalogSummary,
+  MediaFeedFraming,
+  PublicMedia,
+} from "@moya/contracts";
 import type {
   MediaPriority,
   RenditionCandidate,
@@ -68,6 +77,17 @@ export const feedMediaAspectRatio = (media: CatalogMediaDimensions): number => {
     : 4 / 3;
 };
 
+/**
+ * The feed card box's height / width (.feedMedia): the image's own shape
+ * within 3:4 and 3:2, or 3:2 for a card covering every column (an
+ * aligned-row feature is drawn 3:2, and a panorama's own shape clamps there
+ * too).
+ */
+export const feedMediaBoxRatio = (
+  media: CatalogMediaDimensions,
+  span: boolean,
+): number => (span ? 2 / 3 : 1 / feedMediaAspectRatio(media));
+
 export {
   CatalogCardLiveBadge,
   CatalogProvinceBadge,
@@ -87,6 +107,11 @@ export type CatalogCardMediaSource = Pick<
   readonly renditions?: readonly RenditionCandidate[] | undefined;
   /** The opaque asset's colour, painted behind the covered box while it loads. */
   readonly placeholderColor?: string | undefined;
+  /**
+   * A work cover's feed framing (its item's `MediaEdit.feed`), sent only
+   * without a cover composition; never on a Catalog image.
+   */
+  readonly feed?: MediaFeedFraming | undefined;
 };
 
 export const CatalogCardMedia = ({
@@ -138,22 +163,40 @@ export const CatalogCardMedia = ({
       ? MEDIA_SIZES.inscriptionCard(media)
       : MEDIA_SIZES.feedCard(media, slot),
   );
+  // A feed card whose work cover is taller than its box keeps the author's
+  // feed framing there, as the phone feed does: the chosen region, or the
+  // whole still; every other card covers its box at the centre.
+  const boxRatio = feedMediaBoxRatio(media, slot?.span === true);
+  const framing =
+    variant === "feed" ? slideFraming(media, boxRatio, media.feed) : undefined;
+  const fit =
+    framing === undefined ? "cover" : slideFit(media, boxRatio, media.feed);
+  const positionY =
+    framing === undefined
+      ? undefined
+      : slidePositionY(media, boxRatio, media.feed);
   return (
     <div
       className={`${styles.media} ${
         variant === "inscription" ? styles.inscriptionMedia : styles.feedMedia
       }`}
       data-catalog-media-state="valid"
+      data-feed-framing={framing}
+      data-fit={framing === undefined ? undefined : fit}
       style={
         variant === "feed"
           ? ({
               "--feed-media-ratio": feedMediaAspectRatio(media),
+              ...(positionY === undefined
+                ? {}
+                : { "--feed-media-y": positionY }),
             } as CSSProperties)
           : undefined
       }
     >
       {/* The image covers its own box (object-fit: cover), so the asset
-          colour behind it shows only until it paints; an inscription card's
+          colour behind it shows only until it paints; a whole still leaves
+          blank sides that must never be tinted, and an inscription card's
           box can grow taller than its image and keeps its own background. */}
       <img
         ref={imageRef}
@@ -169,7 +212,9 @@ export const CatalogCardMedia = ({
         sizes={image.sizes}
         src={image.src}
         srcSet={image.srcSet}
-        style={placeholderStyle(media.placeholderColor)}
+        style={
+          fit === "cover" ? placeholderStyle(media.placeholderColor) : undefined
+        }
         width={media.width}
       />
       {live ? <CatalogCardLiveBadge /> : null}

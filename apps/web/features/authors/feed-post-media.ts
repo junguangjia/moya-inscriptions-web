@@ -10,6 +10,9 @@ import type { DetailMediaPresentation } from "../detail/catalog-detail-presentat
  * gallery (each image in its full framing), else its one card image. Catalog
  * images take the local delivery form exactly as the card image does. A
  * gallery entry's Live flag only badges the card; motion never plays here.
+ * A work image keeps the author's feed framing: a gallery entry's own, or
+ * the card image's, which is sent only while that still is in the item's
+ * own framing (no cover composition).
  */
 export const feedPostMedia = (
   item: ContentCard,
@@ -28,5 +31,8 @@ export const feedPostMedia = (
         }
       : { src: image.src, renditions: image.renditions }),
     placeholderColor: image.placeholderColor,
+    ...(item.target.type === "work" && image.feed !== undefined
+      ? { feed: image.feed }
+      : {}),
   }));
 };

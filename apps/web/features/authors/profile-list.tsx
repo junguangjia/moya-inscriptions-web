@@ -44,8 +44,10 @@ export const workCardExcerpt = (body: string): string => {
  * work carries `coverRenditions`, the candidate that is `coverSrc` gives the
  * cover's own size, so the box reserved before the image loads matches
  * Home's; without them the measurements stay the display image's. The
- * body's opening rides along so an untitled card shows real text instead of
- * nothing (C07).
+ * author's feed framing travels as Home's cards carry it: each shown image's
+ * own, and `coverFeed` on the card image (sent only without a cover
+ * composition). The body's opening rides along so an untitled card shows
+ * real text instead of nothing (C07).
  */
 export const workCard = (work: UserWork): Card => {
   const cover =
@@ -79,6 +81,7 @@ export const workCard = (work: UserWork): Card => {
       ...(entry.placeholderColor === undefined
         ? {}
         : { placeholderColor: entry.placeholderColor }),
+      ...(entry.feed === undefined ? {} : { feed: entry.feed }),
     };
   });
   return {
@@ -104,6 +107,7 @@ export const workCard = (work: UserWork): Card => {
             ...(cover.placeholderColor === undefined
               ? {}
               : { placeholderColor: cover.placeholderColor }),
+            ...(work.coverFeed === undefined ? {} : { feed: work.coverFeed }),
           },
     ...(cover === null || src === null || gallery.length === 0
       ? {}

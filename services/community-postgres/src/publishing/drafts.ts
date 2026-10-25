@@ -6,6 +6,7 @@ import {
 } from "@moya/api";
 import type {
   CreatePublishingDraftCommand,
+  MediaFeedFraming,
   OpenWorkEditDraftCommand,
   PublishingDeviceClass,
   PublishingDraft,
@@ -211,6 +212,7 @@ const draftCovers = async (
       draft_id: row.id,
       rank,
       item_id: item.itemId,
+      // Pixels only: the thumb's edit key never reads the feed framing.
       edit: { rotation: item.edit.rotation, crop: item.edit.crop },
       cover_crop:
         item.key === row.content.coverKey ? row.content.coverCrop : null,
@@ -1279,6 +1281,7 @@ export const openEditDraft = async (
         edit: {
           rotation?: 0 | 90 | 180 | 270;
           crop?: WorkDraftContent["coverCrop"];
+          feed?: MediaFeedFraming;
         };
         kind: "static" | "live";
         quality_mode: "standard" | "original" | "legacy";
@@ -1302,6 +1305,8 @@ export const openEditDraft = async (
         authorship: revisionAuthorship(revision),
         visibility: work.visibility,
         // Stored item ids are stable client keys as well (as legacy snapshots use).
+        // The edit keeps its feed framing, so the opened draft is the same
+        // content readEditableWork shows the editor.
         items: items.rows.map((item) => ({
           key: item.item_id,
           itemId: item.item_id,
@@ -1310,6 +1315,7 @@ export const openEditDraft = async (
           edit: {
             rotation: item.edit.rotation ?? 0,
             crop: item.edit.crop ?? null,
+            ...(item.edit.feed === undefined ? {} : { feed: item.edit.feed }),
           },
           ...(item.clipboard ? { origin: "clipboard" } : {}),
         })),

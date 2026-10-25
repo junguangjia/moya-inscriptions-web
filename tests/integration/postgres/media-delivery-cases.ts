@@ -35,6 +35,7 @@ import {
 import type {
   MediaCrop,
   MediaEdit,
+  MediaFeedFraming,
   MediaRendition,
   MediaVariant,
   UserWork,
@@ -475,6 +476,142 @@ export const registerMediaDeliveryTests = (pool: Pool) => {
         for (const listedCandidate of image.renditions ?? [])
           for (const viewer of [visitor, null])
             expect(await read(viewer, listedCandidate.src)).not.toBeNull();
+    });
+
+    it("carries each item's feed framing beside its candidates, and on the card image only without a cover composition", async () => {
+      const crop: MediaCrop = { x: 0, y: 0.25, width: 1, height: 0.5 };
+      const cropKey = await editKeyOf(identity, crop);
+      const tall = await mediaItem(
+        author,
+        { width: 2000, height: 6000 },
+        "#203040",
+      );
+      await renditions(tall, author, [
+        ["thumb", 160, 480],
+        ["cover", 360, 1080],
+        ["display", 683, 2048],
+      ]);
+      await renditions(
+        tall,
+        author,
+        [
+          ["thumb", 480, 240],
+          ["cover", 1080, 540],
+        ],
+        cropKey,
+      );
+      const other = await mediaItem(author, { width: 3000, height: 4000 });
+      await renditions(other, author, [
+        ["thumb", 360, 480],
+        ["display", 1536, 2048],
+      ]);
+      const region: MediaFeedFraming = { fit: "cover", y: 0.25 };
+      const framed = (itemId: string, feed: MediaFeedFraming) => ({
+        ...entry(itemId),
+        edit: { ...identity, feed },
+      });
+      const tallEntry = framed(tall, region);
+      // The centred cover is stored as sent and never emitted.
+      const items = [tallEntry, framed(other, { fit: "cover", y: 0.5 })];
+      const otherImage = {
+        id: other,
+        src: path(other, "display", "base"),
+        width: 1536,
+        height: 2048,
+        renditions: [
+          candidate(other, "thumb", "base", 360, 480),
+          candidate(other, "display", "base", 1536, 2048),
+        ],
+      };
+      const otherMedia = { ...otherImage, kind: "static" };
+      const tallImage = (renditionList: MediaRendition[]) => ({
+        id: tall,
+        src: path(tall, "display", "base"),
+        width: 683,
+        height: 2048,
+        renditions: renditionList,
+        placeholderColor: "#203040",
+        feed: region,
+      });
+
+      // Without a cover composition the cover's framing frames the card too.
+      const plain = await publish(author, {
+        title: "长图取景",
+        items,
+        coverKey: tallEntry.key,
+      });
+      const fullFrame = [
+        candidate(tall, "thumb", "base", 160, 480),
+        candidate(tall, "cover", "base", 360, 1080),
+        candidate(tall, "display", "base", 683, 2048),
+      ];
+      const plainCover = [
+        candidate(tall, "thumb", "base", 160, 480),
+        candidate(tall, "cover", "base", 360, 1080),
+      ];
+      for (const viewer of [visitor, author, null]) {
+        const view = await authors.readWork(plain.workId, viewer);
+        expect(view.media).toEqual([
+          { ...tallImage(fullFrame), kind: "static" },
+          otherMedia,
+        ]);
+        expect(view.coverSrc).toBe(path(tall, "cover", "base"));
+        expect(view.coverRenditions).toEqual(plainCover);
+        expect(view.coverFeed).toEqual(region);
+      }
+      const plainCard = await service.card(
+        { type: "work", id: plain.workId },
+        visitor,
+      );
+      expect(contentCardSchema.parse(plainCard)).toEqual(plainCard);
+      expect(plainCard.media).toEqual({
+        id: tall,
+        src: path(tall, "cover", "base"),
+        width: 360,
+        height: 1080,
+        renditions: plainCover,
+        placeholderColor: "#203040",
+        feed: region,
+      });
+      expect(plainCard.gallery).toEqual([tallImage(fullFrame), otherImage]);
+
+      // A cover composition frames the card image itself: no feed there or
+      // on the Work cover, while every item keeps its own framing.
+      const composed = await publish(author, {
+        title: "封面构图",
+        items,
+        coverKey: tallEntry.key,
+        coverCrop: crop,
+      });
+      const composedCover = [
+        candidate(tall, "thumb", cropKey, 480, 240),
+        candidate(tall, "cover", cropKey, 1080, 540),
+      ];
+      const display = [candidate(tall, "display", "base", 683, 2048)];
+      for (const viewer of [visitor, author, null]) {
+        const view = await authors.readWork(composed.workId, viewer);
+        expect(view.media).toEqual([
+          { ...tallImage(display), kind: "static" },
+          otherMedia,
+        ]);
+        expect(view.coverSrc).toBe(path(tall, "cover", cropKey));
+        expect(view.coverRenditions).toEqual(composedCover);
+        expect(view).not.toHaveProperty("coverFeed");
+      }
+      const composedCard = await service.card(
+        { type: "work", id: composed.workId },
+        visitor,
+      );
+      expect(contentCardSchema.parse(composedCard)).toEqual(composedCard);
+      expect(composedCard.media).toEqual({
+        id: tall,
+        src: path(tall, "cover", cropKey),
+        width: 1080,
+        height: 540,
+        renditions: composedCover,
+        placeholderColor: "#203040",
+      });
+      expect(composedCard.gallery).toEqual([tallImage(display), otherImage]);
     });
 
     it("anchors the first-item cover on the derivative its src names, with only smaller card candidates of that framing", async () => {

@@ -42,6 +42,7 @@ import type {
   AuthorListQuery,
   MediaCrop,
   MediaEdit,
+  MediaFeedFraming,
   PublishingHolder,
   WorkSubmissionCommand,
   WorkSubmissionContent,
@@ -4446,6 +4447,429 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
           (card) => card.target.id === album.workId,
         )?.title,
       ).toBe("相册封面");
+    });
+
+    /** The item entry with `feed` added to its edit (absent: the plain edit). */
+    const framedEntry = (
+      itemId: string,
+      feed?: MediaFeedFraming,
+      edit: MediaEdit = identity,
+    ) => entry(itemId, feed === undefined ? edit : { ...edit, feed });
+
+    /** The derive_edit payloads queued for these items, as stored. */
+    const derivePayloads = async (itemIds: readonly string[]) =>
+      (
+        await pool.query<{
+          payload: {
+            editKey: string;
+            edit: Record<string, unknown>;
+            coverCrop: MediaCrop | null;
+            variants: string[];
+          };
+        }>(
+          "SELECT payload FROM community.publishing_jobs WHERE kind='derive_edit' AND subject_id=ANY($1::text[])",
+          [itemIds],
+        )
+      ).rows.map((row) => row.payload);
+
+    it("keeps feed framing through a draft, submission and the reopened edit draft, and shows it on Work media and cards", async () => {
+      const now = at("2026-07-26T08:00:00.000Z");
+      const tall = (await mediaItem(a)).itemId;
+      const wide = (await mediaItem(a)).itemId;
+      const plain = (await mediaItem(a)).itemId;
+      const region: MediaFeedFraming = { fit: "cover", y: 0.2 };
+      const whole: MediaFeedFraming = { fit: "contain" };
+      // Today's centred cover: stored as sent, never emitted to readers.
+      const centred: MediaFeedFraming = { fit: "cover", y: 0.5 };
+      const items = [
+        framedEntry(tall, region),
+        framedEntry(wide, whole),
+        framedEntry(plain, centred),
+      ];
+
+      // A draft keeps every item's framing through its save and a read.
+      const draft = await adapter.createDraft(
+        a,
+        {
+          requestId: randomUUID(),
+          content: contentOf({ title: "长图取景", items }),
+          deviceClass: "phone",
+        },
+        now,
+      );
+      expect(draft.content.items).toEqual(items);
+      expect((await adapter.readDraft(a, draft.id)).content.items).toEqual(
+        items,
+      );
+
+      // Submitted from the draft: ready on the base derivatives, since the
+      // framing never reaches the edit key, and stored whole.
+      const work = confirmed(
+        await adapter.submit(
+          a,
+          command({ draftId: draft.id }, { title: "长图取景", items }),
+          now,
+        ),
+      );
+      expect(
+        (
+          await pool.query<{ edit: MediaEdit; key: string }>(
+            "SELECT edit,community.media_edit_key(edit,NULL) AS key FROM community.work_revision_items WHERE revision_id=$1 ORDER BY position",
+            [work.revisionId],
+          )
+        ).rows,
+      ).toEqual(items.map((item) => ({ edit: item.edit, key: "base" })));
+      expect(
+        (await operators.readSubmission(work.revisionId)).items.map(
+          (item) => item.edit,
+        ),
+      ).toEqual(items.map((item) => item.edit));
+
+      const target = { type: "work" as const, id: work.workId };
+      /** Every framing a reader receives: Work media and cover, card image and gallery. */
+      const framing = async (viewer: string | null) => {
+        const view = await authors.readWork(work.workId, viewer);
+        const card = await service().card(target, viewer);
+        expect(contentCardSchema.parse(card)).toEqual(card);
+        return {
+          media: view.media.map((media) => media.feed),
+          cover: view.coverFeed,
+          card: card.media?.feed,
+          gallery: card.gallery?.map((image) => image.feed),
+        };
+      };
+      // The first item is the cover: without a cover crop the card image
+      // carries its framing too.
+      for (const viewer of [b, a, null])
+        expect(await framing(viewer)).toEqual({
+          media: [region, whole, undefined],
+          cover: region,
+          card: region,
+          gallery: [region, whole, undefined],
+        });
+      // Absent means centred: the centred item carries no key at all.
+      expect(
+        (await authors.readWork(work.workId, b)).media[2],
+      ).not.toHaveProperty("feed");
+      expect((await service().card(target, b)).gallery?.[2]).not.toHaveProperty(
+        "feed",
+      );
+
+      // Reopening the work: the edit draft is the content the editor reads
+      // (publishing-runtime compares the two before its first save).
+      const editable = await adapter.readEditableWork(a, work.workId);
+      expect(editable.content.items.map((item) => item.edit)).toEqual(
+        items.map((item) => item.edit),
+      );
+      const opened = await adapter.openEditDraft(
+        a,
+        work.workId,
+        { requestId: randomUUID(), deviceClass: "phone" },
+        now,
+      );
+      expect(opened.created).toBe(true);
+      expect(opened.draft.content).toEqual(editable.content);
+
+      // A framing-only change saved and submitted from the edit draft is a
+      // new revision with the same content identity: it is never 已编辑 and
+      // queues no edited derivative.
+      const lowered: MediaFeedFraming = { fit: "cover", y: 0.8 };
+      const reframedEdits: MediaEdit[] = [
+        { ...identity, feed: lowered },
+        identity,
+        { ...identity, feed: whole },
+      ];
+      const reframed = {
+        ...opened.draft.content,
+        items: opened.draft.content.items.map((item, index) => ({
+          ...item,
+          edit: reframedEdits[index]!,
+        })),
+      };
+      expect(
+        (
+          await adapter.saveDraft(
+            a,
+            opened.draft.id,
+            {
+              baseRevision: opened.draft.revision,
+              content: reframed,
+              deviceClass: "phone",
+            },
+            now,
+          )
+        ).status,
+      ).toBe("saved");
+      expect((await adapter.readDraft(a, opened.draft.id)).content).toEqual(
+        reframed,
+      );
+      const resubmitted = confirmed(
+        await adapter.submit(
+          a,
+          command({ draftId: opened.draft.id }, reframed, editable.revisionId),
+          now,
+        ),
+      );
+      expect(resubmitted.revisionId).not.toBe(work.revisionId);
+      expect((await revisionRow(resubmitted.revisionId)).content_sha256).toBe(
+        (await revisionRow(work.revisionId)).content_sha256,
+      );
+      expect((await workRow(work.workId)).edited_at).toBeNull();
+      // Only the base HD background jobs exist, from the unedited pixels.
+      for (const payload of await derivePayloads([tall, wide, plain]))
+        expect(payload).toMatchObject({ editKey: "base", edit: identity });
+      expect(await framing(b)).toEqual({
+        media: [lowered, undefined, whole],
+        cover: lowered,
+        card: lowered,
+        gallery: [lowered, undefined, whole],
+      });
+
+      // An explicit cover without a cover crop shows its own framing on the
+      // card image; a cover composition replaces it there, while Work media
+      // and the gallery keep every item's framing.
+      const coverKey = reframed.items[2]!.key;
+      confirmed(
+        await editWork(
+          a,
+          work.workId,
+          { title: "长图取景", items: reframed.items, coverKey },
+          now,
+        ),
+      );
+      expect(await framing(b)).toEqual({
+        media: [lowered, undefined, whole],
+        cover: whole,
+        card: whole,
+        gallery: [lowered, undefined, whole],
+      });
+      const crop: MediaCrop = { x: 0, y: 0.25, width: 1, height: 0.5 };
+      await derive(plain, a, "static", identity, true, crop);
+      confirmed(
+        await editWork(
+          a,
+          work.workId,
+          {
+            title: "长图取景",
+            items: reframed.items,
+            coverKey,
+            coverCrop: crop,
+          },
+          now,
+        ),
+      );
+      for (const viewer of [b, a, null])
+        expect(await framing(viewer)).toEqual({
+          media: [lowered, undefined, whole],
+          cover: undefined,
+          card: undefined,
+          gallery: [lowered, undefined, whole],
+        });
+      const composed = await authors.readWork(work.workId, b);
+      expect(composed.coverSrc).toBe(
+        `/api/community/publishing/media/${plain}/cover/${await editKeyOf(identity, crop)}`,
+      );
+      expect(composed).not.toHaveProperty("coverFeed");
+      expect((await service().card(target, b)).media).not.toHaveProperty(
+        "feed",
+      );
+      expect((await discovery.card(target, b)).media).not.toHaveProperty(
+        "feed",
+      );
+    });
+
+    it("derives an edited item from its rotation and crop alone: feed framing reaches no job payload, edit key or readiness answer", async () => {
+      const now = at("2026-07-27T08:00:00.000Z");
+      const { itemId } = await mediaItem(a);
+      const pixels: MediaEdit = {
+        rotation: 90,
+        crop: { x: 0, y: 0.1, width: 1, height: 0.5 },
+      };
+      const whole: MediaFeedFraming = { fit: "contain" };
+      const framed: MediaEdit = { ...pixels, feed: whole };
+      const pixelKey = await editKeyOf(pixels, null);
+      expect(pixelKey).not.toBe("base");
+      expect(await editKeyOf(framed, null)).toBe(pixelKey);
+      const target = (edit: MediaEdit) => ({
+        items: [entry(itemId, edit)],
+        coverKey: null,
+        coverCrop: null,
+      });
+      const key = entry(itemId).key;
+
+      // Before its derivatives exist, the framed edit answers as its pixels
+      // do, and every queued job carries the pixels alone.
+      const pending = await adapter.ensureEditDerivatives(
+        a,
+        target(framed),
+        now,
+      );
+      expect(pending).toEqual({
+        ready: false,
+        items: [{ key, itemId, state: "deriving", editKey: null }],
+      });
+      expect(
+        await adapter.ensureEditDerivatives(a, target(pixels), now),
+      ).toEqual(pending);
+      const payloads = await derivePayloads([itemId]);
+      expect(payloads.flatMap((payload) => payload.variants).sort()).toEqual([
+        "display",
+        "full",
+        "thumb",
+      ]);
+      for (const payload of payloads) {
+        expect(Object.keys(payload.edit).sort()).toEqual(["crop", "rotation"]);
+        expect(payload).toMatchObject({
+          editKey: pixelKey,
+          edit: pixels,
+          coverCrop: null,
+        });
+      }
+
+      // The SQL asks the framed edit for the pixel edit's derivatives; once
+      // they exist both answer ready under the same key.
+      const required = await derive(itemId, a, "static", framed);
+      expect(new Set(Object.values(required))).toEqual(new Set([pixelKey]));
+      const ready = await adapter.ensureEditDerivatives(a, target(framed), now);
+      expect(ready).toEqual({
+        ready: true,
+        items: [{ key, itemId, state: "ready", editKey: pixelKey }],
+      });
+      expect(
+        await adapter.ensureEditDerivatives(a, target(pixels), now),
+      ).toEqual(ready);
+
+      // Published, the item keeps its framing next to the pixel key.
+      const work = await publish(
+        a,
+        { title: "旋转裁切", items: [entry(itemId, framed)] },
+        now,
+      );
+      expect(
+        (
+          await pool.query<{ edit: MediaEdit }>(
+            "SELECT edit FROM community.work_revision_items WHERE revision_id=$1",
+            [work.revisionId],
+          )
+        ).rows,
+      ).toEqual([{ edit: framed }]);
+      expect(
+        (await operators.readSubmission(work.revisionId)).items.map((item) => [
+          item.edit,
+          item.editKey,
+        ]),
+      ).toEqual([[framed, pixelKey]]);
+      const view = await authors.readWork(work.workId, b);
+      expect(view.media).toMatchObject([
+        {
+          id: itemId,
+          src: `/api/community/publishing/media/${itemId}/display/${pixelKey}`,
+          feed: whole,
+        },
+      ]);
+      expect(view.coverFeed).toEqual(whole);
+      const card = await service().card(
+        { type: "work", id: work.workId },
+        null,
+      );
+      expect(card.media).toMatchObject({
+        src: `/api/community/publishing/media/${itemId}/display/${pixelKey}`,
+        feed: whole,
+      });
+      expect(card.gallery?.map((image) => image.feed)).toEqual([whole]);
+    });
+
+    it("frames Phase 4 legacy photos on their user media without deriving them or marking the work edited", async () => {
+      const now = at("2026-07-28T08:00:00.000Z");
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+      const first = id("user-media");
+      const second = id("user-media");
+      await pool.query(
+        "INSERT INTO community.user_media(id,owner_id,mime_type,width,height,sha256,bytes) VALUES($1,$3,'image/png',30,90,$4,$5),($2,$3,'image/png',60,90,$4,$5)",
+        [first, second, a, "b".repeat(64), png],
+      );
+      const work = id("work");
+      await pool.query(
+        "INSERT INTO community.works(id,author_id,title,text,media_ids,first_published_at,synthetic_provenance) VALUES($1,$2,'旧式长图','旧式正文',$3,'2026-01-05T00:00:00Z','work-publishing-bridge-test')",
+        [work, a, [first, second]],
+      );
+      const legacyRevision = await authorRevision(work);
+      const editable = await adapter.readEditableWork(a, work);
+      const [one, two] = editable.content.items;
+      if (one === undefined || two === undefined)
+        throw new Error("legacy items missing");
+      expect([one.qualityMode, two.qualityMode]).toEqual(["legacy", "legacy"]);
+      const whole: MediaFeedFraming = { fit: "contain" };
+      const top: MediaFeedFraming = { fit: "cover", y: 0 };
+      const items = [
+        { ...one, edit: { ...one.edit, feed: whole } },
+        { ...two, edit: { ...two.edit, feed: top } },
+      ];
+
+      // Framing a legacy photo leaves its pixels on the Phase 4 PNG: the
+      // same content identity, nothing to derive, never 已编辑.
+      const framed = confirmed(
+        await editWork(
+          a,
+          work,
+          {
+            title: "旧式长图",
+            body: "旧式正文",
+            authorship: editable.content.authorship,
+            items,
+            coverKey: editable.content.coverKey,
+          },
+          now,
+        ),
+      );
+      expect((await revisionRow(framed.revisionId)).content_sha256).toBe(
+        (await revisionRow(legacyRevision)).content_sha256,
+      );
+      expect((await workRow(work)).edited_at).toBeNull();
+      expect(await derivePayloads(items.map((item) => item.itemId!))).toEqual(
+        [],
+      );
+
+      const legacy = (
+        mediaId: string,
+        width: number,
+        feed: MediaFeedFraming,
+      ) => ({
+        id: mediaId,
+        src: `/api/community/media/${mediaId}`,
+        width,
+        height: 90,
+        feed,
+      });
+      for (const viewer of [a, b, null]) {
+        const view = await authors.readWork(work, viewer);
+        expect(view.media).toEqual([
+          legacy(first, 30, whole),
+          legacy(second, 60, top),
+        ]);
+        expect(view.coverSrc).toBe(`/api/community/media/${first}`);
+        expect(view.coverFeed).toEqual(whole);
+      }
+      const card = await service().card({ type: "work", id: work }, b);
+      expect(contentCardSchema.parse(card)).toEqual(card);
+      expect(card.media).toEqual(legacy(first, 30, whole));
+      expect(card.gallery).toEqual([
+        legacy(first, 30, whole),
+        legacy(second, 60, top),
+      ]);
+
+      // Reopened, the edit draft is the editable content, framing included.
+      const reopened = await adapter.readEditableWork(a, work);
+      expect(reopened.content.items.map((item) => item.edit)).toEqual(
+        items.map((item) => item.edit),
+      );
+      const { draft } = await adapter.openEditDraft(
+        a,
+        work,
+        { requestId: randomUUID(), deviceClass: "phone" },
+        now,
+      );
+      expect(draft.content).toEqual(reopened.content);
     });
 
     it("applies effective visibility to every surface for self-only, pending first, trashed, hidden and removed works", async () => {

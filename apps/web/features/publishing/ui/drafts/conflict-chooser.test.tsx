@@ -446,4 +446,58 @@ describe("Conflict chooser", () => {
       "图片顺序",
     );
   });
+
+  it("names the feed framing that makes two albums differ (#341)", async () => {
+    const framed = conflict({
+      device: {
+        ...sample.device,
+        content: content({
+          items: [
+            {
+              ...item("a", 1),
+              edit: { ...item("a", 1).edit, feed: { fit: "contain" } },
+            },
+            item("b", 2),
+          ],
+          coverKey: "a",
+        }),
+      },
+      account: {
+        ...sample.account,
+        content: content({
+          items: [
+            {
+              ...item("a", 1),
+              edit: { ...item("a", 1).edit, feed: { fit: "cover", y: 0.5 } },
+            },
+            item("b", 2),
+          ],
+          coverKey: "a",
+        }),
+      },
+    });
+    const node = await render(
+      <ConflictChooser
+        conflict={framed}
+        draftId={draftId(1)}
+        mediaItems={[readyItem(1), readyItem(2)]}
+        onClose={vi.fn()}
+        onResolved={vi.fn()}
+      />,
+    );
+    const device = version(node, "device");
+    const account = version(node, "account");
+    // Only the framing differs, and the version that has one says so.
+    expect(device.querySelector("dl[data-differs] dt")?.textContent).toContain(
+      "图片顺序（2 项）与另一版本不同",
+    );
+    expect(device.querySelector("[data-edit-notes]")?.textContent).toBe(
+      "第 1 项动态流整张显示",
+    );
+    expect(device.querySelector("li[data-item-key]")?.textContent).toContain(
+      "第 1 项，封面，动态流整张显示",
+    );
+    // A centred cover is no framing: nothing to name.
+    expect(account.querySelector("[data-edit-notes]")).toBeNull();
+  });
 });

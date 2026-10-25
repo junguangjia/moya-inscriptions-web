@@ -142,6 +142,47 @@ describe("FeedStagePreview", () => {
     ).toBe("第 1 张在最右，向右滑看下一张");
   });
 
+  // #341: the author's feed framing, exactly as the feed draws it.
+  it("crops a taller slide at the author's region or keeps it whole on the first slide's stage", () => {
+    const { container } = render({
+      slides: [
+        slide("a", 600, 1800, {
+          feed: { fit: "contain" },
+          placeholderColor: "#4a4038",
+        }),
+        slide("b", 600, 1800, {
+          feed: { fit: "cover", y: 1 },
+          placeholderColor: "#4a4038",
+        }),
+        slide("c", 800, 600, { feed: { fit: "cover", y: 0 } }),
+      ],
+    });
+    // A first slide kept whole still sets the 4:5 stage.
+    expect(
+      container
+        .querySelector<HTMLElement>("[data-feed-preview-frame]")!
+        .style.getPropertyValue("--feed-stage-aspect"),
+    ).toBe("1 / 1.25");
+    const slides = [
+      ...container.querySelectorAll<HTMLElement>("[data-feed-slide]"),
+    ];
+    expect(
+      slides.map((node) => [
+        node.getAttribute("data-fit"),
+        node.getAttribute("data-feed-framing"),
+        node.style.getPropertyValue("--feed-slide-y"),
+      ]),
+    ).toEqual([
+      ["contain", "whole", ""],
+      ["cover", "region", "100%"],
+      ["contain", null, ""],
+    ]);
+    // The asset colour only behind a covering picture.
+    expect(
+      slides.map((node) => node.querySelector("img")!.style.backgroundColor),
+    ).toEqual(["", "rgb(74, 64, 56)", ""]);
+  });
+
   it("says how many images stay off the feed and shows nothing for an empty post", () => {
     const { container } = render({ total: 12 });
     expect(

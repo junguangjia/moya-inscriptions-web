@@ -7,6 +7,7 @@ import type {
   CatalogCitationScope,
   CatalogDetail,
   CatalogKind,
+  MediaFeedFraming,
   PublicSourceCitation,
   WorkAuthorship,
   WorkAuthorshipKind,
@@ -72,6 +73,13 @@ export interface DetailMediaPresentation {
   readonly placeholderColor?: string | undefined;
   /** Present only for a Live Photo; the still stays the presented image. */
   readonly live?: DetailLiveMotionPresentation;
+  /**
+   * How the phone feed frames a work image (its `MediaEdit.feed`, from the
+   * card); absent, a taller image is cropped at the centre. Only the feed's
+   * adaptive stage reads it: Detail and the Viewer always show the whole
+   * image.
+   */
+  readonly feed?: MediaFeedFraming | undefined;
   /**
    * catalog-deep-zoom-v1: present only on a Catalog Detail image whose block
    * set is deliverable: the blocks' frame and the record they are read from.

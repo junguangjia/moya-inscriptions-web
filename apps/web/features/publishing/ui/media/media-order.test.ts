@@ -10,6 +10,7 @@ import {
   setCover,
   setCoverCrop,
   setItemEdit,
+  setItemFeed,
   withValidCover,
 } from "./media-order";
 
@@ -113,6 +114,67 @@ describe("media album operations", () => {
       crop: { x: 0, y: 0, width: 1, height: 1 },
     });
     expect(result.value.items[0]!.edit).toEqual({ rotation: 270, crop: null });
+  });
+
+  it("keeps an item's feed framing through rotate/crop edits (#341)", () => {
+    const crop = { x: 0, y: 0, width: 0.5, height: 0.5 };
+    const framed = setItemFeed(setCoverCrop(album("a", "b"), "a", crop), "a", {
+      fit: "cover",
+      y: 0.2,
+    });
+    const turned = setItemEdit(framed, "a", { rotation: 90, crop: null });
+    expect(turned.value.items[0]!.edit).toEqual({
+      rotation: 90,
+      crop: null,
+      feed: { fit: "cover", y: 0.2 },
+    });
+    // The pixels changed: the cover composition is reset as before.
+    expect(turned.coverCropReset).toBe(true);
+    // The edit's own framing is not the item's: only the pixels apply, and
+    // the same pixels are no change at all.
+    const same = setItemEdit(framed, "a", {
+      rotation: 0,
+      crop: null,
+      feed: { fit: "contain" },
+    });
+    expect(same.value).toBe(framed);
+    expect(same.coverCropReset).toBe(false);
+    expect(
+      setItemEdit(album("b"), "b", {
+        rotation: 180,
+        crop: null,
+        feed: { fit: "contain" },
+      }).value.items[0]!.edit,
+    ).toEqual({ rotation: 180, crop: null });
+  });
+
+  it("sets, normalizes and clears feed framing without touching pixels or the cover", () => {
+    const crop = { x: 0, y: 0, width: 0.5, height: 0.5 };
+    const value = setCoverCrop(
+      setItemEdit(album("a", "b"), "a", { rotation: 90, crop }).value,
+      "a",
+      crop,
+    );
+    const whole = setItemFeed(value, "a", { fit: "contain" });
+    expect(whole.items[0]!.edit).toEqual({
+      rotation: 90,
+      crop,
+      feed: { fit: "contain" },
+    });
+    expect(whole.items[1]).toBe(value.items[1]);
+    expect(whole).toMatchObject({ coverKey: "a", coverCrop: crop });
+    expect(setItemFeed(whole, "a", { fit: "contain" })).toBe(whole);
+
+    const region = setItemFeed(whole, "a", { fit: "cover", y: 1 / 3 });
+    expect(region.items[0]!.edit.feed).toEqual({ fit: "cover", y: 0.3333 });
+    expect(setItemFeed(region, "a", { fit: "cover", y: 0.33331 })).toBe(region);
+
+    // A centred cover is no framing: the key goes.
+    const centred = setItemFeed(region, "a", { fit: "cover", y: 0.5 });
+    expect(centred.items[0]!.edit).toEqual({ rotation: 90, crop });
+    expect("feed" in centred.items[0]!.edit).toBe(false);
+    expect(setItemFeed(centred, "a", undefined)).toBe(centred);
+    expect(setItemFeed(value, "missing", { fit: "contain" })).toBe(value);
   });
 
   it("puts re-selected items at the missing item's position and moves its cover role", () => {

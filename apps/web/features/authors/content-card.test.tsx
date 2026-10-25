@@ -190,6 +190,28 @@ describe("ContentCard for works", () => {
     }
   });
 
+  // #341: without a cover composition the card follows the cover's feed
+  // framing (the server sends `media.feed` only then).
+  it("frames a tall work cover the author's way only when the card carries it", () => {
+    const tall = { ...cover, width: 600, height: 1800 };
+    const box = (item: Card) =>
+      render(item).querySelector<HTMLElement>(
+        '[data-catalog-media-state="valid"]',
+      )!;
+    const region = box(
+      card({ media: { ...tall, feed: { fit: "cover", y: 0 } } }),
+    );
+    expect(region.getAttribute("data-feed-framing")).toBe("region");
+    expect(region.style.getPropertyValue("--feed-media-y")).toBe("0%");
+    const whole = box(card({ media: { ...tall, feed: { fit: "contain" } } }));
+    expect(whole.getAttribute("data-fit")).toBe("contain");
+    expect(whole.getAttribute("data-feed-framing")).toBe("whole");
+    const plain = box(card({ media: tall }));
+    expect(plain.hasAttribute("data-fit")).toBe(false);
+    expect(plain.hasAttribute("data-feed-framing")).toBe(false);
+    expect(plain.style.getPropertyValue("--feed-media-y")).toBe("");
+  });
+
   it("keeps a titled media card and its activation unchanged", () => {
     const titled = render(card({ excerpt: "正文开头" }));
     expect(titled.querySelector("h3")?.textContent).toBe("春日临帖");

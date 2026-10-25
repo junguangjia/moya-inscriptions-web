@@ -87,6 +87,8 @@ export const ContentCard = ({
           </div>
         ) : (
           <>
+            {/* A work cover brings its feed framing (`feed`) along; the
+                contract never gives one to a Catalog image. */}
             <CatalogCardMedia
               live={item.live === true}
               media={

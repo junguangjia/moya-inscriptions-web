@@ -22,18 +22,36 @@ const { crop, frame } = vi.hoisted(() => ({
         height: number;
       }) => void;
       onCropChange: (position: { x: number; y: number }) => void;
+      onZoomChange: (zoom: number) => void;
+      onCropSizeChange?: (size: { width: number; height: number }) => void;
+      crop: { x: number; y: number };
+      zoom: number;
+      maxZoom: number;
     },
+    /** Seed while mounting, as react-easy-crop does with a decoded image. */
+    seeding: false,
   },
   frame: {
     render: null as null | ((src: string, edit: unknown) => Promise<unknown>),
   },
 }));
-vi.mock("react-easy-crop", () => ({
-  default: (props: NonNullable<typeof crop.props>) => {
-    crop.props = props;
-    return <div data-test-cropper="" />;
-  },
-}));
+vi.mock("react-easy-crop", async () => {
+  const { useLayoutEffect } = await import("react");
+  return {
+    default: (props: NonNullable<typeof crop.props>) => {
+      crop.props = props;
+      useLayoutEffect(() => {
+        const seed = props.initialCroppedAreaPercentages;
+        if (!crop.seeding || seed === undefined) return;
+        props.onCropChange({ x: -5, y: 0 });
+        props.onZoomChange(100 / seed.width);
+        props.onCropAreaChange(seed);
+        // Mounted once: the props of this render are the ones it seeds with.
+      }, []);
+      return <div data-test-cropper="" />;
+    },
+  };
+});
 vi.mock("../media/edited-frame", () => ({
   renderEditedFrame: (src: string, edit: unknown) => frame.render!(src, edit),
 }));
@@ -107,6 +125,7 @@ beforeEach(() => {
   document.body.append(container);
   root = createRoot(container);
   crop.props = null;
+  crop.seeding = false;
   frame.render = vi.fn(async () => ({
     url: "blob:edited-frame",
     size: { width: 300, height: 400 },
@@ -257,5 +276,53 @@ describe("CoverScreen", () => {
     );
     expect(ratio("1:1").disabled).toBe(true);
     expect(button("还原").getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("keeps its own stage: the whole stage for the frame, decorative corners, no handles, the shared 3× (#341)", async () => {
+    vi.spyOn(Element.prototype, "clientWidth", "get").mockImplementation(
+      function (this: Element) {
+        return this.hasAttribute("data-cover-stage") ? 390 : 0;
+      },
+    );
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(
+      function (this: Element) {
+        return this.hasAttribute("data-cover-stage") ? 600 : 0;
+      },
+    );
+    await render();
+    const stage = host()!.querySelector<HTMLElement>("[data-cover-stage]")!;
+    // A 3:4 frame of the whole 390 × 600 stage, as before the 编辑 field.
+    expect(stage.style.getPropertyValue("--crop-box-width")).toBe("390px");
+    expect(stage.style.getPropertyValue("--crop-box-height")).toBe("600px");
+    await act(async () =>
+      crop.props!.onCropSizeChange!({ width: 390, height: 520 }),
+    );
+    const frame = host()!.querySelector("[data-cover-frame]")!;
+    expect(frame.getAttribute("aria-hidden")).toBe("true");
+    expect(frame.querySelectorAll("[data-corner]")).toHaveLength(4);
+    expect(host()!.querySelector("[data-crop-handle]")).toBe(null);
+    expect(
+      host()!
+        .querySelector("[data-edit-ratio]")!
+        .querySelectorAll('[role="radio"]'),
+    ).toHaveLength(4);
+    expect(crop.props!.maxZoom).toBe(3);
+  });
+
+  it("keeps a stored composition's seed once the cropper applies it, and starts a new ratio centred", async () => {
+    crop.seeding = true;
+    const composition = { x: 0, y: 0.25, width: 1, height: 0.5 };
+    await render({ coverCrop: composition });
+    expect(crop.props!.initialCroppedAreaPercentages).toEqual({
+      x: 0,
+      y: 25,
+      width: 100,
+      height: 50,
+    });
+    expect(crop.props!.zoom).toBe(1);
+    expect(crop.props!.crop).toEqual({ x: -5, y: 0 });
+    await click(ratio("1:1"));
+    expect(crop.props!.zoom).toBe(1);
+    expect(crop.props!.crop).toEqual({ x: 0, y: 0 });
   });
 });

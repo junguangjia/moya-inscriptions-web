@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   commentsStartOffset,
   elementStartOffset,
+  FEED_CENTRE_Y,
   FEED_STAGE_MAX_RATIO,
   FEED_STAGE_MIN_RATIO,
   FEED_POST_CARRY_OWN_STEP_PX,
@@ -11,6 +12,8 @@ import {
   readStripOffset,
   resolveStageAspect,
   slideFit,
+  slideFraming,
+  slidePositionY,
   snapAreaOffset,
   stripIndex,
   stripProgress,
@@ -87,6 +90,62 @@ describe("slideFit", () => {
     );
     expect(slideFit({ width: 1000, height: 1250.5 }, 1.25)).toBe("contain");
     expect(slideFit({ width: 1000, height: 1252 }, 1.25)).toBe("cover");
+  });
+  it("keeps a taller image whole when the author asks for the whole image", () => {
+    const tall = { width: 1, height: 3 };
+    expect(slideFit(tall, 1.25, { fit: "contain" })).toBe("contain");
+    expect(slideFit(tall, 1.25, { fit: "cover", y: 0 })).toBe("cover");
+    expect(slideFit(tall, 1.25, { fit: "cover", y: 0.5 })).toBe("cover");
+    // A shorter image is always shown whole, framed or not.
+    for (const feed of [
+      { fit: "contain" },
+      { fit: "cover", y: 0 },
+      undefined,
+    ] as const)
+      expect(slideFit({ width: 4, height: 3 }, 1.25, feed)).toBe("contain");
+  });
+});
+
+// #341: the author's feed framing of a taller image, in any box.
+describe("slidePositionY / slideFraming", () => {
+  const tall = { width: 1, height: 3 };
+  it("puts the cropped image at the author's region as a CSS percentage", () => {
+    expect(slidePositionY(tall, 1.25, { fit: "cover", y: 0 })).toBe("0%");
+    expect(slidePositionY(tall, 1.25, { fit: "cover", y: 1 })).toBe("100%");
+    expect(slidePositionY(tall, 1.25, { fit: "cover", y: 0.3333 })).toBe(
+      "33.33%",
+    );
+    expect(slidePositionY(tall, 1.25, { fit: "cover", y: 0.1234 })).toBe(
+      "12.34%",
+    );
+    expect(slideFraming(tall, 1.25, { fit: "cover", y: 0 })).toBe("region");
+  });
+  it("leaves the centred, the whole and the unframed image without a position", () => {
+    expect(FEED_CENTRE_Y).toBe(0.5);
+    expect(slidePositionY(tall, 1.25, { fit: "cover", y: 0.5 })).toBe(
+      undefined,
+    );
+    expect(slideFraming(tall, 1.25, { fit: "cover", y: 0.5 })).toBe(undefined);
+    expect(slidePositionY(tall, 1.25, { fit: "contain" })).toBe(undefined);
+    expect(slideFraming(tall, 1.25, { fit: "contain" })).toBe("whole");
+    expect(slidePositionY(tall, 1.25)).toBe(undefined);
+    expect(slideFraming(tall, 1.25)).toBe(undefined);
+  });
+  it("keeps a stored framing dormant while the image is not taller than the box", () => {
+    for (const feed of [{ fit: "contain" }, { fit: "cover", y: 0 }] as const) {
+      expect(slidePositionY({ width: 4, height: 5 }, 1.25, feed)).toBe(
+        undefined,
+      );
+      expect(slideFraming({ width: 4, height: 5 }, 1.25, feed)).toBe(undefined);
+      expect(slideFraming({ width: 16, height: 9 }, 1, feed)).toBe(undefined);
+    }
+    // The same 3:4 image is taller than a 3:2 card box, not a 3:4 one.
+    const portrait = { width: 3, height: 4 };
+    expect(slideFraming(portrait, 2 / 3, { fit: "contain" })).toBe("whole");
+    expect(slideFraming(portrait, 4 / 3, { fit: "contain" })).toBe(undefined);
+    expect(slidePositionY(portrait, 2 / 3, { fit: "cover", y: 0.25 })).toBe(
+      "25%",
+    );
   });
 });
 

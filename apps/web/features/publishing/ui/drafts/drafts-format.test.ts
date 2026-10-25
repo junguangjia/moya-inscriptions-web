@@ -6,6 +6,7 @@ import {
   compareContent,
   draftDeletionScopeText,
   draftKindLabel,
+  itemEditText,
   mediaEditNotes,
   missingLocalText,
   newestEditedFirst,
@@ -14,6 +15,8 @@ import {
   textExcerpt,
 } from "./drafts-format";
 import { NOW, content, minutesAgo, summary } from "./drafts.test-support";
+
+import type { WorkDraftContent } from "@moya/contracts";
 
 describe("drafts wording", () => {
   it("labels new drafts and edits, with the UI-only unnamed placeholder", () => {
@@ -135,5 +138,61 @@ describe("drafts ordering and media notes", () => {
     expect(mediaEditNotes(content({ items: [item("a", 0, false)] }))).toEqual(
       [],
     );
+  });
+
+  it("names feed framing and marks a framing-only difference (#341)", () => {
+    const framed = (feed?: WorkDraftContent["items"][number]["edit"]["feed"]) =>
+      content({
+        items: [
+          {
+            key: "a",
+            itemId: null,
+            kind: "static",
+            qualityMode: "standard",
+            pendingLabel: "photo",
+            edit: { rotation: 0, crop: null, ...(feed ? { feed } : {}) },
+          },
+        ],
+      });
+    expect(
+      itemEditText({ rotation: 90, crop: null, feed: { fit: "contain" } }),
+    ).toBe("已旋转 90°、动态流整张显示");
+    expect(
+      itemEditText({ rotation: 0, crop: null, feed: { fit: "cover", y: 0 } }),
+    ).toBe("动态流显示局部");
+    // A centred cover is the default: nothing to name.
+    expect(
+      itemEditText({ rotation: 0, crop: null, feed: { fit: "cover", y: 0.5 } }),
+    ).toBeNull();
+    expect(mediaEditNotes(framed({ fit: "contain" }))).toEqual([
+      "第 1 项动态流整张显示",
+    ]);
+
+    expect(compareContent(framed(), framed({ fit: "contain" }))).toMatchObject({
+      media: true,
+      cover: false,
+    });
+    expect(
+      compareContent(
+        framed({ fit: "cover", y: 0.2 }),
+        framed({ fit: "cover", y: 0.3 }),
+      ).media,
+    ).toBe(true);
+    expect(
+      compareContent(framed(), framed({ fit: "cover", y: 0.5 })).media,
+    ).toBe(false);
+    // Key order is not a difference.
+    const reordered = framed();
+    expect(
+      compareContent(framed({ fit: "contain" }), {
+        ...reordered,
+        items: [
+          {
+            ...reordered.items[0]!,
+            edit: { feed: { fit: "contain" }, crop: null, rotation: 0 },
+          },
+        ],
+      }).media,
+    ).toBe(false);
   });
 });

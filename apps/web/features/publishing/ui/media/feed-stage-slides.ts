@@ -31,7 +31,8 @@ export interface FeedStageModel {
  * items in `scope` get a picture (a screen without the stage asks for the
  * first one, whose size still sets the stage ratio). An item whose edited
  * frame is still being drawn keeps its edited shape as a placeholder, so the
- * stage never jumps when the picture lands.
+ * stage never jumps when the picture lands. Every slide carries its item's
+ * feed framing, so the preview frames a taller picture as the feed will.
  */
 export const useFeedStageSlides = (
   state: EditorSessionState,
@@ -52,6 +53,8 @@ export const useFeedStageSlides = (
       .slice(0, FEED_GALLERY_MAXIMUM)
       .map((item, index): FeedStagePreviewSlide => {
         const alt = `第 ${index + 1} 项`;
+        const framing =
+          item.edit.feed === undefined ? {} : { feed: item.edit.feed };
         const source = sources.get(item.key);
         if (source !== undefined && source.pending !== true)
           return {
@@ -60,6 +63,7 @@ export const useFeedStageSlides = (
             src: source.src,
             size: { width: source.width, height: source.height },
             status: "ready",
+            ...framing,
           };
         if (source !== undefined)
           return {
@@ -71,6 +75,7 @@ export const useFeedStageSlides = (
               item.edit,
             ),
             status: "loading",
+            ...framing,
           };
         const server =
           views.get(item.key)?.serverItem ??
@@ -90,6 +95,7 @@ export const useFeedStageSlides = (
             idle || localStill(item.key) !== null || server?.media
               ? "loading"
               : "unavailable",
+          ...framing,
         };
       });
     return {

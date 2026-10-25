@@ -253,7 +253,8 @@ export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort
     // Cards read the viewer's revision (the author revision for the work's
     // author, else the public revision): its excerpt and its cover (the chosen
     // cover item under its cover crop, else the first item), static even for
-    // a Live Photo, with the card candidates of the cover's own framing.
+    // a Live Photo, with the card candidates of the cover's own framing and,
+    // without a cover crop, the cover item's feed framing.
     const wm = (
       await db.query<WorkCardRow>(
         `SELECT w.id AS work_id,r.id AS revision_id,r.body,${revisionCoverColumns("cov")}
@@ -322,6 +323,8 @@ export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort
             ...(cover.placeholderColor === undefined
               ? {}
               : { placeholderColor: cover.placeholderColor }),
+            // Only without a cover composition (revisionCover).
+            ...(cover.feed === undefined ? {} : { feed: cover.feed }),
           }
         : null;
       const view =
@@ -349,6 +352,7 @@ export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort
                 ...(entry.placeholderColor === undefined
                   ? {}
                   : { placeholderColor: entry.placeholderColor }),
+                ...(entry.feed === undefined ? {} : { feed: entry.feed }),
               })),
               mediaCount: Math.max(view.total, view.entries.length),
             }),

@@ -51,6 +51,8 @@ import {
   resolveStageAspect,
   sealSpan,
   slideFit,
+  slideFraming,
+  slidePositionY,
   snapAreaOffset,
   stripIndex,
   stripProgress,
@@ -109,7 +111,11 @@ export interface FeedPostStageProps {
   readonly activeMediaIndex?: number | undefined;
   /** Reports a changed image only after the strip settles on it. */
   readonly onActiveMediaIndexChange?: ((index: number) => void) | undefined;
-  /** Detail contains every image; the feed keeps its adaptive cover fit. */
+  /**
+   * Detail contains every image and ignores the author's feed framing; the
+   * feed keeps its adaptive fit, a taller image cropped at the author's
+   * region (centred by default) or kept whole (`feed`).
+   */
   readonly imageFit?: "adaptive" | "contain" | undefined;
   /** Explicit Live controls are opt-in; the feed remains a still surface. */
   readonly enableLivePlayback?: boolean | undefined;
@@ -1345,6 +1351,14 @@ export const FeedPostStage = forwardRef<
               const active = index === activeIndex;
               const broken = failed.has(item.id);
               const image = responsiveImage(item, MEDIA_SIZES.feedPostStage());
+              // Only the feed frames a taller image the author's way; Detail
+              // contains every image whatever its framing.
+              const feed = imageFit === "adaptive" ? item.feed : undefined;
+              const fit =
+                imageFit === "contain"
+                  ? "contain"
+                  : slideFit(item, ratio, feed);
+              const positionY = slidePositionY(item, ratio, feed);
               const imageButton = (
                 <button
                   aria-label={`查看图像：${item.alt}`}
@@ -1374,8 +1388,7 @@ export const FeedPostStage = forwardRef<
                     src={image.src}
                     srcSet={image.srcSet}
                     style={
-                      imageFit === "adaptive" &&
-                      slideFit(item, ratio) === "cover"
+                      fit === "cover"
                         ? placeholderStyle(item.placeholderColor)
                         : undefined
                     }
@@ -1389,14 +1402,18 @@ export const FeedPostStage = forwardRef<
                   aria-label={`第 ${index + 1} 张，共 ${count} 张`}
                   aria-roledescription="slide"
                   className={styles.postSlide}
+                  data-feed-framing={slideFraming(item, ratio, feed)}
                   data-feed-slide={index}
-                  data-fit={
-                    imageFit === "contain" ? "contain" : slideFit(item, ratio)
-                  }
+                  data-fit={fit}
                   data-media-id={item.id}
                   inert={!active || undefined}
                   key={item.id}
                   role="group"
+                  style={
+                    positionY === undefined
+                      ? undefined
+                      : ({ "--feed-slide-y": positionY } as CSSProperties)
+                  }
                 >
                   {broken ? (
                     <MediaFallback

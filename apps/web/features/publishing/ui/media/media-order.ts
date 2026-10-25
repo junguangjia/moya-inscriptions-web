@@ -1,7 +1,19 @@
-import { FULL_EDIT, normalizeCrop, sameCrop, sameEdit } from "./media-geometry";
+import {
+  FULL_EDIT,
+  normalizeCrop,
+  sameCrop,
+  sameEdit,
+  sameFeed,
+  withFeed,
+} from "./media-geometry";
 
 import type { ConfirmedSource } from "../../import-grouping";
-import type { MediaCrop, MediaEdit, WorkDraftItem } from "@moya/contracts";
+import type {
+  MediaCrop,
+  MediaEdit,
+  MediaFeedFraming,
+  WorkDraftItem,
+} from "@moya/contracts";
 
 /**
  * Pure operations on the media part of the editor content (M02, M03): the
@@ -114,8 +126,9 @@ export const setCoverCrop = (
 };
 
 /**
- * Applies a rotate/crop edit. The cover crop is normalized to the item's
- * edited frame, so a changed edit of the cover item resets it.
+ * Applies a rotate/crop edit; the item keeps its feed framing, which only
+ * `setItemFeed` changes. The cover crop is normalized to the item's edited
+ * frame, so a changed edit of the cover item resets it.
  */
 export const setItemEdit = (
   value: MediaValue,
@@ -124,12 +137,12 @@ export const setItemEdit = (
 ): { readonly value: MediaValue; readonly coverCropReset: boolean } => {
   const index = indexOfKey(value, key);
   const current = value.items[index];
-  const next: MediaEdit = {
-    rotation: edit.rotation,
-    crop: normalizeCrop(edit.crop),
-  };
-  if (!current || sameEdit(current.edit, next))
-    return { value, coverCropReset: false };
+  if (!current) return { value, coverCropReset: false };
+  const next = withFeed(
+    { rotation: edit.rotation, crop: normalizeCrop(edit.crop) },
+    current.edit.feed,
+  );
+  if (sameEdit(current.edit, next)) return { value, coverCropReset: false };
   const items = value.items.map((item) =>
     item.key === key ? { ...item, edit: next } : item,
   );
@@ -140,6 +153,26 @@ export const setItemEdit = (
       ? { ...value, items, coverCrop: null }
       : { ...value, items },
     coverCropReset,
+  };
+};
+
+/**
+ * Sets how the phone feed frames one item (`MediaEdit.feed`, #341). It is
+ * presentation only: the item's pixels stay, so its cover composition does
+ * too. A centred cover is stored as no framing.
+ */
+export const setItemFeed = (
+  value: MediaValue,
+  key: string,
+  feed: MediaFeedFraming | undefined,
+): MediaValue => {
+  const current = value.items[indexOfKey(value, key)];
+  if (!current || sameFeed(current.edit.feed, feed)) return value;
+  return {
+    ...value,
+    items: value.items.map((item) =>
+      item.key === key ? { ...item, edit: withFeed(item.edit, feed) } : item,
+    ),
   };
 };
 

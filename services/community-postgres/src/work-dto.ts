@@ -113,6 +113,8 @@ const workDtoFrom = (
     ...(cover?.renditions === undefined
       ? {}
       : { coverRenditions: cover.renditions }),
+    // The cover still's feed framing, only without a cover composition.
+    ...(cover?.feed === undefined ? {} : { coverFeed: cover.feed }),
     firstPublishedAt: row.first_published_at?.toISOString() ?? null,
     version: row.version,
     canEdit: owner,

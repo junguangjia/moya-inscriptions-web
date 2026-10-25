@@ -200,12 +200,25 @@
   aspect-ratio: var(--feed-media-ratio, 4 / 3);
 }
 
+/* The image covers the box, centred, unless the author framed a work cover
+   taller than the box for the feed (no cover composition): its chosen
+   region (--feed-media-y, the vertical position in the overflow), or the
+   whole still with blank sides on the card's own surface, as the feed
+   stage leaves its sides on the page. */
 .feedMedia img {
   display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
-  object-position: center;
+  object-position: 50% var(--feed-media-y, 50%);
+}
+
+.feedMedia[data-fit="contain"] {
+  background: var(--yoyi-color-background-surface);
+}
+
+.feedMedia[data-fit="contain"] img {
+  object-fit: contain;
 }
 
 .masonry[data-span-aligned-rows]
@@ -451,6 +464,7 @@
 
 .postSlide[data-fit="cover"] .postLiveFrame > video {
   object-fit: cover;
+  object-position: 50% var(--feed-slide-y, 50%);
 }
 
 .postSlideButton:focus-visible {
@@ -459,7 +473,10 @@
 }
 
 /* A shorter image sits centred with blank above and below; a taller one is
-   centre-cropped. The viewer always shows the whole image. */
+   cropped at the author's region (--feed-slide-y, its vertical position in
+   the overflow; centred by default) unless the author keeps it whole, blank
+   at the sides on the stage's page background. The viewer always shows the
+   whole image. */
 .postSlideButton img {
   display: block;
   width: 100%;
@@ -469,6 +486,7 @@
 
 .postSlide[data-fit="cover"] .postSlideButton img {
   object-fit: cover;
+  object-position: 50% var(--feed-slide-y, 50%);
 }
 
 /* The double-tap heart, over the stage and never in the way of a tap. */

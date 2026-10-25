@@ -87,8 +87,9 @@ export class AuthorCommunityService {
         ? noRenditionUrls
         : this.mediaResolver.resolveKeys(renditionKeys),
     ]);
-    // Work images carry the path and candidates the adapter resolved for the
-    // viewer's revision; Catalog images their approved URL and candidates.
+    // Work images carry the path, candidates and feed framing the adapter
+    // resolved for the viewer's revision; Catalog images their approved URL
+    // and candidates, never framing.
     const cardImage = (
       m: DiscoveryCardMediaRecord,
     ): NonNullable<ContentCard["media"]> | null => {
@@ -104,6 +105,7 @@ export class AuthorCommunityService {
           ...(m.placeholderColor === undefined
             ? {}
             : { placeholderColor: m.placeholderColor }),
+          ...(m.feed === undefined ? {} : { feed: m.feed }),
         };
       const image = {
         ...m,

@@ -18,6 +18,8 @@ import {
   readStripOffset,
   resolveStageAspect,
   slideFit,
+  slideFraming,
+  slidePositionY,
   stripScrollLeft,
 } from "../../../authors/feed-post-strip-geometry";
 import { MentionControl } from "../../../notifications/mention-control";
@@ -265,7 +267,9 @@ const cardOf = (target: EventTarget | null): number | null => {
  * The work as the feed will show it (#244 r3, mockup A `.hs`): cards at the
  * feed stage's ratio (the first image's, between 1:1 and 4:5), about three
  * quarters of the width and never taller than 40% of the screen, so the next
- * card peeks. It reads right to left like the feed, photo 1 rightmost (a
+ * card peeks. Each picture takes the feed's fit and the author's framing (a
+ * taller one's region, or whole with blank sides on the feed's page
+ * background). It reads right to left like the feed, photo 1 rightmost (a
  * single card too), and snaps card by card; 首图 and each item's status chip
  * sit on the card, and the caption under it says which way it
  * reads. A tap on any card opens 编辑 at it; a tap that moved the strip was
@@ -448,7 +452,13 @@ export const PublishPreviewStrip = ({
         {slides.map((slide, index) => {
           const broken = slide.src !== null && failed.has(slide.key);
           const fit =
-            slide.size === null ? "contain" : slideFit(slide.size, ratio);
+            slide.size === null
+              ? "contain"
+              : slideFit(slide.size, ratio, slide.feed);
+          const positionY =
+            slide.size === null
+              ? undefined
+              : slidePositionY(slide.size, ratio, slide.feed);
           const chip = slide.chip ?? null;
           const glyph: PublishChipGlyph | null =
             chip === null
@@ -478,6 +488,11 @@ export const PublishPreviewStrip = ({
               key={slide.key}
               aria-label={name}
               className={styles.card}
+              data-feed-framing={
+                slide.size === null
+                  ? undefined
+                  : slideFraming(slide.size, ratio, slide.feed)
+              }
               data-feed-slide-edit={index}
               data-fit={fit}
               data-publish-card={index}
@@ -490,6 +505,11 @@ export const PublishPreviewStrip = ({
                 onOpenItem(index);
               }}
               onContextMenu={(event) => event.preventDefault()}
+              style={
+                positionY === undefined
+                  ? undefined
+                  : ({ "--feed-slide-y": positionY } as CSSProperties)
+              }
               type="button"
             >
               {broken ? (

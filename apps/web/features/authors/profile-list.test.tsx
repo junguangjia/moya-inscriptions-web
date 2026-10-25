@@ -275,6 +275,40 @@ describe("Profile works cards", () => {
     expect(workCard(work(3))).not.toHaveProperty("mediaCount");
   });
 
+  // #341: the Works tab frames the work as Home's cards do.
+  it("carries the author's feed framing onto its shown images and its card image", () => {
+    const card = workCard(
+      work(1, {
+        media: [
+          { ...still(1), feed: { fit: "cover", y: 0.2 } },
+          still(2),
+          { ...live(3), feed: { fit: "contain" } },
+        ],
+        coverMediaId: itemId(1),
+        coverSrc: still(1).src,
+        coverFeed: { fit: "cover", y: 0.2 },
+      }),
+    );
+    expect(card.gallery?.map((entry) => entry.feed)).toEqual([
+      { fit: "cover", y: 0.2 },
+      undefined,
+      { fit: "contain" },
+    ]);
+    expect(card.gallery?.[1]).not.toHaveProperty("feed");
+    expect(card.media?.feed).toEqual({ fit: "cover", y: 0.2 });
+    // A cover composition: the account sends no `coverFeed`, and the card
+    // image never takes its item's framing.
+    const composed = workCard(
+      work(1, {
+        media: [{ ...still(1), feed: { fit: "contain" } }],
+        coverMediaId: itemId(1),
+        coverSrc: `/api/community/publishing/media/${itemId(1)}/cover/${"3".repeat(32)}`,
+      }),
+    );
+    expect(composed.media).not.toHaveProperty("feed");
+    expect(composed.gallery?.[0]?.feed).toEqual({ fit: "contain" });
+  });
+
   it("takes the card still from the revision's cover crop, not the display image", () => {
     // M03/L10: the cover crop belongs to the revision, so the Works tab must
     // not fall back to the uncropped display image of the cover item.

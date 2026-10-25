@@ -58,6 +58,8 @@ const session = () => ({
 interface Fixture {
   readonly registered: () => number;
   readonly saved: () => number;
+  /** The content of the account's draft as last saved, or null before a save. */
+  readonly draft: () => CreatePublishingDraftCommand["content"] | null;
   readonly submitted: () => readonly WorkSubmissionCommand[];
   readonly articles: () => readonly CreateArticleDraftCommand[];
   readonly release: () => void;
@@ -80,8 +82,14 @@ interface Fixture {
 const fixture = async (
   page: Page,
   successfulPhotos = false,
+  listedDrafts = false,
 ): Promise<Fixture> => {
   const items = new Map<string, PublishingMediaItem>();
+  /** Each received photo's own size (`listedDrafts`): its derivatives keep that shape. */
+  const shapes = new Map<
+    string,
+    { readonly width: number; readonly height: number }
+  >();
   let highResolution: PublishingMediaProcessingProgress["highResolutionStatus"] =
     "ready";
   let completedRenditions = 5;
@@ -186,6 +194,18 @@ const fixture = async (
         request.socket.destroy();
         return;
       }
+      if (listedDrafts && !shapes.has(item.id)) {
+        const shape = await sharp(bytes)
+          .metadata()
+          .then(
+            ({ width, height }) =>
+              width === undefined || height === undefined
+                ? null
+                : { width, height },
+            () => null,
+          );
+        if (shape !== null) shapes.set(item.id, shape);
+      }
       await uploadsHeld;
       const next = commit(item.id, component.id);
       response.writeHead(200, { "Content-Type": "application/json" });
@@ -224,7 +244,10 @@ const fixture = async (
         ...item,
         state: "ready",
         components: item.components.map((c) => ({ ...c, state: "verified" })),
-        presentation: { width: 8, height: 8 },
+        presentation: (listedDrafts ? shapes.get(id) : undefined) ?? {
+          width: 8,
+          height: 8,
+        },
         media: {
           thumbSrc: `/api/community/publishing/media/${id}/thumb/base`,
           displaySrc: `/api/community/publishing/media/${id}/display/base`,
@@ -257,6 +280,21 @@ const fixture = async (
     createdAt: timestamp,
     updatedAt: timestamp,
   });
+  /**
+   * The draft as the account reads it back: a listed draft brings its
+   * photos' records along, as the account's own read does.
+   */
+  const reopened = () =>
+    draft === null || !listedDrafts
+      ? draft
+      : {
+          ...draft,
+          mediaItems: draft.content.items.flatMap((entry) => {
+            const item =
+              entry.itemId === null ? undefined : items.get(entry.itemId);
+            return item === undefined ? [] : [item];
+          }),
+        };
   const articleFrom = (command: CreateArticleDraftCommand) => ({
     id: ARTICLE_ID,
     ownerId: authorId,
@@ -401,16 +439,21 @@ const fixture = async (
     );
     if (successfulPhotos && itemMatch && request.method() === "GET")
       return route.fulfill({ json: items.get(itemMatch[1]!) });
-    if (
-      successfulPhotos &&
-      /^\/api\/community\/publishing\/media\/[^/]+\/(?:thumb|display)\/base$/u.test(
-        path,
-      )
-    )
+    const derivativeMatch = path.match(
+      /^\/api\/community\/publishing\/media\/([^/]+)\/(?:thumb|display)\/base$/u,
+    );
+    if (successfulPhotos && derivativeMatch) {
+      // A listed draft's photos keep their own shape; any other is a small square.
+      const size = (listedDrafts
+        ? items.get(derivativeMatch[1]!)?.presentation
+        : null) ?? { width: 8, height: 8 };
       return route.fulfill({
         contentType: "image/jpeg",
-        body: (await photo("derivative.jpg", 8, 8, "#315c8d")).buffer,
+        body: (
+          await photo("derivative.jpg", size.width, size.height, "#315c8d")
+        ).buffer,
       });
+    }
     if (
       path === "/api/community/publishing/drafts" &&
       request.method() === "POST"
@@ -420,7 +463,7 @@ const fixture = async (
       return route.fulfill({ status: 201, json: draft });
     }
     if (path === `/api/community/publishing/drafts/${DRAFT_ID}`)
-      return route.fulfill({ json: draft });
+      return route.fulfill({ json: reopened() });
     if (/\/publishing\/drafts\/[^/]+\/(save|snapshot)$/u.test(path)) {
       saved += 1;
       const command = request.postDataJSON() as SavePublishingDraftCommand;
@@ -488,6 +531,36 @@ const fixture = async (
       return route.fulfill({ json: { items: [], nextCursor: null } });
     if (path === "/api/community/notifications/stream") return route.abort();
     if (
+      listedDrafts &&
+      draft !== null &&
+      path === "/api/community/publishing/drafts"
+    )
+      return route.fulfill({
+        json: {
+          items: [
+            {
+              id: draft.id,
+              kind: draft.kind,
+              workId: draft.workId,
+              title: draft.content.title.trim(),
+              excerpt: Array.from(draft.content.body.trim())
+                .slice(0, 80)
+                .join("")
+                .trim(),
+              coverSrc: null,
+              itemCount: draft.content.items.length,
+              missingLocalCount: 0,
+              deviceClass: draft.deviceClass,
+              updatedAt: draft.updatedAt,
+            },
+          ],
+          total: 1,
+          page: 1,
+          pageSize: 20,
+          totalPages: 1,
+        },
+      });
+    if (
       path === "/api/community/publishing/drafts" ||
       /\/publishing\/drafts\/[^/]+\/history$/u.test(path)
     )
@@ -503,6 +576,7 @@ const fixture = async (
   return {
     registered: () => registered,
     saved: () => saved,
+    draft: () => draft?.content ?? null,
     submitted: () => submitted,
     articles: () => articles,
     uploadStarted: () => uploadStarted,
@@ -581,6 +655,37 @@ const sheet = (composer: Composer, name: string) =>
   composer.editor.locator(`[data-phone-sheet="${name}"]`);
 const thumb = (composer: Composer, index: number) =>
   composer.strip.locator(`[data-edit-index="${index}"] [data-edit-thumb]`);
+const ratio = (composer: Composer, name: string) =>
+  composer.editor
+    .getByRole("radiogroup", { name: "裁剪比例", exact: true })
+    .getByRole("radio", { name, exact: true });
+/** 编辑's 「动态流」 tool (#341), and its choice for a photo taller than the feed's stage. */
+const feedTool = (composer: Composer) =>
+  composer.editor.getByRole("button", { name: "动态流", exact: true });
+const feedFit = (composer: Composer, name: "局部" | "整张") =>
+  composer.editor
+    .getByRole("radiogroup", { name: "动态流显示", exact: true })
+    .getByRole("radio", { name, exact: true });
+/** 局部's shown region: a vertical slider, 100 at the top, 0 at the bottom. */
+const feedRegion = (composer: Composer) =>
+  composer.editor.getByRole("slider", { name: "动态流显示范围", exact: true });
+const publishCard = (composer: Composer, index: number) =>
+  composer.editor.locator(`[data-publish-card="${index}"]`);
+/** The element's background and the colour token, both as the browser computes them. */
+const backgroundAndToken = async (locator: Locator, token: string) =>
+  (await present(locator)).evaluate(
+    (node, name) => {
+      const sample = document.createElement("span");
+      sample.style.backgroundColor =
+        getComputedStyle(node).getPropertyValue(name);
+      return {
+        background: getComputedStyle(node).backgroundColor,
+        token: sample.style.backgroundColor,
+      };
+    },
+    token,
+    { timeout: ACTION_TIMEOUT },
+  );
 interface LocalPhoto {
   readonly name: string;
   readonly mimeType: string;
@@ -629,6 +734,11 @@ const openComposer = async (
     readonly desktop?: boolean;
     readonly reducedMotion?: "reduce";
     readonly successfulPhotos?: boolean;
+    /**
+     * With `successfulPhotos`: 草稿箱 lists the saved draft and reopens it
+     * with its photos, whose derivatives keep each photo's shape.
+     */
+    readonly listedDrafts?: boolean;
   } = {},
 ): Promise<Composer> => {
   let context: BrowserContext | null = null;
@@ -647,7 +757,11 @@ const openComposer = async (
     target = await context.newPage();
     cdp = await context.newCDPSession(target);
   }
-  const state = await fixture(target, options.successfulPhotos);
+  const state = await fixture(
+    target,
+    options.successfulPhotos,
+    options.listedDrafts,
+  );
   const composer: Composer = {
     context,
     page: target,
@@ -722,12 +836,24 @@ const skipUnlessTrustedTouch = (testInfo: TestInfo) =>
     "Trusted touch injection uses Chromium CDP.",
   );
 
+/** One trusted finger: how far it moves from the target's centre, and how it leaves. */
+interface TrustedTouch {
+  /** CSS pixels over 12 moves; positive is right and down. */
+  readonly dx?: number | undefined;
+  readonly dy?: number | undefined;
+  /** Checks once the finger is down, before it moves. */
+  readonly landed?: (() => Promise<void>) | undefined;
+  /** Checks once it has moved, while it is still down. */
+  readonly held?: (() => Promise<void>) | undefined;
+  /** The system takes the touch away (touchcancel) instead of a lift. */
+  readonly cancelled?: boolean | undefined;
+}
+
 /** Trusted touch input targets a visible region and always ends the gesture. */
-const trustedDrag = async (
+const trustedTouch = async (
   composer: Composer,
   target: Locator,
-  dx: number,
-  longPress = false,
+  { dx = 0, dy = 0, landed, held, cancelled = false }: TrustedTouch,
 ) => {
   await reveal(target);
   const from = await center(target);
@@ -739,29 +865,89 @@ const trustedDrag = async (
     touchPoints: [{ x: from.x, y: from.y }],
   });
   try {
-    if (longPress) {
-      await expect(composer.strip).toHaveAttribute("data-sorting", "", {
-        timeout: 2_000,
-      });
-      await expect(
-        composer.strip.locator(
-          '[data-edit-index="1"] [data-edit-mark="order"]',
-        ),
-      ).toHaveText("2");
-    }
+    await landed?.();
     for (let step = 1; step <= 12; step += 1) {
       await cdp.send("Input.dispatchTouchEvent", {
         type: "touchMove",
-        touchPoints: [{ x: from.x + (dx * step) / 12, y: from.y }],
+        touchPoints: [
+          { x: from.x + (dx * step) / 12, y: from.y + (dy * step) / 12 },
+        ],
       });
       await composer.page.waitForTimeout(16);
     }
+    await held?.();
   } finally {
     await cdp.send("Input.dispatchTouchEvent", {
-      type: "touchEnd",
+      type: cancelled ? "touchCancel" : "touchEnd",
       touchPoints: [],
     });
   }
+};
+
+const trustedDrag = (
+  composer: Composer,
+  target: Locator,
+  dx: number,
+  longPress = false,
+) =>
+  trustedTouch(composer, target, {
+    dx,
+    landed: longPress
+      ? async () => {
+          await expect(composer.strip).toHaveAttribute("data-sorting", "", {
+            timeout: 2_000,
+          });
+          await expect(
+            composer.strip.locator(
+              '[data-edit-index="1"] [data-edit-mark="order"]',
+            ),
+          ).toHaveText("2");
+        }
+      : undefined,
+  });
+
+/** A primary mouse button drag from `from` (no touch: a narrow window or a trackpad). */
+const mouseDrag = async (
+  page: Page,
+  from: { readonly x: number; readonly y: number },
+  dx: number,
+  dy: number,
+) => {
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  try {
+    await page.mouse.move(from.x + dx, from.y + dy, { steps: 8 });
+  } finally {
+    await page.mouse.up();
+  }
+};
+
+/**
+ * Watches for the zoom a released corner starts ([data-edit-reframe]); the
+ * returned wait passes once it has run and gone.
+ */
+const watchReframe = async (composer: Composer) => {
+  await composer.page.evaluate(() => {
+    const scope = window as unknown as { reframeSeen?: boolean };
+    scope.reframeSeen = false;
+    new MutationObserver((_, observer) => {
+      if (document.querySelector("[data-edit-reframe]") === null) return;
+      scope.reframeSeen = true;
+      observer.disconnect();
+    }).observe(document.body, { subtree: true, childList: true });
+  });
+  return async () => {
+    await expect
+      .poll(() =>
+        composer.page.evaluate(
+          () =>
+            (window as unknown as { reframeSeen?: boolean }).reframeSeen ===
+            true,
+        ),
+      )
+      .toBe(true);
+    await expect(composer.editor.locator("[data-edit-reframe]")).toHaveCount(0);
+  };
 };
 
 for (const progressOpen of [false, true])
@@ -906,11 +1092,12 @@ test("album selection goes straight to 编辑 with a red rightmost 首图 and no
       "[data-order-rail], [data-photo-grid], [data-media-edit-dialog], input[type=range]",
     ),
   ).toHaveCount(0);
+  // 原始比例 · 自由 · 4:5 · 3:4 · 1:1 · 4:3 (#341).
   await expect(
     composer.editor
       .getByRole("radiogroup", { name: "裁剪比例" })
       .getByRole("radio"),
-  ).toHaveCount(5);
+  ).toHaveCount(6);
   await expect
     .poll(composer.fixture.registered, { timeout: ACTION_TIMEOUT })
     .toBeGreaterThan(0);
@@ -987,7 +1174,7 @@ test("long-press drag reorders the RTL strip and renumbers 首图", async ({
   ).toHaveAttribute("data-fit", "contain");
 });
 
-test("inline crop offers 4:5, feed guide and apply-all while cover composition stays separate", async ({
+test("inline crop offers 自由 and 4:5, the 「动态流」 tool and apply-all while framing and cover composition stay separate", async ({
   browser,
   page,
 }, testInfo) => {
@@ -998,24 +1185,88 @@ test("inline crop offers 4:5, feed guide and apply-all while cover composition s
     name: "裁剪比例",
     exact: true,
   });
-  await expect(
-    ratios.getByRole("radio", { name: "原始比例", exact: true }),
-  ).toHaveAttribute("aria-checked", "true");
-  await click(
-    composer.editor.getByRole("button", { name: "动态流参考线", exact: true }),
+  await expect(ratios.getByRole("radio")).toHaveText([
+    "原始比例",
+    "自由",
+    "4:5",
+    "3:4",
+    "1:1",
+    "4:3",
+  ]);
+  await expect(ratio(composer, "原始比例")).toHaveAttribute(
+    "aria-checked",
+    "true",
   );
+  const handles = composer.editor.locator("[data-crop-handle]");
+  await expect(handles).toHaveCount(4);
+  // 「动态流」 starts off: no window over the photo.
+  const tool = feedTool(composer);
+  await expect(tool).toHaveAttribute("aria-pressed", "false");
   const window = composer.editor.locator("[data-feed-window]");
+  await expect(window).toHaveCount(0);
+  const applyAll = composer.editor.getByRole("button", {
+    name: "应用到全部",
+    exact: true,
+  });
+
+  // Photo 2 at 3:4 is taller than the stage photo 1 gives the feed: 整张.
+  await click(thumb(composer, 1));
+  await expect(thumb(composer, 1)).toHaveAttribute("aria-current", "true");
+  await click(ratio(composer, "3:4"));
+  await click(tool);
+  await expect(tool).toHaveAttribute("aria-pressed", "true");
+  // The crop rests meanwhile: its ratios and corners are away.
+  await expect(ratios).toHaveCount(0);
+  await expect(handles).toHaveCount(0);
+  await click(feedFit(composer, "整张"));
+  await expect(feedFit(composer, "整张")).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await expect(window).toHaveAttribute("data-feed-fit", "contain");
+  await expect(window).toHaveAttribute("data-feed-whole", "");
+  await expect(window.locator("[data-edge]")).toHaveCount(0);
+
+  // The tool stays on for photo 1, which the feed crops at its centre: 局部.
+  await click(thumb(composer, 0));
+  await expect(thumb(composer, 0)).toHaveAttribute("aria-current", "true");
   await expect(window).toHaveAttribute("data-feed-fit", "cover");
   await expect(window.locator("[data-edge]")).toHaveCount(2);
-  await click(ratios.getByRole("radio", { name: "4:5", exact: true }));
-  await expect(window).toHaveAttribute("data-feed-fit", "fill");
-  await click(
-    composer.editor.getByRole("button", { name: "应用到全部", exact: true }),
+  await expect(feedFit(composer, "局部")).toHaveAttribute(
+    "aria-checked",
+    "true",
   );
-  await click(thumb(composer, 1));
+  await expect(feedRegion(composer)).toHaveAttribute("aria-valuenow", "50");
+  await expect(applyAll).toHaveAttribute("aria-disabled", "true");
+
+  // Off again, the ratios are back; at 4:5 the feed fills its stage with
+  // the photo and there is nothing to choose.
+  await click(tool);
+  await expect(tool).toHaveAttribute("aria-pressed", "false");
+  await expect(window).toHaveCount(0);
+  await click(ratio(composer, "4:5"));
+  await click(tool);
+  await expect(window).toHaveAttribute("data-feed-fit", "fill");
   await expect(
-    ratios.getByRole("radio", { name: "4:5", exact: true }),
-  ).toHaveAttribute("aria-checked", "true");
+    composer.editor.locator('[data-edit-feed-note="shown"]'),
+  ).toHaveText("动态流中满幅显示，无需选择");
+  await expect(
+    composer.editor.getByRole("radiogroup", { name: "动态流显示" }),
+  ).toHaveCount(0);
+  await click(tool);
+  await click(applyAll);
+  await click(thumb(composer, 1));
+  await expect(ratio(composer, "4:5")).toHaveAttribute("aria-checked", "true");
+  // 应用到全部 gave photo 2 the crop, never the framing: taller again, it is
+  // still shown whole.
+  await click(ratio(composer, "3:4"));
+  await click(tool);
+  await expect(feedFit(composer, "整张")).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await click(tool);
+
   await click(thumb(composer, 0));
   await click(thumb(composer, 0));
   await click(
@@ -1031,9 +1282,370 @@ test("inline crop offers 4:5, feed guide and apply-all while cover composition s
   await present(cover);
   await expect(cover.locator("[data-cover-stage]")).toBeVisible();
   await expect(cover.locator("input[type=range]")).toHaveCount(0);
+  // 封面构图 keeps its whole stage: no corner handles there (#341).
+  await expect(cover.locator("[data-crop-handle]")).toHaveCount(0);
   await click(cover.getByRole("button", { name: "完成", exact: true }));
   await expect(cover).toHaveCount(0);
   await present(screen(composer, "edit"));
+});
+
+test("「动态流」 framing is kept per photo across 发布 and 编辑, and is submitted with its photo", async ({
+  browser,
+  page,
+}, testInfo) => {
+  skipUnlessPhone(testInfo);
+  const composer = await openComposer(browser, page, testInfo, {
+    successfulPhotos: true,
+  });
+  await pickPhotos(composer);
+  await expect.poll(composer.fixture.uploadStarted).toBe(2);
+  const first = publishCard(composer, 0);
+  const back = screen(composer, "publish").getByRole("button", {
+    name: "返回编辑照片",
+    exact: true,
+  });
+  // Unframed, the feed crops the taller photo 1 at its centre.
+  await publishScreen(composer);
+  await expect(first).toHaveAttribute("data-fit", "cover");
+  await expect(first).not.toHaveAttribute("data-feed-framing");
+  await expect(first.locator("img")).toHaveCSS("object-position", "50% 50%");
+  await expect(publishCard(composer, 1)).toHaveAttribute("data-fit", "contain");
+  await click(back);
+  await present(screen(composer, "edit"));
+  await expect(thumb(composer, 0)).toHaveAttribute("aria-current", "true");
+
+  // 局部 at the top (End): only what lies below is cut.
+  await click(feedTool(composer));
+  await press(feedRegion(composer), "End");
+  await expect(feedRegion(composer)).toHaveAttribute("aria-valuenow", "100");
+  const window = composer.editor.locator("[data-feed-window]");
+  await expect(window.locator('[data-edge="top"]')).toHaveCount(0);
+  await expect(window.locator('[data-edge="bottom"]')).toHaveCount(1);
+  await publishScreen(composer);
+  await expect(first).toHaveAttribute("data-fit", "cover");
+  await expect(first).toHaveAttribute("data-feed-framing", "region");
+  await expect(first).toHaveAttribute("style", /--feed-slide-y:\s*0%/u);
+  await expect(first.locator("img")).toHaveCSS("object-position", "50% 0%");
+  await expect(publishCard(composer, 1)).not.toHaveAttribute(
+    "data-feed-framing",
+  );
+
+  // 编辑 opens with the tool off; on, photo 1 is where it was left.
+  await click(back);
+  await present(screen(composer, "edit"));
+  await expect(feedTool(composer)).toHaveAttribute("aria-pressed", "false");
+  await click(feedTool(composer));
+  await expect(feedRegion(composer)).toHaveAttribute("aria-valuenow", "100");
+  await expect(feedFit(composer, "局部")).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await click(feedFit(composer, "整张"));
+  await expect(window).toHaveAttribute("data-feed-whole", "");
+  await expect(window.locator("[data-edge]")).toHaveCount(0);
+  await expect(feedRegion(composer)).toHaveCount(0);
+  // The back sheet's 继续编辑 finds 编辑 as it was.
+  await click(
+    screen(composer, "edit").getByRole("button", { name: "返回", exact: true }),
+  );
+  const sheetBack = sheet(composer, "edit-back");
+  await click(sheetBack.getByRole("button", { name: "继续编辑", exact: true }));
+  await expect(sheetBack).toHaveCount(0);
+  await expect(feedFit(composer, "整张")).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+
+  // 整张: the whole photo, its blank sides on the feed stage's page colour.
+  await publishScreen(composer);
+  await expect(first).toHaveAttribute("data-fit", "contain");
+  await expect(first).toHaveAttribute("data-feed-framing", "whole");
+  await expect(first).not.toHaveAttribute("style", /--feed-slide-y/u);
+  await expect(first.locator("img")).toHaveCSS("object-fit", "contain");
+  const colours = await backgroundAndToken(
+    first,
+    "--yoyi-color-background-page",
+  );
+  expect(colours.token).not.toBe("");
+  expect(colours.background).toBe(colours.token);
+
+  const publish = screen(composer, "publish");
+  // #305: a work needs a title as well as its photos.
+  await fill(publish.locator('[data-editor-input="title"]'), "合成动态流构图");
+  await fill(publish.locator('[data-editor-input="body"]'), "第一张整张显示");
+  await press(publish.locator('[data-editor-input="body"]'), "Tab");
+  await expect(publish.locator("[data-editor-submit]")).not.toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  await click(publish.locator("[data-editor-submit]"));
+  await expect(composer.editor).toHaveCount(0);
+  composer.fixture.releaseUploads();
+  await expect.poll(composer.fixture.uploaded).toBe(2);
+  composer.fixture.releaseReady();
+  await expect
+    .poll(() => composer.fixture.submitted().length, { timeout: 15_000 })
+    .toBe(1);
+  // The framing travels in the photo's edit and never touches its pixels.
+  const [framed, plain] = composer.fixture.submitted()[0]!.content.items;
+  expect(framed!.edit).toEqual({
+    rotation: 0,
+    crop: null,
+    feed: { fit: "contain" },
+  });
+  expect(plain!.edit).not.toHaveProperty("feed");
+});
+
+test("存草稿并退出 keeps a photo's framing in the draft, and reopening the draft brings it back", async ({
+  browser,
+  page,
+}, testInfo) => {
+  skipUnlessPhone(testInfo);
+  const composer = await openComposer(browser, page, testInfo, {
+    successfulPhotos: true,
+    listedDrafts: true,
+  });
+  composer.fixture.releaseUploads();
+  await pickPhotos(composer);
+  await expect.poll(composer.fixture.uploaded).toBe(2);
+  composer.fixture.releaseReady();
+  await expect(composer.editor.locator("[data-edit-status]")).toHaveText("", {
+    timeout: ACTION_TIMEOUT,
+  });
+  // Photo 1 (3:4, now its derivative) is taller than the feed's 4:5 stage.
+  await expect(
+    composer.editor.locator("[data-edit-stage] img").first(),
+  ).toHaveAttribute("src", /\/display\/base$/u);
+  await click(feedTool(composer));
+  await expect(feedTool(composer)).toHaveAttribute("aria-pressed", "true");
+  await click(feedFit(composer, "整张"));
+  await expect(feedFit(composer, "整张")).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  const saved = composer.fixture.saved();
+  await click(
+    screen(composer, "edit").getByRole("button", { name: "返回", exact: true }),
+  );
+  await click(
+    sheet(composer, "edit-back").getByRole("button", {
+      name: "存草稿并退出",
+      exact: true,
+    }),
+  );
+  await expect(composer.editor).toHaveCount(0);
+  expect(composer.fixture.saved()).toBeGreaterThan(saved);
+  const content = composer.fixture.draft();
+  expect(content?.items[0]?.edit.feed).toEqual({ fit: "contain" });
+  expect(content?.items[1]?.edit).not.toHaveProperty("feed");
+
+  // 草稿箱 on a new work's start screen reopens the draft at 发布.
+  await click(
+    composer.page.getByRole("button", { name: "发布内容", exact: true }),
+  );
+  await click(
+    screen(composer, "select").getByRole("button", {
+      name: "草稿箱",
+      exact: true,
+    }),
+  );
+  const picker = composer.page.locator("[data-drafts-picker]");
+  const entry = picker
+    .locator(`[data-draft-id="${DRAFT_ID}"]`)
+    .getByRole("button", { name: "未命名作品", exact: true });
+  // The picker opens a draft once it has confirmed the account.
+  await present(entry);
+  await expect(entry).not.toHaveAttribute("aria-disabled", "true");
+  await click(entry);
+  await expect(picker).toHaveCount(0);
+  const publish = screen(composer, "publish");
+  await present(publish);
+  await expect(publishCard(composer, 0)).toHaveAttribute("data-fit", "contain");
+  await expect(publishCard(composer, 0)).toHaveAttribute(
+    "data-feed-framing",
+    "whole",
+  );
+  await expect(publishCard(composer, 1)).not.toHaveAttribute(
+    "data-feed-framing",
+  );
+  await click(
+    publish.getByRole("button", { name: "返回编辑照片", exact: true }),
+  );
+  await present(screen(composer, "edit"));
+  await expect(thumb(composer, 0)).toHaveAttribute("aria-current", "true");
+  await click(feedTool(composer));
+  await expect(feedTool(composer)).toHaveAttribute("aria-pressed", "true");
+  await expect(feedFit(composer, "整张")).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+});
+
+test("「动态流」 keeps a dragged region once the finger lifts, and a cancelled drag leaves it", async ({
+  browser,
+  page,
+}, testInfo) => {
+  skipUnlessTrustedTouch(testInfo);
+  const composer = await openComposer(browser, page, testInfo);
+  await pickPhotos(composer);
+  const stage = composer.editor.locator("[data-edit-stage]");
+  await click(feedTool(composer));
+  const region = feedRegion(composer);
+  await expect(region).toHaveAttribute("aria-valuenow", "50");
+  await expect(region).toHaveAccessibleDescription(/居中/u);
+  // The window follows the finger down to the bottom; what is kept (said
+  // in the slider's description) changes only once it lifts.
+  await trustedTouch(composer, region, {
+    dy: 160,
+    held: async () => {
+      await expect(region).toHaveAttribute("aria-valuenow", "0");
+      await expect(stage).toHaveAttribute("data-feed-drag", "");
+      // The photo under it never takes the finger (no 0.94 peek).
+      await expect(stage).not.toHaveAttribute("data-gesture");
+      await expect(region).toHaveAccessibleDescription(/居中/u);
+    },
+  });
+  await expect(stage).not.toHaveAttribute("data-feed-drag");
+  await expect(region).toHaveAttribute("aria-valuenow", "0");
+  await expect(region).toHaveAccessibleDescription(/下方裁去 0%/u);
+  // Taken away mid-drag, the window goes back to the kept region.
+  await trustedTouch(composer, region, {
+    dy: -160,
+    cancelled: true,
+    held: async () => {
+      await expect(region).toHaveAttribute("aria-valuenow", "100");
+    },
+  });
+  await expect(stage).not.toHaveAttribute("data-feed-drag");
+  await expect(region).toHaveAttribute("aria-valuenow", "0");
+  await expect(region).toHaveAccessibleDescription(/下方裁去 0%/u);
+  await publishScreen(composer);
+  const first = publishCard(composer, 0);
+  await expect(first).toHaveAttribute("data-feed-framing", "region");
+  await expect(first).toHaveAttribute("style", /--feed-slide-y:\s*100%/u);
+  await expect(first.locator("img")).toHaveCSS("object-position", "50% 100%");
+});
+
+test("a corner drag crops freely at 原始比例 and keeps a chosen ratio, and 「动态流」 rests the photo", async ({
+  browser,
+  page,
+}, testInfo) => {
+  skipUnlessTrustedTouch(testInfo);
+  const composer = await openComposer(browser, page, testInfo);
+  await pickPhotos(composer);
+  const stage = composer.editor.locator("[data-edit-stage]");
+  const corner = (name: string) =>
+    composer.editor.getByRole("button", { name, exact: true });
+  await expect(ratio(composer, "原始比例")).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  // Taken away mid-drag, the window goes back and nothing is kept.
+  await trustedTouch(composer, corner("调整裁剪右下角"), {
+    dx: -60,
+    dy: -90,
+    cancelled: true,
+    held: async () => {
+      await expect(stage).toHaveAttribute("data-resizing", "");
+      // A corner never steps the photo back (no 0.94 peek).
+      await expect(stage).not.toHaveAttribute("data-gesture");
+    },
+  });
+  await expect(stage).not.toHaveAttribute("data-resizing");
+  await expect(ratio(composer, "原始比例")).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  // Let go, the window is the crop, any shape (自由), zoomed to fill the field.
+  let reframed = await watchReframe(composer);
+  await trustedTouch(composer, corner("调整裁剪右下角"), { dx: -60, dy: -90 });
+  await expect(ratio(composer, "自由")).toHaveAttribute("aria-checked", "true");
+  await reframed();
+  await expect(stage).not.toHaveAttribute("data-resizing");
+  // A chosen ratio holds while a corner moves.
+  await click(ratio(composer, "4:5"));
+  reframed = await watchReframe(composer);
+  await trustedTouch(composer, corner("调整裁剪左上角"), { dx: 50, dy: 50 });
+  await reframed();
+  await expect(ratio(composer, "4:5")).toHaveAttribute("aria-checked", "true");
+
+  // While 「动态流」 has the stage, a mouse drag on the photo moves nothing
+  // (review G2); with the tool off the same drag pans it.
+  const picture = composer.editor.locator("[data-media-crop] img").first();
+  const placement = () =>
+    picture.evaluate(
+      (node) => (node as HTMLElement).style.transform,
+      undefined,
+      {
+        timeout: ACTION_TIMEOUT,
+      },
+    );
+  await click(feedTool(composer));
+  await expect(
+    composer.editor.getByLabel("裁剪已暂停，关闭动态流后可调整", {
+      exact: true,
+    }),
+  ).toHaveCount(1);
+  const frame = await center(composer.editor.locator("[data-edit-frame]"));
+  const before = await placement();
+  await mouseDrag(composer.page, frame, 30, 30);
+  // Two frames: anything the drag moved has been drawn.
+  await composer.page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  expect(await placement()).toBe(before);
+  await expect(ratio(composer, "4:5")).toHaveCount(0);
+  await click(feedTool(composer));
+  await expect(ratio(composer, "4:5")).toHaveAttribute("aria-checked", "true");
+  await mouseDrag(composer.page, frame, 30, 30);
+  await expect.poll(placement).not.toBe(before);
+});
+
+test("the six-segment ratio row keeps every segment whole from 320 to 390 px", async ({
+  browser,
+  page,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "desktop-chromium",
+    "Narrow phone widths are set on Chromium's emulated phone.",
+  );
+  const composer = await openComposer(browser, page, testInfo);
+  await pickPhotos(composer);
+  const ratios = composer.editor.getByRole("radiogroup", {
+    name: "裁剪比例",
+    exact: true,
+  });
+  const height = composer.page.viewportSize()?.height;
+  if (height === undefined) throw new Error("Missing phone viewport");
+  for (const width of [320, 360, 375, 390]) {
+    await composer.page.setViewportSize({ width, height });
+    await present(ratios);
+    await expect(ratios.getByRole("radio")).toHaveCount(6);
+    // No segment's word or glyph is cut, and the row stays on the screen.
+    await expect
+      .poll(() =>
+        ratios.evaluate(
+          (group) => {
+            const whole = (node: Element) =>
+              node.scrollWidth <= node.clientWidth + 1 &&
+              node.scrollHeight <= node.clientHeight + 1;
+            const row = group.getBoundingClientRect();
+            return (
+              whole(group) &&
+              row.left >= -0.5 &&
+              row.right <= document.documentElement.clientWidth + 0.5 &&
+              [...group.querySelectorAll("[role=radio]")].every(whole)
+            );
+          },
+          undefined,
+          { timeout: ACTION_TIMEOUT },
+        ),
+      )
+      .toBe(true);
+  }
 });
 
 test("发布 previews the feed right to left and card taps return to the corresponding photo", async ({
@@ -1408,6 +2020,86 @@ test("desktop preserves the entry choice, all-at-once editor, feed stage and cro
     "data-fit",
     "contain",
   );
+});
+
+test("desktop edit dialog keeps 局部 · 整张 with 完成, and 还原 resets the framing", async ({
+  browser,
+  page,
+}, testInfo) => {
+  test.skip(
+    !["desktop-chromium", "desktop-webkit"].includes(testInfo.project.name),
+    "Desktop feed framing (#341, Owner decision 4a).",
+  );
+  const composer = await openComposer(browser, page, testInfo, {
+    desktop: true,
+  });
+  const desktop = composer.editor.locator('[data-editor-layout="desktop"]');
+  await chooseFiles(
+    composer.page,
+    desktop.getByRole("button", { name: "选择文件", exact: true }),
+    await photos(),
+  );
+  // Photo 1 (3:4) is taller than the 4:5 stage it sets.
+  const slide = desktop.locator(
+    '[data-feed-preview-stage] [data-feed-slide="0"]',
+  );
+  await expect(slide).toHaveAttribute("data-fit", "cover");
+  await expect(slide).not.toHaveAttribute("data-feed-framing");
+  const dialog = composer.page.getByRole("dialog", {
+    name: "编辑第 1 项",
+    exact: true,
+  });
+  const open = async () => {
+    await click(
+      desktop.getByRole("button", { name: "编辑第 1 项", exact: true }),
+    );
+    await present(dialog);
+  };
+  const fit = (name: "局部" | "整张") =>
+    dialog
+      .getByRole("group", { name: "动态流显示", exact: true })
+      .getByRole("radio", { name, exact: true });
+  const done = async () => {
+    await click(dialog.getByRole("button", { name: "完成", exact: true }));
+    await expect(dialog).toHaveCount(0);
+  };
+  await open();
+  // The desktop crop has no corner handles.
+  await expect(dialog.locator("[data-crop-handle]")).toHaveCount(0);
+  await expect(fit("局部")).toBeChecked();
+  await (await present(fit("整张"))).check({ timeout: ACTION_TIMEOUT });
+  const window = dialog.locator("[data-feed-window]");
+  await expect(window).toHaveAttribute("data-feed-fit", "contain");
+  await expect(window).toHaveAttribute("data-feed-whole", "");
+  // Pending until 完成: the stage still shows the stored framing.
+  await expect(slide).toHaveAttribute("data-fit", "cover");
+  await done();
+  await expect(slide).toHaveAttribute("data-fit", "contain");
+  await expect(slide).toHaveAttribute("data-feed-framing", "whole");
+
+  // 局部 with the region handle's End: the top of the photo.
+  await open();
+  await expect(fit("整张")).toBeChecked();
+  await (await present(fit("局部"))).check({ timeout: ACTION_TIMEOUT });
+  const region = dialog.getByRole("slider", {
+    name: "动态流显示范围",
+    exact: true,
+  });
+  await expect(region).toHaveAttribute("aria-valuenow", "50");
+  await press(region, "End");
+  await expect(region).toHaveAttribute("aria-valuenow", "100");
+  await done();
+  await expect(slide).toHaveAttribute("data-fit", "cover");
+  await expect(slide).toHaveAttribute("data-feed-framing", "region");
+  await expect(slide).toHaveAttribute("style", /--feed-slide-y:\s*0%/u);
+
+  // 还原 brings back the centred cover.
+  await open();
+  await click(dialog.getByRole("button", { name: "还原", exact: true }));
+  await expect(region).toHaveAttribute("aria-valuenow", "50");
+  await done();
+  await expect(slide).toHaveAttribute("data-fit", "cover");
+  await expect(slide).not.toHaveAttribute("data-feed-framing");
 });
 
 test("phone preview-first processing keeps editing usable and retries only high resolution", async ({

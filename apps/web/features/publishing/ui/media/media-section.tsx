@@ -85,6 +85,7 @@ const MediaSectionBody = ({
     remove,
     chooseCover,
     applyEdit,
+    applyFeed,
     applyCoverCrop,
     retry,
     reselect,
@@ -248,6 +249,7 @@ const MediaSectionBody = ({
           kind={dialogItem.kind}
           knownSize={dialogServer?.presentation ?? null}
           onApply={(edit) => applyEdit(dialogItem.key, edit)}
+          onApplyFeed={(framing) => applyFeed(dialogItem.key, framing)}
           onClose={() => ui.closeDialog()}
           onDraftChange={(draft) => ui.saveDraft(dialog, draft)}
           src={dialogServer?.media?.displaySrc ?? null}

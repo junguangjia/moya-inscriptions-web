@@ -1310,6 +1310,74 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
     );
   });
 
+  it("documents feed framing on work edits, user work media and work cards only, never on Article media", () => {
+    const framing = asObject(asObject(schemas.MediaEdit).properties).feed;
+    const branches = (asObject(framing).oneOf as unknown[]).map(asObject);
+    expect(branches.map((branch) => branch.additionalProperties)).toEqual([
+      false,
+      false,
+    ]);
+    expect(branches.map((branch) => branch.required)).toEqual([
+      ["fit"],
+      ["fit", "y"],
+    ]);
+    expect(asObject(asObject(branches[1]!.properties).y)).toMatchObject({
+      minimum: 0,
+      maximum: 1,
+    });
+    expect(asObject(schemas.MediaEdit).required).not.toContain("feed");
+    // Every component that inlines a media shape carrying the field, and
+    // only those: Article components keep their unchanged media shapes.
+    const carriesFeed = (node: unknown): boolean =>
+      Array.isArray(node)
+        ? node.some(carriesFeed)
+        : typeof node === "object" && node !== null
+          ? Object.entries(node).some(([key, child]) =>
+              key === "properties"
+                ? "feed" in asObject(child) ||
+                  Object.values(asObject(child)).some(carriesFeed)
+                : carriesFeed(child),
+            )
+          : false;
+    expect(
+      Object.keys(schemas)
+        .filter((name) => carriesFeed(schemas[name]))
+        .sort(),
+    ).toEqual([
+      "ContentCard",
+      "ContentCollectionPage",
+      "CreatePublishingDraftCommand",
+      "DiscoveryPage",
+      "EditableWork",
+      "MediaEdit",
+      "PublishingDraft",
+      "PublishingDraftSaveResult",
+      "PublishingOpenedEditDraft",
+      "PublishingReadinessCommand",
+      "PublishingSnapshotPage",
+      "SavePublishingDraftCommand",
+      "UserWork",
+      "WorkDraftContent",
+      "WorkPage",
+      "WorkSubmissionCommand",
+    ]);
+    // A user work's media entries and its cover; a card's image and gallery.
+    const userWork = asObject(asObject(schemas.UserWork).properties);
+    expect(
+      asObject(asObject(asObject(userWork.media).items).properties).feed,
+    ).toEqual(framing);
+    expect(userWork.coverFeed).toEqual(framing);
+    expect(asObject(schemas.UserWork).required).not.toContain("coverFeed");
+    const card = asObject(asObject(schemas.ContentCard).properties);
+    const cardImage = (asObject(card.media).anyOf as unknown[])
+      .map(asObject)
+      .find((branch) => branch.type === "object");
+    expect(asObject(cardImage?.properties).feed).toEqual(framing);
+    expect(
+      asObject(asObject(asObject(card.gallery).items).properties).feed,
+    ).toEqual(framing);
+  });
+
   it("regenerates an object equal to the committed artifact", async () => {
     const artifactUrl = new URL(
       "../../../services/public-api/openapi/openapi.json",

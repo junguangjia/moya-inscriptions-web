@@ -426,6 +426,77 @@ describe("editor session store", () => {
     ).toBe(false);
   });
 
+  it("counts a feed framing as author input, a centred one as none (#341)", () => {
+    const base = contentOf(
+      createEditorSessionStore(ACCOUNT, { type: "new" }).get(),
+    );
+    const framed = (feed: WorkDraftItem["edit"]["feed"]) => ({
+      ...base,
+      items: [
+        {
+          ...item("a", itemId(1)),
+          edit: { rotation: 0 as const, crop: null, ...(feed ? { feed } : {}) },
+        },
+      ],
+    });
+    expect(
+      sameAuthorContent(framed(undefined), framed({ fit: "contain" })),
+    ).toBe(false);
+    expect(
+      sameAuthorContent(
+        framed({ fit: "cover", y: 0.2 }),
+        framed({ fit: "cover", y: 0.3 }),
+      ),
+    ).toBe(false);
+    expect(
+      sameAuthorContent(framed(undefined), framed({ fit: "cover", y: 0.5 })),
+    ).toBe(true);
+    expect(
+      sameAuthorContent(
+        framed({ fit: "cover", y: 0.2 }),
+        framed({ fit: "cover", y: 0.20001 }),
+      ),
+    ).toBe(true);
+    // A later framing change survives a conflict choice like any edit.
+    const device = framed(undefined);
+    const selected = { ...framed(undefined), title: "账号" };
+    expect(
+      preserveLaterConflictEdits(selected, device, framed({ fit: "contain" })),
+    ).toEqual({ ...framed({ fit: "contain" }), title: "账号" });
+  });
+
+  it("carries feed framing through the content, adoption and upload identities", () => {
+    const framed: WorkDraftItem = {
+      ...item("a", null),
+      edit: { rotation: 90, crop: null, feed: { fit: "cover", y: 0 } },
+    };
+    const store = createEditorSessionStore(ACCOUNT, { type: "new" });
+    store.adoptContent({
+      ...contentOf(store.get()),
+      items: [framed],
+      coverKey: null,
+      coverCrop: null,
+    });
+    expect(contentOf(store.get()).items[0]!.edit).toEqual(framed.edit);
+    // Registration gives the item its id; its edit, framing included, stays.
+    const merged = mergeManagedItems(
+      [framed],
+      [
+        {
+          key: "a",
+          itemId: itemId(1),
+          kind: "static",
+          qualityMode: "original",
+        },
+      ],
+    );
+    expect(merged[0]).toMatchObject({
+      itemId: itemId(1),
+      qualityMode: "original",
+      edit: { rotation: 90, crop: null, feed: { fit: "cover", y: 0 } },
+    });
+  });
+
   it("lists local text issues in reading order and maps Backend codes to fields", () => {
     const store = createEditorSessionStore(ACCOUNT, { type: "new" });
     store.setTitle("一\n二");

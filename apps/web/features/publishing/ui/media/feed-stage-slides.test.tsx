@@ -34,18 +34,19 @@ import { FEED_GALLERY_MAXIMUM, useFeedStageSlides } from "./feed-stage-slides";
 import type { FeedStageModel } from "./feed-stage-slides";
 import type { EditorSessionState } from "../editor/editor-session-state";
 import type { EditorMediaScope } from "../editor/preview";
+import type { MediaFeedFraming } from "@moya/contracts";
 import type { Root } from "react-dom/client";
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-const item = (key: string, rotation: 0 | 90 = 0) => ({
+const item = (key: string, rotation: 0 | 90 = 0, feed?: MediaFeedFraming) => ({
   key,
   itemId: null,
   kind: "static" as const,
   qualityMode: "standard" as const,
-  edit: { rotation, crop: null },
+  edit: { rotation, crop: null, ...(feed === undefined ? {} : { feed }) },
   pendingLabel: "photo" as const,
 });
 
@@ -152,6 +153,36 @@ describe("useFeedStageSlides", () => {
       size: { width: 3000, height: 4000 },
       status: "ready",
     });
+  });
+
+  // #341: 发布 and the desktop preview frame a taller picture as the feed will.
+  it("carries each item's feed framing onto its slide in every state", async () => {
+    sources.value = {
+      sources: [
+        { key: "ready", src: "blob:ready", width: 1000, height: 3000 },
+        {
+          key: "drawn",
+          src: "blob:drawn",
+          width: 1000,
+          height: 3000,
+          pending: true,
+        },
+      ],
+      unedited: 0,
+    };
+    await render([
+      item("ready", 0, { fit: "cover", y: 0 }),
+      item("drawn", 0, { fit: "contain" }),
+      item("waiting", 0, { fit: "cover", y: 0.8 }),
+      item("plain"),
+    ]);
+    expect(latest!.slides.map((slide) => [slide.status, slide.feed])).toEqual([
+      ["ready", { fit: "cover", y: 0 }],
+      ["loading", { fit: "contain" }],
+      ["loading", { fit: "cover", y: 0.8 }],
+      ["loading", undefined],
+    ]);
+    expect(latest!.slides[3]).not.toHaveProperty("feed");
   });
 
   it("marks an item with neither a local file nor account media as unavailable", async () => {

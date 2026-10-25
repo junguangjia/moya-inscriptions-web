@@ -80,7 +80,9 @@ div.content {
 /*
  * A card (A `.card`): about 74% of the width at the feed stage's ratio,
  * never taller than 40% of the screen (A `sizeCards`), the whole card a
- * button. The ratio is the stage's height / width, set by the strip.
+ * button. The ratio is the stage's height / width, set by the strip. Its
+ * background is the feed stage's (home-screen.module.css `.postStage`), so
+ * a contained picture's blank margins read as they will in the feed.
  */
 .card {
   position: relative;
@@ -96,7 +98,7 @@ div.content {
   overflow: hidden;
   direction: ltr;
   color: var(--yoyi-color-text-tertiary);
-  background: var(--yoyi-color-background-muted);
+  background: var(--yoyi-color-background-page);
   border: 0;
   border-radius: var(--yoyi-radius-md);
   font: inherit;
@@ -119,7 +121,11 @@ div.content {
   outline-offset: -2px;
 }
 
-/* The fit per slide, as the feed draws it (media-composer.module.css `.slideImage`). */
+/*
+ * The fit and framing per slide, as the feed draws them
+ * (media-composer.module.css `.slideImage`): a taller picture cropped at
+ * the author's region (--feed-slide-y; centred by default) or kept whole.
+ */
 .cardImage {
   position: absolute;
   inset: 0;
@@ -133,9 +139,11 @@ div.content {
 
 .card[data-fit="cover"] .cardImage {
   object-fit: cover;
+  object-position: 50% var(--feed-slide-y, 50%);
 }
 
-/* 准备中 / 无法预览 / 图像无法加载 (media-composer.module.css `.slidePlaceholder`). */
+/* 准备中 / 无法预览 / 图像无法加载 on their own muted fill
+   (media-composer.module.css `.slidePlaceholder`). */
 .cardPlaceholder {
   position: absolute;
   inset: 0;
@@ -143,6 +151,7 @@ div.content {
   place-content: center;
   justify-items: center;
   gap: var(--yoyi-space-2);
+  background: var(--yoyi-color-background-muted);
   font-size: var(--yoyi-type-caption-size);
 }
 

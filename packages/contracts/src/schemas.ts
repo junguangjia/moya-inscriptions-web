@@ -1220,9 +1220,6 @@ const addCardMediaAnchorIssues = (
   if (media.renditions !== undefined)
     addMediaRenditionAnchorIssues(media, media.renditions, context);
 };
-const cardMediaSchema = z
-  .strictObject(cardMediaFields)
-  .superRefine(addCardMediaAnchorIssues);
 /**
  * One shown image of a card's item in its full framing, in the same delivery
  * form as the card's `media`; a Live Photo is its still plus the flag.

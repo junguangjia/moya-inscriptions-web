@@ -371,7 +371,11 @@ export const coverFitFactor = (media: MediaSize): number =>
   Math.min(2, Math.max(1, aspectOf(media) / 1.5));
 
 export const MEDIA_SIZES = {
-  /** Catalog, work and nearby feed cards (home-screen.module.css .feedMedia). */
+  /**
+   * Catalog, work and nearby feed cards (home-screen.module.css .feedMedia);
+   * a work cover the author keeps whole draws narrower than its box, so the
+   * box width stays an upper bound.
+   */
   feedCard: (media: MediaSize, slot?: MediaSlot | null): string => {
     const factor = coverFitFactor(media);
     return slot ? masonrySizes(slot, factor) : columnFeedSizes(factor);
@@ -394,8 +398,9 @@ export const MEDIA_SIZES = {
   },
   /**
    * Phone single-column post stage (home-screen.module.css .postStage): full
-   * bleed, and both fits (a shorter image contained, a taller one covered)
-   * draw the image at the stage width.
+   * bleed. A shorter image contained and a taller one covered draw the image
+   * at the stage width; a taller one the author keeps whole draws narrower,
+   * so the stage width stays an upper bound.
    */
   feedPostStage: (): string => linear({ vw: 100, px: 0 }),
   /** Topic cards draw their image at the card width in its own aspect. */

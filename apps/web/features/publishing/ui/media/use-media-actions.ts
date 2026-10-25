@@ -22,6 +22,7 @@ import {
   setCover,
   setCoverCrop,
   setItemEdit,
+  setItemFeed,
   withValidCover,
 } from "./media-order";
 import { derivativeExpected, itemStatus } from "./media-status";
@@ -44,6 +45,7 @@ import type { EditorMediaScope } from "../editor/preview";
 import type {
   MediaCrop,
   MediaEdit,
+  MediaFeedFraming,
   PublishingMediaItem,
   WorkDraftItem,
 } from "@moya/contracts";
@@ -227,6 +229,12 @@ export interface MediaActions {
     edit: MediaEdit,
     options?: ApplyEditOptions,
   ) => void;
+  /**
+   * How the phone feed frames `key` (#341; undefined: centred). Kept
+   * silently, like a ratio choice; never its pixels, so the cover
+   * composition stays.
+   */
+  readonly applyFeed: (key: string, feed: MediaFeedFraming | undefined) => void;
   readonly applyCoverCrop: (key: string, crop: MediaCrop | null) => void;
   readonly retry: (key: string, plan: RetryPlan) => void;
   readonly reselect: (key: string) => void;
@@ -714,7 +722,8 @@ export const useMediaActions = (
             pending.files.has(file),
           ),
         )
-        // The rotation and crop travel when the kind is the same.
+        // The edit (rotation, crop and feed framing) travels when the kind
+        // is the same: it is the same photo.
         .map((item) =>
           item.kind === pending.previous.kind
             ? { ...item, edit: pending.previous.edit }
@@ -906,6 +915,11 @@ export const useMediaActions = (
     else if (lead !== null) announce(lead);
   };
 
+  const applyFeed = (key: string, feed: MediaFeedFraming | undefined) => {
+    const next = setItemFeed(current(), key, feed);
+    if (next !== current()) actions.setMedia(next);
+  };
+
   const applyCoverCrop = (key: string, crop: MediaCrop | null) => {
     const before = current();
     const from = indexOfKey(before, key);
@@ -1068,6 +1082,7 @@ export const useMediaActions = (
     remove,
     chooseCover,
     applyEdit,
+    applyFeed,
     applyCoverCrop,
     retry,
     reselect,

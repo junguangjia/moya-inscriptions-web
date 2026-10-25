@@ -342,16 +342,23 @@ export const drawPlan = (
 /**
  * How the phone single-column feed stage (#243) shows an edited frame of
  * `cropRatio` (width / height). The stage takes its shape from the post's
- * first image, clamped between 1:1 and 4:5 (`resolveStageAspect`); a frame
- * taller than the stage is centre-cropped (`cover`, only `height` of it is
- * visible, centred), a frame of the stage's shape fills it (`fill`), any
- * other frame is shown whole with blank above and below (`contain`). The
- * stage has no focal point, so the window depends on the shape alone.
+ * first image, clamped between 1:1 and 4:5 (`resolveStageAspect`). A frame
+ * taller than the stage is `tall`, and its feed framing (#341) decides: the
+ * stage crops it at the author's region (`cover`, only `height` of it is
+ * visible with `top` of it hidden above; centred when no framing places
+ * it), or shows it whole with blank at the sides when the author keeps it
+ * whole (`feed.fit` 'contain'). A frame of the stage's shape fills it
+ * (`fill`); any other frame is shown whole with blank above and below
+ * (`contain`), and a framing it carries stays dormant.
  */
 export interface FeedStageWindow {
   readonly fit: "cover" | "fill" | "contain";
   /** Visible fraction of the frame's height (1 unless `cover`). */
   readonly height: number;
+  /** Hidden fraction of the frame's height above the visible part (0 unless `cover`). */
+  readonly top: number;
+  /** The frame is taller than the stage: 局部 or 整张 is the author's choice. */
+  readonly tall: boolean;
   /** The stage's height / width ratio the window was computed against. */
   readonly stageRatio: number;
 }
@@ -362,13 +369,44 @@ const FEED_FIT_TOLERANCE = 0.001;
 export const feedStageWindow = (
   cropRatio: number,
   stageRatio: number = resolveStageAspect({ width: 1, height: 1 / cropRatio }),
+  feed?: MediaFeedFraming,
 ): FeedStageWindow => {
   const frameRatio = 1 / cropRatio;
   if (!(frameRatio > 0) || !Number.isFinite(frameRatio))
-    return { fit: "fill", height: 1, stageRatio };
-  if (frameRatio > stageRatio + FEED_FIT_TOLERANCE)
-    return { fit: "cover", height: round(stageRatio / frameRatio), stageRatio };
+    return { fit: "fill", height: 1, top: 0, tall: false, stageRatio };
+  if (frameRatio > stageRatio + FEED_FIT_TOLERANCE) {
+    if (feed?.fit === "contain")
+      return { fit: "contain", height: 1, top: 0, tall: true, stageRatio };
+    const height = round(stageRatio / frameRatio);
+    const y =
+      feed?.fit === "cover" && Number.isFinite(feed.y)
+        ? clamp(feed.y, 0, 1)
+        : FEED_CENTRE_Y;
+    return {
+      fit: "cover",
+      height,
+      top: round((1 - height) * y),
+      tall: true,
+      stageRatio,
+    };
+  }
   if (Math.abs(frameRatio - stageRatio) <= FEED_FIT_TOLERANCE)
-    return { fit: "fill", height: 1, stageRatio };
-  return { fit: "contain", height: 1, stageRatio };
+    return { fit: "fill", height: 1, top: 0, tall: false, stageRatio };
+  return { fit: "contain", height: 1, top: 0, tall: false, stageRatio };
+};
+
+/**
+ * What the stage shows of a frame, in words (the feed window's value text):
+ * the cuts above and below a cropped frame, equal ones as centred, or how
+ * a frame shown whole is placed.
+ */
+export const feedRegionText = (window: FeedStageWindow): string => {
+  if (window.fit === "fill") return "满幅显示";
+  if (window.fit === "contain")
+    return window.tall ? "整张显示，左右留白" : "整张显示，上下留白";
+  const above = Math.round(window.top * 100);
+  const below = Math.round((1 - window.top - window.height) * 100);
+  return above === below
+    ? `居中，上下各裁去 ${above}%`
+    : `上方裁去 ${above}%，下方裁去 ${below}%`;
 };
