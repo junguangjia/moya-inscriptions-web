@@ -80,7 +80,7 @@ describe("Community V1 freeze (amendment 2026-09-11, section 9)", () => {
     ]);
   });
 
-  it("3. keeps the Backend router at the Catalog routes, /v1/me, the Development session lifecycle (2A) and the comment paths (2B)", async () => {
+  it("3. keeps the Backend router at the approved Catalog, session, comment, notification and reporting entry points", async () => {
     const router = await read("services/backend-runtime/src/http/router.ts");
     expect(
       [...router.matchAll(/pathname === "([^"]+)"/gu)].map((m) => m[1]),
@@ -91,6 +91,12 @@ describe("Community V1 freeze (amendment 2026-09-11, section 9)", () => {
       "/v1/me",
       "/v1/development/sign-in",
       "/v1/development/sign-out",
+      // #326: case/decision/inbox operations remain authenticated public-user reads and writes.
+      "/v1/community/reports",
+      "/v1/community/decisions",
+      "/v1/community/reporting-inbox",
+      // Owner-approved settings-feedback-v1 (#329), session-bound write only.
+      "/v1/community/feedback",
       // Owner r2 notification scope; composition remains Development-only.
       "/v1/community/mentions",
       "/v1/community/notifications",

@@ -1,12 +1,21 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
   catalogRecipePolicySchema,
+  catalogDeliveryCapabilitiesRequestSchema,
   catalogDeliveryReadinessSchema,
+  catalogPublishedRenditionsSchema,
+  catalogRenderBacklogSchema,
+  type CatalogDeliveryCapabilities,
+  type CatalogPublishedRenditions,
+  type CatalogPublishedRenditionsRequest,
   type CatalogRecipePolicy,
+  type CatalogRenderBacklogReport,
 } from "@moya/contracts/internal/editorial";
+import type { PayloadRequest } from "payload";
 
-import { EditorialError } from "./errors";
+import { requireActor } from "./access";
+import { EditorialError, validationError } from "./errors";
 import {
   callCommunityOperator,
   CommunityOperatorError,
@@ -63,5 +72,101 @@ export const readCatalogReadiness = async (intentId: string) => {
     );
   } catch {
     throw new EditorialError("CATALOG_DELIVERY_READINESS_UNAVAILABLE", 503);
+  }
+};
+
+/** Publish gate for media that is already live, over the same operator
+ * boundary: the Backend reads its own App facts; Admin gains no privilege.
+ * `null` means no Backend answers this question (not connected, or older than
+ * it), which is no proof; any other failure is an unavailable proof.
+ */
+export const readCatalogPublishedRenditions = async (
+  media: CatalogPublishedRenditionsRequest["media"],
+): Promise<CatalogPublishedRenditions | null> => {
+  try {
+    return catalogPublishedRenditionsSchema.parse(
+      await callCommunityOperator(
+        "POST",
+        "catalog-delivery/published-renditions",
+        { media },
+      ),
+    );
+  } catch (error) {
+    if (
+      error instanceof CommunityOperatorError &&
+      ["OPERATOR_NOT_CONFIGURED", "NOT_FOUND"].includes(error.code)
+    )
+      return null;
+    throw new EditorialError("CATALOG_DELIVERY_READINESS_UNAVAILABLE", 503);
+  }
+};
+
+/** Pacing of bulk Catalog work (catalog-scale-v1 I9, Owner decision D5): the
+ * App's render backlog, over the same operator boundary. Counts only, so any
+ * authenticated editorial actor may ask, with the capability probe's empty
+ * body. It is read-only and informs the CLI's waves; Admin refuses no prepare
+ * because of it. No Backend that answers it is NOT_CONFIGURED; any other
+ * failure, or an answer that is not the contract, is UNAVAILABLE.
+ */
+export const catalogRenderBacklog = async (
+  req: PayloadRequest,
+  input: unknown,
+): Promise<CatalogRenderBacklogReport> => {
+  requireActor(req);
+  const request = catalogDeliveryCapabilitiesRequestSchema.safeParse(input);
+  if (!request.success) throw validationError(request.error.issues);
+  let answer: unknown;
+  try {
+    answer = await callCommunityOperator(
+      "GET",
+      "catalog-delivery/render-backlog",
+    );
+  } catch (error) {
+    if (
+      error instanceof CommunityOperatorError &&
+      ["OPERATOR_NOT_CONFIGURED", "NOT_FOUND"].includes(error.code)
+    )
+      throw new EditorialError("CATALOG_RENDER_BACKLOG_NOT_CONFIGURED", 503);
+    throw new EditorialError("CATALOG_RENDER_BACKLOG_UNAVAILABLE", 503);
+  }
+  const backlog = catalogRenderBacklogSchema.safeParse(answer);
+  if (!backlog.success)
+    throw new EditorialError("CATALOG_RENDER_BACKLOG_UNAVAILABLE", 503);
+  return backlog.data;
+};
+
+/** Read-only capability probe for release tooling: the recipe policy must be
+ * readable and the readiness route connected to its prepare reader. A fresh
+ * random intent ID names no intent, so a connected route answers 404.
+ */
+export const probeCatalogDeliveryBackend = async (): Promise<
+  CatalogDeliveryCapabilities["delivery"]
+> => {
+  let policy: CatalogRecipePolicy | null;
+  try {
+    policy = await readCatalogRecipePolicy();
+  } catch {
+    return "UNAVAILABLE";
+  }
+  if (policy === null) return "NOT_CONFIGURED";
+  try {
+    catalogDeliveryReadinessSchema.parse(
+      await callCommunityOperator("POST", "catalog-delivery/readiness", {
+        intentId: randomUUID(),
+      }),
+    );
+    return "AVAILABLE";
+  } catch (error) {
+    if (error instanceof CommunityOperatorError && error.code === "NOT_FOUND")
+      return "AVAILABLE";
+    // Every Backend 503 reaches Admin as OPERATOR_UNAVAILABLE. A missing
+    // prepare reader is the expected cause; a passing STORE_UNAVAILABLE reads
+    // the same (documented for the operator).
+    if (
+      error instanceof CommunityOperatorError &&
+      error.code === "OPERATOR_UNAVAILABLE"
+    )
+      return "NOT_CONFIGURED";
+    return "UNAVAILABLE";
   }
 };

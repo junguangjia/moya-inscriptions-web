@@ -27,6 +27,7 @@ import {
   type PublishingDb,
 } from "./db.js";
 import { catalogBlockJobSql } from "./jobs.js";
+import { markCatalogPublicationDirty } from "./catalog-publication-dirty.js";
 import {
   catalogBlockGrid,
   catalogMasterFrame,
@@ -40,7 +41,12 @@ import {
  * a paused block set, and report status, storage and the rollback guard. Each
  * write is one transaction that locks the Catalog asset row first (the lock
  * order of Catalog renders), then master rows, blobs and jobs, and re-checks
- * every precondition there. Results are content-free.
+ * every precondition there. A write that ends a master marks its asset for
+ * the scoped reconcile as its last statement (catalog-scale-v1: the asset's
+ * blocks leave its plan, and only a reconcile that plans the asset withdraws
+ * the published ones). A re-attach marks the previous, unreferenced asset
+ * without its row lock, which a mark needs none of: it takes no asset row
+ * (catalog-publication-dirty's lock order). Results are content-free.
  */
 
 /** The first pipeline release (Asia/Shanghai day start): bytes since count toward T0. */
@@ -252,17 +258,20 @@ const frameRefusal = (
 const masterId = (): string =>
   `catalog-master-${randomUUID().replaceAll("-", "")}`;
 
-/** Ends rows, abandons their queued block jobs and releases their blocks. */
+/** Ends rows, abandons their queued block jobs and releases their blocks;
+ * returns the assets of the masters it ended, for the caller to mark
+ * (endedMastersMarked) once its other writes are done. */
 const endMasters = async (
   db: PublishingDb,
   ids: readonly string[],
   reason: CatalogMasterEndReason,
   at: string,
-): Promise<void> => {
-  if (ids.length === 0) return;
-  await db.query(
+): Promise<readonly string[]> => {
+  if (ids.length === 0) return [];
+  const ended = await db.query<{ catalog_asset_id: string }>(
     `UPDATE community.catalog_display_masters SET ended_at=$2::timestamptz, end_reason=$3
-     WHERE id=ANY($1::text[]) AND ended_at IS NULL`,
+     WHERE id=ANY($1::text[]) AND ended_at IS NULL
+     RETURNING catalog_asset_id`,
     [ids, at, reason],
   );
   await db.query(
@@ -278,7 +287,25 @@ const endMasters = async (
      WHERE catalog_master_id=ANY($1::text[]) AND state='ready'`,
     [ids, at],
   );
+  return ended.rows.map((row) => row.catalog_asset_id);
 };
+
+/**
+ * Marks the assets of ended masters for the scoped reconcile (a normal
+ * mark: the published blocks of a still-public image leave its plan), as the
+ * transaction's last write: after its asset rows, and in one sorted dirty
+ * statement (catalog-publication-dirty's lock order).
+ */
+const endedMastersMarked = (
+  db: PublishingDb,
+  assetIds: readonly string[],
+  now: Date,
+): Promise<number> =>
+  markCatalogPublicationDirty(
+    db,
+    new Map(assetIds.map((id) => [id, { reason: "rendition", urgent: false }])),
+    now,
+  );
 
 const insertMaster = async (
   db: PublishingDb,
@@ -488,6 +515,7 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
           storage,
         };
       let blobId: string;
+      let ended: readonly string[] = [];
       if (input.source.kind === "upload") {
         blobId = `media-blob-${randomUUID().replaceAll("-", "")}`;
         await db.query(
@@ -505,7 +533,7 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
       } else {
         blobId = previous!.blob_id;
         if (previous!.ended_at === null)
-          await endMasters(db, [previous!.id], "reattached", at);
+          ended = await endMasters(db, [previous!.id], "reattached", at);
       }
       const id = await insertMaster(
         db,
@@ -525,6 +553,7 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
         },
         at,
       );
+      await endedMastersMarked(db, ended, now);
       return {
         status: "done",
         masterId: id,
@@ -578,7 +607,7 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
       );
       const bound = withinBounds(storage);
       if (bound !== null) return refused(bound, storage);
-      await endMasters(db, [active.id], "limit_changed", at);
+      const ended = await endMasters(db, [active.id], "limit_changed", at);
       const id = await insertMaster(
         db,
         {
@@ -590,6 +619,7 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
         },
         at,
       );
+      await endedMastersMarked(db, ended, now);
       return {
         status: "done",
         masterId: id,
@@ -626,7 +656,11 @@ export class PostgresCatalogDisplayMasterAdapter implements CatalogDisplayMaster
         )
       ).rows.map((row) => row.id);
       if (masters.length === 0) return refused("no_active_master");
-      await endMasters(db, masters, "detached", at);
+      await endedMastersMarked(
+        db,
+        await endMasters(db, masters, "detached", at),
+        now,
+      );
       return { status: "done", ended: masters.length };
     });
   }

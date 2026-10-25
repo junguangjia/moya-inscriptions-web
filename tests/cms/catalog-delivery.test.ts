@@ -177,15 +177,17 @@ describe("Catalog delivery internal boundary", () => {
     );
   });
 
-  it("requires delivery for editorial originals while retaining qualified legacy and text-only publication", () => {
+  it("requires delivery for editorial originals while retaining qualified legacy and text-only publication", async () => {
     const content = editorialDraftSchema.parse({
       catalogId: "synthetic-guard",
       sourceId: "synthetic-guard-source",
       kind: "calligraphy",
       media: [],
     });
-    expect(() => assertCatalogDeliveryPublication(content)).not.toThrow();
-    expect(() =>
+    await expect(
+      assertCatalogDeliveryPublication(content),
+    ).resolves.toBeUndefined();
+    await expect(
       assertCatalogDeliveryPublication({
         ...content,
         media: [
@@ -195,13 +197,43 @@ describe("Catalog delivery internal boundary", () => {
           },
         ],
       }),
-    ).not.toThrow();
-    expect(() =>
+    ).resolves.toBeUndefined();
+    await expect(
       assertCatalogDeliveryPublication({
         ...content,
         media: [syntheticMedia("synthetic-private")],
       }),
-    ).toThrow("CATALOG_DELIVERY_PREPARATION_REQUIRED");
+    ).rejects.toThrow("CATALOG_DELIVERY_PREPARATION_REQUIRED");
+  });
+
+  it("publishes editorial originals unprepared only while CMS_CATALOG_DIRECT_PUBLISH is on", async () => {
+    const content = {
+      ...editorialDraftSchema.parse({
+        catalogId: "synthetic-direct",
+        sourceId: "synthetic-direct-source",
+        kind: "calligraphy",
+        media: [],
+      }),
+      media: [syntheticMedia("synthetic-direct-private")],
+    };
+    try {
+      vi.stubEnv("CMS_CATALOG_DIRECT_PUBLISH", "on");
+      await expect(
+        assertCatalogDeliveryPublication(content),
+      ).resolves.toBeUndefined();
+      for (const value of ["", "off"]) {
+        vi.stubEnv("CMS_CATALOG_DIRECT_PUBLISH", value);
+        await expect(assertCatalogDeliveryPublication(content)).rejects.toThrow(
+          "CATALOG_DELIVERY_PREPARATION_REQUIRED",
+        );
+      }
+      vi.stubEnv("CMS_CATALOG_DIRECT_PUBLISH", "ON");
+      await expect(assertCatalogDeliveryPublication(content)).rejects.toThrow(
+        "CMS_CATALOG_DIRECT_PUBLISH_INVALID",
+      );
+    } finally {
+      vi.stubEnv("CMS_CATALOG_DIRECT_PUBLISH", "");
+    }
   });
 });
 
@@ -217,9 +249,54 @@ describe
     let outside: TypedUser;
     let ownerSession: string;
     let automationSession: string;
-    const ids = ["http", "prune", "race", "expiry", "bypass", "pinned"].map(
-      (name) => `synthetic-delivery-${name}-${run}`,
-    );
+    const ids = [
+      "http",
+      "prune",
+      "race",
+      "expiry",
+      "bypass",
+      "pinned",
+      "live",
+      "pacing",
+      "direct",
+      "direct-native",
+    ].map((name) => `synthetic-delivery-${name}-${run}`);
+    /** A loopback operator boundary with the real handler and stub facts. */
+    const syntheticOperatorBoundary = async (
+      dependencies: Partial<OperatorRouteDependencies>,
+    ) => {
+      const credential = randomUUID();
+      const server = createServer((request, response) => {
+        void handleOperatorRequest(
+          request,
+          response,
+          new URL(request.url!, "http://127.0.0.1").pathname,
+          {
+            moderationService: {},
+            operatorCredential: credential,
+            ...dependencies,
+          } as OperatorRouteDependencies,
+        );
+      });
+      await new Promise<void>((resolve) =>
+        server.listen(0, "127.0.0.1", resolve),
+      );
+      const address = server.address();
+      if (!address || typeof address === "string")
+        throw new Error("Synthetic operator address missing");
+      vi.stubEnv(
+        "COMMUNITY_OPERATOR_BASE_URL",
+        `http://127.0.0.1:${address.port}`,
+      );
+      vi.stubEnv("COMMUNITY_OPERATOR_TOKEN", credential);
+      return async () => {
+        vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", "");
+        vi.stubEnv("COMMUNITY_OPERATOR_TOKEN", "");
+        await new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        );
+      };
+    };
     const reqFor = (user: TypedUser | null = owner) =>
       createLocalReq(user ? { user } : {}, payload);
     const post = (name: string, input: unknown, session = ownerSession) =>
@@ -818,5 +895,379 @@ describe
         overrideAccess: false,
       });
       expect(primary.title).toBe("Synthetic published A");
+    });
+
+    it("publishes unprepared editorial originals through approved automation and Native Owner PATCH while CMS_CATALOG_DIRECT_PUBLISH is on", async () => {
+      const { draft } = await draftB(ids[8]!);
+      const { draft: native } = await draftB(ids[9]!);
+      const primaryTitle = async (id: number | string) =>
+        (
+          await payload.findByID({
+            collection: "catalogs",
+            id,
+            draft: false,
+            req: await reqFor(),
+            overrideAccess: false,
+          })
+        ).title;
+      // The operator would refuse every image; with the switch on it is
+      // never asked, so publication holds no Backend read.
+      let asked = 0;
+      const close = await syntheticOperatorBoundary({
+        catalogPublishedRenditions: async (media) => {
+          asked++;
+          return {
+            media: media.map(({ mediaId, objectKey }) => ({
+              mediaId,
+              objectKey,
+              complete: false,
+            })),
+          };
+        },
+      });
+      try {
+        vi.stubEnv("CMS_CATALOG_DIRECT_PUBLISH", "on");
+        const approval = await approveBatch(await reqFor(), {
+          automationUserId: automation.id,
+          items: [{ id: draft.id, revision: draft.revision }],
+        });
+        await publishApproved(await reqFor(automation), {
+          id: draft.id,
+          approvalId: approval.approvalId,
+          idempotencyKey: `${run}:direct`,
+        });
+        expect(await primaryTitle(draft.id)).toBe("Synthetic private B");
+        const response = await handleEndpoints({
+          config,
+          request: new Request(
+            `http://127.0.0.1:3002/api/catalogs/${native.id}`,
+            {
+              method: "PATCH",
+              headers: {
+                "content-type": "application/json",
+                authorization: `JWT ${ownerSession}`,
+              },
+              body: JSON.stringify({
+                revision: native.revision,
+                _status: "published",
+              }),
+            },
+          ),
+        });
+        expect(response.status).toBe(200);
+        expect(await primaryTitle(native.id)).toBe("Synthetic private B");
+        expect(asked).toBe(0);
+      } finally {
+        vi.stubEnv("CMS_CATALOG_DIRECT_PUBLISH", "");
+        await close();
+      }
+    });
+
+    it("publishes editorial originals that already have complete published sets, and still refuses one that lacks its set", async () => {
+      const complete = new Set<string>();
+      const asked: { mediaId: string; objectKey: string }[][] = [];
+      const close = await syntheticOperatorBoundary({
+        catalogPublishedRenditions: async (media) => {
+          asked.push(media);
+          return {
+            media: media.map(({ mediaId, objectKey }) => ({
+              mediaId,
+              objectKey,
+              complete: complete.has(mediaId),
+            })),
+          };
+        },
+      });
+      try {
+        const { draft, contentB } = await draftB(ids[6]!, 2);
+        const publish = async (revision: number) =>
+          payload.update({
+            collection: "catalogs",
+            id: draft.id,
+            req: await reqFor(),
+            overrideAccess: false,
+            data: { revision, _status: "published" },
+          });
+        complete.add(contentB.media[0]!.mediaId);
+        await expect(publish(draft.revision)).rejects.toThrow(
+          "CATALOG_DELIVERY_PREPARATION_REQUIRED",
+        );
+        const registered = await payload.find({
+          collection: "media",
+          req: await reqFor(),
+          overrideAccess: false,
+          where: {
+            mediaId: { in: contentB.media.map(({ mediaId }) => mediaId) },
+          },
+        });
+        expect(asked.at(-1)).toEqual(
+          contentB.media.map(({ mediaId, objectKey }) => ({
+            mediaId,
+            objectKey,
+            sourceSha256: registered.docs.find(
+              (doc) => doc.mediaId === mediaId,
+            )!.sha256,
+          })),
+        );
+        complete.add(contentB.media[1]!.mediaId);
+        const published = await publish(draft.revision);
+        expect(published).toMatchObject({
+          _status: "published",
+          title: "Synthetic private B",
+        });
+        // A later text-only edit of the live record publishes the same way.
+        const edited = await saveDraft(await reqFor(automation), {
+          id: draft.id,
+          expectedRevision: Number(published.revision),
+          idempotencyKey: `${run}:live-text`,
+          content: { ...contentB, title: "Synthetic text-only edit" },
+        });
+        expect((await publish(edited.revision)).title).toBe(
+          "Synthetic text-only edit",
+        );
+        expect(
+          (
+            await payload.db.pool.query(
+              "SELECT count(*)::int AS count FROM catalog_delivery_intents WHERE catalog_document_id = $1",
+              [draft.id],
+            )
+          ).rows[0].count,
+        ).toBe(0);
+        // An image without its set (a new upload) still needs preparation.
+        complete.delete(contentB.media[1]!.mediaId);
+        const again = await saveDraft(await reqFor(automation), {
+          id: draft.id,
+          expectedRevision: edited.revision + 1,
+          idempotencyKey: `${run}:live-text-2`,
+          content: { ...contentB, title: "Synthetic second edit" },
+        });
+        await expect(publish(again.revision)).rejects.toThrow(
+          "CATALOG_DELIVERY_PREPARATION_REQUIRED",
+        );
+      } finally {
+        await close();
+      }
+    });
+
+    it("reports delivery capability to release tooling without reading or writing records", async () => {
+      const capability = async (session = ownerSession) => {
+        const response = await post(
+          "catalog-delivery-capabilities",
+          {},
+          session,
+        );
+        return { status: response.status, body: await response.json() };
+      };
+      expect((await capability("")).status).toBe(403);
+      expect(await capability()).toMatchObject({
+        status: 200,
+        body: { ok: true, result: { delivery: "NOT_CONFIGURED" } },
+      });
+      for (const [dependencies, delivery] of [
+        [{}, "UNAVAILABLE"],
+        [
+          { catalogRecipePolicy: async () => currentCatalogRecipePolicy() },
+          "NOT_CONFIGURED",
+        ],
+        [
+          {
+            catalogRecipePolicy: async () => currentCatalogRecipePolicy(),
+            catalogDeliveryReadiness: async () => null,
+          },
+          "AVAILABLE",
+        ],
+      ] as const) {
+        const close = await syntheticOperatorBoundary(dependencies);
+        try {
+          expect((await capability(automationSession)).body).toEqual({
+            ok: true,
+            result: { delivery },
+          });
+        } finally {
+          await close();
+        }
+      }
+    });
+
+    it("adds the images of intents prepared since the count or up to 10 minutes before it, live or released, never ended ones (I9)", async () => {
+      // Files run one at a time, so no other intent is created meanwhile.
+      const { command } = await draftB(ids[7]!, 2);
+      const prepared = await post("prepare-catalog-delivery", command);
+      expect(prepared.status).toBe(200);
+      const { result: intent } = await prepared.json();
+      // Its prepare's start, moved far from every other intent (a run's own
+      // hour in 2098), so the 10-minute window around a count holds it alone;
+      // put back afterwards, so no later run can meet it there.
+      const { created_at: originalCreatedAt } = (
+        await payload.db.pool.query(
+          "SELECT created_at FROM catalog_delivery_intents WHERE id = $1",
+          [intent.intentId],
+        )
+      ).rows[0] as { created_at: Date };
+      const hour = Number.parseInt(run.replaceAll("-", "").slice(0, 8), 16);
+      const createdAt = new Date(
+        Date.UTC(2098, 0, 1) + (hour % 8_000) * 3_600_000,
+      );
+      const placeAt = (at: Date) =>
+        payload.db.pool.query(
+          "UPDATE catalog_delivery_intents SET created_at = $2 WHERE id = $1",
+          [intent.intentId, at],
+        );
+      await placeAt(createdAt);
+      const minute = 60_000;
+      let countedAt = new Date(createdAt.getTime() - 1);
+      const close = await syntheticOperatorBoundary({
+        catalogRenderBacklog: async () => ({
+          tiers: { t0: 0, t1: 0, t2: 7, t3: 0, t4: 0 },
+          countedAt: countedAt.toISOString(),
+          queued: 7,
+          running: 0,
+        }),
+      });
+      const pacing = async () => {
+        const response = await post(
+          "catalog-render-backlog",
+          {},
+          automationSession,
+        );
+        expect(response.status).toBe(200);
+        return (await response.json()).result;
+      };
+      try {
+        // Prepared after the count: its 2 images are not in any tier yet.
+        expect(await pacing()).toMatchObject({
+          tiers: { t2: 7 },
+          preparedSince: 2,
+        });
+        // Begun just before the count: its commit may have followed the
+        // pass's snapshot, or the worker's clock may run ahead, so it is
+        // still added (counted twice at worst, never missed).
+        for (const after of [1_000, 10 * minute - 1_000]) {
+          countedAt = new Date(createdAt.getTime() + after);
+          expect((await pacing()).preparedSince, String(after)).toBe(2);
+        }
+        // Begun over 10 minutes before the count: the sync pass holds it.
+        countedAt = new Date(createdAt.getTime() + 10 * minute + 1_000);
+        expect((await pacing()).preparedSince).toBe(0);
+        // Ended, it will never be rendered for this intent.
+        countedAt = new Date(createdAt.getTime() - 1);
+        const cancelled = await post("cancel-catalog-delivery", {
+          intentId: intent.intentId,
+          expectedStateVersion: 1,
+          idempotencyKey: `${run}:pacing-cancel`,
+        });
+        expect(cancelled.status).toBe(200);
+        expect((await pacing()).preparedSince).toBe(0);
+      } finally {
+        await placeAt(originalCreatedAt);
+        await close();
+      }
+    });
+
+    it("proxies the render backlog to an authenticated editorial actor only, counts only (I9)", async () => {
+      const backlog = async (session = ownerSession, input: unknown = {}) => {
+        const response = await post("catalog-render-backlog", input, session);
+        return { status: response.status, body: await response.json() };
+      };
+      // Counted after every intent here: none was prepared since.
+      const counted = {
+        tiers: { t0: 3, t1: 2, t2: 40, t3: 0, t4: 1_200 },
+        countedAt: "2099-01-01T00:00:00.000Z",
+        queued: 300,
+        running: 1,
+      };
+      const failure = (code: string) => ({
+        status: 503,
+        body: { ok: false, error: { code, fields: [] } },
+      });
+      const reader = vi.fn(async () => counted);
+      // Anonymous: refused before the Backend is asked.
+      const anonymous = await backlog("");
+      expect(anonymous.status).toBe(403);
+      expect(anonymous.body).toMatchObject({
+        ok: false,
+        error: { code: "AUTHORIZATION_REQUIRED" },
+      });
+      // No operator boundary configured in this Admin.
+      expect(await backlog()).toEqual(
+        failure("CATALOG_RENDER_BACKLOG_NOT_CONFIGURED"),
+      );
+      const close = await syntheticOperatorBoundary({
+        catalogRenderBacklog: reader,
+      });
+      try {
+        for (const session of [ownerSession, automationSession])
+          expect(await backlog(session)).toEqual({
+            status: 200,
+            body: { ok: true, result: { ...counted, preparedSince: 0 } },
+          });
+        expect(reader).toHaveBeenCalledTimes(2);
+        // The body is the capability probe's: empty.
+        for (const input of [{ catalogId: ids[0] }, { tiers: null }, []])
+          expect((await backlog(ownerSession, input)).status).toBe(400);
+        expect(reader).toHaveBeenCalledTimes(2);
+      } finally {
+        await close();
+      }
+      // A Backend without the reader (503), or whose reader fails (500), is
+      // unavailable.
+      for (const dependencies of [
+        {},
+        {
+          catalogRenderBacklog: async () => {
+            throw new Error("synthetic backlog failure");
+          },
+        },
+      ] as Partial<OperatorRouteDependencies>[]) {
+        const closeFailing = await syntheticOperatorBoundary(dependencies);
+        try {
+          expect(await backlog(automationSession)).toEqual(
+            failure("CATALOG_RENDER_BACKLOG_UNAVAILABLE"),
+          );
+        } finally {
+          await closeFailing();
+        }
+      }
+      // A Backend older than the route (404) is not configured; an answer
+      // beyond the contract is unavailable, never passed on.
+      for (const [status, answer, code] of [
+        [
+          404,
+          { error: { status: 404, code: "NOT_FOUND" } },
+          "CATALOG_RENDER_BACKLOG_NOT_CONFIGURED",
+        ],
+        [
+          200,
+          { ...counted, assetIds: ["synthetic-asset"] },
+          "CATALOG_RENDER_BACKLOG_UNAVAILABLE",
+        ],
+      ] as const) {
+        const raw = createServer((_request, response) => {
+          response.writeHead(status, { "content-type": "application/json" });
+          response.end(JSON.stringify(answer));
+        });
+        await new Promise<void>((resolve) =>
+          raw.listen(0, "127.0.0.1", resolve),
+        );
+        try {
+          const address = raw.address();
+          if (!address || typeof address === "string")
+            throw new Error("Synthetic operator address missing");
+          vi.stubEnv(
+            "COMMUNITY_OPERATOR_BASE_URL",
+            `http://127.0.0.1:${address.port}`,
+          );
+          vi.stubEnv("COMMUNITY_OPERATOR_TOKEN", randomUUID());
+          const answered = await backlog();
+          expect(answered).toEqual(failure(code));
+          expect(JSON.stringify(answered)).not.toContain("synthetic-asset");
+        } finally {
+          vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", "");
+          vi.stubEnv("COMMUNITY_OPERATOR_TOKEN", "");
+          await new Promise<void>((resolve, reject) =>
+            raw.close((error) => (error ? reject(error) : resolve())),
+          );
+        }
+      }
     });
   });

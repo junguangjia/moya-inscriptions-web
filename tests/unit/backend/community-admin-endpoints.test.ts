@@ -37,6 +37,7 @@ import type { Endpoint, PayloadRequest } from "payload";
  * the complete request envelope is validated strictly, the id is mapped into
  * the Backend route, and only the validated command body is forwarded.
  */
+const HUMAN_REASON = "Synthetic human moderation reason";
 const commentId = "comment-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f01";
 const userId = "user-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f01";
 
@@ -121,7 +122,7 @@ describe("Admin community moderation endpoint boundary", () => {
     const result = await invoke(
       endpoints,
       "moderate-comment",
-      request({ id: commentId, action: "approve" }),
+      request({ reason: HUMAN_REASON, id: commentId, action: "approve" }),
     );
     expect(result).toEqual({
       status: 200,
@@ -131,20 +132,31 @@ describe("Admin community moderation endpoint boundary", () => {
       {
         method: "POST",
         path: `comments/${commentId}/moderation`,
-        body: { action: "approve" },
+        body: { reason: HUMAN_REASON, action: "approve" },
       },
     ]);
   });
 
   it.each([
-    ["extra field", { id: commentId, action: "approve", note: "x" }],
-    ["missing id", { action: "approve" }],
-    ["missing action", { id: commentId }],
-    ["unknown action", { id: commentId, action: "delete" }],
+    [
+      "extra field",
+      { reason: HUMAN_REASON, id: commentId, action: "approve", note: "x" },
+    ],
+    ["missing id", { reason: HUMAN_REASON, action: "approve" }],
+    ["missing action", { reason: HUMAN_REASON, id: commentId }],
+    [
+      "unknown action",
+      { reason: HUMAN_REASON, id: commentId, action: "delete" },
+    ],
     ["malformed id", { id: "comment-x", action: "approve" }],
     [
       "actor label",
-      { id: commentId, action: "approve", operatorLabel: "owner" },
+      {
+        reason: HUMAN_REASON,
+        id: commentId,
+        action: "approve",
+        operatorLabel: "owner",
+      },
     ],
     ["non-object", "approve"],
   ])("rejects %s before any Backend call", async (_label, body) => {
@@ -165,35 +177,39 @@ describe("Admin community moderation endpoint boundary", () => {
       await invoke(
         endpoints,
         "moderate-comment",
-        request({ id: commentId, action }),
+        request({ reason: HUMAN_REASON, id: commentId, action }),
       );
     for (const action of ["suspend", "reinstate"] as const)
-      await invoke(endpoints, "moderate-user", request({ id: userId, action }));
+      await invoke(
+        endpoints,
+        "moderate-user",
+        request({ reason: HUMAN_REASON, id: userId, action }),
+      );
     expect(calls).toEqual([
       {
         method: "POST",
         path: `comments/${commentId}/moderation`,
-        body: { action: "reject" },
+        body: { reason: HUMAN_REASON, action: "reject" },
       },
       {
         method: "POST",
         path: `comments/${commentId}/moderation`,
-        body: { action: "hide" },
+        body: { reason: HUMAN_REASON, action: "hide" },
       },
       {
         method: "POST",
         path: `comments/${commentId}/moderation`,
-        body: { action: "unhide" },
+        body: { reason: HUMAN_REASON, action: "unhide" },
       },
       {
         method: "POST",
         path: `users/${userId}/status`,
-        body: { action: "suspend" },
+        body: { reason: HUMAN_REASON, action: "suspend" },
       },
       {
         method: "POST",
         path: `users/${userId}/status`,
-        body: { action: "reinstate" },
+        body: { reason: HUMAN_REASON, action: "reinstate" },
       },
     ]);
     expect(
@@ -201,7 +217,7 @@ describe("Admin community moderation endpoint boundary", () => {
         await invoke(
           endpoints,
           "moderate-user",
-          request({ id: commentId, action: "suspend" }),
+          request({ reason: HUMAN_REASON, id: commentId, action: "suspend" }),
         )
       ).status,
     ).toBe(400);
@@ -219,7 +235,7 @@ describe("Admin community moderation endpoint boundary", () => {
         await invoke(
           endpoints,
           "moderate-comments",
-          request({ action: "hide", ids }),
+          request({ reason: HUMAN_REASON, action: "hide", ids }),
         )
       ).status,
     ).toBe(200);
@@ -227,14 +243,18 @@ describe("Admin community moderation endpoint boundary", () => {
       {
         method: "POST",
         path: "comments/moderation",
-        body: { action: "hide", ids },
+        body: { reason: HUMAN_REASON, action: "hide", ids },
       },
     ]);
     for (const body of [
-      { action: "hide", ids: [...ids, `comment-${"f".repeat(32)}`] },
-      { action: "hide", ids: [ids[0], ids[0]] },
-      { action: "hide", ids: [] },
-      { action: "hide", ids, all: true },
+      {
+        reason: HUMAN_REASON,
+        action: "hide",
+        ids: [...ids, `comment-${"f".repeat(32)}`],
+      },
+      { reason: HUMAN_REASON, action: "hide", ids: [ids[0], ids[0]] },
+      { reason: HUMAN_REASON, action: "hide", ids: [] },
+      { reason: HUMAN_REASON, action: "hide", ids, all: true },
     ])
       expect(
         (await invoke(endpoints, "moderate-comments", request(body))).status,
@@ -295,7 +315,10 @@ describe("Admin community moderation endpoint boundary", () => {
         await invoke(
           endpoints,
           "moderate-comment",
-          request({ id: commentId, action: "approve" }, role),
+          request(
+            { reason: HUMAN_REASON, id: commentId, action: "approve" },
+            role,
+          ),
         ),
       ).toEqual({
         status: 403,
@@ -326,7 +349,7 @@ describe("Admin community moderation endpoint boundary", () => {
       await invoke(
         endpoints,
         "moderate-comment",
-        request({ id: commentId, action: "hide" }),
+        request({ reason: HUMAN_REASON, id: commentId, action: "hide" }),
       ),
     ).toEqual({
       status: 409,
@@ -348,6 +371,7 @@ describe("Phase 4 Owner command envelopes", () => {
     [
       "moderate-work",
       {
+        reason: HUMAN_REASON,
         id: "work-" + "1".repeat(32),
         requestId: receipt,
         state: "hidden",
@@ -358,13 +382,18 @@ describe("Phase 4 Owner command envelopes", () => {
     ],
     [
       "delete-body",
-      { id: commentId, requestId: receipt },
+      { id: commentId, requestId: receipt, reason: HUMAN_REASON },
       "POST",
       `comments/${commentId}/delete-body`,
     ],
     [
       "remove-thread",
-      { id: commentId, requestId: receipt, expectedAffectedCount: 4 },
+      {
+        id: commentId,
+        requestId: receipt,
+        expectedAffectedCount: 4,
+        reason: HUMAN_REASON,
+      },
       "POST",
       `comments/${commentId}/remove-thread`,
     ],
@@ -453,6 +482,7 @@ describe("Phase 4 Owner command envelopes", () => {
             id: commentId,
             requestId: receipt,
             expectedAffectedCount: 0,
+            reason: HUMAN_REASON,
           }),
         )
       ).status,
@@ -690,6 +720,7 @@ describe("Work publishing Owner envelopes", () => {
     [
       "moderate-work-submission",
       {
+        reason: HUMAN_REASON,
         id: revisionId,
         requestId: receipt,
         action: "approve",
@@ -697,7 +728,12 @@ describe("Work publishing Owner envelopes", () => {
       },
       "POST",
       `publishing/submissions/${revisionId}/moderation`,
-      { requestId: receipt, action: "approve", expectedVersion: 4 },
+      {
+        requestId: receipt,
+        action: "approve",
+        expectedVersion: 4,
+        reason: HUMAN_REASON,
+      },
     ],
     [
       "read-account-capacity",
@@ -811,6 +847,7 @@ describe("Work publishing Owner envelopes", () => {
     [
       "moderate-work-submission",
       {
+        reason: HUMAN_REASON,
         id: revisionId,
         requestId: receipt,
         action: "hide",
@@ -828,6 +865,7 @@ describe("Work publishing Owner envelopes", () => {
     [
       "moderate-work-submission",
       {
+        reason: HUMAN_REASON,
         id: revisionId,
         requestId: receipt,
         action: "reject",
@@ -999,6 +1037,7 @@ describe("Work publishing Owner envelopes", () => {
         endpoints,
         "moderate-work-submission",
         request({
+          reason: HUMAN_REASON,
           id: revisionId,
           requestId: receipt,
           action: "approve",
@@ -2163,5 +2202,175 @@ describe("Agent administration Owner envelopes (Development)", () => {
     expect(
       outcomeUnknown(new OperatorFailure("AGENT_FORBIDDEN", "x", 403)),
     ).toBe(false);
+  });
+});
+
+describe("Owner feedback read boundary", () => {
+  const feedbackPage = {
+    items: [
+      {
+        id: "feedback-" + "a".repeat(32),
+        message: "设置中的反馈正文",
+        images: [],
+        user: { id: userId, displayName: "测试用户" },
+        createdAt: "2026-10-23T12:00:00.000Z",
+      },
+    ],
+    total: 21,
+    page: 2,
+    pageSize: 20,
+  };
+
+  it.each(["development", "production"])(
+    "forwards only validated pagination and contract-checks the answer in %s",
+    async (nodeEnv) => {
+      vi.stubEnv("NODE_ENV", nodeEnv);
+      try {
+        const call = vi.fn(async () => feedbackPage) as unknown as OperatorCall;
+        const endpoints = createCommunityEndpoints(call);
+        expect(
+          await invoke(
+            endpoints,
+            "read-feedback",
+            request({ page: 2, pageSize: 20 }),
+          ),
+        ).toEqual({
+          status: 200,
+          body: { ok: true, result: feedbackPage },
+        });
+        expect(call).toHaveBeenCalledWith("GET", "feedback?page=2&pageSize=20");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it("refuses non-Owners and extra query fields before reading any feedback", async () => {
+    const { call, calls } = recorder();
+    const endpoints = createCommunityEndpoints(call);
+    for (const role of [null, "automation"] as const)
+      expect(
+        (await invoke(endpoints, "read-feedback", request({}, role))).status,
+      ).toBe(403);
+    for (const input of [
+      { page: 0 },
+      { pageSize: 51 },
+      { userId },
+      { search: "测试" },
+    ])
+      expect(
+        (await invoke(endpoints, "read-feedback", request(input))).status,
+      ).toBe(400);
+    expect(calls).toEqual([]);
+  });
+
+  it("does not expose or log an answer outside the feedback contract", async () => {
+    const call = vi.fn(async () => ({
+      ...feedbackPage,
+      privateField: "unexpected content",
+    })) as unknown as OperatorCall;
+    const req = request({ page: 1, pageSize: 20 });
+    expect(
+      await invoke(createCommunityEndpoints(call), "read-feedback", req),
+    ).toEqual({
+      status: 502,
+      body: { ok: false, error: { code: "OPERATOR_RESPONSE_INVALID" } },
+    });
+    expect(req.payload.logger.error).not.toHaveBeenCalled();
+  });
+});
+
+describe("private feedback image streaming boundary", () => {
+  const feedbackId = "feedback-" + "a".repeat(32),
+    itemId = "media-item-" + "b".repeat(32);
+  const path =
+    "/community-moderation/feedback-media/:feedbackId/:itemId/:variant";
+  const req = (
+    role: "owner" | "automation" | null = "owner",
+    changes: Record<string, unknown> = {},
+  ) =>
+    ({
+      ...request({}, role),
+      routeParams: { feedbackId, itemId, variant: "display" },
+      headers: new Headers(),
+      url:
+        "http://admin.invalid/api/community-moderation/feedback-media/" +
+        feedbackId +
+        "/" +
+        itemId +
+        "/display",
+      signal: new AbortController().signal,
+      ...changes,
+    }) as unknown as PayloadRequest;
+  const invokeMedia = async (
+    open: OperatorMediaCall,
+    value: PayloadRequest,
+  ) => {
+    const endpoint = createCommunityEndpoints(recorder().call, open).find(
+      (e) => e.path === path,
+    )!;
+    return await (endpoint.handler as (r: PayloadRequest) => Promise<Response>)(
+      value,
+    );
+  };
+  const media = (contentType = "image/webp"): OperatorMediaResponse => ({
+    status: 200,
+    contentType,
+    contentLength: "4",
+    contentRange: null,
+    acceptsRanges: false,
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3, 4]));
+        controller.close();
+      },
+    }),
+  });
+  it("requires Owner and refuses malformed identities, queries and source/master variants before transport", async () => {
+    const open = vi.fn<OperatorMediaCall>();
+    for (const role of [null, "automation"] as const)
+      expect((await invokeMedia(open, req(role))).status).toBe(403);
+    for (const routeParams of [
+      { feedbackId: "../other", itemId, variant: "display" },
+      { feedbackId, itemId: "blob-secret", variant: "display" },
+      { feedbackId, itemId, variant: "original" },
+      { feedbackId, itemId, variant: "standard_master" },
+    ])
+      expect(
+        (await invokeMedia(open, req("owner", { routeParams }))).status,
+      ).toBe(400);
+    expect(
+      (
+        await invokeMedia(
+          open,
+          req("owner", { url: "http://admin.invalid/?url=other" }),
+        )
+      ).status,
+    ).toBe(400);
+    expect(open).not.toHaveBeenCalled();
+  });
+  it("relays only the exact association route and private WebP headers", async () => {
+    const open = vi.fn<OperatorMediaCall>().mockResolvedValue(media());
+    const value = req();
+    const result = await invokeMedia(open, value);
+    expect(open).toHaveBeenCalledWith(
+      `feedback/${feedbackId}/images/${itemId}/display`,
+      null,
+      value.signal,
+    );
+    expect(result.status).toBe(200);
+    expect(result.headers.get("content-type")).toBe("image/webp");
+    expect(result.headers.get("cache-control")).toBe("private, no-store");
+    expect(result.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(result.headers.get("cross-origin-resource-policy")).toBe(
+      "same-origin",
+    );
+    expect((await result.arrayBuffer()).byteLength).toBe(4);
+  });
+  it("rejects unexpected media types instead of exposing other bytes", async () => {
+    const open = vi
+      .fn<OperatorMediaCall>()
+      .mockResolvedValue(media("video/mp4"));
+    expect((await invokeMedia(open, req())).status).toBe(502);
   });
 });

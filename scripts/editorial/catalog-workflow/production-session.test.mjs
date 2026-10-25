@@ -541,6 +541,10 @@ test("real HTTPS code path with a request-object seam stages once, publishes fro
       intent = { ...intent, state: "released", stateVersion: 3 };
       return { json: { ok: true, result: intent } };
     }
+    if (route === "/api/editorial/catalog-delivery-capabilities")
+      return { json: { ok: true, result: { delivery: "AVAILABLE" } } };
+    if (route === "/api/editorial/catalog-render-backlog")
+      return { json: { ok: true, result: renderBacklog() } };
     throw Error("UNEXPECTED_SYNTHETIC_ROUTE:" + route);
   });
   const stateDir = path.join(d, "state");
@@ -606,6 +610,28 @@ test("real HTTPS code path with a request-object seam stages once, publishes fro
   assert.equal(calls.length, beforeInvalidReload);
 });
 
+/** The Admin's render-backlog answer (catalog-scale-v1 I9): counted per tier
+ * by the last sync pass, a minute ago unless given, with the base renders
+ * queued and running now. */
+function renderBacklog(
+  tiers = { t0: 0, t1: 0, t2: 0, t3: 0, t4: 0 },
+  queued = 0,
+  running = 0,
+  countedMinutesAgo = 1,
+  preparedSince = 0,
+) {
+  return {
+    tiers,
+    countedAt:
+      tiers === null
+        ? null
+        : new Date(Date.now() - countedMinutesAgo * 60_000).toISOString(),
+    queued,
+    running,
+    preparedSince,
+  };
+}
+
 function receiptFor(body, draft) {
   const fields = Object.keys(body.content);
   // body is schema-ordered and carries exactly the parsed editorial fields.
@@ -621,7 +647,7 @@ function receiptFor(body, draft) {
     actor: 1,
     operation: "save-draft",
     status: "completed",
-    catalog: 10,
+    catalog: body.id,
     revision: draft.revision,
     fingerprint: draft.fingerprint,
   };
@@ -1017,4 +1043,868 @@ test("historical Production reuse binds original Catalog ID and fresh key receip
         false,
       );
     });
+});
+
+/** The answers of the staged-publication test above, as one reusable Native
+ * with per-test overrides. Still only the in-process request-object seam.
+ */
+function syntheticNative(t, f, override = () => undefined) {
+  const { id, revision } = f.before;
+  const n = {
+    draft: { id, revision, fingerprint: f.before.fingerprint, content: f.old },
+    main: { id, revision, _status: "published", ...f.old },
+    // A reuse-only record's media is already in Native.
+    uploaded: f.manifest.records[0].reuseOnly === true,
+    received: false,
+    intent: null,
+    saveReceipt: null,
+    // What the Admin's render-backlog proxy answers: drained by default.
+    backlog: renderBacklog(),
+  };
+  const uploadId = hash("a");
+  const session = () => ({
+    uploadId,
+    state: n.received ? "ready" : "uploading",
+    chunkBytes: MEDIA_UPLOAD_CHUNK_BYTES,
+    chunkCount: 1,
+    receivedIndices: n.received ? [0] : [],
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  });
+  n.calls = fakeHTTPS(t, (call) => {
+    const answer = override(call, n);
+    if (answer) return answer;
+    const { route, body, method } = call;
+    if (route === "/api/users/me")
+      return {
+        json: {
+          user: {
+            id: 1,
+            role: "owner",
+            collection: "users",
+            scopeCatalogIds: [],
+          },
+        },
+      };
+    if (route === "/api/editorial/read-draft")
+      return { json: { ok: true, result: n.draft } };
+    if (route.startsWith("/api/catalogs/") && method === "PATCH") {
+      n.main = { ...n.main, revision: n.main.revision + 1, _status: "draft" };
+      n.draft = {
+        ...n.draft,
+        revision: n.main.revision,
+        fingerprint: hash("e"),
+      };
+      return { json: { doc: n.main } };
+    }
+    if (route.startsWith("/api/catalogs/")) return { json: n.main };
+    if (route.startsWith("/api/media?"))
+      return {
+        json: {
+          docs: n.uploaded ? [f.media] : [],
+          totalDocs: n.uploaded ? 1 : 0,
+        },
+      };
+    if (
+      route.endsWith("media-upload/start") ||
+      route.endsWith("media-upload/status")
+    )
+      return { json: { ok: true, result: session() } };
+    if (route.includes("media-upload/chunk/")) {
+      n.received = true;
+      return {
+        json: {
+          ok: true,
+          result: { uploadId, index: 0, bytes: body.length, sha256: sha(body) },
+        },
+      };
+    }
+    if (route.endsWith("media-upload/complete")) {
+      n.uploaded = true;
+      return {
+        json: {
+          ok: true,
+          result: {
+            media: f.media,
+            reused: false,
+            validatedBytes: f.bytes.length,
+            validatedSha256: sha(f.bytes),
+          },
+        },
+      };
+    }
+    if (route.endsWith("save-draft")) {
+      n.draft = {
+        id,
+        revision: n.draft.revision + 1,
+        fingerprint: hash("e"),
+        content: body.content,
+      };
+      n.saveReceipt = body;
+      return {
+        json: {
+          ok: true,
+          result: {
+            id,
+            revision: n.draft.revision,
+            fingerprint: n.draft.fingerprint,
+          },
+        },
+      };
+    }
+    if (route.startsWith("/api/editorial-receipts?"))
+      return {
+        json: { docs: [receiptFor(n.saveReceipt, n.draft)], totalDocs: 1 },
+      };
+    if (route.endsWith("prepare-catalog-delivery")) {
+      n.intent = {
+        intentId: "00000000-0000-4000-8000-000000000001",
+        id,
+        catalogId: f.content.catalogId,
+        revision: n.draft.revision,
+        fingerprint: n.draft.fingerprint,
+        manifestSha256: sha(
+          JSON.stringify(
+            catalogDeliveryManifestSchema.parse(
+              f.content.media.map((m) => ({
+                ...m,
+                sourceSha256: f.manifest.records[0].media[0].uploadedSha256,
+              })),
+            ),
+          ),
+        ),
+        mediaCount: 1,
+        recipeManifestSha256: hash("b"),
+        state: "prepared",
+        stateVersion: 1,
+        readiness: "PENDING",
+        publicCopyAuthorized: false,
+        expiresAt: "2099-01-01T00:00:00.000Z",
+        replayed: false,
+      };
+      return { json: { ok: true, result: n.intent } };
+    }
+    if (route.endsWith("request-catalog-release")) {
+      n.intent = { ...n.intent, state: "release_requested", stateVersion: 2 };
+      return { json: { ok: true, result: n.intent } };
+    }
+    if (route.endsWith("read-catalog-delivery"))
+      return { json: { ok: true, result: n.intent } };
+    if (route === "/api/editorial/catalog-delivery-capabilities")
+      return { json: { ok: true, result: { delivery: "AVAILABLE" } } };
+    if (route === "/api/editorial/catalog-render-backlog")
+      return { json: { ok: true, result: n.backlog } };
+    throw Error("UNEXPECTED_SYNTHETIC_ROUTE:" + route);
+  });
+  return n;
+}
+async function stagedRun(t, f) {
+  const d = await directory(t);
+  f.input.controlled.root = d;
+  f.authority.inputSha256 = digest(f.input);
+  await writeFile(path.join(d, "test.png"), f.bytes);
+  const stateDir = path.join(d, "state");
+  return (command = "run", extra = {}) =>
+    withProductionCatalogSession(
+      { ...options(f, stateDir, command), ...extra },
+      // The production CLI's dispatch (production-cli.mjs).
+      async (client) => {
+        if (command === "withdraw") return client.withdraw();
+        const fresh = !client.snapshot().frozen;
+        if (command === "upload" || (command === "run" && fresh))
+          await client.ensureMedia();
+        if (command === "upload") return client.snapshot().proofs;
+        if (command === "run" && fresh) await client.saveDraft();
+        return client.publish();
+      },
+    );
+}
+const writes = (calls) =>
+  calls.filter(
+    (c) =>
+      c.method === "PATCH" ||
+      /media-upload\/(start|chunk|stream|complete)|save-draft|(prepare|request|release|cancel)-catalog/.test(
+        c.route,
+      ),
+  );
+const count = (calls, suffix) =>
+  calls.filter((c) => c.route.endsWith(suffix)).length;
+/** An Admin from before the delivery release: Payload's own 404 for every
+ * route it does not serve, and the old endpoints still answering.
+ */
+const oldAdmin = ({ route }) => {
+  if (/catalog-delivery|catalog-release|media-upload/.test(route))
+    return { status: 404, json: { message: `Route not found "${route}"` } };
+};
+const backendNotConfigured = ({ route }) => {
+  if (route === "/api/editorial/catalog-delivery-capabilities")
+    return { json: { ok: true, result: { delivery: "NOT_CONFIGURED" } } };
+};
+
+/** DEP-4's reuse-only record (TEST-3 of the historical fixture): its media
+ * proof is imported from Production evidence without any write. With
+ * `edited`, the live draft holds an earlier text, so `run` first writes at
+ * save-draft; otherwise the draft is already B and `publish` first writes at
+ * prepare-catalog-delivery.
+ */
+async function reuseOnlySetup(t, { edited = true } = {}) {
+  const f = setup();
+  const spec = await frozenSources(t, undefined, {
+    target: f.manifest.target,
+    observedRecordIndex: 2,
+  });
+  const bundle = await convertHistoricalProof(spec),
+    entry = bundle.entries.find((x) => x.recordId === "TEST-3"),
+    e = entry.evidence,
+    nativeId = 3,
+    objectKey = "editorial/synthetic-2.jpg";
+  f.content = editorialDraftSchema.parse({
+    catalogId: e.catalogId,
+    sourceId: e.sourceId,
+    kind: "inscription",
+    title: "Synthetic historical B",
+    summary: "Synthetic",
+    media: [
+      {
+        mediaId: e.mediaId,
+        objectKey,
+        width: e.width,
+        height: e.height,
+        position: 0,
+        isRepresentative: true,
+        alt: "Synthetic",
+      },
+    ],
+  });
+  f.old = edited
+    ? { ...f.content, title: "Synthetic historical A" }
+    : f.content;
+  f.before = {
+    id: nativeId,
+    revision: 4,
+    fingerprint: hash("c"),
+    contentSha256: digest(f.old),
+  };
+  f.media = {
+    id: e.nativeId,
+    mediaId: e.mediaId,
+    catalogId: e.catalogId,
+    objectKey,
+    sha256: e.uploadedSha256,
+    filesize: e.bytes,
+    width: e.width,
+    height: e.height,
+    filename: "synthetic-2.jpg",
+    mimeType: "image/jpeg",
+    alt: "Synthetic",
+  };
+  f.manifest.records = [
+    {
+      recordId: "TEST-3",
+      catalogId: e.catalogId,
+      sourceId: e.sourceId,
+      contentSha256: digest(f.content),
+      disposition: "publish",
+      reuseOnly: true,
+      protections: entry.protections,
+      media: [
+        {
+          mediaId: e.mediaId,
+          sourceSha256: e.sourceSha256,
+          uploadedSha256: e.uploadedSha256,
+          bytes: e.bytes,
+          width: e.width,
+          height: e.height,
+          position: 0,
+          isRepresentative: true,
+        },
+      ],
+    },
+  ];
+  f.input = {
+    version: 1,
+    expectedNative: f.before,
+    conversions: [
+      {
+        mediaId: e.mediaId,
+        reference: historicalConversionReference(bundle, entry.entryId),
+      },
+    ],
+    controlled: {
+      version: 1,
+      root: "/SYNTHETIC",
+      records: [
+        {
+          recordId: "TEST-3",
+          nativeId,
+          baselineStatus: "published",
+          content: f.content,
+          media: [
+            {
+              mediaId: e.mediaId,
+              file: null,
+              mimeType: "image/jpeg",
+              alt: "Synthetic",
+              rights: null,
+              orderConfidence: null,
+            },
+          ],
+        },
+      ],
+    },
+  };
+  Object.assign(f.authority, {
+    nativeId,
+    catalogId: e.catalogId,
+    manifestSha256: digest(f.manifest),
+  });
+  return f;
+}
+
+test("an intent that ended reports its terminal category, never WAITING_FOR_READY", async (t) => {
+  for (const ended of ["expired", "cancelled", "superseded", "withdrawn"])
+    await t.test(ended, async (t) => {
+      const f = setup();
+      const native = syntheticNative(t, f, ({ route }, n) => {
+        // The intent ends between prepare and the first read.
+        if (route.endsWith("read-catalog-delivery"))
+          return {
+            json: {
+              ok: true,
+              result: { ...n.intent, state: ended, stateVersion: 2 },
+            },
+          };
+      });
+      const run = await stagedRun(t, f);
+      const code = `DELIVERY_INTENT_${ended.toUpperCase()}`;
+      await assert.rejects(run, { code });
+      // The same state directory keeps reporting the end without new writes.
+      const before = writes(native.calls).length;
+      await assert.rejects(() => run("publish"), { code });
+      assert.equal(writes(native.calls).length, before);
+      assert.equal(
+        native.calls.some((c) => c.route.endsWith("request-catalog-release")),
+        false,
+      );
+    });
+});
+
+test("a withdrawal Native refused is sent again from the same state directory", async (t) => {
+  const f = setup();
+  f.input.expectedNative.contentSha256 = digest(f.content);
+  let refuse = true;
+  const native = syntheticNative(t, f, ({ method }) => {
+    if (method === "PATCH" && refuse) {
+      refuse = false;
+      return {
+        status: 409,
+        json: { errors: [{ message: "CONCURRENT_OPERATION_BUSY" }] },
+      };
+    }
+  });
+  native.draft.content = f.content;
+  native.main = { id: 10, revision: 2, _status: "published", ...f.content };
+  const run = await stagedRun(t, f);
+  await assert.rejects(() => run("withdraw"), { code: "REVISION_CONFLICT" });
+  const result = await run("withdraw");
+  assert.equal(result.status, "NATIVE_WITHDRAWAL_CONFIRMED");
+  assert.equal(result.native.status, "draft");
+  assert.equal(native.calls.filter((c) => c.method === "PATCH").length, 2);
+  // Confirmed: a later run reconciles and never sends a third PATCH.
+  await run("withdraw");
+  assert.equal(native.calls.filter((c) => c.method === "PATCH").length, 2);
+});
+
+test("a withdrawal refused before dispatch records no attempt and is sent on the next run", async (t) => {
+  const f = setup();
+  f.input.expectedNative.contentSha256 = digest(f.content);
+  let armed = false,
+    tripped = false;
+  const native = syntheticNative(t, f, ({ route, method }) => {
+    if (method === "GET" && route.startsWith("/api/catalogs/") && !tripped)
+      armed = true;
+  });
+  native.draft.content = f.content;
+  native.main = { id: 10, revision: 2, _status: "published", ...f.content };
+  const run = await stagedRun(t, f);
+  const assertBindingActive = async () => {
+    if (armed && !tripped) {
+      tripped = true;
+      throw Object.assign(new Error("SYNTHETIC_BINDING_RECHECK"), {
+        code: "PRODUCTION_INPUT_CHANGED",
+      });
+    }
+  };
+  await assert.rejects(() => run("withdraw", { assertBindingActive }), {
+    code: "PRODUCTION_INPUT_CHANGED",
+  });
+  assert.equal(native.calls.filter((c) => c.method === "PATCH").length, 0);
+  const result = await run("withdraw", { assertBindingActive });
+  assert.equal(result.status, "NATIVE_WITHDRAWAL_CONFIRMED");
+  assert.equal(native.calls.filter((c) => c.method === "PATCH").length, 1);
+});
+
+test("a draft save Native refused is sent again from the same state directory", async (t) => {
+  const f = setup();
+  let refuse = true;
+  const native = syntheticNative(t, f, ({ route }) => {
+    if (route.endsWith("save-draft") && refuse) {
+      refuse = false;
+      return {
+        status: 409,
+        json: { ok: false, error: { code: "CONCURRENT_OPERATION_BUSY" } },
+      };
+    }
+  });
+  const run = await stagedRun(t, f);
+  await assert.rejects(run, { code: "CONCURRENT_OPERATION_BUSY" });
+  assert.equal(native.draft.revision, 2);
+  const outcome = await run();
+  assert.equal(outcome.status, "WAITING_FOR_READY");
+  assert.equal(
+    native.calls.filter((c) => c.route.endsWith("save-draft")).length,
+    2,
+  );
+  assert.equal(native.draft.revision, 3);
+});
+
+test("run and upload stop before the first upload when the Admin lacks the delivery endpoints", async (t) => {
+  const f = setup();
+  const native = syntheticNative(t, f, oldAdmin);
+  const run = await stagedRun(t, f);
+  await assert.rejects(run, { code: "ADMIN_CAPABILITY_MISSING" });
+  await assert.rejects(() => run("upload"), {
+    code: "ADMIN_CAPABILITY_MISSING",
+  });
+  assert.deepEqual(writes(native.calls), []);
+  assert.equal(native.draft.revision, 2);
+});
+
+test("a publication stops before any write when the Backend cannot pin a recipe or prove readiness", async (t) => {
+  for (const [delivery, code] of [
+    ["NOT_CONFIGURED", "BACKEND_DELIVERY_NOT_CONFIGURED"],
+    ["UNAVAILABLE", "BACKEND_DELIVERY_UNAVAILABLE"],
+  ])
+    await t.test(delivery, async (t) => {
+      const f = setup();
+      const native = syntheticNative(t, f, ({ route }) => {
+        if (route === "/api/editorial/catalog-delivery-capabilities")
+          return { json: { ok: true, result: { delivery } } };
+      });
+      const run = await stagedRun(t, f);
+      await assert.rejects(run, { code });
+      assert.deepEqual(writes(native.calls), []);
+      // An upload alone needs no Backend: it proceeds past the same probe.
+      const uploaded = await withProductionCatalogSession(
+        options(f, path.join(f.input.controlled.root, "upload"), "upload"),
+        async (client) => {
+          await client.ensureMedia();
+          return client.snapshot().proofs;
+        },
+      );
+      assert.equal(Object.keys(uploaded).length, 1);
+      assert.equal(
+        writes(native.calls).every((c) => c.route.includes("media-upload")),
+        true,
+      );
+    });
+});
+
+test("a reuse-only run stops before its draft save, and publish before its intent, when delivery is absent", async (t) => {
+  for (const [name, absent, code] of [
+    ["old Admin", oldAdmin, "ADMIN_CAPABILITY_MISSING"],
+    [
+      "Backend not configured",
+      backendNotConfigured,
+      "BACKEND_DELIVERY_NOT_CONFIGURED",
+    ],
+  ])
+    await t.test(name, async (t) => {
+      await t.test("run of a text-only edit", async (t) => {
+        const f = await reuseOnlySetup(t);
+        const native = syntheticNative(t, f, absent);
+        const run = await stagedRun(t, f);
+        await assert.rejects(run, { code });
+        // The media proof was imported without any write; the save is the
+        // first write and it was never sent.
+        assert.equal(count(native.calls, "catalog-delivery-capabilities"), 1);
+        assert.equal(count(native.calls, "save-draft"), 0);
+        assert.deepEqual(writes(native.calls), []);
+        assert.equal(native.draft.revision, 4);
+        assert.equal(native.draft.content.title, "Synthetic historical A");
+      });
+      await t.test("publish of a saved draft", async (t) => {
+        const f = await reuseOnlySetup(t, { edited: false });
+        const native = syntheticNative(t, f, absent);
+        const run = await stagedRun(t, f);
+        assert.equal(Object.keys(await run("upload")).length, 1);
+        assert.deepEqual(
+          native.calls.filter(
+            (c) => c.method !== "GET" && !/read-draft$/.test(c.route),
+          ),
+          [],
+        );
+        await assert.rejects(() => run("publish"), { code });
+        assert.equal(count(native.calls, "catalog-delivery-capabilities"), 1);
+        assert.equal(count(native.calls, "prepare-catalog-delivery"), 0);
+        assert.deepEqual(writes(native.calls), []);
+      });
+    });
+});
+
+test("a draft save refused before dispatch records no attempt and is sent on the next run", async (t) => {
+  const f = await reuseOnlySetup(t);
+  let armed = false,
+    tripped = false;
+  const native = syntheticNative(t, f, ({ route }) => {
+    // The capability probe is the last request before the draft save.
+    if (route === "/api/editorial/catalog-delivery-capabilities" && !tripped)
+      armed = true;
+  });
+  const run = await stagedRun(t, f);
+  const assertBindingActive = async () => {
+    if (armed && !tripped) {
+      tripped = true;
+      throw Object.assign(new Error("SYNTHETIC_BINDING_RECHECK"), {
+        code: "PRODUCTION_INPUT_CHANGED",
+      });
+    }
+  };
+  await assert.rejects(() => run("run", { assertBindingActive }), {
+    code: "PRODUCTION_INPUT_CHANGED",
+  });
+  assert.equal(tripped, true);
+  assert.equal(count(native.calls, "save-draft"), 0);
+  assert.equal(native.draft.revision, 4);
+  const outcome = await run("run", { assertBindingActive });
+  assert.equal(outcome.status, "WAITING_FOR_READY");
+  assert.equal(count(native.calls, "save-draft"), 1);
+  assert.equal(native.draft.revision, 5);
+});
+
+/* catalog-scale-v1 I9 (Owner decision D5): the waves. A new prepare is sent
+ * only while the render backlog ahead of it drains within 12 hours at the
+ * render rate (7 images a minute unless configured), read through the Admin
+ * proxy after the capability preflight. */
+const CAPABILITIES = "/api/editorial/catalog-delivery-capabilities";
+const RENDER_BACKLOG = "/api/editorial/catalog-render-backlog";
+const PREPARE = "/api/editorial/prepare-catalog-delivery";
+/** One session's requests: its preflight precedes its backlog read, which
+ * precedes its prepare, and no write precedes the preflight. */
+const assertWaveOrder = (calls, { prepared }) => {
+  const routes = calls.map((c) => c.route),
+    capability = routes.indexOf(CAPABILITIES),
+    backlog = routes.indexOf(RENDER_BACKLOG),
+    firstWrite = calls.findIndex((c) => writes([c]).length === 1);
+  assert.ok(capability >= 0 && capability < backlog);
+  assert.equal(routes.filter((r) => r === RENDER_BACKLOG).length, 1);
+  assert.equal(firstWrite === -1 || firstWrite > capability, true);
+  assert.equal(routes.indexOf(PREPARE) > backlog, prepared);
+  assert.equal(routes.includes(PREPARE), prepared);
+};
+
+test("a new wave is prepared only while the render backlog drains within 12 hours, after the capability preflight", async (t) => {
+  const f = setup();
+  const native = syntheticNative(t, f);
+  // 12 hours at 7 a minute are 5,040 images ahead of the wave; a recipe
+  // re-render not queued yet (t4) runs after it and is not counted.
+  native.backlog = renderBacklog(
+    { t0: 40, t1: 1_000, t2: 4_000, t3: 1, t4: 90_000 },
+    300,
+    1,
+  );
+  const run = await stagedRun(t, f);
+  const waiting = await run();
+  assert.deepEqual(waiting, {
+    status: "WAITING_FOR_RENDER_BACKLOG",
+    renderBacklog: {
+      images: 5_041,
+      imagesPerMinute: 7,
+      drainMinutes: 721,
+      maxDrainMinutes: 720,
+      countedAt: native.backlog.countedAt,
+    },
+    anonymousDeliveryVerified: false,
+  });
+  assertWaveOrder(native.calls, { prepared: false });
+  // Counts only: no origin, record, image, key or credential.
+  const text = JSON.stringify(waiting);
+  for (const secret of [
+    "example.invalid",
+    "editorial/",
+    "SYNTHETIC",
+    f.manifest.records[0].catalogId,
+    f.manifest.records[0].media[0].mediaId,
+  ])
+    assert.equal(text.includes(secret), false, secret);
+  // A caller runs `publish` again while it waits (no sooner than a sync pass:
+  // each run spends the state directory's request budget). Each run reads
+  // the backlog afresh, with no attempt limit, and prepares nothing.
+  for (let i = 0; i < 3; i++) assert.deepEqual(await run("publish"), waiting);
+  assert.equal(count(native.calls, "catalog-render-backlog"), 4);
+  assert.equal(count(native.calls, "prepare-catalog-delivery"), 0);
+  // The draft was saved and frozen; the same state directory prepares the
+  // wave once the backlog is down to the limit.
+  native.backlog = renderBacklog(
+    { t0: 40, t1: 1_000, t2: 4_000, t3: 0, t4: 90_000 },
+    300,
+    1,
+  );
+  const from = native.calls.length;
+  const outcome = await run("publish");
+  assert.equal(outcome.status, "WAITING_FOR_READY");
+  assertWaveOrder(native.calls.slice(from), { prepared: true });
+  assert.equal(count(native.calls, "save-draft"), 1);
+});
+
+test("the base renders queued and running count when more than the tiers last counted", async (t) => {
+  const f = setup();
+  const native = syntheticNative(t, f);
+  native.backlog = renderBacklog(
+    { t0: 0, t1: 0, t2: 0, t3: 0, t4: 20_000 },
+    5_040,
+    1,
+  );
+  const run = await stagedRun(t, f);
+  assert.equal((await run()).renderBacklog.images, 5_041);
+  assert.equal(count(native.calls, "prepare-catalog-delivery"), 0);
+  native.backlog = renderBacklog(
+    { t0: 0, t1: 0, t2: 0, t3: 0, t4: 20_000 },
+    5_039,
+    1,
+  );
+  assert.equal((await run("publish")).status, "WAITING_FOR_READY");
+  assert.equal(count(native.calls, "prepare-catalog-delivery"), 1);
+});
+
+test("the images prepared since the last count hold the next wave back, so one batch inside a sync interval is paced on all of it", async (t) => {
+  const f = setup();
+  const native = syntheticNative(t, f);
+  // 4,900 counted and 141 prepared by earlier sessions since: 5,041 ahead.
+  const tiers = { t0: 0, t1: 0, t2: 4_900, t3: 0, t4: 0 };
+  native.backlog = renderBacklog(tiers, 300, 1, 1, 141);
+  const run = await stagedRun(t, f);
+  const waiting = await run();
+  assert.equal(waiting.status, "WAITING_FOR_RENDER_BACKLOG");
+  assert.equal(waiting.renderBacklog.images, 5_041);
+  // Also on top of the queued and running renders when they are more.
+  native.backlog = renderBacklog(
+    { t0: 0, t1: 0, t2: 0, t3: 0, t4: 0 },
+    5_000,
+    1,
+    1,
+    40,
+  );
+  assert.equal((await run("publish")).renderBacklog.images, 5_041);
+  assert.equal(count(native.calls, "prepare-catalog-delivery"), 0);
+  native.backlog = renderBacklog(tiers, 300, 1, 1, 140);
+  assert.equal((await run("publish")).status, "WAITING_FOR_READY");
+  assert.equal(count(native.calls, "prepare-catalog-delivery"), 1);
+});
+
+test("an Admin answer without the prepared-since count stops the wave before its prepare", async (t) => {
+  const f = setup();
+  const older = renderBacklog();
+  delete older.preparedSince;
+  const native = syntheticNative(t, f, ({ route }) =>
+    route === RENDER_BACKLOG
+      ? { json: { ok: true, result: older } }
+      : undefined,
+  );
+  const run = await stagedRun(t, f);
+  await assert.rejects(run, { code: "RENDER_BACKLOG_INVALID" });
+  assert.equal(count(native.calls, "prepare-catalog-delivery"), 0);
+});
+
+test("the render rate is configurable, and an invalid one stops before any request", async (t) => {
+  const f = setup();
+  const native = syntheticNative(t, f);
+  native.backlog = renderBacklog({ t0: 0, t1: 0, t2: 10_080, t3: 1, t4: 0 });
+  const run = await stagedRun(t, f);
+  for (const renderImagesPerMinute of [
+    0,
+    -7,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    61,
+    "7",
+  ])
+    await assert.rejects(
+      () => run("run", { renderImagesPerMinute }),
+      { code: "RENDER_PACING_INVALID" },
+      String(renderImagesPerMinute),
+    );
+  assert.deepEqual(native.calls, []);
+  const waiting = await run("run", { renderImagesPerMinute: 14 });
+  assert.deepEqual(waiting.renderBacklog, {
+    images: 10_081,
+    imagesPerMinute: 14,
+    drainMinutes: 721,
+    maxDrainMinutes: 720,
+    countedAt: native.backlog.countedAt,
+  });
+  assert.equal(
+    (await run("publish", { renderImagesPerMinute: 14.01 })).status,
+    "WAITING_FOR_READY",
+  );
+  assert.equal(count(native.calls, "prepare-catalog-delivery"), 1);
+});
+
+test("a backlog the Admin cannot report, or one never counted, stops the wave before its prepare", async (t) => {
+  for (const [name, answer, code] of [
+    [
+      "never counted",
+      { json: { ok: true, result: renderBacklog(null, 0, 0) } },
+      "RENDER_BACKLOG_NOT_COUNTED",
+    ],
+    [
+      "an Admin without the proxy",
+      { status: 404, json: { message: "Route not found" } },
+      "ADMIN_RENDER_BACKLOG_MISSING",
+    ],
+    [
+      "a Backend without the route",
+      {
+        status: 503,
+        json: {
+          ok: false,
+          error: { code: "CATALOG_RENDER_BACKLOG_NOT_CONFIGURED", fields: [] },
+        },
+      },
+      "CATALOG_RENDER_BACKLOG_NOT_CONFIGURED",
+    ],
+    [
+      "an unavailable Backend",
+      {
+        status: 503,
+        json: {
+          ok: false,
+          error: { code: "CATALOG_RENDER_BACKLOG_UNAVAILABLE", fields: [] },
+        },
+      },
+      "CATALOG_RENDER_BACKLOG_UNAVAILABLE",
+    ],
+    [
+      "an answer that is not the contract",
+      {
+        json: {
+          ok: true,
+          result: { ...renderBacklog(), assetIds: ["synthetic"] },
+        },
+      },
+      "RENDER_BACKLOG_INVALID",
+    ],
+    [
+      "a refused read",
+      { status: 403, json: { ok: false, error: { code: "FORBIDDEN" } } },
+      "NATIVE_REQUEST_REJECTED",
+    ],
+  ])
+    await t.test(name, async (t) => {
+      const f = setup();
+      const native = syntheticNative(t, f, ({ route }) =>
+        route === RENDER_BACKLOG ? answer : undefined,
+      );
+      const run = await stagedRun(t, f);
+      await assert.rejects(run, { code });
+      assert.equal(count(native.calls, "catalog-render-backlog"), 1);
+      assert.equal(count(native.calls, "prepare-catalog-delivery"), 0);
+    });
+});
+
+test("a count with a tier that is not a whole number, or a tier this build does not know, reaches the gate as never counted and stops the wave before its prepare", async (t) => {
+  // The App's own reader (built), so the gate sees what the Backend answers
+  // for such a row: never as 0, which would let the wave through.
+  const { readCatalogRenderBacklog } =
+    await import("../../../services/community-postgres/dist/index.js");
+  const low = { t0: 0, t1: 0, t2: 100, t3: 0, t4: 0 };
+  const missing = { ...low };
+  delete missing.t4;
+  for (const [name, recorded] of [
+    ["a negative tier", { ...low, t1: -1 }],
+    ["a fractional tier", { ...low, t2: 0.5 }],
+    ["a tier as text", { ...low, t3: "0" }],
+    ["a missing tier", missing],
+    // A newer worker's tier: dropping it would undercount the backlog.
+    ["a tier this build does not know", { ...low, t5: 500 }],
+  ])
+    await t.test(name, async (t) => {
+      const read = await readCatalogRenderBacklog({
+        query: async () => ({
+          rows: [
+            {
+              render_backlog: recorded,
+              render_backlog_at: new Date(Date.now() - 60_000),
+              queued: 0,
+              running: 0,
+            },
+          ],
+        }),
+      });
+      // As the Backend serializes it and the Admin passes it on: nothing is
+      // prepared since a count it does not have.
+      const result = { ...JSON.parse(JSON.stringify(read)), preparedSince: 0 };
+      const f = setup();
+      const native = syntheticNative(t, f, ({ route }) =>
+        route === RENDER_BACKLOG ? { json: { ok: true, result } } : undefined,
+      );
+      const run = await stagedRun(t, f);
+      await assert.rejects(run, { code: "RENDER_BACKLOG_NOT_COUNTED" });
+      assert.equal(count(native.calls, "catalog-render-backlog"), 1);
+      assert.equal(count(native.calls, "prepare-catalog-delivery"), 0);
+    });
+});
+
+test("a backlog counted over an hour ago, or ahead of this clock beyond skew, stops the wave before its prepare", async (t) => {
+  // The worker stopped counting while its last count stays under the limit,
+  // and the queue (capped at 300) cannot show what built up since.
+  const low = { t0: 0, t1: 0, t2: 100, t3: 0, t4: 0 };
+  for (const [name, minutesAgo] of [
+    ["counted 61 minutes ago", 61],
+    ["counted three days ago", 3 * 24 * 60],
+    ["counted 10 minutes ahead", -10],
+  ])
+    await t.test(name, async (t) => {
+      const f = setup();
+      const native = syntheticNative(t, f);
+      native.backlog = renderBacklog(low, 300, 1, minutesAgo);
+      const run = await stagedRun(t, f);
+      await assert.rejects(run, (error) => {
+        assert.equal(error.code, "RENDER_BACKLOG_STALE");
+        assert.equal(error.message, "RENDER_BACKLOG_STALE");
+        return true;
+      });
+      assert.equal(count(native.calls, "catalog-render-backlog"), 1);
+      assert.equal(count(native.calls, "prepare-catalog-delivery"), 0);
+      // Counted again, the same state directory prepares the wave.
+      native.backlog = renderBacklog(low, 300, 1);
+      assert.equal((await run("publish")).status, "WAITING_FOR_READY");
+      assert.equal(count(native.calls, "prepare-catalog-delivery"), 1);
+    });
+  for (const [name, minutesAgo] of [
+    ["counted 59 minutes ago", 59],
+    ["counted 4 minutes ahead (clock skew)", -4],
+  ])
+    await t.test(name, async (t) => {
+      const f = setup();
+      const native = syntheticNative(t, f);
+      native.backlog = renderBacklog(low, 300, 1, minutesAgo);
+      const run = await stagedRun(t, f);
+      assert.equal((await run()).status, "WAITING_FOR_READY");
+      assertWaveOrder(native.calls, { prepared: true });
+    });
+});
+
+test("a wave whose prepare was already sent is not paced again", async (t) => {
+  const f = setup();
+  const native = syntheticNative(t, f);
+  const run = await stagedRun(t, f);
+  assert.equal((await run()).status, "WAITING_FOR_READY");
+  assert.equal(count(native.calls, "catalog-render-backlog"), 1);
+  // The backlog grew behind the prepared wave: its later runs still read,
+  // request and release it, and never ask for the backlog again.
+  native.backlog = renderBacklog({ t0: 0, t1: 0, t2: 50_000, t3: 0, t4: 0 });
+  assert.equal((await run("publish")).status, "WAITING_FOR_READY");
+  assert.equal(count(native.calls, "catalog-render-backlog"), 1);
+  assert.equal(count(native.calls, "prepare-catalog-delivery"), 1);
+  assert.equal(count(native.calls, "request-catalog-release"), 1);
 });

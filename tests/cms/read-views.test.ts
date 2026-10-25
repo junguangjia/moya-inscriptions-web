@@ -19,7 +19,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   createPublishedCatalogViewsSql,
+  downgradePublishedCatalogMediaViewSql,
   dropPublishedCatalogViewsSql,
+  upgradePublishedCatalogMediaViewSql,
 } from "admin/published";
 import { upgradePublishedCatalogSearchViewSql } from "admin/published-search";
 
@@ -71,6 +73,8 @@ beforeAll(async () => {
   }
   await pool.query(createPublishedCatalogViewsSql);
   await pool.query(upgradePublishedCatalogSearchViewSql);
+  // catalog-scale-v1 (M1): the keyed-read catalog_media every reader now sees.
+  await pool.query(upgradePublishedCatalogMediaViewSql);
 }, 20_000);
 
 afterAll(async () => {
@@ -357,6 +361,13 @@ describe("Payload published views through the unchanged Public read adapter", ()
         "UPDATE catalog_entries SET title = '不能写入' WHERE catalog_id = 'synthetic-catalog-1'",
       ),
     ).rejects.toMatchObject({ code: "55000" });
+    await expect(
+      pool.query(
+        "UPDATE catalog_media SET alt_text = '不能写入' WHERE catalog_id = 'synthetic-catalog-1'",
+      ),
+    ).rejects.toMatchObject({ code: "55000" });
+    // Migrations unwind in reverse: M1's down runs before the views' down.
+    await pool.query(downgradePublishedCatalogMediaViewSql);
     await pool.query(dropPublishedCatalogViewsSql);
     expect(
       (await pool.query("SELECT COUNT(*)::integer AS count FROM catalogs"))
@@ -364,6 +375,7 @@ describe("Payload published views through the unchanged Public read adapter", ()
     ).toEqual([{ count: 3 }]);
     await pool.query(createPublishedCatalogViewsSql);
     await pool.query(upgradePublishedCatalogSearchViewSql);
+    await pool.query(upgradePublishedCatalogMediaViewSql);
   });
 
   it("starts with a restricted public role while denying native drafts and all writes", async () => {

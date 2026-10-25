@@ -1,3 +1,6 @@
+import { handleReportingRequest } from "../community/reporting-handler.js";
+import type { ReportingIdentify } from "../community/reporting-handler.js";
+import type { CommunityReportingService } from "@moya/api";
 import { handleNotificationRequest } from "../community/notification-handler.js";
 import { handleAnalyticsRequest } from "../analytics/analytics-handler.js";
 import type { AnalyticsRouteDependencies } from "../analytics/analytics-handler.js";
@@ -27,6 +30,7 @@ import {
   handleDevelopmentSignIn,
   handleDevelopmentSignOut,
 } from "../community/community-handler.js";
+import { handleFeedbackRequest } from "../community/feedback-handler.js";
 import { handleAuthorRequest } from "../community/author-handler.js";
 import { handleDevelopmentCatalogRendition } from "../community/development-catalog-rendition-handler.js";
 import type { DevelopmentCatalogRenditions } from "../community/development-catalog-rendition-handler.js";
@@ -57,6 +61,7 @@ import type {
   DirectMessageService,
   PublishingOperatorService,
   ThreadService,
+  FeedbackService,
   WorkPublishingService,
 } from "@moya/api";
 import type { HealthReadinessCheck } from "../health/health-handler.js";
@@ -78,8 +83,13 @@ const sendRouteError = (
 };
 
 export interface CommunityRouterDependencies {
+  readonly reportingService?: CommunityReportingService;
+  readonly reportingIdentify?: ReportingIdentify;
+  readonly onAuthenticated?: (id: string, source: string) => Promise<void>;
   readonly catalogRecipePolicy?: BackendApplicationOptions["catalogRecipePolicy"];
   readonly catalogDeliveryReadiness?: BackendApplicationOptions["catalogDeliveryReadiness"];
+  readonly catalogPublishedRenditions?: BackendApplicationOptions["catalogPublishedRenditions"];
+  readonly catalogRenderBacklog?: BackendApplicationOptions["catalogRenderBacklog"];
   /** Separate user-owned Article operations. */
   readonly articleAuthoringService?: ArticleAuthoringService;
   readonly articleDelegation?: BackendApplicationOptions["articleDelegation"];
@@ -101,6 +111,7 @@ export interface CommunityRouterDependencies {
   readonly discussionPort?: DiscussionPort | undefined;
   /** Operator-managed Thread routes. */
   readonly threadService?: ThreadService | undefined;
+  readonly feedbackService?: FeedbackService | undefined;
   /** Owner-only direct-message moderation routes. */
   readonly directMessageService?: DirectMessageService | undefined;
   /** True only under NODE_ENV=development; Production never composes the entry. */
@@ -274,6 +285,47 @@ export const createRouter =
           response,
           community.authService,
           community.authRequestSource,
+          community.onAuthenticated,
+        ),
+        apiFailure,
+      );
+      return;
+    }
+
+    if (
+      community?.reportingService &&
+      (pathname === "/v1/community/reports" ||
+        pathname.startsWith("/v1/community/reports/") ||
+        pathname === "/v1/community/decisions" ||
+        pathname.startsWith("/v1/community/decisions/") ||
+        pathname === "/v1/community/reporting-inbox" ||
+        pathname.startsWith("/v1/community/reporting-inbox/"))
+    ) {
+      containRequest(
+        response,
+        handleReportingRequest(
+          request,
+          response,
+          community.reportingService,
+          community.sessionService,
+          community.reportingIdentify,
+        ),
+        apiFailure,
+      );
+      return;
+    }
+
+    if (
+      community?.feedbackService !== undefined &&
+      pathname === "/v1/community/feedback"
+    ) {
+      containRequest(
+        response,
+        handleFeedbackRequest(
+          request,
+          response,
+          community.feedbackService,
+          community.sessionService,
         ),
         apiFailure,
       );
@@ -461,8 +513,11 @@ export const createRouter =
         response,
         handleOperatorRequest(request, response, pathname, {
           moderationService,
+          reportingService: community?.reportingService,
           catalogRecipePolicy: community?.catalogRecipePolicy,
           catalogDeliveryReadiness: community?.catalogDeliveryReadiness,
+          catalogPublishedRenditions: community?.catalogPublishedRenditions,
+          catalogRenderBacklog: community?.catalogRenderBacklog,
           articlePublicationOperatorService:
             community?.articlePublicationOperatorService,
           contentOperatorPort: community?.contentOperatorPort,
@@ -470,6 +525,7 @@ export const createRouter =
           publishingOperatorService: community?.publishingOperatorService,
           agentAdministrationService: community?.agentAdministrationService,
           threadService: community?.threadService,
+          feedbackService: community?.feedbackService,
           directMessageService: community?.directMessageService,
           operatorCredential: community?.operatorCredential ?? "",
         }),

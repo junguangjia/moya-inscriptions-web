@@ -873,6 +873,7 @@ const completeQueue = async <T>(work: () => Promise<T>): Promise<T> => {
 };
 const mediaProjection = (
   document: Record<string, unknown>,
+  invalid: () => never = () => fail("UPLOAD_INPUT_INVALID"),
 ): EditorialUploadedMedia => {
   const value: Record<string, unknown> = {};
   for (const field of [
@@ -892,7 +893,9 @@ const mediaProjection = (
   ])
     if (document[field] !== undefined && document[field] !== null)
       value[field] = document[field];
-  return parse(editorialUploadedMediaSchema, value);
+  const projected = editorialUploadedMediaSchema.safeParse(value);
+  if (!projected.success) invalid();
+  return projected.data;
 };
 const matchesIntent = (
   media: EditorialUploadedMedia,
@@ -912,21 +915,27 @@ export function createResumableMediaEndpoints(options: {
   directory: string;
   mediaDirectory: string;
 }): Endpoint[] {
-  const store = new EditorialUploadStore(
-    options.directory,
-    options.mediaDirectory,
-  );
+  // Built on the first request, never while the config loads: Admin start and
+  // `payload migrate` do not depend on the staging directory's parent.
+  let created: EditorialUploadStore | undefined;
   const endpoint = (
     route: string,
-    operation: (req: PayloadRequest) => Promise<unknown>,
+    operation: (
+      req: PayloadRequest,
+      store: EditorialUploadStore,
+    ) => Promise<unknown>,
   ): Endpoint => ({
     path: `/editorial/media-upload/${route}`,
     method: "post",
     handler: async (req) => {
       try {
         requireActor(req);
+        created ??= new EditorialUploadStore(
+          options.directory,
+          options.mediaDirectory,
+        );
         return Response.json(
-          { ok: true, result: await operation(req) },
+          { ok: true, result: await operation(req, created) },
           {
             headers: {
               "Cache-Control": "private, no-store",
@@ -955,7 +964,7 @@ export function createResumableMediaEndpoints(options: {
     },
   });
   return [
-    endpoint("start", async (req) => {
+    endpoint("start", async (req, store) => {
       const intent = parse(editorialMediaUploadStartSchema, await json(req));
       const actor = requireActor(req);
       if (!canEditCatalog(req, intent.catalogId)) fail("UPLOAD_FORBIDDEN", 403);
@@ -1019,7 +1028,7 @@ export function createResumableMediaEndpoints(options: {
         return store.status(manifest);
       });
     }),
-    endpoint("status", async (req) => {
+    endpoint("status", async (req, store) => {
       const { uploadId } = parse(
         editorialMediaUploadSessionRequestSchema,
         await json(req),
@@ -1030,7 +1039,7 @@ export function createResumableMediaEndpoints(options: {
         return store.status(await store.authorize(req, uploadId));
       });
     }),
-    endpoint("chunk/:uploadId/:index", async (req) => {
+    endpoint("chunk/:uploadId/:index", async (req, store) => {
       const uploadId = req.routeParams?.uploadId,
         indexText = req.routeParams?.index;
       if (
@@ -1059,7 +1068,7 @@ export function createResumableMediaEndpoints(options: {
         });
       });
     }),
-    endpoint("stream/:uploadId/:offset", async (req) => {
+    endpoint("stream/:uploadId/:offset", async (req, store) => {
       const uploadId = req.routeParams?.uploadId;
       const offsetText = req.routeParams?.offset;
       const advertised = req.headers.get("content-length");
@@ -1092,7 +1101,7 @@ export function createResumableMediaEndpoints(options: {
         return store.status(await store.authorize(req, uploadId));
       });
     }),
-    endpoint("complete", async (req) => {
+    endpoint("complete", async (req, store) => {
       const { uploadId } = parse(
         editorialMediaUploadSessionRequestSchema,
         await json(req),
@@ -1123,8 +1132,11 @@ export function createResumableMediaEndpoints(options: {
           let media: EditorialUploadedMedia;
           let reused = false;
           if (found.docs[0]) {
+            // A registered original over the relay's 40 MiB (a Catalog
+            // ingest) can never be this intent: an identity conflict.
             media = mediaProjection(
               found.docs[0] as unknown as Record<string, unknown>,
+              () => fail("MEDIA_IDENTITY_CONFLICT", 409),
             );
             if (!matchesIntent(media, intent))
               fail("MEDIA_IDENTITY_CONFLICT", 409);

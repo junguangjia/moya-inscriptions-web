@@ -1,4 +1,8 @@
 import {
+  captureStaffCandidate,
+  recordStaffModeration,
+} from "../staff-moderation-reporting.js";
+import {
   beginArticlePublicationSync,
   type PublicationSyncOptions,
 } from "../publishing/publication-sync.js";
@@ -138,7 +142,7 @@ const publishedColumns =
 const publishedFrom = `FROM community.article_documents a
   JOIN community.article_revisions r ON r.article_id=a.id AND r.version=a.published_version
   JOIN community.public_users u ON u.id=a.owner_id AND u.status='active'
-  WHERE a.published_version IS NOT NULL AND a.status<>'withdrawn'`;
+  WHERE a.published_version IS NOT NULL AND a.status<>'withdrawn' AND NOT a.reporting_hidden`;
 
 const canonical = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(canonical);
@@ -449,7 +453,7 @@ export class PostgresArticleAuthoringAdapter
             `SELECT i.id,i.state,i.legacy_media_id,i.kind,
         EXISTS (SELECT 1 FROM community.media_renditions d JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed' WHERE d.item_id=i.id AND d.role='display' AND d.edit_key='base' AND d.state='ready') AS display_ready,
         EXISTS (SELECT 1 FROM community.media_renditions d JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed' WHERE d.item_id=i.id AND d.role='motion' AND d.edit_key='base' AND d.state='ready') AS motion_ready
-       FROM community.media_items i WHERE i.id=ANY($1::text[]) AND i.owner_id=$2 ORDER BY i.id FOR SHARE OF i`,
+       FROM community.media_items i WHERE i.id=ANY($1::text[]) AND i.owner_id=$2 AND i.purpose='content' ORDER BY i.id FOR SHARE OF i`,
             [refs.itemIds, draft.ownerId],
           )
         ).rows
@@ -1081,6 +1085,28 @@ export class PostgresArticleAuthoringAdapter
           )
         ).rows[0]!;
         await publicationSync.finish(now);
+        await recordStaffModeration(
+          db,
+          captureStaffCandidate(
+            { type: "article", id },
+            identity.owner_id,
+            candidate.title,
+            command.reason,
+          ),
+          operator,
+          command.action,
+          now,
+          approve
+            ? { kind: "informational" }
+            : {
+                kind: "article_submission",
+                articleId: id,
+                candidateVersion: candidate.candidateVersion,
+                fingerprint: candidate.fingerprint,
+                documentVersion: changed.version,
+                publicVersion: changed.published_version,
+              },
+        );
         return articleModerationResultSchema.parse({
           articleId: id,
           candidateVersion: candidate.candidateVersion,

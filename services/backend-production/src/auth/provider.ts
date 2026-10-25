@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   interpretAliyunCheck,
   interpretAliyunSend,
@@ -70,6 +70,13 @@ export const createProductionAuthDelivery = (
   };
   const failed = (error: unknown): "failed" | "unknown" =>
     error instanceof ProviderTransportError ? error.outcome : "unknown";
+  // PNVS verifies by phone + scheme; OutId alone does not bind an OTP.
+  // Derive the same bounded scheme for both calls from the application challenge.
+  const phoneScheme = (challengeId: string): string =>
+    createHash("sha256")
+      .update(`${config.phone?.schemeName ?? ""}\0${challengeId}`)
+      .digest("hex")
+      .slice(0, 20);
   const aliyun = async (
     action: "SendSmsVerifyCode" | "CheckSmsVerifyCode",
     body: object,
@@ -121,7 +128,9 @@ export const createProductionAuthDelivery = (
       try {
         const mapped = mapAliyunSendSmsVerifyCode({
           ...input,
-          ...config.phone,
+          signName: config.phone.signName,
+          templateCode: config.phone.templates[input.purpose],
+          schemeName: phoneScheme(input.outId),
         });
         // Disable the provider's automatic signature/template replacement retry.
         return interpretAliyunSend(
@@ -141,9 +150,12 @@ export const createProductionAuthDelivery = (
       try {
         const mapped = mapAliyunCheckSmsVerifyCode({
           ...input,
-          schemeName: config.phone.schemeName,
+          schemeName: phoneScheme(input.outId),
         });
-        return interpretAliyunCheck(await aliyun("CheckSmsVerifyCode", mapped));
+        const result = await aliyun("CheckSmsVerifyCode", mapped);
+        return interpretAliyunCheck({
+          Model: { VerifyResult: record(result.Model)?.VerifyResult },
+        });
       } catch (error) {
         return failed(error) === "unknown" ? "unknown" : "malformed";
       }

@@ -1,6 +1,9 @@
+import { handleReportingOperatorRequest } from "./reporting-handler.js";
+import type { CommunityReportingService } from "@moya/api";
 import { timingSafeEqual } from "node:crypto";
 
 import {
+  requireHumanModerationReason,
   CommunityInputError,
   CommunityContentOperatorService,
   isCommunityConflictError,
@@ -16,8 +19,14 @@ import {
   catalogRecipePolicySchema,
   catalogDeliveryReadinessRequestSchema,
   catalogDeliveryReadinessSchema,
+  catalogPublishedRenditionsRequestSchema,
+  catalogPublishedRenditionsSchema,
+  catalogRenderBacklogSchema,
   type CatalogDeliveryReadiness,
+  type CatalogPublishedRenditions,
+  type CatalogPublishedRenditionsRequest,
   type CatalogRecipePolicy,
+  type CatalogRenderBacklogReport,
 } from "@moya/contracts/internal/editorial";
 
 import { JsonBodyError, readJsonBody } from "../http/json-body.js";
@@ -26,6 +35,10 @@ import { failureLabel } from "../http/request-boundary.js";
 import { collectTransportQuery } from "../http/transport-query.js";
 import { handleAgentRequest } from "./agent-handler.js";
 import { handlePublishingOperatorRequest } from "./work-publishing-handler.js";
+import {
+  handleFeedbackOperatorRequest,
+  handleFeedbackOperatorImageRequest,
+} from "./feedback-handler.js";
 import { handleThreadOperatorRequest } from "./thread-handler.js";
 import { handleDirectMessageOperatorRequest } from "./direct-message-handler.js";
 import { handleArticlePublicationOperatorRequest } from "./article-publication-operator-handler.js";
@@ -39,15 +52,27 @@ import type {
   DirectMessageService,
   PublishingOperatorService,
   ThreadService,
+  FeedbackService,
 } from "@moya/api";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 export interface OperatorRouteDependencies {
+  readonly reportingService?: CommunityReportingService | undefined;
   readonly catalogDeliveryReadiness?:
     | ((intentId: string) => Promise<CatalogDeliveryReadiness | null>)
     | undefined;
   readonly catalogRecipePolicy?:
     (() => Promise<CatalogRecipePolicy>) | undefined;
+  /** Admin publish gate: App facts only, read with the Backend's own role. */
+  readonly catalogPublishedRenditions?:
+    | ((
+        media: CatalogPublishedRenditionsRequest["media"],
+      ) => Promise<CatalogPublishedRenditions>)
+    | undefined;
+  /** Pacing of bulk Catalog work (catalog-scale-v1 I9): the App's render
+   * backlog, counts only, read with the Backend's own role. */
+  readonly catalogRenderBacklog?:
+    (() => Promise<CatalogRenderBacklogReport>) | undefined;
   readonly articlePublicationOperatorService?:
     ArticlePublicationOperatorService | undefined;
   readonly moderationService: CommunityModerationService;
@@ -59,6 +84,7 @@ export interface OperatorRouteDependencies {
   readonly agentAdministrationService?: AgentAdministrationService | undefined;
   /** Threads (content-community-completion-v1, Development only); absent leaves threads/* unrouted. */
   readonly threadService?: ThreadService | undefined;
+  readonly feedbackService?: FeedbackService | undefined;
   /** DM moderation (content-community-completion-v1, Development only). */
   readonly directMessageService?: DirectMessageService | undefined;
   /** Shared credential the Owner's Payload Admin holds server-side. */
@@ -185,14 +211,18 @@ export const handleOperatorRequest = async (
   pathname: string,
   {
     moderationService,
+    reportingService,
     catalogRecipePolicy,
     catalogDeliveryReadiness,
+    catalogPublishedRenditions,
+    catalogRenderBacklog,
     operatorCredential,
     contentOperatorPort,
     discussionPort,
     publishingOperatorService,
     agentAdministrationService,
     threadService,
+    feedbackService,
     directMessageService,
     articlePublicationOperatorService,
   }: OperatorRouteDependencies,
@@ -205,6 +235,39 @@ export const handleOperatorRequest = async (
   const methodNotAllowed = () =>
     sendOperatorError(response, 405, "METHOD_NOT_ALLOWED");
   try {
+    if (
+      feedbackService !== undefined &&
+      pathname === "/internal/community/feedback"
+    ) {
+      await handleFeedbackOperatorRequest(request, response, feedbackService);
+      return;
+    }
+    const feedbackImage =
+      /^\/internal\/community\/feedback\/(feedback-[0-9a-f]{32})\/images\/(media-item-[0-9a-f]{32})\/(thumb|display|full)$/u.exec(
+        pathname,
+      );
+    if (feedbackService !== undefined && feedbackImage) {
+      await handleFeedbackOperatorImageRequest(
+        request,
+        response,
+        feedbackService,
+        feedbackImage.slice(1),
+      );
+      return;
+    }
+    if (
+      reportingService &&
+      (pathname === "/internal/community/reports" ||
+        pathname.startsWith("/internal/community/reports/"))
+    ) {
+      await handleReportingOperatorRequest(
+        request,
+        response,
+        pathname,
+        reportingService,
+      );
+      return;
+    }
     if (pathname === "/internal/community/catalog-delivery/readiness") {
       if (method !== "POST") return methodNotAllowed();
       if (!catalogDeliveryReadiness)
@@ -222,6 +285,48 @@ export const handleOperatorRequest = async (
       if (!result)
         return sendOperatorError(response, 404, "CATALOG_DELIVERY_NOT_FOUND");
       sendJson(response, 200, catalogDeliveryReadinessSchema.parse(result));
+      return;
+    }
+    if (
+      pathname === "/internal/community/catalog-delivery/published-renditions"
+    ) {
+      if (method !== "POST") return methodNotAllowed();
+      if (!catalogPublishedRenditions)
+        return sendOperatorError(
+          response,
+          503,
+          "CATALOG_DELIVERY_NOT_CONFIGURED",
+        );
+      // A record may name up to 2,000 media; editorial keys are ~200 bytes.
+      const input = catalogPublishedRenditionsRequestSchema.safeParse(
+        await readJsonBody(request, 1_048_576),
+      );
+      if (!input.success)
+        return sendOperatorError(response, 400, "INVALID_INPUT");
+      sendJson(
+        response,
+        200,
+        catalogPublishedRenditionsSchema.parse(
+          await catalogPublishedRenditions(input.data.media),
+        ),
+      );
+      return;
+    }
+    // Read-only and content-free: the CLI paces its prepare waves on it
+    // (Owner decision D5); nothing is refused or written because of it.
+    if (pathname === "/internal/community/catalog-delivery/render-backlog") {
+      if (method !== "GET") return methodNotAllowed();
+      if (!catalogRenderBacklog)
+        return sendOperatorError(
+          response,
+          503,
+          "CATALOG_DELIVERY_NOT_CONFIGURED",
+        );
+      sendJson(
+        response,
+        200,
+        catalogRenderBacklogSchema.parse(await catalogRenderBacklog()),
+      );
       return;
     }
     if (pathname === "/internal/community/catalog-delivery/recipe-policy") {
@@ -366,7 +471,10 @@ export const handleOperatorRequest = async (
         sendJson(
           response,
           200,
-          await operatorService.moderateWork(work[1]!, await commandBody()),
+          await operatorService.moderateWork(
+            work[1]!,
+            requireHumanModerationReason(await commandBody()),
+          ),
         );
         return;
       }
@@ -381,7 +489,10 @@ export const handleOperatorRequest = async (
           sendJson(
             response,
             200,
-            await operatorService.deleteBody(deletion[1]!, await commandBody()),
+            await operatorService.deleteBody(
+              deletion[1]!,
+              requireHumanModerationReason(await commandBody()),
+            ),
           );
         } else {
           sendJson(
@@ -389,7 +500,7 @@ export const handleOperatorRequest = async (
             200,
             await operatorService.removeThread(
               deletion[1]!,
-              await commandBody(),
+              requireHumanModerationReason(await commandBody()),
             ),
           );
         }
@@ -453,7 +564,9 @@ export const handleOperatorRequest = async (
       sendJson(
         response,
         200,
-        await moderationService.moderateComments(await readJsonBody(request)),
+        await moderationService.moderateComments(
+          requireHumanModerationReason(await readJsonBody(request)),
+        ),
       );
       return;
     }
@@ -542,7 +655,7 @@ export const handleOperatorRequest = async (
         200,
         await moderationService.moderateComment(
           id.data,
-          await readJsonBody(request),
+          requireHumanModerationReason(await readJsonBody(request)),
         ),
       );
       return;
@@ -570,7 +683,7 @@ export const handleOperatorRequest = async (
         200,
         await moderationService.moderateUser(
           id.data,
-          await readJsonBody(request),
+          requireHumanModerationReason(await readJsonBody(request)),
         ),
       );
       return;

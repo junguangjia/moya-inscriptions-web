@@ -1,15 +1,23 @@
 /** Native authenticated chunk transport. Never logs content or credentials. */
 import { createHash } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
+import { URL } from "node:url";
 import { NativeStreamBody, NativeChunkBody } from "./native-stream-fetch.mjs";
 import * as uploadContract from "../../packages/contracts/dist/internal/editorial/index.js";
 
 const {
   MEDIA_UPLOAD_CHUNK_BYTES,
   MEDIA_UPLOAD_STREAM_VERSION,
+  MAX_MEDIA_UPLOAD_BYTES,
+  CATALOG_ORIGINAL_MAX_BYTES,
   editorialMediaUploadStartSchema,
   editorialMediaUploadSessionSchema,
   editorialMediaUploadChunkResultSchema,
   editorialMediaUploadCompleteResultSchema,
+  editorialMediaIngestStartSchema,
+  editorialMediaIngestStartResultSchema,
+  editorialMediaIngestCompleteResultSchema,
+  editorialMediaIngestAbandonResultSchema,
 } = uploadContract;
 
 const digest = (value) => createHash("sha256").update(value).digest("hex");
@@ -368,9 +376,487 @@ async function parallelChunks({
   }
 }
 
+export const MEDIA_INGEST_ROUTES = Object.freeze({
+  start: "/api/editorial/media-ingest/start",
+  complete: "/api/editorial/media-ingest/complete",
+  abandon: "/api/editorial/media-ingest/abandon",
+});
+const STAGING_PATH = /^\/catalog-ingest\/v1\/([a-f0-9]{2})\/([a-f0-9]{64})$/;
+const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/**
+ * The configured COS API host suffix in lower case without a leading dot, or
+ * null unless it is at least two DNS labels with an alphabetic top label, so
+ * no IP literal or single name can match.
+ */
+export function normalizeCosHostSuffix(value) {
+  if (typeof value !== "string") return null;
+  const lower = value.toLowerCase();
+  const suffix = lower.startsWith(".") ? lower.slice(1) : lower;
+  const labels = suffix.split(".");
+  return suffix.length <= 253 &&
+    labels.length >= 2 &&
+    labels.every((label) => DNS_LABEL.test(label)) &&
+    /[a-z]/.test(labels.at(-1))
+    ? suffix
+    : null;
+}
+
+/**
+ * The staging PUT target or null: https on the default port, a host strictly
+ * under the configured suffix (the virtual-hosted bucket), no credentials or
+ * fragment, and the path of this ingest's staging key (any ingest's when
+ * ingestId is omitted). The signature stays in the query. Never logged.
+ */
+export function stagingUploadTarget(value, hostSuffix, ingestId) {
+  const suffix = normalizeCosHostSuffix(hostSuffix);
+  if (!suffix || typeof value !== "string" || value.includes("#")) return null;
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  const key = STAGING_PATH.exec(url.pathname);
+  return url.protocol === "https:" &&
+    url.port === "" &&
+    !url.username &&
+    !url.password &&
+    url.hostname.endsWith(`.${suffix}`) &&
+    key &&
+    key[1] === key[2].slice(0, 2) &&
+    (ingestId === undefined || key[2] === ingestId)
+    ? url
+    : null;
+}
+
+/**
+ * The immutable ingest intent of an item and its exact bytes, or null when
+ * the bytes are not the item's. start, complete and abandon all send it.
+ */
+export function mediaIngestIntent({ item, bytes, transferId }) {
+  if (
+    !(bytes instanceof Uint8Array) ||
+    bytes.length !== item?.file?.size ||
+    digest(bytes) !== item.file.sha256
+  )
+    return null;
+  return ingestIntent(
+    item,
+    transferId,
+    createHash("md5").update(bytes).digest("base64"),
+  );
+}
+
+/**
+ * The same intent from the MD5 a caller recorded when it read the item's
+ * bytes, without reading them again (the server derives the staging key from
+ * it, MD5 included): --abandon of an item whose file changed or is gone. Null
+ * when the record cannot be the intent's.
+ */
+export function recordedIngestIntent({ item, transferId, md5Base64 }) {
+  return typeof md5Base64 === "string" && Number.isSafeInteger(item?.file?.size)
+    ? ingestIntent(item, transferId, md5Base64)
+    : null;
+}
+
+function ingestIntent(item, transferId, md5Base64) {
+  const intent = {
+    transferId,
+    catalogId: item.body.catalogId,
+    mediaId: item.body.mediaId,
+    sha256: item.file.sha256,
+    bytes: item.file.size,
+    mimeType: item.file.mimeType,
+    md5Base64,
+    ...(item.file.width === undefined ? {} : { width: item.file.width }),
+    ...(item.file.height === undefined ? {} : { height: item.file.height }),
+    alt: item.body.alt,
+    ...(item.body.rights === undefined ? {} : { rights: item.body.rights }),
+    ...(item.body.orderConfidence === undefined
+      ? {}
+      : { orderConfidence: item.body.orderConfidence }),
+  };
+  return editorialMediaIngestStartSchema.safeParse(intent).success
+    ? intent
+    : null;
+}
+
+/** The anonymous Range 0-0 outcomes for a final original (direct-ingest.mjs). */
+const PRIVACY = new Set([
+  "private",
+  "public",
+  "unexpected",
+  "uncertain",
+  "skipped",
+]);
+const ingestRetryable = (response) =>
+  response.retryable === true && response.code !== "INGEST_FINAL_INVALID";
+
+/** The content-addressed key the Admin derives (collection.ts) for new bytes. */
+const registeredKey = (intent) => {
+  const extension =
+    intent.mimeType === "image/jpeg" ? "jpg" : intent.mimeType.split("/")[1];
+  const filename = `${digest(String(intent.mediaId))}-${intent.sha256}.${extension}`;
+  return {
+    filename,
+    objectKey: `editorial/${digest(String(intent.catalogId))}/${filename}`,
+  };
+};
+
+const registeredMatches = (media, intent) =>
+  media.mediaId === intent.mediaId &&
+  media.catalogId === intent.catalogId &&
+  media.sha256 === intent.sha256 &&
+  media.filesize === intent.bytes &&
+  media.mimeType === intent.mimeType &&
+  media.alt === intent.alt &&
+  (media.rights ?? undefined) === (intent.rights ?? undefined) &&
+  (media.orderConfidence ?? undefined) ===
+    (intent.orderConfidence ?? undefined) &&
+  (intent.width === undefined || media.width === intent.width) &&
+  (intent.height === undefined || media.height === intent.height);
+
+/**
+ * Catalog original ingest (direct-cos-v1): start signs one staging PUT, the
+ * injected putObject sends the bytes straight to COS with exactly the signed
+ * headers, and complete has the Admin verify, copy and register them. start,
+ * the PUT (forbid-overwrite) and complete are each safe to repeat, so every
+ * uncertain answer is retried. A 404 from an ingest route means the routes
+ * are absent: before any PUT the item may use the relay ({fallback: true}).
+ * Once a PUT began, in this run or an earlier one (resumeStaged, or
+ * stagingRecorded: the caller's record of a PUT that may have landed), it
+ * stops with MEDIA_INGEST_UNAVAILABLE instead and abandons nothing, so the
+ * caller keeps its staging record for a run or an abandon once the routes
+ * are back; a relay registration would leave the staged object to no one.
+ * A terminal failure after a PUT, in this run or the staged run resumeStaged
+ * continues (start included), is final and abandons the staging key; a
+ * retryable one keeps it, and resumeStaged then skips the PUT after start.
+ * A used or nearly expired URL is re-signed only once the put slot is held,
+ * so a wait for a shared slot never outlasts the signature. A start that
+ * finds the mediaId registered after such a PUT reuses the doc and abandons
+ * the key first (best effort), as the Admin's complete deletes it on a
+ * reuse. privacyCheck, when given, receives
+ * the signed URL (for its bucket origin) and the key of each new
+ * registration; only its status string is returned. Every answer but a
+ * fallback carries metrics: the bytes, each PUT's milliseconds and status,
+ * and each complete phase's milliseconds (numbers only, for the canary's
+ * record). ownsStaging, when
+ * given, is the caller's record of the staging id an earlier run may have
+ * written under (the Admin derives it from the caller): a grant for another
+ * id is another credential's, so the item stops, final, with
+ * INGEST_ACTOR_MISMATCH before any PUT, complete or abandon, and an abandon
+ * that answers for another id clears nothing.
+ */
+async function ingestDirect(options) {
+  const metrics = { bytes: options.bytes.length, puts: [], completes: [] };
+  const result = await ingestDirectRun({ ...options, metrics });
+  return result.fallback ? result : { ...result, metrics };
+}
+async function ingestDirectRun({
+  intent,
+  bytes,
+  md5Base64,
+  post,
+  putObject,
+  put,
+  complete,
+  privacyCheck,
+  hostSuffix,
+  signal,
+  onProgress,
+  resumeStaged,
+  stagingRecorded,
+  ownsStaging,
+  retryDelayMs,
+  now,
+  metrics,
+}) {
+  const owned = (ingestId) =>
+    typeof ownsStaging !== "function" || ownsStaging(ingestId) === true;
+  const control = async (route, body, schema, attempts) => {
+    let response;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      if (attempt)
+        await sleep(retryDelayMs * 2 ** (attempt - 1), undefined, {
+          signal,
+        }).catch(() => {});
+      if (aborted(signal)) return failed("TRANSPORT_UNCERTAIN", true);
+      try {
+        response = parseResult(await post(route, body), schema);
+      } catch {
+        response = failed("TRANSPORT_UNCERTAIN", true);
+      }
+      if (response.ok || !ingestRetryable(response)) return response;
+    }
+    return response;
+  };
+  // ingestId (once start granted one): the caller's own staging id, which a
+  // batch's state can bind to its actor; never a URL or key.
+  const notify = (phase, staged) =>
+    onProgress({
+      mediaId: intent.mediaId,
+      totalBytes: bytes.length,
+      acknowledgedBytes: staged ? bytes.length : 0,
+      phase,
+      ...(grant ? { ingestId: grant.ingestId } : {}),
+    });
+  // Only server-derived facts are accepted, and new bytes only under the
+  // content-addressed key; a reuse reports the doc's own registered facts.
+  const registered = (media, reused, validatedMd5) => {
+    const key = registeredKey(intent);
+    return registeredMatches(media, intent) &&
+      (reused ||
+        (media.objectKey === key.objectKey && media.filename === key.filename))
+      ? {
+          ok: true,
+          result: media,
+          reused,
+          validatedBytes: media.filesize,
+          validatedSha256: media.sha256,
+          validatedMd5,
+          transport: "direct-cos-v1",
+        }
+      : failed("MEDIA_UPLOAD_READBACK_MISMATCH");
+  };
+  const begin = async () => {
+    const response = await control(
+      MEDIA_INGEST_ROUTES.start,
+      intent,
+      editorialMediaIngestStartResultSchema,
+      3,
+    );
+    if (!response.ok || response.result.state === "registered") return response;
+    const { ingestId, upload } = response.result,
+      expiresAt = Date.parse(upload.expiresAt);
+    if (
+      !stagingUploadTarget(upload.url, hostSuffix, ingestId) ||
+      upload.headers["content-length"] !== String(bytes.length) ||
+      upload.headers["content-type"] !== intent.mimeType ||
+      upload.headers["content-md5"] !== md5Base64 ||
+      !Number.isFinite(expiresAt)
+    )
+      return failed("MEDIA_UPLOAD_RESPONSE_INVALID");
+    if (!owned(ingestId))
+      return { ...failed("INGEST_ACTOR_MISMATCH"), foreign: true };
+    return {
+      ok: true,
+      result: { state: "upload", ingestId, upload, expiresAt, used: false },
+    };
+  };
+  // staged: skip the PUT on this pass (the first pass of a resumed item);
+  // every path back to the loop's top clears it, and a PUT that lands goes
+  // straight on to complete.
+  let grant,
+    staged = resumeStaged === true,
+    putBegan = staged || stagingRecorded === true,
+    putAttempts = 0,
+    lastPutStatus = 0,
+    rePut = false;
+  // The routes are absent (404): the relay only while no PUT began.
+  const absent = () =>
+    putBegan ? failed("MEDIA_INGEST_UNAVAILABLE") : { fallback: true };
+  // Final: the item fails (never retried, even after a 5xx such as
+  // INGEST_FINAL_INVALID), and a staging key a PUT may have written, in this
+  // run or the one resumed, is abandoned.
+  const giveUp = async ({ foreign, ...failure }) => {
+    const final = { ...failure, retryable: false };
+    // Another credential's grant: the recorded staging key is not this
+    // caller's to abandon, and nothing went under the new one.
+    if (foreign || !putBegan || aborted(signal)) return final;
+    const response = await control(
+      MEDIA_INGEST_ROUTES.abandon,
+      { intent },
+      editorialMediaIngestAbandonResultSchema,
+      2,
+    );
+    // stagingCleared: nothing is left under this actor's staging key (the
+    // grant's, or before any grant the recorded one); abandoned: an object
+    // was there and is removed.
+    const cleared =
+      response.ok &&
+      (grant === undefined
+        ? owned(response.result.ingestId)
+        : response.result.ingestId === grant.ingestId);
+    return {
+      ...final,
+      abandoned: cleared && response.result.state === "abandoned",
+      stagingCleared: cleared,
+    };
+  };
+  // A doc registered meanwhile (the relay, another credential) is reused.
+  // Bytes this item may have staged, in this run or the one resumed, are
+  // never copied, so the caller's own staging key is abandoned first;
+  // best effort, the staging lifecycle is the backstop.
+  const reuse = async (media) => {
+    if (putBegan && !aborted(signal))
+      await control(
+        MEDIA_INGEST_ROUTES.abandon,
+        { intent },
+        editorialMediaIngestAbandonResultSchema,
+        2,
+      );
+    return registered(media, true, null);
+  };
+  // start (or a re-sign) that did not grant a URL.
+  const notGranted = (started) =>
+    !started.ok
+      ? started.httpStatus === 404
+        ? absent()
+        : ingestRetryable(started)
+          ? started
+          : giveUp(started)
+      : reuse(started.result.media);
+  // start first, also on resume: a doc registered meanwhile is reused without
+  // a PUT or complete, and a 404 means the routes are absent.
+  const first = await begin();
+  if (!first.ok || first.result.state === "registered")
+    return notGranted(first);
+  grant = first.result;
+  for (;;) {
+    if (!staged) {
+      // Three refused PUTs are final; three uncertain ones may have landed,
+      // so their staging key is kept for the next run.
+      if (putAttempts >= 3)
+        return lastPutStatus === 403
+          ? giveUp(failed("MEDIA_INGEST_PUT_FORBIDDEN"))
+          : failed("MEDIA_INGEST_PUT_UNCERTAIN", true);
+      if (aborted(signal)) return failed("TRANSPORT_UNCERTAIN", true);
+      let putMs = 0;
+      // The slot may be shared with other items (a caller's limiter smaller
+      // than its items in flight), so the URL is checked only once it is
+      // held: a used or nearly expired one is re-signed for the same key
+      // there, and no wait for the slot can outlast the 300 s signature.
+      const slot = await put(async () => {
+        if (grant.used || grant.expiresAt - now() < 15_000) {
+          const started = await begin();
+          if (!started.ok || started.result.state === "registered")
+            return { started };
+          grant = started.result;
+        }
+        if (aborted(signal)) return { aborted: true };
+        putAttempts += 1;
+        putBegan = true;
+        grant.used = true;
+        await notify("streaming", false);
+        const began = now();
+        try {
+          return {
+            response: await putObject({
+              url: grant.upload.url,
+              headers: { ...grant.upload.headers },
+              body: bytes,
+              signal,
+            }),
+          };
+        } catch {
+          return { response: { ok: false, status: 0 } };
+        } finally {
+          putMs = now() - began;
+        }
+      });
+      if (slot?.started) return notGranted(slot.started);
+      if (slot?.aborted) return failed("TRANSPORT_UNCERTAIN", true);
+      const response = slot?.response;
+      metrics.puts.push({
+        ms: putMs,
+        status: Number.isSafeInteger(response?.status) ? response.status : 0,
+      });
+      // A local refusal (target or header guard) is final and content-free.
+      if (typeof response?.code === "string")
+        return giveUp(
+          failed(
+            /^COS_[A-Z_]{2,60}$/.test(response.code)
+              ? response.code
+              : "MEDIA_INGEST_PUT_REJECTED",
+          ),
+        );
+      lastPutStatus = Number.isSafeInteger(response?.status)
+        ? response.status
+        : 0;
+      // 409: forbid-overwrite refused a second PUT, so the bytes are staged.
+      if (
+        (lastPutStatus >= 200 && lastPutStatus < 300) ||
+        lastPutStatus === 409
+      )
+        await notify("staged", true);
+      else if (
+        [0, 403, 408, 429].includes(lastPutStatus) ||
+        lastPutStatus >= 500
+      )
+        continue; // uncertain, expired or busy: re-sign and PUT again
+      else return giveUp(failed("MEDIA_INGEST_PUT_REJECTED"));
+    }
+    await notify("confirming", true);
+    const done = await complete(async () => {
+      const began = now();
+      try {
+        return await control(
+          MEDIA_INGEST_ROUTES.complete,
+          { intent },
+          editorialMediaIngestCompleteResultSchema,
+          4,
+        );
+      } finally {
+        metrics.completes.push(now() - began);
+      }
+    });
+    if (done.ok) {
+      const result = registered(
+        done.result.media,
+        done.result.reused,
+        done.result.validatedMd5,
+      );
+      if (
+        !result.ok ||
+        (done.result.validatedMd5 !== null &&
+          done.result.validatedMd5 !== md5Base64)
+      )
+        return failed("MEDIA_UPLOAD_READBACK_MISMATCH");
+      if (result.reused || typeof privacyCheck !== "function") return result;
+      let privacy;
+      try {
+        privacy = await privacyCheck({
+          url: grant.upload.url,
+          objectKey: result.result.objectKey,
+        });
+      } catch {
+        privacy = "uncertain";
+      }
+      return {
+        ...result,
+        privacy: PRIVACY.has(privacy) ? privacy : "uncertain",
+      };
+    }
+    if (done.httpStatus === 404) return absent();
+    // The staging object is gone (expired, abandoned, or deleted after a
+    // mismatch the server found): PUT again, and only once after a mismatch.
+    if (done.code === "INGEST_NOT_UPLOADED") {
+      staged = false;
+      continue;
+    }
+    if (
+      (done.code === "INGEST_HASH_MISMATCH" ||
+        done.code === "INGEST_SIZE_MISMATCH") &&
+      !rePut
+    ) {
+      rePut = true;
+      staged = false;
+      continue;
+    }
+    return ingestRetryable(done) ? done : giveUp(done);
+  }
+}
+
 /**
  * send uses the existing bounded/sanitized native HTTP client. A missing reply
  * is reconciled against durable session state before one bounded continuation.
+ *
+ * uploadMode "direct-cos-v1" ingests a Catalog original of up to
+ * CATALOG_ORIGINAL_MAX_BYTES through the media-ingest routes and the injected
+ * putObject (see ingestDirect); while those routes are absent (404) it falls
+ * back to the relay only for files within MAX_MEDIA_UPLOAD_BYTES and only
+ * before any staging PUT (stagingRecorded: one an earlier run recorded).
  */
 export async function stageMediaUpload({
   item,
@@ -382,9 +868,18 @@ export async function stageMediaUpload({
   complete = (operation) => operation(),
   existingOnly = false,
   uploadMode = "auto",
+  putObject,
+  cosHostSuffix,
+  put = (operation) => operation(),
+  privacyCheck,
+  resumeStaged = false,
+  stagingRecorded = false,
+  ownsStaging,
+  retryDelayMs = 1_000,
+  now = Date.now,
 }) {
   if (aborted(signal)) return failed("TRANSPORT_UNCERTAIN", true);
-  if (!["auto", "parallel-chunks-v1"].includes(uploadMode))
+  if (!["auto", "parallel-chunks-v1", "direct-cos-v1"].includes(uploadMode))
     return failed("MEDIA_UPLOAD_INPUT_INVALID");
   if (
     !Number.isSafeInteger(MEDIA_UPLOAD_CHUNK_BYTES) ||
@@ -396,6 +891,67 @@ export async function stageMediaUpload({
     return failed("MEDIA_UPLOAD_PROTOCOL_UNAVAILABLE");
   if (!(bytes instanceof Uint8Array) || typeof send !== "function")
     return failed("MEDIA_UPLOAD_INPUT_INVALID");
+  if (uploadMode === "direct-cos-v1") {
+    // Branches before the relay's 40 MiB start schema.
+    if (
+      !Number.isSafeInteger(CATALOG_ORIGINAL_MAX_BYTES) ||
+      typeof editorialMediaIngestStartSchema?.safeParse !== "function" ||
+      typeof editorialMediaIngestStartResultSchema?.safeParse !== "function" ||
+      typeof editorialMediaIngestCompleteResultSchema?.safeParse !==
+        "function" ||
+      typeof editorialMediaIngestAbandonResultSchema?.safeParse !== "function"
+    )
+      return failed("MEDIA_UPLOAD_PROTOCOL_UNAVAILABLE");
+    if (
+      existingOnly ||
+      typeof putObject !== "function" ||
+      typeof put !== "function" ||
+      (privacyCheck !== undefined && typeof privacyCheck !== "function") ||
+      (ownsStaging !== undefined && typeof ownsStaging !== "function") ||
+      // Never read as "nothing recorded": that would let the relay register
+      // an item whose staged object then stays.
+      typeof stagingRecorded !== "boolean" ||
+      !normalizeCosHostSuffix(cosHostSuffix) ||
+      !Number.isSafeInteger(retryDelayMs) ||
+      retryDelayMs < 0 ||
+      typeof now !== "function"
+    )
+      return failed("MEDIA_UPLOAD_INPUT_INVALID");
+    const intent = mediaIngestIntent({ item, bytes, transferId });
+    if (!intent) return failed("MEDIA_SOURCE_CHANGED");
+    const direct = await ingestDirect({
+      intent,
+      bytes,
+      md5Base64: intent.md5Base64,
+      post: (route, body) => send(route, "POST", body, signal),
+      putObject,
+      put,
+      complete,
+      privacyCheck,
+      hostSuffix: cosHostSuffix,
+      signal,
+      onProgress,
+      resumeStaged,
+      stagingRecorded,
+      ownsStaging,
+      retryDelayMs,
+      now,
+    });
+    if (!direct.fallback) return direct;
+    if (bytes.length > MAX_MEDIA_UPLOAD_BYTES)
+      return failed("MEDIA_INGEST_UNAVAILABLE");
+    const relayed = await stageMediaUpload({
+      item,
+      bytes,
+      transferId,
+      send,
+      signal,
+      onProgress,
+      complete,
+      uploadMode: "parallel-chunks-v1",
+    });
+    return relayed.ok ? { ...relayed, transport: "relay" } : relayed;
+  }
   const expected = {
     transferId,
     existingOnly,

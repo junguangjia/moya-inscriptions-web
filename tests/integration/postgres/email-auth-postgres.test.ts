@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -17,6 +17,7 @@ import {
 import {
   PostgresCommunityAuthAdapter,
   PostgresCommunityIdentityAdapter,
+  createPostgresBetaAccountAccess,
   requiredCommunityMigrations,
   runCommunityMigrations,
   verifyCommunityMigrationLedger,
@@ -147,6 +148,7 @@ const register = async (
   identifier: string,
   displayName: string,
   source = "127.0.0.1",
+  invitationCode?: string,
 ) => {
   const sent = await service.sendChallenge({
     channel,
@@ -154,6 +156,7 @@ const register = async (
     identifier,
     idempotencyKey: key(),
     source,
+    ...(invitationCode === undefined ? {} : { invitationCode }),
   });
   if (!sent.ok || sent.value.continuationToken === undefined)
     throw new Error(sent.ok ? "missing continuation" : sent.reason);
@@ -596,6 +599,7 @@ describe("email-auth PostgreSQL", () => {
       {
         environment: "production",
         profile: "email-first",
+        registrationMode: "invite-only",
         keys,
         emailMode: "provider",
         phoneMode: "disabled",
@@ -603,12 +607,28 @@ describe("email-auth PostgreSQL", () => {
         registrationAgreement: agreement,
       },
     );
+    const invitationCode = randomBytes(16).toString("base64url");
+    await owner.query(
+      `INSERT INTO community.registration_invitations
+      (id,digest,environment,max_uses,expires_at) VALUES($1,$2,'production',20,now()+interval '7 days')`,
+      [
+        `invitation-${randomBytes(16).toString("hex")}`,
+        createHash("sha256")
+          .update(`artvenn:registration-invitation:v1:${invitationCode}`)
+          .digest("hex"),
+      ],
+    );
     const accepted = await register(
       production,
       "email",
       "production-session@example.com",
       "Synthetic Production",
+      "127.0.0.1",
+      invitationCode,
     );
+    expect(
+      await createPostgresBetaAccountAccess(app).read(accepted.profile.id),
+    ).toBe("granted");
     const development = await register(
       serviceFor(app, "disabled"),
       "email",
@@ -1826,5 +1846,24 @@ describe("email-auth PostgreSQL", () => {
       );
     });
   });
-  authFactorReceiptCases(() => new PostgresCommunityAuthAdapter(appPool()));
+  authFactorReceiptCases(
+    () => new PostgresCommunityAuthAdapter(appPool()),
+    async (_port, invitation) => {
+      await owner.query(
+        `INSERT INTO community.registration_invitations
+      (id,digest,environment,max_uses,used_count,created_at,expires_at,revoked_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+          invitation.id,
+          invitation.digest,
+          invitation.environment,
+          invitation.maxUses,
+          invitation.usedCount,
+          invitation.createdAt,
+          invitation.expiresAt,
+          invitation.revokedAt,
+        ],
+      );
+    },
+  );
 });

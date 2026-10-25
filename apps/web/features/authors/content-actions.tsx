@@ -1,4 +1,5 @@
 "use client";
+import { ReportMenu } from "../reporting/report-actions";
 import { useAuthEntry } from "../auth/auth-return";
 import { useEffect, useRef, useState } from "react";
 import type { ContentIdentity } from "@moya/contracts";
@@ -277,6 +278,7 @@ export const ContentActionsView = ({
           </button>
         );
       })}
+      <ReportMenu target={target} />
     </div>
   );
 };
@@ -317,6 +319,7 @@ export const ContentActions = ({
             return actions.environment.onAction(action, content);
           },
         }}
+        report={<ReportMenu target={target} />}
         onComment={interactions.onComment}
       />
     );

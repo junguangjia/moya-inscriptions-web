@@ -1,3 +1,7 @@
+import {
+  authChallengeAcceptedSchema,
+  authVerifyRequestSchema,
+} from "./auth-schemas.ts";
 import { z } from "zod";
 import {
   analyticsBatchSchema,
@@ -43,6 +47,8 @@ import {
   authPasswordResetRequestSchema,
   authPasswordResetResultSchema,
   healthResponseSchema,
+  submitFeedbackRequestSchema,
+  feedbackReceiptSchema,
   productAccessSchema,
   mediaIdSchema,
   noQueryTransportSchema,
@@ -420,6 +426,8 @@ import {
 export const authJsonSchemas = {
   AuthCapabilities: toJsonSchema(authCapabilitiesSchema),
   AuthChallengeRequest: toJsonSchema(authChallengeRequestSchema),
+  AuthChallengeAccepted: toJsonSchema(authChallengeAcceptedSchema),
+  AuthVerifyRequest: toJsonSchema(authVerifyRequestSchema),
   AuthRegistrationRequest: toJsonSchema(authRegistrationRequestSchema),
   AuthPasswordLoginRequest: toJsonSchema(authPasswordLoginRequestSchema),
   AuthPasswordResetRequest: toJsonSchema(authPasswordResetRequestSchema),
@@ -476,4 +484,51 @@ export const workPublishingJsonSchemas = {
   WorkVisibilityCommand: toJsonSchema(workVisibilityCommandSchema),
   WorkVisibilityResult: toJsonSchema(workVisibilityResultSchema),
   PublishingLimits: toJsonSchema(publishingLimitsSchema),
+};
+
+import {
+  createCommunityReportRequestSchema,
+  communityReportSchema,
+  communityReportPageSchema,
+  communityReportingDecisionSchema,
+  communityReportingDecisionPageSchema,
+  communityReportMaterialRequestSchema,
+  communityReportAppealRequestSchema,
+  communityReportEvidenceSchema,
+  communityReportEvidenceUploadRequestSchema,
+  communityReportingInboxSchema,
+  communityAppealSessionSchema,
+  communityAppealLoginResultSchema,
+} from "./reporting.ts";
+export const reportingJsonSchemas = {
+  CreateCommunityReportRequest: toJsonSchema(
+    createCommunityReportRequestSchema,
+  ),
+  CommunityReport: toJsonSchema(communityReportSchema),
+  CommunityReportPage: toJsonSchema(communityReportPageSchema),
+  CommunityReportingDecision: toJsonSchema(communityReportingDecisionSchema),
+  CommunityReportingDecisionPage: toJsonSchema(
+    communityReportingDecisionPageSchema,
+  ),
+  CommunityReportMaterialRequest: toJsonSchema(
+    communityReportMaterialRequestSchema,
+  ),
+  CommunityReportAppealRequest: toJsonSchema(
+    communityReportAppealRequestSchema,
+  ),
+  CommunityReportEvidence: toJsonSchema(communityReportEvidenceSchema),
+  CommunityReportEvidenceUploadRequest: toJsonSchema(
+    communityReportEvidenceUploadRequestSchema,
+  ),
+  CommunityReportingInbox: toJsonSchema(communityReportingInboxSchema),
+  CommunityAppealSession: toJsonSchema(communityAppealSessionSchema),
+  CommunityAppealLoginResult: toJsonSchema(communityAppealLoginResultSchema),
+  ReportingReadResult: toJsonSchema(
+    z.object({ read: z.literal(true) }).strict(),
+  ),
+};
+
+export const feedbackJsonSchemas = {
+  SubmitFeedbackRequest: toJsonSchema(submitFeedbackRequestSchema),
+  FeedbackReceipt: toJsonSchema(feedbackReceiptSchema),
 };

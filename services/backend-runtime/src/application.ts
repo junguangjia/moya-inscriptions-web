@@ -1,3 +1,8 @@
+import { CommunityReportingService } from "@moya/api";
+import type {
+  CommunityReportingPort,
+  CommunityReportingEvidenceStore,
+} from "@moya/api";
 import { NotificationService } from "@moya/api";
 import type { NotificationPort, NotificationWorkerPort } from "@moya/api";
 import {
@@ -31,6 +36,7 @@ import {
   EditorialContentReadService,
   PublishingOperatorService,
   ThreadService,
+  FeedbackService,
   PublishingTransferRegistry,
   WorkPublishingService,
 } from "@moya/api";
@@ -55,6 +61,7 @@ import type {
   DirectMessagePort,
   EditorialContentReadPort,
   ThreadPort,
+  FeedbackPort,
   PublishingMediaProcessorPort,
   PublishingMediaStorePort,
   PublishingOperatorPort,
@@ -75,8 +82,14 @@ import type { CommunityRouterDependencies } from "./http/router.js";
 import type { RequestListener } from "node:http";
 
 export interface BackendApplicationOptions {
+  readonly reportingPort?: CommunityReportingPort;
+  readonly reportingEvidenceStore?: CommunityReportingEvidenceStore;
+  readonly onAuthenticated?: (id: string, source: string) => Promise<void>;
   readonly catalogRecipePolicy?: () => Promise<CatalogRecipePolicy>;
   readonly catalogDeliveryReadiness?: import("./community/operator-handler.js").OperatorRouteDependencies["catalogDeliveryReadiness"];
+  readonly catalogPublishedRenditions?: import("./community/operator-handler.js").OperatorRouteDependencies["catalogPublishedRenditions"];
+  /** The App's Catalog render backlog for the pacing of bulk work; absent answers 503. */
+  readonly catalogRenderBacklog?: import("./community/operator-handler.js").OperatorRouteDependencies["catalogRenderBacklog"];
   readonly analytics?: {
     readonly port: AnalyticsPort;
     readonly policy: AnalyticsPolicy;
@@ -147,6 +160,8 @@ export interface BackendApplicationOptions {
   readonly editorialContentPort?: EditorialContentReadPort;
   /** Threads over Works. */
   readonly threadPort?: ThreadPort;
+  /** Private settings feedback. */
+  readonly feedbackPort?: FeedbackPort;
   /** Direct messages. */
   readonly directMessagePort?: DirectMessagePort;
   /** Injected clock for publishing commands; defaults to the system clock. */
@@ -262,6 +277,10 @@ const resolveCommunity = (
     options.threadPort !== undefined
       ? new ThreadService(options.threadPort)
       : undefined;
+  const feedbackService =
+    options.feedbackPort === undefined
+      ? undefined
+      : new FeedbackService(options.feedbackPort, options.publishingMediaStore);
   const directMessageService =
     options.directMessagePort !== undefined
       ? new DirectMessageService(options.directMessagePort)
@@ -280,6 +299,30 @@ const resolveCommunity = (
   }
   return {
     sessionService,
+    ...(options.reportingPort
+      ? {
+          reportingService: new CommunityReportingService(
+            options.reportingPort,
+            {
+              ...(options.reportingEvidenceStore
+                ? { evidenceStore: options.reportingEvidenceStore }
+                : {}),
+            },
+          ),
+          ...(options.authService
+            ? {
+                reportingIdentify: async (token: string) => {
+                  const result =
+                    await options.authService!.readAppealSession(token);
+                  return result.ok ? { id: result.value.profile.id } : null;
+                },
+              }
+            : {}),
+        }
+      : {}),
+    ...(options.onAuthenticated
+      ? { onAuthenticated: options.onAuthenticated }
+      : {}),
     ...(options.articlePublicationOperatorPort !== undefined
       ? {
           articlePublicationOperatorService:
@@ -351,6 +394,7 @@ const resolveCommunity = (
         }
       : {}),
     ...(threadService === undefined ? {} : { threadService }),
+    ...(feedbackService === undefined ? {} : { feedbackService }),
     ...(directMessageService === undefined ? {} : { directMessageService }),
     // Publishing reuses the existing services and their access checks.
     ...publishing,
@@ -406,6 +450,8 @@ const resolveCommunity = (
       : {}),
     catalogRecipePolicy: options.catalogRecipePolicy,
     catalogDeliveryReadiness: options.catalogDeliveryReadiness,
+    catalogPublishedRenditions: options.catalogPublishedRenditions,
+    catalogRenderBacklog: options.catalogRenderBacklog,
     operatorCredential: options.communityOperatorCredential ?? "",
   };
 };

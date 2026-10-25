@@ -1,3 +1,7 @@
+import {
+  readAppealSessionToken,
+  serializeAppealSessionCookie,
+} from "./appeal-session-cookie";
 import "server-only";
 import { trustedAuthSourceHeaders } from "./auth-request-source";
 import {
@@ -406,6 +410,14 @@ export const relayServerAuthorCommunity = async (
   const prefix = "/api/community/";
   if (!incoming.pathname.startsWith(prefix)) return fail(404);
   const suffix = incoming.pathname.slice(prefix.length);
+  const reporting = /^(?:reports|decisions|reporting-inbox)(?:\/|$)/u.test(
+    suffix,
+  );
+  const reportEvidence = /^reports\/[^/]+\/evidence(?:\/[^/]+)?$/u.test(suffix);
+  const restrictedReporting =
+    /^(?:decisions(?:\/|$)|reports\/[^/]+(?:\/(?:statements|evidence)(?:\/[^/]+)?)?$)/u.test(
+      suffix,
+    );
   const articleAuthoring =
     suffix === "article-authoring" || suffix.startsWith("article-authoring/");
   if (request.method === "PUT" && !articleAuthoring) return fail(405);
@@ -426,7 +438,15 @@ export const relayServerAuthorCommunity = async (
     const base = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
     const target = new URL(`v1/community/${suffix}`, base);
     target.search = incoming.search;
-    const token = readCommunitySessionToken(request.headers.get("cookie"));
+    const normalToken = readCommunitySessionToken(
+      request.headers.get("cookie"),
+    );
+    const appealToken =
+      restrictedReporting &&
+      request.headers.get("x-reporting-session") === "appeal"
+        ? readAppealSessionToken(request.headers.get("cookie"))
+        : undefined;
+    const token = appealToken ?? normalToken;
     const outgoing: Record<string, string> = {
       accept: "application/json, image/png",
     };
@@ -434,7 +454,7 @@ export const relayServerAuthorCommunity = async (
     // Bind private inbox reads to the UI's confirmed account when another tab changed the cookie.
     if (
       request.method === "GET" &&
-      (suffix === "notifications" || articleAuthoring)
+      (suffix === "notifications" || articleAuthoring || reporting)
     ) {
       const expected = request.headers.get("x-author-account");
       if (expected) {
@@ -459,8 +479,9 @@ export const relayServerAuthorCommunity = async (
       const chunks: Uint8Array[] = [];
       let size = 0;
       if (articleAuthoring && type !== "application/json") return fail(422);
-      const limit =
-        type === "image/png"
+      const limit = reportEvidence
+        ? 11_200_000
+        : type === "image/png"
           ? 4194304
           : articleAuthoring
             ? ARTICLE_DOCUMENT_LIMITS.documentBytes + 16_384
@@ -495,6 +516,7 @@ export const relayServerAuthorCommunity = async (
     // repeated.
     if (
       upstream.status === 401 &&
+      appealToken === undefined &&
       token !== undefined &&
       (await communitySessionRefused(base, token))
     ) {
@@ -513,7 +535,15 @@ export const relayServerAuthorCommunity = async (
       return new Response(null, { status: 204, headers });
     }
     const type = upstream.headers.get("content-type")?.split(";")[0];
-    if (type !== "application/json" && type !== "image/png")
+    if (
+      !type ||
+      (type !== "application/json" &&
+        type !== "image/png" &&
+        !(
+          reportEvidence &&
+          ["image/jpeg", "image/webp", "application/pdf"].includes(type ?? "")
+        ))
+    )
       return fail(upstream.ok ? 502 : upstream.status);
     const reader = upstream.body?.getReader();
     if (!reader) return fail(502);
@@ -523,7 +553,7 @@ export const relayServerAuthorCommunity = async (
       const part = await reader.read();
       if (part.done) break;
       size += part.value.byteLength;
-      if (size > 4500000) {
+      if (size > (reportEvidence ? 8_388_608 : 4500000)) {
         await reader.cancel();
         return fail(502);
       }
@@ -551,7 +581,13 @@ export const relayServerAuthorCommunity = async (
     }
     return new Response(body, {
       status: upstream.status,
-      headers: { ...headers, "content-type": type },
+      headers: {
+        ...headers,
+        "content-type": type,
+        ...(reportEvidence && type !== "application/json"
+          ? { "content-disposition": "attachment" }
+          : {}),
+      },
     });
   } catch {
     return fail(503);
@@ -1426,11 +1462,17 @@ export const relayServerCommunityAuth = async (
   const prefix = "/api/community/auth/";
   if (!incoming.pathname.startsWith(prefix)) return fail(404);
   const suffix = incoming.pathname.slice(prefix.length);
-  if (suffix === "sign-out" && request.method !== "POST") return fail(405);
+  if (
+    (suffix === "sign-out" || suffix === "appeals/sign-out") &&
+    request.method !== "POST"
+  )
+    return fail(405);
   try {
     const base = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
     const target = new URL(`v1/community/auth/${suffix}`, base);
-    const token = readCommunitySessionToken(request.headers.get("cookie"));
+    const token = suffix.startsWith("appeals/")
+      ? readAppealSessionToken(request.headers.get("cookie"))
+      : readCommunitySessionToken(request.headers.get("cookie"));
     const sourceHeaders =
       request.method === "POST" && process.env.NODE_ENV === "production"
         ? trustedAuthSourceHeaders(request)
@@ -1455,13 +1497,19 @@ export const relayServerCommunityAuth = async (
       signal: AbortSignal.timeout(15_000),
       ...(body === undefined ? {} : { body }),
     });
-    if (suffix === "sign-out") {
+    if (suffix === "sign-out" || suffix === "appeals/sign-out") {
       const secure = isSecureRequest(request);
       return new Response(null, {
         status: upstream.status,
         headers: {
           ...headers,
-          "set-cookie": serializeClearedCommunitySessionCookie(secure),
+          "set-cookie":
+            suffix === "appeals/sign-out"
+              ? serializeClearedCommunitySessionCookie(secure).replace(
+                  /^yoyi-session=/u,
+                  "yoyi-appeal-session=",
+                )
+              : serializeClearedCommunitySessionCookie(secure),
         },
       });
     }
@@ -1506,11 +1554,11 @@ export const relayServerCommunityAuth = async (
         typeof session.token === "string" &&
         typeof session.expiresAt === "string"
       ) {
-        setCookie = serializeCommunitySessionCookie(
-          session.token,
-          new Date(session.expiresAt),
-          secure,
-        );
+        setCookie = (
+          suffix.startsWith("appeals/")
+            ? serializeAppealSessionCookie
+            : serializeCommunitySessionCookie
+        )(session.token, new Date(session.expiresAt), secure);
         delete session.token;
       }
     }

@@ -1,3 +1,4 @@
+import { staffAuditCommand } from "../staff-moderation-reporting.js";
 import { createHash, randomUUID } from "node:crypto";
 
 import { CommunityConflictError, CommunityNotFoundError } from "@moya/api";
@@ -377,7 +378,10 @@ export const operatorCommand = <T>(
         spec.target?.type ?? null,
         spec.target?.id ?? null,
         at,
-        JSON.stringify({ command: spec.input, result }),
+        JSON.stringify({
+          command: staffAuditCommand(spec.action, spec.input),
+          result,
+        }),
       ],
     );
     // The receipt carries the same clock as the audit row above.

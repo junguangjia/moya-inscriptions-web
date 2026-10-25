@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import type { Server } from "node:http";
 import { UnconfiguredStorageUrlResolver } from "@moya/image";
@@ -22,7 +22,21 @@ describe("Production authentication source through its dedicated relay", () => {
   const setup = async (configured = true) => {
     const relay = randomBytes(32).toString("base64url");
     let sends = 0;
-    const service = new CommunityAuthService(createMemoryCommunityAuthPort(), {
+    const port = createMemoryCommunityAuthPort();
+    const invitationCode = "A".repeat(22); // Synthetic fixture only.
+    port.provisionInvitation({
+      id: "invite-" + "1".repeat(32),
+      digest: createHash("sha256")
+        .update("artvenn:registration-invitation:v1:" + invitationCode)
+        .digest("hex"),
+      environment: "production",
+      maxUses: 100,
+      usedCount: 0,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      revokedAt: null,
+    });
+    const service = new CommunityAuthService(port, {
       environment: "production",
       profile: "email-first",
       keys: {
@@ -33,6 +47,7 @@ describe("Production authentication source through its dedicated relay", () => {
       },
       emailMode: "provider",
       phoneMode: "disabled",
+      registrationMode: "invite-only",
       registrationAgreement: {
         version: "synthetic",
         title: "SYNTHETIC",
@@ -83,6 +98,7 @@ describe("Production authentication source through its dedicated relay", () => {
         body: JSON.stringify({
           channel: "email",
           purpose: "register",
+          invitationCode,
           identifier: `synthetic-source-${index}@example.invalid`,
           idempotencyKey: randomUUID(),
         }),

@@ -110,7 +110,7 @@ const closedBeta = (...admitted: string[]) => {
   const accounts = new Set<string>(admitted);
   const policy: Policy = {
     mode: "closed_beta",
-    admits: (userId) => accounts.has(userId),
+    admits: async (userId) => accounts.has(userId),
   };
   return { accounts, policy };
 };
@@ -227,7 +227,7 @@ describe("Web relays in front of a closed-beta Backend", () => {
   it("adds nothing in public mode", async () => {
     const { cookieFor, visit } = await start({
       mode: "public",
-      admits: () => false,
+      admits: async () => false,
     });
     await expect(fetchServerProductAccess(undefined)).resolves.toEqual({
       state: "success",

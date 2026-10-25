@@ -251,6 +251,21 @@ describe
       }
       await applyPrepareReader(privateRole);
       const reader = runtimePool(privateRole).pool;
+      // catalog-scale-v1 M2: the live projection the worker's snapshot reads
+      // has the same columns, and the same reader is its only grantee.
+      expect(
+        (
+          await reader.query(
+            "SELECT * FROM public.catalog_delivery_live_prepare_media LIMIT 0",
+          )
+        ).fields.map(({ name }) => name),
+      ).toEqual(
+        (
+          await reader.query(
+            "SELECT * FROM public.catalog_delivery_prepare_media LIMIT 0",
+          )
+        ).fields.map(({ name }) => name),
+      );
       expect(
         (
           await reader.query(
@@ -283,20 +298,31 @@ describe
           )
         ).rows[0].count,
       ).toBeGreaterThanOrEqual(0);
-      for (const [privilege, allowed] of [
-        ["SELECT", true],
-        ["INSERT", false],
-        ["UPDATE", false],
-        ["DELETE", false],
-      ] as const)
-        expect(
-          (
-            await reader.query(
-              "SELECT has_table_privilege(current_user,'public.catalog_delivery_prepare_media',$1) AS allowed",
-              [privilege],
-            )
-          ).rows[0].allowed,
-        ).toBe(allowed);
+      for (const view of [
+        "catalog_delivery_prepare_media",
+        "catalog_delivery_live_prepare_media",
+      ])
+        for (const [privilege, allowed] of [
+          ["SELECT", true],
+          ["INSERT", false],
+          ["UPDATE", false],
+          ["DELETE", false],
+        ] as const)
+          expect(
+            (
+              await reader.query(
+                "SELECT has_table_privilege(current_user,$2,$1) AS allowed",
+                [privilege, `public.${view}`],
+              )
+            ).rows[0].allowed,
+          ).toBe(allowed);
+      expect(
+        (
+          await reader.query(
+            "SELECT count(*)::int AS count FROM public.catalog_delivery_live_prepare_media",
+          )
+        ).rows[0].count,
+      ).toBeGreaterThanOrEqual(0);
       for (const sql of [
         "SELECT * FROM public.catalog_delivery_intents",
         "SELECT * FROM public.catalog_entries",
@@ -497,6 +523,7 @@ describe
           "catalog_delivery_intents",
           "catalog_delivery_receipts",
           "catalog_delivery_prepare_media",
+          "catalog_delivery_live_prepare_media",
         ])
           await expect(
             publicPool.query(`SELECT * FROM public.${table}`),

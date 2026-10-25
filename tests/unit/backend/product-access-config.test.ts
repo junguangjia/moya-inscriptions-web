@@ -74,10 +74,10 @@ describe("product access configuration", () => {
     ).toEqual({ mode: "public" });
   });
 
-  it("keeps a Development stack that does not opt in public", () => {
+  it("keeps a Development stack that does not opt in public", async () => {
     const policy = loadProductAccess({}, "development");
     expect(policy.mode).toBe("public");
-    expect(policy.admits(other)).toBe(true);
+    expect(await policy.admits(other)).toBe(true);
     expect(() =>
       loadProductAccess({ PRODUCT_ACCESS_MODE: "beta" }, "development"),
     ).toThrow("PRODUCT_ACCESS_MODE");
@@ -140,12 +140,12 @@ describe("product access configuration", () => {
     ).toThrow(invalid);
   });
 
-  it("admits exactly the listed account ids; an empty list admits nobody", () => {
+  it("admits exactly the listed account ids; an empty list admits nobody", async () => {
     const policy = loadProductAccess(workspace().environment, "production");
     expect(policy.mode).toBe("closed_beta");
-    expect(policy.admits(tester)).toBe(true);
-    expect(policy.admits(other)).toBe(false);
-    expect(policy.admits("owner")).toBe(false);
+    expect(await policy.admits(tester)).toBe(true);
+    expect(await policy.admits(other)).toBe(false);
+    expect(await policy.admits("owner")).toBe(false);
     expect(describeProductAccess(policy)).toEqual({
       mode: "closed_beta",
       accounts: 1,
@@ -154,14 +154,14 @@ describe("product access configuration", () => {
       workspace(allowlist([])).environment,
       "production",
     );
-    expect(empty.admits(tester)).toBe(false);
+    expect(await empty.admits(tester)).toBe(false);
     expect(describeProductAccess(empty)).toEqual({
       mode: "closed_beta",
       accounts: 0,
     });
   });
 
-  it("applies a changed allowlist without a restart and denies everyone while it is missing or invalid", () => {
+  it("applies a changed allowlist without a restart and denies everyone while it is missing or invalid", async () => {
     const { file, environment } = workspace();
     let now = 0;
     const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
@@ -172,39 +172,68 @@ describe("product access configuration", () => {
       now: () => now,
       recheckMs: 1_000,
     });
-    expect(policy.admits(tester)).toBe(true);
+    expect(await policy.admits(tester)).toBe(true);
 
     install(file, allowlist([{ id: other }]));
     // Within the interval the previous answer stands; after it the file decides.
     now = 999;
-    expect(policy.admits(tester)).toBe(true);
+    expect(await policy.admits(tester)).toBe(true);
     now = 1_000;
-    expect(policy.admits(tester)).toBe(false);
-    expect(policy.admits(other)).toBe(true);
+    expect(await policy.admits(tester)).toBe(false);
+    expect(await policy.admits(other)).toBe(true);
 
     install(file, "not json");
     now = 2_000;
-    expect(policy.admits(other)).toBe(false);
+    expect(await policy.admits(other)).toBe(false);
     rmSync(file);
     now = 3_000;
-    expect(policy.admits(other)).toBe(false);
+    expect(await policy.admits(other)).toBe(false);
     install(file, allowlist([{ id: tester }]), 0o644);
     now = 4_000;
-    expect(policy.admits(tester)).toBe(false);
+    expect(await policy.admits(tester)).toBe(false);
 
     install(file, allowlist([{ id: tester }]));
     now = 5_000;
-    expect(policy.admits(tester)).toBe(true);
+    expect(await policy.admits(tester)).toBe(true);
     // A clock that steps backwards looks at once instead of waiting to catch up.
     install(file, allowlist([{ id: other }]));
     now = 1_000;
-    expect(policy.admits(tester)).toBe(false);
-    expect(policy.admits(other)).toBe(true);
+    expect(await policy.admits(tester)).toBe(false);
+    expect(await policy.admits(other)).toBe(true);
     // Reports carry counts and never an account id.
     const logged = [...info.mock.calls, ...error.mock.calls].flat().join("\n");
     expect(logged).toContain("reloaded (1 accounts)");
     expect(logged).toContain("every account is denied");
     expect(logged).not.toContain("user-");
+  });
+
+  it("combines file and database grants with explicit revocation taking precedence", async () => {
+    const states = new Map<string, "granted" | "revoked" | "none">();
+    const read = vi.fn(async (userId: string) => states.get(userId) ?? "none");
+    const { file, environment } = workspace();
+    const policy = loadProductAccess(environment, "production", {
+      recheckMs: 0,
+      betaAccountAccess: { read },
+    });
+    expect(await policy.admits(tester)).toBe(true);
+    expect(await policy.admits(other)).toBe(false);
+    states.set(other, "granted");
+    expect(await policy.admits(other)).toBe(true);
+    states.set(tester, "revoked");
+    expect(await policy.admits(tester)).toBe(false);
+    states.set(tester, "granted");
+    expect(await policy.admits(tester)).toBe(true);
+
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    install(file, "not json");
+    read.mockClear();
+    expect(await policy.admits(tester)).toBe(false);
+    expect(await policy.admits(other)).toBe(false);
+    expect(read).not.toHaveBeenCalled();
+    install(file, allowlist([]));
+    expect(await policy.admits(tester)).toBe(true);
+    read.mockRejectedValueOnce(new Error("synthetic unavailable store"));
+    await expect(policy.admits(tester)).rejects.toThrow("unavailable store");
   });
 
   it("validates a configuration or a candidate file from the command line without printing account ids", () => {
@@ -227,11 +256,13 @@ describe("product access configuration", () => {
     expect(JSON.parse(run(["--file", file]))).toEqual({
       mode: "closed_beta",
       accounts: 2,
+      evaluation: "candidate-file",
     });
     expect(JSON.parse(run(["--file", file, "--has", tester]))).toEqual({
       mode: "closed_beta",
       accounts: 2,
-      admitted: true,
+      evaluation: "candidate-file",
+      listed: true,
     });
     expect(
       JSON.parse(
@@ -240,7 +271,18 @@ describe("product access configuration", () => {
           PRODUCT_ACCESS_ALLOWLIST_FILE: file,
         }),
       ),
-    ).toEqual({ mode: "closed_beta", accounts: 2 });
+    ).toEqual({
+      mode: "closed_beta",
+      accounts: 2,
+      evaluation: "configuration",
+    });
+    // Runtime admission must not silently fall back to candidate-file membership.
+    expect(() =>
+      run(["--has", tester], {
+        PRODUCT_ACCESS_MODE: "closed-beta",
+        PRODUCT_ACCESS_ALLOWLIST_FILE: file,
+      }),
+    ).toThrow(/APP_DATABASE_URL is required/u);
     install(file, "not json");
     for (const args of [["--file", file], [], ["--unknown", "x"]])
       expect(() => run(args)).toThrow(/PRODUCT_ACCESS_REFUSED/u);

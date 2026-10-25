@@ -85,6 +85,7 @@ export const handleCommunityAuth = async (
   response: ServerResponse,
   service: CommunityAuthService,
   resolveSource?: AuthRequestSource,
+  onAuthenticated?: (id: string, source: string) => Promise<void>,
 ): Promise<void> => {
   const url = new URL(request.url ?? "/", "http://request.invalid");
   const path = url.pathname.slice("/v1/community/auth/".length);
@@ -99,6 +100,27 @@ export const handleCommunityAuth = async (
             : null;
     if (source === null) {
       sendApiError(response, "UNAUTHENTICATED", "AUTH_SOURCE_UNTRUSTED");
+      return;
+    }
+    if (path === "appeals/sign-out" && request.method === "POST") {
+      const token = readBearerToken(request);
+      if (token) await service.signOutAppeal(token);
+      response.writeHead(204, noStore);
+      response.end();
+      return;
+    }
+    if (path === "appeals/session" && request.method === "GET") {
+      const token = readBearerToken(request);
+      if (!token) {
+        sendFailure(response, "AUTH_UNAUTHENTICATED");
+        return;
+      }
+      const session = await service.readAppealSession(token);
+      if (!session.ok) {
+        sendFailure(response, session.reason);
+        return;
+      }
+      sendJson(response, 200, session.value, noStore);
       return;
     }
     if (path === "capabilities" && request.method === "GET") {
@@ -150,10 +172,66 @@ export const handleCommunityAuth = async (
     }
     const body = await readJsonBody(request);
     const token = readBearerToken(request);
-    if (path === "challenges") {
+    if (path === "appeals/login") {
+      const parsed = authPasswordLoginRequestSchema.safeParse(body);
+      if (!parsed.success) {
+        sendFailure(response, "AUTH_INVALID_CREDENTIALS");
+        return;
+      }
+      const result = await service.passwordLogin({
+        ...parsed.data,
+        source,
+        appealOnly: true,
+      });
+      if (!result.ok) {
+        sendFailure(response, result.reason);
+        return;
+      }
+      sendJson(
+        response,
+        200,
+        { outcome: "appeal_signed_in", session: sessionBody(result.value) },
+        noStore,
+      );
+      return;
+    }
+    if (path === "appeals/verify") {
+      const parsed = authVerifyRequestSchema.safeParse(body);
+      if (!parsed.success) {
+        sendFailure(response, "AUTH_CODE_INVALID");
+        return;
+      }
+      const result = await service.verifyChallenge({
+        ...parsed.data,
+        appealOnly: true,
+      });
+      if (!result.ok) {
+        sendFailure(response, result.reason);
+        return;
+      }
+      if (result.value.outcome !== "signed_in") {
+        sendFailure(response, "AUTH_PROOF_REJECTED");
+        return;
+      }
+      sendJson(
+        response,
+        200,
+        {
+          outcome: "appeal_signed_in",
+          session: sessionBody(result.value.session),
+        },
+        noStore,
+      );
+      return;
+    }
+    if (path === "challenges" || path === "appeals/challenges") {
       const parsed = authChallengeRequestSchema.safeParse(body);
       if (!parsed.success) {
         sendApiError(response, "INVALID_INPUT", "AUTH_INVALID_IDENTIFIER");
+        return;
+      }
+      if (path === "appeals/challenges" && parsed.data.purpose !== "sign_in") {
+        sendFailure(response, "AUTH_PROOF_REJECTED");
         return;
       }
       const result = await service.sendChallenge({
@@ -164,10 +242,15 @@ export const handleCommunityAuth = async (
           : { identifier: parsed.data.identifier }),
         idempotencyKey: parsed.data.idempotencyKey,
         source,
-        ...(token === undefined ? {} : { sessionToken: token }),
+        ...(token === undefined || path === "appeals/challenges"
+          ? {}
+          : { sessionToken: token }),
         ...(parsed.data.reauthToken === undefined
           ? {}
           : { reauthToken: parsed.data.reauthToken }),
+        ...(parsed.data.invitationCode === undefined
+          ? {}
+          : { invitationCode: parsed.data.invitationCode }),
       });
       if (!result.ok) {
         sendFailure(response, result.reason);
@@ -194,6 +277,9 @@ export const handleCommunityAuth = async (
       }
       const value = result.value;
       if (value.outcome === "signed_in") {
+        await onAuthenticated?.(value.session.profile.id, source).catch(
+          () => undefined,
+        );
         sendJson(
           response,
           200,
@@ -216,6 +302,9 @@ export const handleCommunityAuth = async (
         sendFailure(response, result.reason);
         return;
       }
+      await onAuthenticated?.(result.value.profile.id, source).catch(
+        () => undefined,
+      );
       sendJson(
         response,
         200,
@@ -279,6 +368,9 @@ export const handleCommunityAuth = async (
         sendFailure(response, result.reason);
         return;
       }
+      await onAuthenticated?.(result.value.profile.id, source).catch(
+        () => undefined,
+      );
       sendJson(
         response,
         201,

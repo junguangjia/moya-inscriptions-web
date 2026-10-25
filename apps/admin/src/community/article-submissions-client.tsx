@@ -19,6 +19,7 @@ import {
 } from "./api";
 import { ArticleSubmissionPreview } from "./article-submission-preview";
 import styles from "./community.module.css";
+import { ModerationReasonInput, readModerationReason } from "./bulk-actions";
 
 const CONFIRM = "community-article-submission-confirm";
 type Decision = {
@@ -52,6 +53,8 @@ export const ArticleSubmissionsQueueClient = () => {
   const [previewReady, setPreviewReady] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<Decision | null>(null);
+  const [reasonDraft, setReasonDraft] = useState("");
+  const reason = readModerationReason(reasonDraft);
   const [retry, setRetry] = useState<Decision | null>(null);
   const [revision, setRevision] = useState(0);
   const lock = useRef(false);
@@ -165,6 +168,7 @@ export const ArticleSubmissionsQueueClient = () => {
   const ask = (action: ModerateArticlePendingCommand["action"]) => {
     if (
       detail === null ||
+      reason === null ||
       busy ||
       retry !== null ||
       (action === "approve" && !previewReady)
@@ -178,6 +182,7 @@ export const ArticleSubmissionsQueueClient = () => {
         candidateVersion: detail.candidateVersion,
         fingerprint: detail.fingerprint,
         action,
+        reason,
       },
     });
     openModal(CONFIRM);
@@ -301,12 +306,20 @@ export const ArticleSubmissionsQueueClient = () => {
                   candidate={detail}
                   onAvailabilityChange={setPreviewReady}
                 />
+                <ModerationReasonInput
+                  label="文章审核理由（必填）"
+                  value={reasonDraft}
+                  onChange={setReasonDraft}
+                  disabled={busy || retry !== null}
+                />
                 <div className={styles.actions}>
                   <button
                     type="button"
                     className={styles.actionButton}
                     data-primary="true"
-                    disabled={busy || retry !== null || !previewReady}
+                    disabled={
+                      busy || retry !== null || !previewReady || reason === null
+                    }
                     onClick={() => ask("approve")}
                   >
                     通过并公开…
@@ -315,7 +328,7 @@ export const ArticleSubmissionsQueueClient = () => {
                     type="button"
                     className={styles.actionButton}
                     data-danger="true"
-                    disabled={busy || retry !== null}
+                    disabled={busy || retry !== null || reason === null}
                     onClick={() => ask("reject")}
                   >
                     拒绝…
@@ -353,6 +366,9 @@ export const ArticleSubmissionsQueueClient = () => {
                 {confirmation.command.action === "approve"
                   ? "这个版本将成为文章的公开版本。"
                   : "这个版本不会公开；已有公开版本保持不变，作者可继续编辑。"}
+              </p>
+              <p className={styles.reportText}>
+                处置理由：{confirmation.command.reason}
               </p>
               <p>只处理已查看的精确版本；文章若已变化，本次决定不会执行。</p>
             </>

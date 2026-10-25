@@ -18,8 +18,27 @@ const keyFrom = (value: string | undefined, name: string): Uint8Array => {
 export interface ProductionAuthConfiguration {
   readonly keys: AuthKeys;
   readonly profile?: "email-first" | "password-only";
+  readonly emailEnabled?: boolean;
   readonly phoneEnabled: boolean;
+  readonly registrationMode?: "closed" | "invite-only";
+  readonly allowProvisionedHandleLogin?: boolean;
 }
+
+const registrationModeFrom = (
+  value: string | undefined,
+): "closed" | "invite-only" | undefined => {
+  if (value === undefined || value === "") return undefined;
+  if (value !== "closed" && value !== "invite-only")
+    throw new Error("AUTH_REGISTRATION_MODE must be closed or invite-only");
+  return value;
+};
+
+const handleLoginFrom = (value: string | undefined): boolean => {
+  if (value === undefined || value === "" || value === "false") return false;
+  if (value !== "true")
+    throw new Error("AUTH_LEGACY_HANDLE_LOGIN_ENABLED must be true or false");
+  return true;
+};
 
 /** Explicit Production configuration only; no local-provider fallback. */
 export const productionAuthConfigurationFrom = (
@@ -66,8 +85,19 @@ export const productionAuthConfigurationFrom = (
       throw new Error(
         "password-only requires disabled OTP providers and no delivery configuration",
       );
-  } else if (env.AUTH_EMAIL_PROVIDER !== "tencent-ses")
-    throw new Error("AUTH_EMAIL_PROVIDER must be tencent-ses when enabled");
+  } else {
+    if (!["disabled", "tencent-ses"].includes(env.AUTH_EMAIL_PROVIDER ?? ""))
+      throw new Error(
+        "AUTH_EMAIL_PROVIDER must be disabled or tencent-ses when enabled",
+      );
+    if (
+      env.AUTH_EMAIL_PROVIDER !== "tencent-ses" &&
+      env.AUTH_PHONE_PROVIDER !== "aliyun-dypns"
+    )
+      throw new Error(
+        "OTP authentication requires at least one enabled provider",
+      );
+  }
   const version = env.AUTH_KEY_VERSION;
   if (
     version === undefined ||
@@ -83,7 +113,13 @@ export const productionAuthConfigurationFrom = (
       encryptionKey: keyFrom(env.AUTH_ENCRYPTION_KEY, "AUTH_ENCRYPTION_KEY"),
       otpKey: keyFrom(env.AUTH_OTP_KEY, "AUTH_OTP_KEY"),
     },
+    emailEnabled: env.AUTH_EMAIL_PROVIDER === "tencent-ses",
     phoneEnabled: env.AUTH_PHONE_PROVIDER === "aliyun-dypns",
+    registrationMode:
+      registrationModeFrom(env.AUTH_REGISTRATION_MODE) ?? "closed",
+    allowProvisionedHandleLogin: handleLoginFrom(
+      env.AUTH_LEGACY_HANDLE_LOGIN_ENABLED,
+    ),
   };
 };
 
@@ -104,10 +140,15 @@ export const createProductionAuthService = (
     environment: "production",
     profile: config.profile ?? "email-first",
     keys: config.keys,
-    emailMode: config.profile === "password-only" ? "disabled" : "provider",
+    emailMode:
+      config.profile === "password-only" || config.emailEnabled === false
+        ? "disabled"
+        : "provider",
     phoneMode: config.phoneEnabled ? "provider" : "disabled",
     delivery,
     registrationAgreement,
+    registrationMode: config.registrationMode ?? "closed",
+    allowProvisionedHandleLogin: config.allowProvisionedHandleLogin ?? false,
   });
 
 /** Development acceptance profiles. Unset AUTH_PROFILE leaves authentication unmounted. */
@@ -127,12 +168,17 @@ export const createDevelopmentAuthService = (
   };
   const captureUrl = env.AUTH_EMAIL_CAPTURE_URL ?? "http://127.0.0.1:3463";
   const mailpit = createMailpitCapture(captureUrl);
+  const registrationMode = registrationModeFrom(env.AUTH_REGISTRATION_MODE);
   return new CommunityAuthService(port, {
     environment: "development",
     profile,
     keys,
     emailMode: "local_capture",
     phoneMode: profile === "full-local" ? "simulated" : "disabled",
+    ...(registrationMode === undefined ? {} : { registrationMode }),
+    allowProvisionedHandleLogin: handleLoginFrom(
+      env.AUTH_LEGACY_HANDLE_LOGIN_ENABLED,
+    ),
     delivery: {
       sendEmail: (input) => mailpit.sendEmail(input),
       sendPhone: async (input) => {

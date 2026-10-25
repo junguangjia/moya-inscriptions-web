@@ -127,6 +127,62 @@ describe("Production auth protected configuration", () => {
     });
     expect(international?.email?.region).toBe("ap-singapore");
   });
+  it("enables SMS without SES, ignores disabled providers, and refuses incomplete enabled inputs", async () => {
+    const smsOnly = Object.fromEntries(
+      Object.entries(environment()).filter(
+        ([name]) => !name.startsWith("TENCENT_SES_"),
+      ),
+    );
+    smsOnly.AUTH_EMAIL_PROVIDER = "disabled";
+    const config = await loadProductionAuthConfiguration(smsOnly);
+    expect(config?.email).toBeNull();
+    expect(config?.service.emailEnabled).toBe(false);
+    expect(config?.service.phoneEnabled).toBe(true);
+    expect(config?.phone?.templates).toEqual({
+      sign_in: "SYNTHETIC_ONLY",
+      register: "SYNTHETIC_ONLY",
+      replace: "100002",
+      password_reset: "100003",
+      link: "100004",
+      reauthenticate: "100005",
+    });
+    expect(
+      (
+        await loadProductionAuthConfiguration({
+          ...smsOnly,
+          TENCENT_SES_ENDPOINT: "disabled-invalid",
+        })
+      )?.email,
+    ).toBeNull();
+    for (const invalid of [
+      { AUTH_PHONE_PROVIDER: "disabled" },
+      { ALIYUN_ACCESS_KEY_ID: "" },
+      { ALIYUN_ACCESS_KEY_SECRET: "" },
+      { ALIYUN_SMS_SIGN_NAME: "" },
+      { ALIYUN_SMS_TEMPLATE_CODE: "" },
+      { ALIYUN_SMS_LINK_TEMPLATE_CODE: "" },
+      { ALIYUN_SMS_SCHEME_NAME: "x".repeat(21) },
+    ])
+      await expect(
+        refusesConfig(
+          loadProductionAuthConfiguration({ ...smsOnly, ...invalid }),
+        ),
+      ).rejects.toThrow("Configuration refused");
+    const emailOnly = {
+      ...environment(),
+      AUTH_PHONE_PROVIDER: "disabled",
+      ALIYUN_ACCESS_KEY_SECRET: "",
+      ALIYUN_SMS_SCHEME_NAME: "invalid".repeat(20),
+    };
+    expect(
+      (await loadProductionAuthConfiguration(emailOnly))?.phone,
+    ).toBeNull();
+    const configured = await loadProductionAuthConfiguration({
+      ...smsOnly,
+      ALIYUN_SMS_LINK_TEMPLATE_CODE: "SYNTHETIC_LINK",
+    });
+    expect(configured?.phone?.templates.link).toBe("SYNTHETIC_LINK");
+  });
   it("allows no approved agreement, but refuses an unsafe or malformed supplied file", async () => {
     expect((await configuration()).agreement).toBeNull();
     const dir = await mkdtemp(join(tmpdir(), "synthetic-auth-config-"));
@@ -284,6 +340,7 @@ describe("signed provider request contract", () => {
     expect(
       (
         await delivery.sendPhone({
+          purpose: "sign_in",
           e164: "+8613800000000",
           code: null,
           outId: "synthetic-challenge",
@@ -301,12 +358,28 @@ describe("signed provider request contract", () => {
     const email = JSON.parse(requests[0]!.body) as {
       Template: { TemplateData: string };
       Destination: string[];
+      TriggerType: number;
     };
-    expect(JSON.parse(email.Template.TemplateData).code === code).toBe(true);
+    expect(email.TriggerType).toBe(1);
+    expect(email.Destination).toEqual(["synthetic@example.invalid"]);
+    expect(JSON.parse(email.Template.TemplateData)).toEqual({
+      code,
+      minutes: "5",
+    });
     const sms = new URLSearchParams(requests[1]!.body);
     expect(sms.get("ReturnVerifyCode")).toBe("false");
     expect(sms.get("TemplateParam")).toBe('{"code":"##code##","min":"5"}');
     expect(sms.get("AutoRetry")).toBe("0");
+    expect(sms.get("DuplicatePolicy")).toBe("1");
+    expect(sms.get("CountryCode")).toBe("86");
+    expect(sms.get("PhoneNumber")).toBe("13800000000");
+    expect(sms.get("CodeType")).toBe("1");
+    expect(sms.get("ValidTime")).toBe("300");
+    expect(sms.get("Interval")).toBe("60");
+    expect(sms.get("SchemeName")).toHaveLength(20);
+    expect(new URLSearchParams(requests[2]!.body).get("SchemeName")).toBe(
+      sms.get("SchemeName"),
+    );
     expect(sms.get("CodeLength")).toBe("6");
     expect(requests.length).toBe(3);
   });
@@ -331,6 +404,8 @@ describe("signed provider request contract", () => {
     }
     for (const body of [
       { Code: "ERROR", Success: true, Model: { VerifyResult: "PASS" } },
+      { Code: "OK", Success: true, model: { verifyResult: "PASS" } },
+      { Code: "OK", Success: true, body: { Model: { VerifyResult: "PASS" } } },
       { Code: "OK", Success: false, Model: { VerifyResult: "PASS" } },
       {
         Code: "OK",

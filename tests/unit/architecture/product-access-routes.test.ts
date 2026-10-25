@@ -68,7 +68,10 @@ const routes: Readonly<Record<string, string>> = {
   "dev/community/preview/page.tsx": "development",
   "dev/t02p/page.tsx": "development",
   "dev/t02p/qa/page.tsx": "development",
-  "login/agreements/page.tsx": "development",
+  "login/agreements/page.tsx": "policy",
+  "policies/page.tsx": "policy",
+  "policies/[policy]/page.tsx": "policy",
+  "appeal-login/page.tsx": "bootstrap",
   "docs/design-system/assets/[[...path]]/route.ts": "asset",
   "packages/design-tokens/src/theme.css/route.ts": "asset",
   "packages/ui/src/assets/[[...path]]/route.ts": "asset",
@@ -78,6 +81,8 @@ const routes: Readonly<Record<string, string>> = {
 };
 
 const proof: Readonly<Record<string, RegExp>> = {
+  // These named routes serve only the reviewed static policy document or links.
+  policy: /from ["']\.\.?\/content["']|href="\/policies\/terms"/u,
   analytics: /\brelayServerAnalytics\b/u,
   page: /\breadVisitorAccess\(\)/u,
   content: /\bisProductAccessGranted\(request\)/u,
@@ -86,11 +91,15 @@ const proof: Readonly<Record<string, RegExp>> = {
   session:
     /\breadCommunitySessionToken\(|\brelay(?:ServerAuthorCommunity|NotificationStream|ServerPublishingMedia|ServerPublishingUpload|ServerProfileMedia)\b/u,
   bootstrap:
-    /\brelayServerCommunityAuth\b|\bfetchServerCurrentUser\b|<AuthPage\b/u,
+    /\brelayServerCommunityAuth\b|\bfetchServerCurrentUser\b|<AuthPage\b|<AppealLogin\b/u,
   operator: /\bfetchServerEditorialPreview\(/u,
   development: /NODE_ENV\s*!==\s*"development"/u,
   asset: /kind: "(?:demo-assets|design-tokens|ui-styles|ui-assets)"/u,
-  redirect: /Response\.redirect\(/u,
+  // A contentless 307 whose Location is the fixed same-origin template; no
+  // Response.redirect (absolute URLs only), so nothing is built from the
+  // proxied request origin. The route unit test pins the exact behavior.
+  redirect:
+    /^(?![\s\S]*\bResponse\.redirect\()[\s\S]*status: 307,\s*headers: \{\s*Location: `\/\?catalogId=\$\{encodedCatalogId\}#detail-\$\{encodedCatalogId\}`/u,
 };
 
 describe("product access covers every Web entry point", () => {
@@ -144,6 +153,11 @@ describe("product access covers every Web entry point", () => {
       "POST passwords/reset",
       "POST registrations",
       "POST sign-out",
+      "POST appeals/login",
+      "POST appeals/challenges",
+      "POST appeals/verify",
+      "GET appeals/session",
+      "POST appeals/sign-out",
     ]);
     // No prefix, method or namespace is open as a whole.
     expect(gate).toContain('const operatorPrefix = "/internal/community/";');

@@ -8,6 +8,8 @@ import {
   requestCatalogRelease,
   releaseCatalogDelivery,
   cancelCatalogDelivery,
+  catalogDeliveryCapabilities,
+  catalogRenderBacklogForPacing,
 } from "./catalog-delivery";
 
 import { EditorialError, safeEditorialFailure } from "./errors";
@@ -66,6 +68,9 @@ export const editorialEndpoints: Endpoint[] = [
   endpoint("request-catalog-release", requestCatalogRelease),
   endpoint("release-catalog-delivery", releaseCatalogDelivery),
   endpoint("cancel-catalog-delivery", cancelCatalogDelivery),
+  endpoint("catalog-delivery-capabilities", catalogDeliveryCapabilities),
+  // catalog-scale-v1 I9: read-only pacing for the CLI's prepare waves.
+  endpoint("catalog-render-backlog", catalogRenderBacklogForPacing),
   // content-community-completion-v1: the same mechanism for Articles.
   endpoint("save-article-draft", saveArticleDraft),
   endpoint("approve-article-batch", approveArticleBatch),

@@ -8,7 +8,10 @@ import {
 } from "node:fs";
 import { isAbsolute } from "node:path";
 
-import type { BackendApplicationOptions } from "@moya/backend-runtime";
+import type {
+  BackendApplicationOptions,
+  BetaAccountAccessPort,
+} from "@moya/backend-runtime";
 
 type Environment = Readonly<Record<string, string | undefined>>;
 export type ProductAccessPolicy = NonNullable<
@@ -24,7 +27,7 @@ const defaultRecheckMs = 1_000;
 
 const publicAccess: ProductAccessPolicy = Object.freeze({
   mode: "public",
-  admits: () => true,
+  admits: async () => true,
 });
 
 /**
@@ -113,12 +116,13 @@ export interface ProductAccessOptions {
   readonly now?: () => number;
   /** How often a request may look for a changed allowlist file. */
   readonly recheckMs?: number;
+  readonly betaAccountAccess?: BetaAccountAccessPort;
 }
 
 /**
- * Admits exactly the accounts in the allowlist file. The file is read again
- * when it changes, so adding or removing an account needs no restart; while
- * it is missing or invalid every account is denied.
+ * Combines legacy file entries and invited-account grants, with explicit
+ * database revocation taking precedence. Changes apply without a restart;
+ * while the protected file is missing or invalid every account is denied.
  */
 class ClosedBetaAccess implements ProductAccessPolicy {
   readonly mode = "closed_beta";
@@ -127,6 +131,8 @@ class ClosedBetaAccess implements ProductAccessPolicy {
   private checkedAt: number;
   private readonly now: () => number;
   private readonly recheckMs: number;
+  private valid = true;
+  private readonly betaAccountAccess: BetaAccountAccessPort | undefined;
 
   constructor(
     private readonly path: string,
@@ -135,6 +141,7 @@ class ClosedBetaAccess implements ProductAccessPolicy {
     // Monotonic by default: a wall clock that steps cannot postpone a look.
     this.now = options.now ?? (() => performance.now());
     this.recheckMs = options.recheckMs ?? defaultRecheckMs;
+    this.betaAccountAccess = options.betaAccountAccess;
     // Startup refuses an allowlist it cannot read; nothing is admitted by default.
     this.seen = fingerprint(path);
     this.accounts = readAllowlist(path);
@@ -146,9 +153,16 @@ class ClosedBetaAccess implements ProductAccessPolicy {
     return this.accounts.size;
   }
 
-  admits(userId: string): boolean {
+  async admits(userId: string): Promise<boolean> {
     this.refresh();
-    return this.accounts.has(userId);
+    // A broken protected file denies even database grants. Database revocation
+    // is authoritative over either source, and storage errors propagate as unavailable.
+    if (!this.valid) return false;
+    const access = await this.betaAccountAccess?.read(userId);
+    return (
+      access !== "revoked" &&
+      (access === "granted" || this.accounts.has(userId))
+    );
   }
 
   private refresh(): void {
@@ -166,11 +180,13 @@ class ClosedBetaAccess implements ProductAccessPolicy {
     this.seen = current;
     try {
       this.accounts = readAllowlist(this.path);
+      this.valid = true;
       console.info(
         `[backend-production] product access allowlist reloaded (${this.accounts.size} accounts)`,
       );
     } catch {
       this.accounts = new Set();
+      this.valid = false;
       console.error(
         "[backend-production] product access allowlist is missing or invalid; every account is denied until it is corrected",
       );

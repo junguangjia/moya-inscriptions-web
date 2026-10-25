@@ -1,4 +1,5 @@
 "use client";
+import { ReportMenu } from "../reporting/report-actions";
 import { UserIdentity } from "../authors/user-identity";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
@@ -263,7 +264,15 @@ export function ThreadDetail({
           <Icon name="back" aria-hidden="true" />
         </button>
         <h1>{title}</h1>
-        <span />
+        {commentsHidden ? (
+          <span />
+        ) : (
+          <ReportMenu
+            target={
+              post ? { type: "work", id: post.work.id } : { type: "thread", id }
+            }
+          />
+        )}
       </header>
       {post ? (
         <ThreadPost

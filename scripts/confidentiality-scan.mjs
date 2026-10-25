@@ -153,9 +153,117 @@ function placeholder(value) {
     /^EXPLICIT_SYNTHETIC_PLACEHOLDER$/i.test(value)
   );
 }
+// The parser comes only from the trusted Node executable, never a repository
+// dependency. Missing/unsupported parsers retain the conservative literal check.
+const generatedParser = (() => {
+  try {
+    const source =
+      process.binding("natives")["internal/deps/acorn/acorn/dist/acorn"];
+    if (typeof source !== "string") return null;
+    const module = { exports: {} };
+    Function("exports", "module", source)(module.exports, module);
+    return typeof module.exports.parse === "function"
+      ? { parse: module.exports.parse, identity: digest(Buffer.from(source)) }
+      : null;
+  } catch {
+    return null;
+  }
+})();
+let generatedTreeText, generatedTree, generatedTokens;
+function generatedExpressionProof(text, at, name, operator, matchEnd) {
+  const result = { runtime: false, exactHint: false };
+  if (!generatedParser) return result;
+  if (generatedTreeText !== text) {
+    generatedTreeText = text;
+    try {
+      generatedTokens = [];
+      generatedTree = generatedParser.parse(text, {
+        ecmaVersion: "latest",
+        sourceType: "module",
+        allowReturnOutsideFunction: true,
+        allowAwaitOutsideFunction: true,
+        onToken: generatedTokens,
+      });
+    } catch {
+      generatedTree = null;
+    }
+  }
+  if (!generatedTree) return result;
+  const contains = (n) => n && n.start <= at && at < n.end;
+  const reference = (n) =>
+    n &&
+    (n.type === "Identifier" ||
+      n.type === "ThisExpression" ||
+      (n.type === "ChainExpression" && reference(n.expression)) ||
+      (n.type === "MemberExpression" &&
+        !n.computed &&
+        reference(n.object) &&
+        n.property.type === "Identifier"));
+  function visit(node) {
+    if (!contains(node)) return;
+    if (
+      node.type === "Property" &&
+      !node.computed &&
+      node.kind === "init" &&
+      node.key.start === at &&
+      (node.key.name ?? node.key.value) === name &&
+      node.value.type === "Literal" &&
+      node.value.value === "密码需要 6–20 个字符，包含大写字母和数字。"
+    )
+      result.exactHint = true;
+    if (
+      node.type === "BinaryExpression" &&
+      node.operator === operator &&
+      reference(node.right)
+    ) {
+      const left =
+        node.left.type === "ChainExpression" ? node.left.expression : node.left;
+      const label =
+        left.type === "Literal" &&
+        left.start === at &&
+        left.value === name &&
+        ["password", "AUTH_INVALID_PASSWORD"].includes(name);
+      const binding =
+        (left.type === "Identifier" &&
+          left.start === at &&
+          left.name === name) ||
+        (left.type === "MemberExpression" &&
+          !left.computed &&
+          left.property.start === at &&
+          left.property.name === name);
+      if (label || binding) {
+        // The old matcher stops before quotes. Never exempt a quoted tail,
+        // including a parenthesized/comment-separated one, for a credential
+        // binding. Public form-state labels are string data, not bindings.
+        let index = generatedTokens.findIndex(
+          (token) => token.start >= matchEnd,
+        );
+        while (index >= 0 && generatedTokens[index]?.type.label === "(")
+          index++;
+        const tail =
+          index >= 0 &&
+          ["string", "`"].includes(generatedTokens[index]?.type.label);
+        if (label || !tail) result.runtime = true;
+      }
+    }
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value))
+        for (const child of value) {
+          if (child && typeof child.type === "string") visit(child);
+        }
+      else if (value && typeof value.type === "string") visit(value);
+    }
+  }
+  visit(generatedTree);
+  return result;
+}
+
 const pnpmLock = (filename) => path.basename(filename) === "pnpm-lock.yaml";
 const syntaxContext = (filename) =>
   syntax(filename) +
+  (/\.(?:[cm]?js|jsx|tsx?)$/i.test(filename)
+    ? ":generated-parser:" + (generatedParser?.identity ?? "unavailable")
+    : "") +
   (pnpmLock(filename) ? ":pnpm-lock" : "") +
   (/\.swift$/i.test(filename) ? ":swift" : "") +
   (/\.(?:[cm]?js|ts)$/i.test(filename) ? ":javascript" : "");
@@ -337,6 +445,25 @@ function literalFindings(text, filename) {
       continue;
     const afterValue = text.slice(m.index + m[0].length);
     const expressionEnd = /^[ \t]*(?:$|[,;)}\]\r\n]|\/\/)/;
+    if (/\.(?:[cm]?js|jsx|tsx?)$/i.test(filename)) {
+      const proof = generatedExpressionProof(
+        text,
+        m.index,
+        name,
+        operator,
+        m.index + m[0].length,
+      );
+      if (!quoted && /^(?:===|!==|==|!=)$/.test(operator) && proof.runtime)
+        continue;
+      if (
+        quoted &&
+        operator === ":" &&
+        name === "AUTH_INVALID_PASSWORD" &&
+        value === "密码需要 6–20 个字符，包含大写字母和数字。" &&
+        proof.exactHint
+      )
+        continue;
+    }
     // This documented environment switch disables implicit authentication.
     // Its name alone, other values and other token fields receive no exemption.
     if (

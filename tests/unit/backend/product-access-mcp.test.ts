@@ -79,7 +79,7 @@ describe("product access and the Article MCP boundary", () => {
           nodeEnv: "development",
           productAccess: {
             mode: "closed_beta",
-            admits: (userId) => userId === fixtureUsers.active.id,
+            admits: async (userId) => userId === fixtureUsers.active.id,
           },
           catalogQueryPort: createDevelopmentCatalogFixtureQueryPort(),
           storageUrlResolver: new UnconfiguredStorageUrlResolver(),
@@ -130,7 +130,7 @@ describe("product access and the Article MCP boundary", () => {
 
   it("refuses content and tool operations for a grant whose account is not approved, without changing the protocol", async () => {
     const admitted = new Set<string>([fixtureUsers.active.id]);
-    const admitsAccount = vi.fn((userId: string) => admitted.has(userId));
+    const admitsAccount = vi.fn(async (userId: string) => admitted.has(userId));
     const assertCurrent = vi.fn(async () => undefined);
     const tokens = new Map([
       [`artvenn_article_ct_${"a".repeat(43)}`, fixtureUsers.active.id],
@@ -217,7 +217,7 @@ describe("product access and the Article MCP boundary", () => {
     expect(tools).toContain("artvenn_article_catalog_read");
 
     // Removed between admission and the operation: the operation is refused.
-    admitsAccount.mockImplementationOnce(() => true);
+    admitsAccount.mockImplementationOnce(async () => true);
     admitted.delete(fixtureUsers.active.id);
     const late = await call(approved);
     expect(late.status).toBe(200);
@@ -227,5 +227,19 @@ describe("product access and the Article MCP boundary", () => {
     // And on the next request it is refused at admission.
     expect((await call(approved)).status).toBe(403);
     expect(admitsAccount).toHaveBeenCalledWith(fixtureUsers.active.id);
+
+    admitsAccount.mockRejectedValueOnce(
+      new Error("synthetic unavailable database"),
+    );
+    expect((await call(approved)).status).toBe(503);
+    admitsAccount
+      .mockResolvedValueOnce(true)
+      .mockRejectedValueOnce(new Error("synthetic unavailable database"));
+    const unavailable = await call(approved);
+    expect(unavailable.status).toBe(200);
+    expect(
+      ((await unavailable.json()) as { error: { message: string } }).error
+        .message,
+    ).toContain("Service temporarily unavailable");
   });
 });

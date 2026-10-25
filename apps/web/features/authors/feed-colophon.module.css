@@ -417,11 +417,13 @@
   font-size: var(--yoyi-type-body-size);
 }
 
-.reply .actions {
+.reply .actions,
+.reply .report {
   font-size: var(--yoyi-type-body-small-size);
 }
 
-.actions button {
+.actions button,
+.report > button {
   flex: none;
   width: var(--yoyi-space-8);
   height: var(--yoyi-space-8);
@@ -435,7 +437,8 @@
   writing-mode: horizontal-tb;
 }
 
-.actions svg {
+.actions svg,
+.report > button svg {
   display: block;
   width: 1em;
   height: 1em;
@@ -617,4 +620,12 @@
   .skeleton {
     animation: none;
   }
+}
+
+/* A separate native button keeps the existing roving toolbar unchanged. */
+.report {
+  font-size: var(--yoyi-type-body-size);
+  position: absolute;
+  top: calc(var(--yoyi-space-8) + var(--yoyi-space-1));
+  left: 0;
 }

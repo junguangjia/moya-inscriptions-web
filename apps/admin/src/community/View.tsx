@@ -7,8 +7,10 @@ import { AccountCapacityClient } from "./account-capacity-client";
 import { AgentOperationsClient } from "./agent-operations-client";
 import { CommunityContentClient } from "./content-client";
 import { CommunityHistoryClient } from "./history-client";
+import { CommunityFeedbackClient } from "./feedback-client";
 import { PublishingJobsClient } from "./publishing-jobs-client";
 import { CommunityQueueClient } from "./queue-client";
+import { CommunityReportsClient } from "./reports-client";
 import { ThreadsClient } from "./threads-client";
 import { DmModerationClient } from "./dm-moderation-client";
 import { CommunitySettingsClient } from "./settings-client";
@@ -51,6 +53,12 @@ export const CommunitySettingsView = (props: AdminViewServerProps) => (
 export const CommunityHistoryView = (props: AdminViewServerProps) => (
   <OwnerOnly props={props}>
     <CommunityHistoryClient />
+  </OwnerOnly>
+);
+
+export const CommunityFeedbackView = (props: AdminViewServerProps) => (
+  <OwnerOnly props={props}>
+    <CommunityFeedbackClient />
   </OwnerOnly>
 );
 
@@ -109,3 +117,17 @@ export const ArticleSubmissionsView = (props: AdminViewServerProps) => (
     <ArticleSubmissionsQueueClient />
   </OwnerOnly>
 );
+
+export const CommunityReportsView = (props: AdminViewServerProps) => (
+  <OwnerOnly props={props}>
+    <CommunityReportsClient />
+  </OwnerOnly>
+);
+
+export const CommunityAppealsView = (props: AdminViewServerProps) => (
+  <OwnerOnly props={props}>
+    <CommunityReportsClient appealsOnly />
+  </OwnerOnly>
+);
+
+export { ReportDetail } from "./reports-client";

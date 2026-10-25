@@ -9,6 +9,8 @@ import type {
   CommentUserPresentation,
 } from "../comments/comment-types";
 import type { DiscussionThread } from "./use-discussion-thread";
+import type { CommunityReport } from "@moya/contracts";
+import { reportingClient } from "../reporting/reporting-data";
 
 const h = vi.hoisted(() => ({
   thread: null as unknown as DiscussionThread,
@@ -19,6 +21,10 @@ const h = vi.hoisted(() => ({
   authors: {
     viewer: { id: "reader", displayName: "读者" } as unknown,
     cache: new Map<string, unknown>(),
+    checking: false,
+    sessionError: false,
+    signInHref: "/login",
+    notify: vi.fn(),
   },
   entryRenders: 0,
 }));
@@ -208,6 +214,10 @@ beforeEach(() => {
   h.authors = {
     viewer: { id: "reader", displayName: "读者" },
     cache: new Map(),
+    checking: false,
+    sessionError: false,
+    signInHref: "/login",
+    notify: vi.fn(),
   };
   strip = document.createElement("div");
   h.stage = {
@@ -810,7 +820,7 @@ describe("FeedColophon", () => {
   });
 
   it("sends a guest to sign in from content and likes, with the original opener", () => {
-    h.authors = { viewer: null, cache: new Map() };
+    h.authors = { ...h.authors, viewer: null, cache: new Map() };
     h.thread = makeThread({
       currentUser: { id: "guest", name: "访客" },
       viewerState: { state: "signed-out", signInHref: "/login?x=1" },
@@ -1775,5 +1785,190 @@ describe("FeedColophon", () => {
     render();
     expect($("[data-colophon-text][aria-pressed='true']")).toBeNull();
     expect($("[data-colophon-actions]")).not.toBeNull();
+  });
+});
+
+describe("live colophon reporting", () => {
+  const acceptedReport = (id: string, targetId: string): CommunityReport => ({
+    id,
+    target: { type: "comment", id: targetId },
+    canonicalPath: "/?workId=w1#detail",
+    kind: "quick_comment",
+    reason: null,
+    description: "",
+    status: "open",
+    urgent: false,
+    version: 1,
+    createdAt: "2026-10-24T00:00:00.000Z",
+    updatedAt: "2026-10-24T00:00:00.000Z",
+    decision: null,
+    appeal: null,
+    messages: [],
+    evidence: [],
+  });
+  it("uses the shared one-click report for real root/reply rows without exposing a reason form", async () => {
+    h.stage = { ...h.stage, surface: "reading", count: 0, region: "comments" };
+    const reader = user("reader", "读者");
+    h.thread = makeThread({
+      items: [
+        comment("report-root", writer, {
+          replies: [
+            reply("report-reply", other),
+            reply("own-reply", reader),
+            reply("deleted-reply", other, { deleted: true }),
+          ],
+        }),
+        comment("own-root", reader),
+        comment("deleted-root", writer, { deleted: true }),
+      ],
+    });
+    let resolveRoot!: (value: CommunityReport) => void;
+    const pendingRoot = new Promise<CommunityReport>((resolve) => {
+      resolveRoot = resolve;
+    });
+    const submit = vi
+      .spyOn(reportingClient, "create")
+      .mockImplementationOnce(() => pendingRoot)
+      .mockResolvedValueOnce(
+        acceptedReport("report-reply-receipt", "report-reply"),
+      );
+    render();
+    const rootFlag = $<HTMLButtonElement>(
+      '[data-comment-id="report-root"] [data-comment-report]',
+    )!;
+    const replyFlag = $<HTMLButtonElement>(
+      '[data-comment-reply="report-reply"] [data-comment-report]',
+    )!;
+    expect(rootFlag).not.toBeNull();
+    expect(replyFlag).not.toBeNull();
+    expect($$("[data-comment-report]")).toHaveLength(2);
+    for (const flag of [rootFlag, replyFlag]) {
+      expect(flag.textContent).toBe("");
+      expect(flag.getAttribute("aria-label")).toBe("举报评论");
+      expect(flag.querySelector("svg")).not.toBeNull();
+    }
+    for (const selector of [
+      '[data-comment-id="own-root"]',
+      '[data-comment-id="deleted-root"]',
+      '[data-comment-reply="own-reply"]',
+      '[data-comment-reply="deleted-reply"]',
+    ])
+      expect($(selector)?.querySelector("[data-comment-report]")).toBeNull();
+    await act(async () => rootFlag.click());
+    await act(async () => rootFlag.click());
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(rootFlag.disabled).toBe(true);
+    expect(submit.mock.calls[0]).toEqual([
+      "reader",
+      {
+        kind: "quick_comment",
+        target: { type: "comment", id: "report-root" },
+        requestId: expect.any(String),
+      },
+    ]);
+    expect(submit.mock.calls[0]![1]).not.toHaveProperty("reason");
+    expect(
+      host.querySelector('dialog, [role="dialog"], select[required]'),
+    ).toBeNull();
+    await act(async () =>
+      resolveRoot(acceptedReport("report-root-receipt", "report-root")),
+    );
+    expect(rootFlag.disabled).toBe(true);
+    expect(rootFlag.getAttribute("aria-label")).toBe("已举报评论");
+    expect(rootFlag.getAttribute("aria-pressed")).toBe("true");
+    await act(async () => replyFlag.click());
+    expect(submit).toHaveBeenCalledTimes(2);
+    expect(submit.mock.calls[1]).toEqual([
+      "reader",
+      {
+        kind: "quick_comment",
+        target: { type: "comment", id: "report-reply" },
+        requestId: expect.any(String),
+      },
+    ]);
+    expect(replyFlag.disabled).toBe(true);
+    expect(replyFlag.getAttribute("aria-label")).toBe("已举报评论");
+    expect(h.authors.notify).toHaveBeenCalledWith("已收到举报");
+    expect(
+      host.querySelector('dialog, [role="dialog"], select[required]'),
+    ).toBeNull();
+  });
+  it("keeps report controls out of the supplied QA presentation by default", () => {
+    const submit = vi.spyOn(reportingClient, "create");
+    act(() =>
+      root.render(
+        <FeedColophonPresentation
+          target={target}
+          title="QA题跋"
+          presentation="detail"
+          thread={makeThread({
+            items: [
+              comment("qa-root", writer, {
+                replies: [reply("qa-reply", other)],
+              }),
+            ],
+          })}
+        />,
+      ),
+    );
+    expect(h.options).toHaveLength(0);
+    expect($("[data-comment-id='qa-root']")).not.toBeNull();
+    expect($$("[data-comment-report]")).toHaveLength(0);
+    expect(submit).not.toHaveBeenCalled();
+  });
+  it("keeps report as a native Tab stop outside the unchanged like/delete toolbar", () => {
+    h.stage = { ...h.stage, surface: "reading", count: 0, region: "comments" };
+    const reader = user("reader", "读者");
+    h.thread = makeThread({
+      items: [
+        comment("keyboard-other", writer),
+        comment("keyboard-own", reader),
+      ],
+    });
+    render();
+    const row = $('[data-comment-id="keyboard-other"]')!;
+    const like = row.querySelector<HTMLButtonElement>("[data-colophon-like]")!;
+    const report = row.querySelector<HTMLButtonElement>(
+      "[data-comment-report]",
+    )!;
+    expect(report).not.toBeNull();
+    expect(report.tabIndex).toBe(0);
+    expect(report.closest('[role="toolbar"]')).toBeNull();
+    act(() => report.focus());
+    expect(document.activeElement).toBe(report);
+    act(() => {
+      like.focus();
+      like.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+      );
+    });
+    expect(document.activeElement).toBe(like);
+    expect(like.tabIndex).toBe(0);
+    expect(report.tabIndex).toBe(0);
+    const own = $('[data-comment-id="keyboard-own"]')!;
+    const ownLike = own.querySelector<HTMLButtonElement>(
+      "[data-colophon-like]",
+    )!;
+    const ownDelete = own.querySelector<HTMLButtonElement>(
+      "[data-colophon-delete]",
+    )!;
+    expect(own.querySelector("[data-comment-report]")).toBeNull();
+    act(() => {
+      ownLike.focus();
+      ownLike.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+      );
+    });
+    expect(document.activeElement).toBe(ownDelete);
+    expect(ownDelete.tabIndex).toBe(0);
+    expect(ownLike.tabIndex).toBe(-1);
+    act(() =>
+      ownDelete.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
+    expect(document.activeElement).toBe(
+      own.querySelector("[data-colophon-text]"),
+    );
   });
 });

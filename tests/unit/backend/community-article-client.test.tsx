@@ -137,10 +137,30 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("Author Article candidate review", () => {
+  it("requires a nonempty human reason before opening a decision confirmation", async () => {
+    render(<ArticleSubmissionsQueueClient />);
+    const field = await screen.findByLabelText("文章审核理由（必填）");
+    const reject = screen.getByRole("button", {
+      name: "拒绝…",
+    }) as HTMLButtonElement;
+    expect(reject.disabled).toBe(true);
+    fireEvent.change(field, { target: { value: "   " } });
+    expect(reject.disabled).toBe(true);
+    fireEvent.click(reject);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(
+      runtime.call.mock.calls.filter(
+        ([name]) => name === "moderate-article-submission",
+      ),
+    ).toHaveLength(0);
+  });
   it("renders the actual candidate as text and sends exactly the reviewed triple after confirmation", async () => {
     const { container } = render(<ArticleSubmissionsQueueClient />);
     await screen.findByText("精确候选正文<script>must remain text</script>");
     expect(container.querySelector("script")).toBeNull();
+    fireEvent.change(await screen.findByLabelText("文章审核理由（必填）"), {
+      target: { value: "  Synthetic article decision reason  " },
+    });
     const approve = screen.getByRole("button", { name: "通过并公开…" });
     await waitFor(() =>
       expect((approve as HTMLButtonElement).disabled).toBe(false),
@@ -156,6 +176,7 @@ describe("Author Article candidate review", () => {
         candidateVersion: 3,
         fingerprint: candidate.fingerprint,
         action: "approve",
+        reason: "Synthetic article decision reason",
         requestId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
       }),
     );
@@ -170,6 +191,9 @@ describe("Author Article candidate review", () => {
     });
     render(<ArticleSubmissionsQueueClient />);
     await screen.findByText("精确候选正文<script>must remain text</script>");
+    fireEvent.change(await screen.findByLabelText("文章审核理由（必填）"), {
+      target: { value: "  Synthetic article decision reason  " },
+    });
     const approve = screen.getByRole("button", { name: "通过并公开…" });
     await waitFor(() =>
       expect((approve as HTMLButtonElement).disabled).toBe(false),
@@ -210,6 +234,9 @@ describe("Author Article candidate review", () => {
         : candidate;
     });
     render(<ArticleSubmissionsQueueClient />);
+    fireEvent.change(await screen.findByLabelText("文章审核理由（必填）"), {
+      target: { value: "Synthetic article decision reason" },
+    });
     fireEvent.click(await screen.findByRole("button", { name: "拒绝…" }));
     fireEvent.click(await screen.findByRole("button", { name: "确认拒绝" }));
     fireEvent.click(
@@ -543,6 +570,9 @@ describe("Canonical Article preview fidelity", () => {
       throw new Error("No decision may be sent for a replaced confirmation");
     });
     render(<ArticleSubmissionsQueueClient />);
+    fireEvent.change(await screen.findByLabelText("文章审核理由（必填）"), {
+      target: { value: "Synthetic article decision reason" },
+    });
     const approve = await screen.findByRole("button", { name: "通过并公开…" });
     await waitFor(() =>
       expect((approve as HTMLButtonElement).disabled).toBe(false),

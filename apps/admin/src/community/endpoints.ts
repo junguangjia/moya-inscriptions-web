@@ -12,6 +12,9 @@ import {
   operatorFeaturedQuerySchema,
   operatorUsersQuerySchema,
   operatorUserPageSchema,
+  operatorFeedbackQuerySchema,
+  operatorFeedbackPageSchema,
+  operatorFeedbackMediaRequestSchema,
   recommendUserCommandSchema,
   adminModerateWorkRequestSchema,
   featuredMutationSchema,
@@ -51,6 +54,13 @@ import {
   operatorDmLookupRequestSchema,
   operatorDmMessageSchema,
   operatorDmReadRequestSchema,
+  operatorReportQuerySchema,
+  operatorReportSchema,
+  operatorReportPageSchema,
+  operatorReportDecisionRequestSchema,
+  operatorReportReviewRequestSchema,
+  operatorReportMetadataRequestSchema,
+  operatorReportForwardRequestSchema,
 } from "@moya/contracts/internal/community-operator";
 import { z } from "zod";
 
@@ -63,10 +73,14 @@ import {
   callCommunityOperator,
   CommunityOperatorError,
   openCommunityOperatorMedia,
+  openCommunityOperatorEvidence,
 } from "./backend";
 
 export {
   CommunityOperatorError,
+  OPERATOR_EVIDENCE_TYPES,
+  OPERATOR_EVIDENCE_MAXIMUM_BYTES,
+  openCommunityOperatorEvidence,
   OPERATOR_MEDIA_LIFETIME_MS,
   OPERATOR_MEDIA_MAXIMUM_BYTES,
   OPERATOR_MEDIA_TYPES,
@@ -203,9 +217,81 @@ export type CommunityOperation = (
   input: unknown,
 ) => Promise<unknown>;
 
+const reportIdSchema = operatorReportSchema.shape.id
+  .min(1)
+  .max(128)
+  .regex(/^\S+$/u);
+const readReportRequestSchema = z.strictObject({ id: reportIdSchema });
+const reportEvidenceRequestSchema = readReportRequestSchema.extend({
+  evidenceId: reportIdSchema,
+});
+
 export const communityOperations = (
   call: OperatorCall,
 ): Readonly<Record<string, CommunityOperation>> => ({
+  "read-reports": async (_req, input) =>
+    checked(
+      operatorReportPageSchema,
+      await call(
+        "GET",
+        `reports${toQuery(parse(operatorReportQuerySchema, input))}`,
+      ),
+    ),
+  "read-report": async (_req, input) => {
+    const { id } = parse(readReportRequestSchema, input);
+    return checked(
+      operatorReportSchema,
+      await call("GET", `reports/${segment(id)}`),
+    );
+  },
+  "decide-report": async (_req, input) => {
+    const { id, ...command } = parse(
+      operatorReportDecisionRequestSchema.extend({ id: reportIdSchema }),
+      input,
+    );
+    return checked(
+      operatorReportSchema,
+      await call("POST", `reports/${segment(id)}/decisions`, command),
+    );
+  },
+  "review-report": async (_req, input) => {
+    const { id, ...command } = parse(
+      operatorReportReviewRequestSchema.extend({ id: reportIdSchema }),
+      input,
+    );
+    return checked(
+      operatorReportSchema,
+      await call("POST", `reports/${segment(id)}/review`, command),
+    );
+  },
+  "set-report-metadata": async (_req, input) => {
+    const { id, ...command } = parse(
+      operatorReportMetadataRequestSchema.extend({ id: reportIdSchema }),
+      input,
+    );
+    return checked(
+      operatorReportSchema,
+      await call("POST", `reports/${segment(id)}/metadata`, command),
+    );
+  },
+  "forward-report": async (_req, input) => {
+    const { id, ...command } = parse(
+      operatorReportForwardRequestSchema.extend({ id: reportIdSchema }),
+      input,
+    );
+    return checked(
+      operatorReportSchema,
+      await call("POST", `reports/${segment(id)}/forward`, command),
+    );
+  },
+  "read-feedback": async (_req, input) =>
+    checked(
+      operatorFeedbackPageSchema,
+      await call(
+        "GET",
+        `feedback${toQuery(parse(operatorFeedbackQuerySchema, input))}`,
+      ),
+    ),
   "read-works": async (_req, input) =>
     call("GET", `works${toQuery(parse(operatorWorksQuerySchema, input))}`),
   "read-users": async (_req, input) =>
@@ -358,19 +444,25 @@ export const communityOperations = (
     return call("GET", `comments/${segment(id)}`);
   },
   "moderate-comment": async (_req, input): Promise<ModerationResult> => {
-    const { id, action } = parse(adminModerateCommentRequestSchema, input);
-    return call("POST", `comments/${segment(id)}/moderation`, { action });
+    const { id, action, reason } = parse(
+      adminModerateCommentRequestSchema,
+      input,
+    );
+    return call("POST", `comments/${segment(id)}/moderation`, {
+      action,
+      reason,
+    });
   },
   "moderate-comments": async (_req, input): Promise<BulkModerationResult> => {
-    const { ids, action } = parse(
+    const { ids, action, reason } = parse(
       adminBulkModerateCommentsRequestSchema,
       input,
     );
-    return call("POST", "comments/moderation", { action, ids });
+    return call("POST", "comments/moderation", { action, ids, reason });
   },
   "moderate-user": async (_req, input): Promise<UserModerationResult> => {
-    const { id, action } = parse(adminModerateUserRequestSchema, input);
-    return call("POST", `users/${segment(id)}/status`, { action });
+    const { id, action, reason } = parse(adminModerateUserRequestSchema, input);
+    return call("POST", `users/${segment(id)}/status`, { action, reason });
   },
   "read-events": async (_req, input): Promise<ModerationEventPage> => {
     const query = parse(moderationEventQuerySchema, input ?? {});
@@ -714,10 +806,97 @@ const articleSubmissionMediaEndpoint = (
   },
 });
 
+/** Evidence bytes stay behind Owner authentication on both HTTP hops. */
+const reportEvidenceEndpoint = (openEvidence: OperatorMediaCall): Endpoint => ({
+  path: "/community-moderation/report-evidence/:id/:evidenceId",
+  method: "get",
+  handler: async (req) => {
+    try {
+      requireOwner(req);
+      const { id, evidenceId } = parse(reportEvidenceRequestSchema, {
+        id: req.routeParams?.id,
+        evidenceId: req.routeParams?.evidenceId,
+      });
+      const media = await openEvidence(
+        `reports/${segment(id)}/evidence/${segment(evidenceId)}`,
+        null,
+        req.signal,
+      );
+      return new Response(media.body, {
+        status: media.status,
+        headers: {
+          "Content-Type": media.contentType,
+          "Content-Disposition": 'attachment; filename="report-evidence"',
+          "Cache-Control": "private, no-store",
+          "X-Content-Type-Options": "nosniff",
+          "Content-Security-Policy": "default-src 'none'; sandbox",
+          "Cross-Origin-Resource-Policy": "same-origin",
+          "Referrer-Policy": "no-referrer",
+          Vary: "Cookie",
+          ...(media.contentLength === null
+            ? {}
+            : { "Content-Length": media.contentLength }),
+        },
+      });
+    } catch (error) {
+      return failure(error, req);
+    }
+  },
+});
+
+/** Private feedback screenshots: association-authorized rendered WebP only. */
+const feedbackMediaEndpoint = (openMedia: OperatorMediaCall): Endpoint => ({
+  path: "/community-moderation/feedback-media/:feedbackId/:itemId/:variant",
+  method: "get",
+  handler: async (req) => {
+    try {
+      requireOwner(req);
+      const params = req.routeParams ?? {};
+      const { feedbackId, itemId, variant } = parse(
+        operatorFeedbackMediaRequestSchema,
+        {
+          feedbackId: params.feedbackId,
+          itemId: params.itemId,
+          variant: params.variant,
+        },
+      );
+      if (new URL(req.url ?? "http://request.invalid").search !== "")
+        throw new CommunityOperatorError("COMMAND_INVALID", 400);
+      const media = await openMedia(
+        `feedback/${segment(feedbackId)}/images/${segment(itemId)}/${variant}`,
+        byteRange(req.headers?.get("range")),
+        req.signal,
+      );
+      if (media.contentType !== "image/webp") {
+        await media.body.cancel().catch(() => undefined);
+        throw new CommunityOperatorError("OPERATION_FAILED", 502);
+      }
+      const headers = new Headers({
+        "Content-Type": media.contentType,
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+        "Cross-Origin-Resource-Policy": "same-origin",
+        "Referrer-Policy": "no-referrer",
+        Vary: "Cookie, Range",
+      });
+      if (media.acceptsRanges) headers.set("Accept-Ranges", "bytes");
+      if (media.contentLength !== null)
+        headers.set("Content-Length", media.contentLength);
+      if (media.contentRange !== null)
+        headers.set("Content-Range", media.contentRange);
+      return new Response(media.body, { status: media.status, headers });
+    } catch (error) {
+      return failure(error, req);
+    }
+  },
+});
+
 /** The real endpoint set, with the transports injectable for boundary tests. */
 export const createCommunityEndpoints = (
   call: OperatorCall = callCommunityOperator,
   openMedia: OperatorMediaCall = openCommunityOperatorMedia,
+  openEvidence: OperatorMediaCall = openCommunityOperatorEvidence,
 ): Endpoint[] => [
   ...Object.entries({
     ...communityOperations(call),
@@ -725,6 +904,8 @@ export const createCommunityEndpoints = (
   }).map(([name, operation]) => endpoint(name, operation)),
   workSubmissionMediaEndpoint(openMedia),
   articleSubmissionMediaEndpoint(openMedia),
+  reportEvidenceEndpoint(openEvidence),
+  feedbackMediaEndpoint(openMedia),
 ];
 
 export const communityEndpoints: Endpoint[] = createCommunityEndpoints();

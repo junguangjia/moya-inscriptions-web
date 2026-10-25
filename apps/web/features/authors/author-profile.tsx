@@ -1,5 +1,7 @@
 "use client";
 
+import { ReportDialog, ReportMenu } from "../reporting/report-actions";
+import { useAuthEntry } from "../auth/auth-return";
 import { trackAnalytics } from "../analytics/client";
 import { StudioName } from "./user-identity";
 import { useAuthReturn, useAuthReturnView } from "../auth/auth-return";
@@ -60,11 +62,16 @@ const COVER_CARD_PAD = 10;
 const ProfileMoreMenu = ({
   name,
   onBlock,
+  targetId,
 }: {
+  targetId: string;
   name: string;
   onBlock: () => void;
 }) => {
   const [open, setOpen] = useState(false);
+  const [reporting, setReporting] = useState(false);
+  const author = useAuthors();
+  const enterAuth = useAuthEntry();
   const menuId = useId();
   const menu = useRef<HTMLDivElement>(null),
     opener = useRef<HTMLButtonElement>(null);
@@ -96,58 +103,86 @@ const ProfileMoreMenu = ({
     };
   }, [open]);
   return (
-    <div className={styles.moreActions}>
-      <button
-        type="button"
-        ref={opener}
-        className={styles.moreButton}
-        aria-label="更多操作"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-controls={open ? menuId : undefined}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <circle cx="5" cy="12" r="1.75" />
-          <circle cx="12" cy="12" r="1.75" />
-          <circle cx="19" cy="12" r="1.75" />
-        </svg>
-      </button>
-      {open && (
-        <div
-          className={styles.moreMenu}
-          id={menuId}
-          ref={menu}
-          role="menu"
-          aria-label={`对 ${name} 的更多操作`}
-          onBlur={(event) => {
-            // Tabbing away closes it; a press elsewhere (no new focus target)
-            // is left to the outside-press handler.
-            const next = event.relatedTarget;
-            if (
-              next instanceof Node &&
-              !menu.current?.contains(next) &&
-              !opener.current?.contains(next)
-            )
-              setOpen(false);
-          }}
+    <>
+      <div className={styles.moreActions}>
+        <button
+          type="button"
+          ref={opener}
+          className={styles.moreButton}
+          aria-label="更多操作"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-controls={open ? menuId : undefined}
+          onClick={() => setOpen((value) => !value)}
         >
-          <button
-            type="button"
-            role="menuitem"
-            data-profile-block=""
-            onClick={() => {
-              setOpen(false);
-              // Keep focus on ⋯ through the confirmation and after a cancel.
-              opener.current?.focus();
-              onBlock();
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="5" cy="12" r="1.75" />
+            <circle cx="12" cy="12" r="1.75" />
+            <circle cx="19" cy="12" r="1.75" />
+          </svg>
+        </button>
+        {open && (
+          <div
+            className={styles.moreMenu}
+            id={menuId}
+            ref={menu}
+            role="menu"
+            aria-label={`对 ${name} 的更多操作`}
+            onBlur={(event) => {
+              // Tabbing away closes it; a press elsewhere (no new focus target)
+              // is left to the outside-press handler.
+              const next = event.relatedTarget;
+              if (
+                next instanceof Node &&
+                !menu.current?.contains(next) &&
+                !opener.current?.contains(next)
+              )
+                setOpen(false);
             }}
           >
-            屏蔽
-          </button>
-        </div>
+            <button
+              type="button"
+              role="menuitem"
+              data-profile-block=""
+              onClick={() => {
+                setOpen(false);
+                // Keep focus on ⋯ through the confirmation and after a cancel.
+                opener.current?.focus();
+                onBlock();
+              }}
+            >
+              屏蔽
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={author.checking}
+              onClick={() => {
+                setOpen(false);
+                opener.current?.focus();
+                if (author.sessionError)
+                  author.notify("账户状态尚未确认，请稍后重试");
+                else if (!author.viewer)
+                  enterAuth(author.signInHref, opener.current);
+                else setReporting(true);
+              }}
+            >
+              举报用户
+            </button>
+          </div>
+        )}
+      </div>
+      {reporting && (
+        <ReportDialog
+          key={author.viewer?.id ?? "guest"}
+          target={{ type: "user", id: targetId }}
+          onClose={() => {
+            setReporting(false);
+            opener.current?.focus();
+          }}
+        />
       )}
-    </div>
+    </>
   );
 };
 interface AuthorProfilePresentationProps {
@@ -958,6 +993,15 @@ const ScopedAuthorProfile = ({
                   {profile.bio}
                 </p>
               )}
+              {!isPreview && (
+                <p
+                  className={styles.coverBio}
+                  data-theme={coverTheme}
+                  data-profile-ip-location=""
+                >
+                  IP 属地：{profile.ipLocation ?? "属地暂不可用"}
+                </p>
+              )}
               <div className={styles.coverBar} data-theme={coverTheme}>
                 {!isPreview &&
                   (profile.totals.following !== null ||
@@ -1057,6 +1101,7 @@ const ScopedAuthorProfile = ({
                     )}
                     <ProfileMoreMenu
                       name={profile.displayName}
+                      targetId={profile.id}
                       onBlock={async () => {
                         if (
                           !window.confirm(
@@ -1091,6 +1136,7 @@ const ScopedAuthorProfile = ({
                     >
                       登录后关注
                     </a>
+                    <ReportMenu target={{ type: "user", id: profile.id }} />
                   </div>
                 ) : null}
               </div>

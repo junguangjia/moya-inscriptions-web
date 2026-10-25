@@ -22,12 +22,21 @@ export const authoredArticleCatalogPairKey = (
   mediaId: string,
 ): string => JSON.stringify([catalogId, mediaId]);
 
+/*
+ * `$2` binds the requested media ids again, as a restriction on the published
+ * media view alone. The pair join implies it, so no row changes; unlike a join
+ * qual it enters a view that allows it (catalog-scale-v1 M1), so only those
+ * images are read, by index. A fenced view (before M1, or after its down) is
+ * still read once per request, as before; a LATERAL subquery would read it
+ * once per pair (catalog-scale-v1 S5).
+ */
 const pairSql = (renditions: boolean) => `
         SELECT cm.media_id,cm.catalog_id,cm.position,cm.is_representative,cm.kind,
           cm.alt_text,cm.width,cm.height,cm.object_key${renditions ? ",delivery.renditions,delivery.placeholder_color" : ""}
         FROM jsonb_to_recordset($1::jsonb) AS pair("catalogId" text,"mediaId" text)
         JOIN public.catalog_entries ce ON ce.catalog_id=pair."catalogId"
-        JOIN public.catalog_media cm ON cm.catalog_id=ce.catalog_id AND cm.media_id=pair."mediaId"${renditions ? catalogMediaDeliveryJoinSql("cm") : ""}
+        JOIN public.catalog_media cm ON cm.catalog_id=ce.catalog_id AND cm.media_id=pair."mediaId"
+          AND cm.media_id=ANY($2::text[])${renditions ? catalogMediaDeliveryJoinSql("cm") : ""}
         ORDER BY cm.catalog_id,cm.media_id`;
 
 /**
@@ -56,6 +65,7 @@ export class PostgresAuthoredArticleCatalogMediaResolver {
     );
     if (wanted.size > 60) throw new Error("article_reference_limit");
     if (wanted.size === 0) return new Map();
+    const requested = [...wanted.values()];
     const db = await this.pool.connect().catch((error) => {
       throw asPostgresOperationError(error, "connect");
     });
@@ -66,7 +76,8 @@ export class PostgresAuthoredArticleCatalogMediaResolver {
       );
       rows = (
         await db.query<CatalogMediaRow>(this.sql, [
-          JSON.stringify([...wanted.values()]),
+          JSON.stringify(requested),
+          [...new Set(requested.map(({ mediaId }) => mediaId))],
         ])
       ).rows;
       await db.query("COMMIT");
@@ -80,12 +91,23 @@ export class PostgresAuthoredArticleCatalogMediaResolver {
       catalogId: row.catalog_id as string,
       media: mapCatalogMediaRow(row),
     }));
-    const facts = await this.storage.catalogFacts?.(
-      projections.map(({ media }) => ({
-        mediaId: media.id,
-        objectKey: media.objectKey,
-      })),
-    );
+    // Rendition facts are media resolution: their failure is the same 503
+    // as a URL failure below (catalog-delivery-release-hardening-v1 F9).
+    let facts:
+      | Awaited<ReturnType<NonNullable<StorageUrlResolver["catalogFacts"]>>>
+      | undefined;
+    try {
+      facts = await this.storage.catalogFacts?.(
+        projections.map(({ media }) => ({
+          mediaId: media.id,
+          objectKey: media.objectKey,
+        })),
+      );
+    } catch (error) {
+      throw error instanceof CatalogMediaResolutionError
+        ? error
+        : new CatalogMediaResolutionError({ cause: error });
+    }
     if (facts)
       projections = projections.map((p) => ({
         ...p,

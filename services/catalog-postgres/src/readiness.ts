@@ -45,16 +45,33 @@ export const checkPostgresReadiness = async (pool: Pool): Promise<void> => {
   }
 };
 
+/** What the published read connection serves besides the Catalog readers. */
+export interface PostgresStartupOptions extends CatalogReaderOptions {
+  /**
+   * The Backend's discovery (browse, collection, card, filter options) reads
+   * the published `public.catalog_discovery` view through this connection,
+   * which needs SELECT on it (`grant-public-read.sql`).
+   */
+  readonly discovery?: boolean;
+}
+
+const unreadableCodes: ReadonlySet<unknown> = new Set([
+  "3F000",
+  "42P01",
+  "42501",
+]);
+
 /**
  * Read-only startup validation of the published read connection. Readers
  * composed with `renditions` also require the Catalog rendition delivery
- * view and its SELECT grant (the post-Community public read phase), so a
- * missing grant stops startup instead of failing Catalog reads.
+ * view and its SELECT grant (the post-Community public read phase), and
+ * `discovery` requires the published discovery view and its SELECT grant, so
+ * a missing grant stops startup instead of failing Catalog or discovery reads.
  */
 export const assertPostgresStartupReady = async (
   pool: Pool,
   source: "legacy" | "payload" = "legacy",
-  options: CatalogReaderOptions = {},
+  options: PostgresStartupOptions = {},
 ): Promise<void> => {
   try {
     const client = await acquireClient(pool);
@@ -126,9 +143,23 @@ export const assertPostgresStartupReady = async (
       } catch (error) {
         // Missing schema or view, or no SELECT grant for this role.
         const code = (error as { readonly code?: unknown } | null)?.code;
-        if (code === "3F000" || code === "42P01" || code === "42501")
+        if (unreadableCodes.has(code))
           throw new PostgresStartupError(
             "Catalog rendition delivery view is not readable",
+            error,
+          );
+        throw error;
+      }
+    }
+    if (options.discovery === true) {
+      try {
+        await pool.query("SELECT 1 FROM public.catalog_discovery LIMIT 0");
+      } catch (error) {
+        // Missing view, or no SELECT grant for this role.
+        const code = (error as { readonly code?: unknown } | null)?.code;
+        if (unreadableCodes.has(code))
+          throw new PostgresStartupError(
+            "Catalog discovery view is not readable: grant SELECT on public.catalog_discovery to the public read role",
             error,
           );
         throw error;
@@ -140,5 +171,173 @@ export const assertPostgresStartupReady = async (
       "PostgreSQL startup validation failed",
       error,
     );
+  }
+};
+
+/** A privilege a startup check requires of the connection's own role. */
+interface RequiredPrivilege {
+  readonly relation: string;
+  readonly privilege: "SELECT" | "INSERT" | "UPDATE";
+  /** For a column privilege; otherwise the table privilege is required. */
+  readonly column?: string;
+}
+
+// One boolean per requirement, in input order. A missing relation or column
+// reads as not granted rather than raising, so the message can name it.
+const requiredPrivilegesSql = `SELECT CASE
+  WHEN to_regclass(r.relation) IS NULL THEN false
+  WHEN r.column_name = '' THEN has_table_privilege(to_regclass(r.relation), r.privilege)
+  WHEN NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = to_regclass(r.relation)
+    AND a.attname = r.column_name AND a.attnum > 0 AND NOT a.attisdropped) THEN false
+  ELSE has_column_privilege(to_regclass(r.relation), r.column_name, r.privilege)
+END AS granted
+FROM unnest($1::text[], $2::text[], $3::text[]) WITH ORDINALITY
+  AS r(relation, privilege, column_name, ordinal)
+ORDER BY r.ordinal`;
+
+const describePrivilege = ({
+  relation,
+  privilege,
+  column,
+}: RequiredPrivilege) =>
+  `${privilege}${column === undefined ? "" : ` (${column})`} on ${relation}`;
+
+/** The requirements this role lacks; throws when the answer is incomplete. */
+const missingPrivileges = async (
+  pool: Pool,
+  required: readonly RequiredPrivilege[],
+): Promise<readonly RequiredPrivilege[]> => {
+  let rows: readonly { readonly granted?: unknown }[];
+  try {
+    rows = (
+      await pool.query<{ granted: unknown }>(requiredPrivilegesSql, [
+        required.map(({ relation }) => relation),
+        required.map(({ privilege }) => privilege),
+        required.map(({ column }) => column ?? ""),
+      ])
+    ).rows;
+  } catch (error) {
+    throw new PostgresStartupError(
+      "PostgreSQL startup validation failed",
+      error,
+    );
+  }
+  // Fail closed: one answer per requirement, each exactly true.
+  if (rows.length !== required.length)
+    throw new PostgresStartupError("PostgreSQL startup validation failed");
+  return required.filter((_, index) => rows[index]?.granted !== true);
+};
+
+/*
+ * catalog-scale-v1 (Issue #323) 1B, W6: the App role's privileges on the
+ * scoped Catalog reconcile's tables (App migration 20261024010000), exactly
+ * as infra/development/work-publishing/grant-runtime.sql grants them. Marks
+ * are inserted and advanced, never deleted; the single state row is only
+ * updated.
+ */
+const catalogPublicationScopePrivileges: readonly RequiredPrivilege[] = [
+  { relation: "community.catalog_publication_dirty", privilege: "SELECT" },
+  { relation: "community.catalog_publication_dirty", privilege: "INSERT" },
+  ...["mark_seq", "cleared_seq", "reason", "urgent", "marked_at"].map(
+    (column) => ({
+      relation: "community.catalog_publication_dirty",
+      privilege: "UPDATE" as const,
+      column,
+    }),
+  ),
+  { relation: "community.catalog_reconcile_state", privilege: "SELECT" },
+  ...[
+    "sweep_cursor",
+    "policy_digest",
+    "public_count",
+    "public_sum",
+    "public_observed_at",
+    "private_count",
+    "private_sum",
+    "private_observed_at",
+    "render_backlog",
+    "render_backlog_at",
+    "updated_at",
+  ].map((column) => ({
+    relation: "community.catalog_reconcile_state",
+    privilege: "UPDATE" as const,
+    column,
+  })),
+];
+
+/**
+ * Read-only startup check of the App connection (worker and Backend): the
+ * scoped Catalog reconcile's dirty queue and state row exist and this role
+ * holds every privilege the reconcile uses on them. A worker or Backend
+ * started before the migration or its grants refuses, naming what is
+ * missing (relation, column and privilege names only), instead of failing
+ * every reconcile with 42P01 or 42501. The state row itself must exist too:
+ * the App role can only update it, so without it (an owner-side truncate, a
+ * restore without data) every update of the sweep position and fingerprints
+ * would change nothing.
+ */
+export const assertCatalogPublicationScopeReady = async (
+  pool: Pool,
+): Promise<void> => {
+  const missing = await missingPrivileges(
+    pool,
+    catalogPublicationScopePrivileges,
+  );
+  if (missing.length > 0)
+    throw new PostgresStartupError(
+      `Catalog publication scope is not ready for the App role (missing ${missing.map(describePrivilege).join(", ")}): apply App migration 20261024010000, then infra/development/work-publishing/grant-runtime.sql`,
+    );
+  let stateRows: unknown;
+  try {
+    stateRows = (
+      await pool.query<{ state_rows: unknown }>(
+        "SELECT count(*)::integer AS state_rows FROM community.catalog_reconcile_state",
+      )
+    ).rows[0]?.state_rows;
+  } catch (error) {
+    throw new PostgresStartupError(
+      "PostgreSQL startup validation failed",
+      error,
+    );
+  }
+  if (stateRows !== 1)
+    throw new PostgresStartupError(
+      "Catalog publication scope is not ready for the App role (missing the community.catalog_reconcile_state row): re-create it with the migration role as App migration 20261024010000 does",
+    );
+};
+
+/** Both private prepare views the worker and the Backend read (CMS M2). */
+const catalogPrepareViews = [
+  "public.catalog_delivery_prepare_media",
+  "public.catalog_delivery_live_prepare_media",
+] as const;
+
+/**
+ * Read-only startup check of the Catalog prepare connection, where one is
+ * configured: its role can read both private prepare views, the live
+ * projection that the snapshot and the publication fence read (CMS migration
+ * 20261024_000000) and the full one that readiness reads. Each is probed as
+ * a read with LIMIT 0, so schema usage, the view and its grant are all
+ * checked and no row is read. Without the grant, startup refuses naming the
+ * view instead of every Catalog sync and fence failing with 42501.
+ */
+export const assertCatalogPrepareReaderReady = async (
+  pool: Pool,
+): Promise<void> => {
+  for (const view of catalogPrepareViews) {
+    try {
+      await pool.query(`SELECT 1 FROM ${view} LIMIT 0`);
+    } catch (error) {
+      const code = (error as { readonly code?: unknown } | null)?.code;
+      if (unreadableCodes.has(code))
+        throw new PostgresStartupError(
+          `Catalog prepare reader cannot read ${view}: apply CMS migration 20261024_000000, then re-run infra/development/catalog-media/grant-prepare-read.sql`,
+          error,
+        );
+      throw new PostgresStartupError(
+        "PostgreSQL startup validation failed",
+        error,
+      );
+    }
   }
 };

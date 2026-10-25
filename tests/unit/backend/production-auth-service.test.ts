@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   CommunityAuthService,
@@ -28,6 +28,19 @@ const keys = () => ({
 });
 const harness = (overrides: Partial<CommunityAuthServiceOptions> = {}) => {
   const port = createMemoryCommunityAuthPort();
+  const invitationCode = "A".repeat(22); // Synthetic invitation, never issued by an operator.
+  port.provisionInvitation({
+    id: "invite-" + "0".repeat(32),
+    digest: createHash("sha256")
+      .update("artvenn:registration-invitation:v1:" + invitationCode)
+      .digest("hex"),
+    environment: "production",
+    maxUses: 20,
+    usedCount: 0,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    revokedAt: null,
+  });
   let code = "",
     sends = 0,
     checks = 0;
@@ -53,15 +66,22 @@ const harness = (overrides: Partial<CommunityAuthServiceOptions> = {}) => {
     phoneMode: "provider",
     delivery,
     registrationAgreement: agreement,
+    ...(overrides.environment === "development"
+      ? {}
+      : { registrationMode: "invite-only" as const }),
     ...overrides,
   };
   return {
     port,
+    invitationCode,
     options,
     service: new CommunityAuthService(port, options),
     code: () => code,
     sends: () => sends,
     checks: () => checks,
+    resetChecks: () => {
+      checks = 0;
+    },
     setPhoneCheckHook: (hook: () => Promise<void>) => {
       phoneCheckHook = hook;
     },
@@ -75,6 +95,7 @@ const prepare = async (
     channel: "email",
     purpose: "register",
     identifier,
+    invitationCode: h.invitationCode,
     idempotencyKey: randomUUID(),
     source: "synthetic",
   });
@@ -163,7 +184,7 @@ describe("Production authentication core invariants", () => {
         })
       ).ok,
     ).toBe(true);
-    expect(h.sends()).toBe(1);
+    expect(h.sends()).toBe(0);
   });
   it("requires exact agreement version before registration writes", async () => {
     const h = harness(),
@@ -312,13 +333,15 @@ describe("Production authentication core invariants", () => {
   });
 });
 
-const phoneChallenge = async (
-  h: ReturnType<typeof harness>,
-  purpose: "register" | "sign_in" = "register",
-) => {
+const phoneChallenge = async (h: ReturnType<typeof harness>) => {
+  // Exercise provider phone checks on an existing account linked through its
+  // purpose-bound authorization; SMS-only registration has separate coverage.
+  const linked = await h.service.completeFactor(await factorChallenge(h));
+  if (!linked.ok) throw Error("Synthetic phone link refused");
+  h.resetChecks();
   const sent = await h.service.sendChallenge({
     channel: "phone",
-    purpose,
+    purpose: "sign_in",
     identifier: "+8613800138000",
     idempotencyKey: randomUUID(),
     source: "synthetic",
@@ -420,32 +443,20 @@ describe("Live phone checks follow local authorization", () => {
   });
   it("preserves sign-in receipt replay without another provider check, including after OTP expiry", async () => {
     const h = harness(),
-      registrationProof = await phoneChallenge(h);
-    const verified = await h.service.verifyChallenge(registrationProof);
-    if (!verified.ok || verified.value.outcome !== "registration_required")
-      throw Error("Synthetic phone verification refused");
-    const registration = await h.service.confirmRegistration({
-      handoffToken: verified.value.handoffToken,
-      displayName: "合成",
-      agreement: true,
-      agreementVersion: agreement.version,
-      idempotencyKey: randomUUID(),
-    });
-    if (!registration.ok) throw Error("Synthetic phone registration refused");
-    const input = await phoneChallenge(h, "sign_in");
+      input = await phoneChallenge(h);
     expect((await h.service.verifyChallenge(input)).ok).toBe(true);
-    expect(h.checks()).toBe(2);
+    expect(h.checks()).toBe(1);
     await changeChallenge(h, input.challengeId, {
       expiresAt: new Date(0).toISOString(),
     });
     const replay = await h.service.verifyChallenge(input);
     expect(replay.ok).toBe(true);
-    expect(h.checks()).toBe(2);
+    expect(h.checks()).toBe(1);
     if (!replay.ok || replay.value.outcome !== "signed_in")
       throw Error("Synthetic replay refused");
     await h.service.signOut(replay.value.session.token);
     expect((await h.service.verifyChallenge(input)).ok).toBe(false);
-    expect(h.checks()).toBe(2);
+    expect(h.checks()).toBe(1);
   });
   it("keeps final transactional refusal if the challenge changes during the provider call", async () => {
     const h = harness(),
@@ -457,7 +468,7 @@ describe("Live phone checks follow local authorization", () => {
     );
     expect((await h.service.verifyChallenge(input)).ok).toBe(false);
     expect(h.checks()).toBe(1);
-    expect(await h.port.transaction((tx) => tx.countUsers())).toBe(0);
+    expect(await h.port.transaction((tx) => tx.countUsers())).toBe(1);
   });
   it("refuses stale factor challenges before external verification", async () => {
     for (const change of stale) {

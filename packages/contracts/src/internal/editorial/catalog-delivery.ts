@@ -230,3 +230,94 @@ export const catalogDeliveryReadinessSchema = z.strictObject({
 export type CatalogDeliveryReadiness = z.output<
   typeof catalogDeliveryReadinessSchema
 >;
+
+/** Release tooling asks this before its first write. Any answer at all means
+ * this Admin serves the delivery and upload endpoints; `delivery` says whether
+ * its Backend can pin a recipe and prove readiness. No setting is reported.
+ */
+export const catalogDeliveryCapabilitiesRequestSchema = z.strictObject({});
+export const catalogDeliveryCapabilitiesSchema = z.strictObject({
+  delivery: z.enum(["AVAILABLE", "NOT_CONFIGURED", "UNAVAILABLE"]),
+});
+export type CatalogDeliveryCapabilities = z.output<
+  typeof catalogDeliveryCapabilitiesSchema
+>;
+
+const publishedRenditionSource = {
+  mediaId: editorialMediaSchema.shape.mediaId,
+  objectKey: editorialMediaSchema.shape.objectKey,
+};
+/** Admin publish gate, operator boundary only: the exact CMS sources of a
+ * record whose current, complete and published rendition sets are asked for.
+ */
+export const catalogPublishedRenditionsRequestSchema = z.strictObject({
+  media: z
+    .array(
+      z.strictObject({ ...publishedRenditionSource, sourceSha256: digest }),
+    )
+    .min(1)
+    .max(2000),
+});
+export const catalogPublishedRenditionsSchema = z.strictObject({
+  media: z
+    .array(
+      z.strictObject({ ...publishedRenditionSource, complete: z.boolean() }),
+    )
+    .max(2000),
+});
+export type CatalogPublishedRenditionsRequest = z.output<
+  typeof catalogPublishedRenditionsRequestSchema
+>;
+export type CatalogPublishedRenditions = z.output<
+  typeof catalogPublishedRenditionsSchema
+>;
+
+const backlogCount = z
+  .number()
+  .int()
+  .nonnegative()
+  .max(Number.MAX_SAFE_INTEGER);
+const renderBacklogShape = {
+  tiers: z
+    .strictObject({
+      t0: backlogCount,
+      t1: backlogCount,
+      t2: backlogCount,
+      t3: backlogCount,
+      t4: backlogCount,
+    })
+    .nullable(),
+  countedAt: z.iso.datetime().nullable(),
+  queued: backlogCount,
+  running: backlogCount,
+};
+const countedWithItsTime = (value: { tiers: unknown; countedAt: unknown }) =>
+  (value.tiers === null) === (value.countedAt === null);
+const countedWithItsTimeIssue = {
+  path: ["countedAt"],
+  message: "A counted backlog carries its time, and only a counted one.",
+};
+/** Operator boundary only, read-only, for the pacing of bulk Catalog work:
+ * per render tier, the images the last sync pass counted as still needing a
+ * render and when it counted them (both null before the first pass), and the
+ * base Catalog render jobs queued and running now. Counts only: no record,
+ * image or key crosses it.
+ */
+export const catalogRenderBacklogSchema = z
+  .strictObject(renderBacklogShape)
+  .refine(countedWithItsTime, countedWithItsTimeIssue);
+export type CatalogRenderBacklogReport = z.output<
+  typeof catalogRenderBacklogSchema
+>;
+/** What the Admin's pacing route answers: the App's count, and the images of
+ * the delivery intents prepared since that count (live or released), which
+ * the worker's next sync pass queues and no count holds yet. A batch of
+ * prepares inside one sync interval is then paced on all of them, never on
+ * one stale count each (0 before the first count). Counts only.
+ */
+export const catalogRenderBacklogAnswerSchema = z
+  .strictObject({ ...renderBacklogShape, preparedSince: backlogCount })
+  .refine(countedWithItsTime, countedWithItsTimeIssue);
+export type CatalogRenderBacklogAnswer = z.output<
+  typeof catalogRenderBacklogAnswerSchema
+>;

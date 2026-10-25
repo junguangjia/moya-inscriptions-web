@@ -12218,6 +12218,9 @@
                         "const": true,
                         "type": "boolean"
                       },
+                      "invitationRequired": {
+                        "type": "boolean"
+                      },
                       "reason": {
                         "type": "null"
                       }
@@ -12233,6 +12236,9 @@
                       },
                       "available": {
                         "const": false,
+                        "type": "boolean"
+                      },
+                      "invitationRequired": {
                         "type": "boolean"
                       },
                       "reason": {
@@ -12450,6 +12456,9 @@
                     "const": true,
                     "type": "boolean"
                   },
+                  "invitationRequired": {
+                    "type": "boolean"
+                  },
                   "reason": {
                     "type": "null"
                   }
@@ -12465,6 +12474,9 @@
                   },
                   "available": {
                     "const": false,
+                    "type": "boolean"
+                  },
+                  "invitationRequired": {
                     "type": "boolean"
                   },
                   "reason": {
@@ -12489,6 +12501,32 @@
         "required": ["profile", "email", "phone", "developmentOnly"],
         "type": "object"
       },
+      "AuthChallengeAccepted": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "challengeId": {
+            "pattern": "^challenge-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "continuationToken": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "type": "string"
+          },
+          "maskedTarget": {
+            "maxLength": 80,
+            "minLength": 1,
+            "type": "string"
+          },
+          "resendAvailableAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+            "type": "string"
+          }
+        },
+        "required": ["challengeId", "resendAvailableAt", "maskedTarget"],
+        "type": "object"
+      },
       "AuthChallengeRequest": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -12505,6 +12543,10 @@
           "identifier": {
             "maxLength": 254,
             "minLength": 1,
+            "type": "string"
+          },
+          "invitationCode": {
+            "pattern": "^[A-Za-z0-9_-]{22}$",
             "type": "string"
           },
           "purpose": {
@@ -12906,6 +12948,17 @@
             "pattern": "^user-[0-9a-f]{32}$",
             "type": "string"
           },
+          "ipLocation": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "isOwner": {
             "type": "boolean"
           },
@@ -13136,6 +13189,36 @@
           "handoffToken",
           "displayName",
           "agreement",
+          "idempotencyKey"
+        ],
+        "type": "object"
+      },
+      "AuthVerifyRequest": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "challengeId": {
+            "pattern": "^challenge-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "code": {
+            "pattern": "^\\d{6}$",
+            "type": "string"
+          },
+          "continuationToken": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "challengeId",
+          "code",
+          "continuationToken",
           "idempotencyKey"
         ],
         "type": "object"
@@ -14900,6 +14983,1282 @@
           }
         },
         "required": ["requestId", "enabled"],
+        "type": "object"
+      },
+      "CommunityAppealLoginResult": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "outcome": {
+            "const": "appeal_signed_in",
+            "type": "string"
+          },
+          "session": {
+            "additionalProperties": false,
+            "properties": {
+              "expiresAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                "type": "string"
+              },
+              "profile": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 40,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "handle": {
+                    "pattern": "^[a-z][a-z0-9-]{2,31}$",
+                    "type": "string"
+                  },
+                  "id": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^\\S+$",
+                    "type": "string"
+                  },
+                  "studioName": {
+                    "type": "string"
+                  }
+                },
+                "required": ["id", "handle", "displayName"],
+                "type": "object"
+              }
+            },
+            "required": ["expiresAt", "profile"],
+            "type": "object"
+          }
+        },
+        "required": ["outcome", "session"],
+        "type": "object"
+      },
+      "CommunityAppealSession": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "expiresAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+            "type": "string"
+          },
+          "profile": {
+            "additionalProperties": false,
+            "properties": {
+              "displayName": {
+                "maxLength": 40,
+                "minLength": 1,
+                "type": "string"
+              },
+              "handle": {
+                "pattern": "^[a-z][a-z0-9-]{2,31}$",
+                "type": "string"
+              },
+              "id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^\\S+$",
+                "type": "string"
+              },
+              "studioName": {
+                "type": "string"
+              }
+            },
+            "required": ["id", "handle", "displayName"],
+            "type": "object"
+          }
+        },
+        "required": ["expiresAt", "profile"],
+        "type": "object"
+      },
+      "CommunityReport": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "appeal": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "createdAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": ["pending", "upheld", "overturned"],
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": ["text", "status", "createdAt"],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "canonicalPath": {
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+            "type": "string"
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "enum": [
+                      "retain",
+                      "hide",
+                      "warn",
+                      "restrict_comments",
+                      "suspend",
+                      "approve",
+                      "reject",
+                      "restore",
+                      "delete_body",
+                      "remove_thread"
+                    ],
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "reversedAt": {
+                    "anyOf": [
+                      {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "reviewReason": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "action",
+                  "reason",
+                  "createdAt",
+                  "reversedAt",
+                  "reviewReason"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "evidence": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "createdAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                  "type": "string"
+                },
+                "downloadPath": {
+                  "type": "string"
+                },
+                "fileName": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "mimeType": {
+                  "type": "string"
+                },
+                "sensitive": {
+                  "type": "boolean"
+                },
+                "size": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "fileName",
+                "mimeType",
+                "size",
+                "sensitive",
+                "createdAt",
+                "downloadPath"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "standard",
+              "quick_comment",
+              "rights_notice",
+              "moderation"
+            ],
+            "type": "string"
+          },
+          "messages": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "createdAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": ["notice", "statement", "result"],
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": ["id", "kind", "text", "createdAt"],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "illegal_harmful",
+                  "spam_scam",
+                  "harassment",
+                  "privacy",
+                  "impersonation",
+                  "copyright",
+                  "other"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": ["open", "reviewing", "resolved", "appealed"],
+            "type": "string"
+          },
+          "target": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^\\S+$",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "work",
+                  "comment",
+                  "user",
+                  "article",
+                  "thread",
+                  "catalog"
+                ],
+                "type": "string"
+              }
+            },
+            "required": ["type", "id"],
+            "type": "object"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+            "type": "string"
+          },
+          "urgent": {
+            "type": "boolean"
+          },
+          "version": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "target",
+          "canonicalPath",
+          "kind",
+          "reason",
+          "description",
+          "status",
+          "urgent",
+          "version",
+          "createdAt",
+          "updatedAt",
+          "decision",
+          "appeal",
+          "messages",
+          "evidence"
+        ],
+        "type": "object"
+      },
+      "CommunityReportAppealRequest": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "requestId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["text", "requestId"],
+        "type": "object"
+      },
+      "CommunityReportEvidence": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+            "type": "string"
+          },
+          "downloadPath": {
+            "type": "string"
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "mimeType": {
+            "type": "string"
+          },
+          "sensitive": {
+            "type": "boolean"
+          },
+          "size": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "fileName",
+          "mimeType",
+          "size",
+          "sensitive",
+          "createdAt",
+          "downloadPath"
+        ],
+        "type": "object"
+      },
+      "CommunityReportEvidenceUploadRequest": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "contentBase64": {
+            "maxLength": 11184812,
+            "minLength": 4,
+            "type": "string"
+          },
+          "fileName": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "mimeType": {
+            "enum": [
+              "image/jpeg",
+              "image/png",
+              "image/webp",
+              "application/pdf"
+            ],
+            "type": "string"
+          },
+          "requestId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "sensitive": {
+            "default": true,
+            "description": "All public complaint uploads are treated as sensitive; a client flag cannot extend retention.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "fileName",
+          "mimeType",
+          "contentBase64",
+          "sensitive",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "CommunityReportingDecision": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "appeal": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "createdAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": ["pending", "upheld", "overturned"],
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": ["text", "status", "createdAt"],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "canonicalPath": {
+            "type": "string"
+          },
+          "caseId": {
+            "type": "string"
+          },
+          "decision": {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "enum": [
+                  "retain",
+                  "hide",
+                  "warn",
+                  "restrict_comments",
+                  "suspend",
+                  "approve",
+                  "reject",
+                  "restore",
+                  "delete_body",
+                  "remove_thread"
+                ],
+                "type": "string"
+              },
+              "createdAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "reversedAt": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "reviewReason": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "action",
+              "reason",
+              "createdAt",
+              "reversedAt",
+              "reviewReason"
+            ],
+            "type": "object"
+          },
+          "evidence": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "createdAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                  "type": "string"
+                },
+                "downloadPath": {
+                  "type": "string"
+                },
+                "fileName": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "mimeType": {
+                  "type": "string"
+                },
+                "sensitive": {
+                  "type": "boolean"
+                },
+                "size": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "fileName",
+                "mimeType",
+                "size",
+                "sensitive",
+                "createdAt",
+                "downloadPath"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "enum": [
+              "standard",
+              "quick_comment",
+              "rights_notice",
+              "moderation"
+            ],
+            "type": "string"
+          },
+          "messages": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "createdAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": ["notice", "statement", "result"],
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": ["id", "kind", "text", "createdAt"],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "target": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^\\S+$",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "work",
+                  "comment",
+                  "user",
+                  "article",
+                  "thread",
+                  "catalog"
+                ],
+                "type": "string"
+              }
+            },
+            "required": ["type", "id"],
+            "type": "object"
+          }
+        },
+        "required": [
+          "caseId",
+          "kind",
+          "evidence",
+          "target",
+          "canonicalPath",
+          "decision",
+          "appeal",
+          "messages"
+        ],
+        "type": "object"
+      },
+      "CommunityReportingDecisionPage": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "appeal": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "createdAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": ["pending", "upheld", "overturned"],
+                          "type": "string"
+                        },
+                        "text": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["text", "status", "createdAt"],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "canonicalPath": {
+                  "type": "string"
+                },
+                "caseId": {
+                  "type": "string"
+                },
+                "decision": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "action": {
+                      "enum": [
+                        "retain",
+                        "hide",
+                        "warn",
+                        "restrict_comments",
+                        "suspend",
+                        "approve",
+                        "reject",
+                        "restore",
+                        "delete_body",
+                        "remove_thread"
+                      ],
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "reversedAt": {
+                      "anyOf": [
+                        {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reviewReason": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "action",
+                    "reason",
+                    "createdAt",
+                    "reversedAt",
+                    "reviewReason"
+                  ],
+                  "type": "object"
+                },
+                "evidence": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "createdAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                        "type": "string"
+                      },
+                      "downloadPath": {
+                        "type": "string"
+                      },
+                      "fileName": {
+                        "type": "string"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "mimeType": {
+                        "type": "string"
+                      },
+                      "sensitive": {
+                        "type": "boolean"
+                      },
+                      "size": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "fileName",
+                      "mimeType",
+                      "size",
+                      "sensitive",
+                      "createdAt",
+                      "downloadPath"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "kind": {
+                  "enum": [
+                    "standard",
+                    "quick_comment",
+                    "rights_notice",
+                    "moderation"
+                  ],
+                  "type": "string"
+                },
+                "messages": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "createdAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                        "type": "string"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "enum": ["notice", "statement", "result"],
+                        "type": "string"
+                      },
+                      "text": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["id", "kind", "text", "createdAt"],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "target": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "pattern": "^\\S+$",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "work",
+                        "comment",
+                        "user",
+                        "article",
+                        "thread",
+                        "catalog"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": ["type", "id"],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "caseId",
+                "kind",
+                "evidence",
+                "target",
+                "canonicalPath",
+                "decision",
+                "appeal",
+                "messages"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "page": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "pageSize": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "total": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": ["items", "total", "page", "pageSize"],
+        "type": "object"
+      },
+      "CommunityReportingInbox": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "caseId": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": ["notice", "statement", "result"],
+                  "type": "string"
+                },
+                "readAt": {
+                  "anyOf": [
+                    {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "caseId",
+                "kind",
+                "text",
+                "createdAt",
+                "readAt"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": ["items"],
+        "type": "object"
+      },
+      "CommunityReportMaterialRequest": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "requestId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["text", "requestId"],
+        "type": "object"
+      },
+      "CommunityReportPage": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "appeal": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "createdAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": ["pending", "upheld", "overturned"],
+                          "type": "string"
+                        },
+                        "text": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["text", "status", "createdAt"],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "canonicalPath": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                  "type": "string"
+                },
+                "decision": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "action": {
+                          "enum": [
+                            "retain",
+                            "hide",
+                            "warn",
+                            "restrict_comments",
+                            "suspend",
+                            "approve",
+                            "reject",
+                            "restore",
+                            "delete_body",
+                            "remove_thread"
+                          ],
+                          "type": "string"
+                        },
+                        "createdAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        },
+                        "reversedAt": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "reviewReason": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "action",
+                        "reason",
+                        "createdAt",
+                        "reversedAt",
+                        "reviewReason"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "description": {
+                  "type": "string"
+                },
+                "evidence": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "createdAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                        "type": "string"
+                      },
+                      "downloadPath": {
+                        "type": "string"
+                      },
+                      "fileName": {
+                        "type": "string"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "mimeType": {
+                        "type": "string"
+                      },
+                      "sensitive": {
+                        "type": "boolean"
+                      },
+                      "size": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "fileName",
+                      "mimeType",
+                      "size",
+                      "sensitive",
+                      "createdAt",
+                      "downloadPath"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "standard",
+                    "quick_comment",
+                    "rights_notice",
+                    "moderation"
+                  ],
+                  "type": "string"
+                },
+                "messages": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "createdAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                        "type": "string"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "enum": ["notice", "statement", "result"],
+                        "type": "string"
+                      },
+                      "text": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["id", "kind", "text", "createdAt"],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "reason": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "illegal_harmful",
+                        "spam_scam",
+                        "harassment",
+                        "privacy",
+                        "impersonation",
+                        "copyright",
+                        "other"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "enum": ["open", "reviewing", "resolved", "appealed"],
+                  "type": "string"
+                },
+                "target": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "pattern": "^\\S+$",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "work",
+                        "comment",
+                        "user",
+                        "article",
+                        "thread",
+                        "catalog"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": ["type", "id"],
+                  "type": "object"
+                },
+                "updatedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                  "type": "string"
+                },
+                "urgent": {
+                  "type": "boolean"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "target",
+                "canonicalPath",
+                "kind",
+                "reason",
+                "description",
+                "status",
+                "urgent",
+                "version",
+                "createdAt",
+                "updatedAt",
+                "decision",
+                "appeal",
+                "messages",
+                "evidence"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "page": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "pageSize": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "total": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": ["items", "total", "page", "pageSize"],
         "type": "object"
       },
       "ContentCard": {
@@ -16955,6 +18314,171 @@
         },
         "required": ["text"],
         "type": "object"
+      },
+      "CreateCommunityReportRequest": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "description": {
+                "maxLength": 10000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "const": "standard",
+                "type": "string"
+              },
+              "reason": {
+                "enum": [
+                  "illegal_harmful",
+                  "spam_scam",
+                  "harassment",
+                  "privacy",
+                  "impersonation",
+                  "copyright",
+                  "other"
+                ],
+                "type": "string"
+              },
+              "requestId": {
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                "type": "string"
+              },
+              "target": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^\\S+$",
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": ["work", "user", "article", "thread", "catalog"],
+                    "type": "string"
+                  }
+                },
+                "required": ["type", "id"],
+                "type": "object"
+              }
+            },
+            "required": ["kind", "target", "reason", "requestId"],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "quick_comment",
+                "type": "string"
+              },
+              "requestId": {
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                "type": "string"
+              },
+              "target": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^\\S+$",
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "comment",
+                    "type": "string"
+                  }
+                },
+                "required": ["type", "id"],
+                "type": "object"
+              }
+            },
+            "required": ["kind", "target", "requestId"],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "claimantName": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "contact": {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              "description": {
+                "maxLength": 10000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "const": "rights_notice",
+                "type": "string"
+              },
+              "reason": {
+                "const": "copyright",
+                "type": "string"
+              },
+              "requestId": {
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                "type": "string"
+              },
+              "rightsBasis": {
+                "maxLength": 10000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "sourceCaseId": {
+                "pattern": "^report-[0-9a-f]{32}$",
+                "type": "string"
+              },
+              "target": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^\\S+$",
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": [
+                      "work",
+                      "comment",
+                      "user",
+                      "article",
+                      "thread",
+                      "catalog"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": ["type", "id"],
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind",
+              "target",
+              "reason",
+              "description",
+              "claimantName",
+              "contact",
+              "rightsBasis",
+              "requestId"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "CreatePublishingDraftCommand": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -20052,6 +21576,23 @@
           "draftId",
           "version"
         ],
+        "type": "object"
+      },
+      "FeedbackReceipt": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^feedback-[0-9a-f]{32}$",
+            "type": "string"
+          }
+        },
+        "required": ["id", "createdAt"],
         "type": "object"
       },
       "GuestFavoriteMerge": {
@@ -28292,6 +29833,10 @@
             "enum": ["standard-image-v1", "standard-live-v1"],
             "type": "string"
           },
+          "purpose": {
+            "enum": ["content", "feedback"],
+            "type": "string"
+          },
           "qualityMode": {
             "enum": ["standard", "original"],
             "type": "string"
@@ -28329,6 +29874,18 @@
           }
         },
         "required": ["requestId", "targetId", "enabled"],
+        "type": "object"
+      },
+      "ReportingReadResult": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "read": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": ["read"],
         "type": "object"
       },
       "RequestIdentity": {
@@ -28715,6 +30272,32 @@
           }
         },
         "required": ["requestId", "text"],
+        "type": "object"
+      },
+      "SubmitFeedbackRequest": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "imageIds": {
+            "items": {
+              "pattern": "^media-item-[0-9a-f]{32}$",
+              "type": "string"
+            },
+            "maxItems": 3,
+            "type": "array"
+          },
+          "message": {
+            "maxLength": 5000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          }
+        },
+        "required": ["submissionId", "message"],
         "type": "object"
       },
       "ThreadPage": {
@@ -34313,9 +35896,365 @@
         "summary": "Masked login factors for the current account"
       }
     },
+    "/v1/community/auth/appeals/challenges": {
+      "post": {
+        "description": "Only purpose sign_in is accepted. Provider availability and source/target attempt budgets remain unchanged.",
+        "operationId": "createAppealSignInChallenge",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthChallengeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthChallengeAccepted"
+                }
+              }
+            },
+            "description": "Existing challenge continuation."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Generic invalid credentials. ApiErrorCode UNAUTHENTICATED."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Attempt limit or state conflict. ApiErrorCode CONFLICT."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid input or purpose-bound proof. ApiErrorCode INVALID_INPUT."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Internal service error. ApiErrorCode INTERNAL_ERROR."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication unavailable. ApiErrorCode SERVICE_UNAVAILABLE."
+          }
+        },
+        "summary": "Send an existing-account sign-in challenge without an ordinary session"
+      }
+    },
+    "/v1/community/auth/appeals/login": {
+      "post": {
+        "description": "Existing identity verification and attempt budgets. A short-lived appeal-only server grant cannot authorize normal community reads or writes; Web stores it in a separate HttpOnly cookie.",
+        "operationId": "signInForAppeal",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthPasswordLoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Server-only appeal session grant. Relay removes the credential before browser delivery."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Generic invalid credentials. ApiErrorCode UNAUTHENTICATED."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Attempt limit or state conflict. ApiErrorCode CONFLICT."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid input or purpose-bound proof. ApiErrorCode INVALID_INPUT."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Internal service error. ApiErrorCode INTERNAL_ERROR."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication unavailable. ApiErrorCode SERVICE_UNAVAILABLE."
+          }
+        },
+        "summary": "Verify a password for restricted case access"
+      }
+    },
+    "/v1/community/auth/appeals/session": {
+      "get": {
+        "operationId": "readOwnAppealSession",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityAppealSession"
+                }
+              }
+            },
+            "description": "Identity metadata only, no credential."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Generic invalid credentials. ApiErrorCode UNAUTHENTICATED."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Attempt limit or state conflict. ApiErrorCode CONFLICT."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid input or purpose-bound proof. ApiErrorCode INVALID_INPUT."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Internal service error. ApiErrorCode INTERNAL_ERROR."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication unavailable. ApiErrorCode SERVICE_UNAVAILABLE."
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Read the verified appeal session owner"
+      }
+    },
+    "/v1/community/auth/appeals/sign-out": {
+      "post": {
+        "operationId": "signOutAppealSession",
+        "responses": {
+          "204": {
+            "description": "Restricted session ended."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Generic invalid credentials. ApiErrorCode UNAUTHENTICATED."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Attempt limit or state conflict. ApiErrorCode CONFLICT."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid input or purpose-bound proof. ApiErrorCode INVALID_INPUT."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Internal service error. ApiErrorCode INTERNAL_ERROR."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication unavailable. ApiErrorCode SERVICE_UNAVAILABLE."
+          }
+        },
+        "summary": "Revoke the restricted session without changing ordinary login"
+      }
+    },
+    "/v1/community/auth/appeals/verify": {
+      "post": {
+        "operationId": "verifyAppealSignInChallenge",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthVerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Server-only short-lived appeal grant; no ordinary session is issued."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Generic invalid credentials. ApiErrorCode UNAUTHENTICATED."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Attempt limit or state conflict. ApiErrorCode CONFLICT."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid input or purpose-bound proof. ApiErrorCode INVALID_INPUT."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Internal service error. ApiErrorCode INTERNAL_ERROR."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication unavailable. ApiErrorCode SERVICE_UNAVAILABLE."
+          }
+        },
+        "summary": "Verify a sign-in challenge for restricted case access"
+      }
+    },
     "/v1/community/auth/capabilities": {
       "get": {
-        "description": "Server-owned email and phone availability. A client cannot enable simulation or live delivery. Production does not mount this route in this task.",
+        "description": "Server-owned channel and registration capabilities, invitation requirement and approved agreement. A client cannot enable registration, simulation or live delivery. Production requires explicit server configuration.",
         "operationId": "getAuthCapabilities",
         "responses": {
           "200": {
@@ -34364,7 +36303,7 @@
     },
     "/v1/community/auth/passwords/login": {
       "post": {
-        "description": "Existing same-origin relay receives a server-only Session grant and sets HttpOnly Cookie. Production mounting is unchanged. Missing credentials and wrong passwords have the same response.",
+        "description": "The same-origin relay receives a server-only Session grant and sets an HttpOnly Cookie. Runtime capabilities select supported identifiers, including explicitly enabled provisioned handles. Missing credentials and wrong passwords have the same response.",
         "operationId": "passwordSignIn",
         "requestBody": {
           "content": {
@@ -34428,10 +36367,10 @@
                 }
               }
             },
-            "description": "Development auth unavailable. ApiErrorCode SERVICE_UNAVAILABLE."
+            "description": "Authentication unavailable. ApiErrorCode SERVICE_UNAVAILABLE."
           }
         },
-        "summary": "Development password sign-in for an existing public account"
+        "summary": "Password sign-in for an existing public account"
       }
     },
     "/v1/community/auth/passwords/reset": {
@@ -34507,7 +36446,7 @@
                 }
               }
             },
-            "description": "Development auth unavailable. ApiErrorCode SERVICE_UNAVAILABLE."
+            "description": "Authentication unavailable. ApiErrorCode SERVICE_UNAVAILABLE."
           }
         },
         "summary": "Consume a password_reset proof and replace an existing account's password"
@@ -35529,6 +37468,196 @@
             "session": []
           }
         ]
+      }
+    },
+    "/v1/community/decisions": {
+      "get": {
+        "description": "Private, no-store. Reporter reads expose only their own report and evidence. Affected users read only their decision, appeal and deliberately forwarded material. Restricted appeal sessions cannot create reports or add reporter supplements. Request identities are bound to the authenticated account.",
+        "operationId": "listOwnReportingDecisions",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "maximum": 100000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pageSize",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityReportingDecisionPage"
+                }
+              }
+            },
+            "description": "Committed private result"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "A valid session is required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unavailable or foreign-owned case or evidence"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Case changed or request identity was reused"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid bounded input or forbidden target/action"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Infrastructure is unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "tags": ["CommunityReporting"]
+      }
+    },
+    "/v1/community/decisions/{decisionId}/appeals": {
+      "post": {
+        "description": "Private, no-store. Reporter reads expose only their own report and evidence. Affected users read only their decision, appeal and deliberately forwarded material. Restricted appeal sessions cannot create reports or add reporter supplements. Request identities are bound to the authenticated account.",
+        "operationId": "appealReportingDecision",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "decisionId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommunityReportAppealRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityReportingDecision"
+                }
+              }
+            },
+            "description": "Committed private result"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "A valid session is required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unavailable or foreign-owned case or evidence"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Case changed or request identity was reused"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid bounded input or forbidden target/action"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Infrastructure is unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "tags": ["CommunityReporting"]
       }
     },
     "/v1/community/discover": {
@@ -36838,6 +38967,102 @@
             "session": []
           }
         ]
+      }
+    },
+    "/v1/community/feedback": {
+      "post": {
+        "description": "Requires a valid account session and x-author-account equal to that account. Saves trimmed text and up to three ready private feedback-purpose images atomically before returning the receipt. Images must be static, uploaded through a no-work temporary publishing session with purpose feedback, and at most 10 MiB each. Retry the same submissionId, message and ordered imageIds to recover the same receipt; changing text or images under the same identity returns CONFLICT. Accepts no query parameters. No public feedback read route exists.",
+        "operationId": "submitFeedback",
+        "parameters": [
+          {
+            "description": "The authenticated account; omission or mismatch rejects. This header does not authorize a request.",
+            "in": "header",
+            "name": "x-author-account",
+            "required": true,
+            "schema": {
+              "pattern": "^user-[0-9a-f]{32}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitFeedbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackReceipt"
+                }
+              }
+            },
+            "description": "Saved feedback receipt"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unexpected query; error code INVALID_QUERY."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid session or missing/mismatched account header; error code UNAUTHENTICATED."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Submission identity already used; error code CONFLICT."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid feedback body; error code INVALID_INPUT."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Feedback store unavailable; error code SERVICE_UNAVAILABLE."
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Submit private feedback from settings"
       }
     },
     "/v1/community/filter-options": {
@@ -42035,6 +44260,833 @@
             "session": []
           }
         ]
+      }
+    },
+    "/v1/community/reporting-inbox": {
+      "get": {
+        "description": "Private, no-store. Reporter reads expose only their own report and evidence. Affected users read only their decision, appeal and deliberately forwarded material. Restricted appeal sessions cannot create reports or add reporter supplements. Request identities are bound to the authenticated account.",
+        "operationId": "readReportingInbox",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityReportingInbox"
+                }
+              }
+            },
+            "description": "Committed private result"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "A valid session is required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unavailable or foreign-owned case or evidence"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Case changed or request identity was reused"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid bounded input or forbidden target/action"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Infrastructure is unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "tags": ["CommunityReporting"]
+      }
+    },
+    "/v1/community/reporting-inbox/{messageId}/read": {
+      "post": {
+        "description": "Private, no-store. Reporter reads expose only their own report and evidence. Affected users read only their decision, appeal and deliberately forwarded material. Restricted appeal sessions cannot create reports or add reporter supplements. Request identities are bound to the authenticated account.",
+        "operationId": "markReportingMessageRead",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "messageId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportingReadResult"
+                }
+              }
+            },
+            "description": "Committed private result"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "A valid session is required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unavailable or foreign-owned case or evidence"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Case changed or request identity was reused"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid bounded input or forbidden target/action"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Infrastructure is unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "tags": ["CommunityReporting"]
+      }
+    },
+    "/v1/community/reports": {
+      "get": {
+        "description": "Private, no-store. Reporter reads expose only their own report and evidence. Affected users read only their decision, appeal and deliberately forwarded material. Restricted appeal sessions cannot create reports or add reporter supplements. Request identities are bound to the authenticated account.",
+        "operationId": "listOwnReports",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "maximum": 100000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pageSize",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityReportPage"
+                }
+              }
+            },
+            "description": "Committed private result"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "A valid session is required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unavailable or foreign-owned case or evidence"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Case changed or request identity was reused"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid bounded input or forbidden target/action"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Infrastructure is unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "tags": ["CommunityReporting"]
+      },
+      "post": {
+        "description": "Private, no-store. Reporter reads expose only their own report and evidence. Affected users read only their decision, appeal and deliberately forwarded material. Restricted appeal sessions cannot create reports or add reporter supplements. Request identities are bound to the authenticated account.",
+        "operationId": "createReport",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCommunityReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityReport"
+                }
+              }
+            },
+            "description": "Committed private result"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "A valid session is required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unavailable or foreign-owned case or evidence"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Case changed or request identity was reused"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid bounded input or forbidden target/action"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Infrastructure is unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "tags": ["CommunityReporting"]
+      }
+    },
+    "/v1/community/reports/{caseId}": {
+      "get": {
+        "description": "Private, no-store. Reporter reads expose only their own report and evidence. Affected users read only their decision, appeal and deliberately forwarded material. Restricted appeal sessions cannot create reports or add reporter supplements. Request identities are bound to the authenticated account.",
+        "operationId": "readOwnReport",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "caseId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityReport"
+                }
+              }
+            },
+            "description": "Committed private result"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "A valid session is required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unavailable or foreign-owned case or evidence"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Case changed or request identity was reused"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid bounded input or forbidden target/action"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Infrastructure is unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "tags": ["CommunityReporting"]
+      }
+    },
+    "/v1/community/reports/{caseId}/evidence": {
+      "post": {
+        "description": "Private, no-store. Reporter reads expose only their own report and evidence. Affected users read only their decision, appeal and deliberately forwarded material. Restricted appeal sessions cannot create reports or add reporter supplements. Request identities are bound to the authenticated account.",
+        "operationId": "uploadPrivateReportEvidence",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "caseId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommunityReportEvidenceUploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityReportEvidence"
+                }
+              }
+            },
+            "description": "Committed private result"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "A valid session is required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unavailable or foreign-owned case or evidence"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Case changed or request identity was reused"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid bounded input or forbidden target/action"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Infrastructure is unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "tags": ["CommunityReporting"]
+      }
+    },
+    "/v1/community/reports/{caseId}/evidence/{evidenceId}": {
+      "get": {
+        "description": "Private, no-store. Reporter reads expose only their own report and evidence. Affected users read only their decision, appeal and deliberately forwarded material. Restricted appeal sessions cannot create reports or add reporter supplements. Request identities are bound to the authenticated account.",
+        "operationId": "readPrivateReportEvidence",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "caseId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "evidenceId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Private authenticated attachment with nosniff and no-store"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "A valid session is required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unavailable or foreign-owned case or evidence"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Case changed or request identity was reused"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid bounded input or forbidden target/action"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Infrastructure is unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "tags": ["CommunityReporting"]
+      }
+    },
+    "/v1/community/reports/{caseId}/materials": {
+      "post": {
+        "description": "Private, no-store. Reporter reads expose only their own report and evidence. Affected users read only their decision, appeal and deliberately forwarded material. Restricted appeal sessions cannot create reports or add reporter supplements. Request identities are bound to the authenticated account.",
+        "operationId": "supplementOwnReport",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "caseId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommunityReportMaterialRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityReport"
+                }
+              }
+            },
+            "description": "Committed private result"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "A valid session is required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unavailable or foreign-owned case or evidence"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Case changed or request identity was reused"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid bounded input or forbidden target/action"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Infrastructure is unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "tags": ["CommunityReporting"]
+      }
+    },
+    "/v1/community/reports/{caseId}/statements": {
+      "post": {
+        "description": "Private, no-store. Reporter reads expose only their own report and evidence. Affected users read only their decision, appeal and deliberately forwarded material. Restricted appeal sessions cannot create reports or add reporter supplements. Request identities are bound to the authenticated account.",
+        "operationId": "submitRightsStatement",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "caseId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommunityReportMaterialRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityReportingDecision"
+                }
+              }
+            },
+            "description": "Committed private result"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "A valid session is required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unavailable or foreign-owned case or evidence"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Case changed or request identity was reused"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid bounded input or forbidden target/action"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Infrastructure is unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "tags": ["CommunityReporting"]
       }
     },
     "/v1/community/threads": {

@@ -21,6 +21,10 @@ import {
   PostgresAuthoredArticleCatalogMediaResolver,
   authoredArticleCatalogPairKey,
 } from "@moya/catalog-postgres";
+import {
+  CatalogMediaResolutionError,
+  isCatalogMediaResolutionError,
+} from "@moya/api";
 const owner = `user-${"1".repeat(32)}` as PublicUserId;
 const id = (digit: string) => `media-item-${digit.repeat(32)}`;
 const legacy = `user-media-${"9".repeat(32)}`;
@@ -222,13 +226,17 @@ describe("published Catalog exact-pair media composition", () => {
     ];
     const result = await resolver.resolveCatalog(pairs as never);
     expect(resolveMany).toHaveBeenCalledOnce();
-    expect(query.mock.calls[1]?.[1]).toEqual([JSON.stringify(pairs)]);
+    // The pairs, and their media ids once each as the view restriction.
+    expect(query.mock.calls[1]?.[1]).toEqual([
+      JSON.stringify(pairs),
+      ["media-a", "media-b"],
+    ]);
     expect(result.size).toBe(2);
     expect(JSON.stringify([...result.values()])).not.toContain("objectKey");
     expect(release).toHaveBeenCalledOnce();
   });
   it("keeps the same legacy MediaId with different Catalog object keys in distinct batches", async () => {
-    const { pool } = database([
+    const { pool, query } = database([
       catalogRow("catalog-a", "media-same", "synthetic/a.webp"),
       catalogRow("catalog-b", "media-same", "synthetic/b.webp"),
     ]);
@@ -248,6 +256,8 @@ describe("published Catalog exact-pair media composition", () => {
       { catalogId: "catalog-b", mediaId: "media-same" },
     ] as never);
     expect(resolveMany).toHaveBeenCalledTimes(2);
+    // The view restriction names a media id once, whatever its records.
+    expect(query.mock.calls[1]?.[1]?.[1]).toEqual(["media-same"]);
     expect(
       result.get(authoredArticleCatalogPairKey("catalog-a", "media-same"))?.src,
     ).toMatch(/\/a\.webp$/u);
@@ -271,6 +281,45 @@ describe("published Catalog exact-pair media composition", () => {
       ).size,
     ).toBe(0);
     expect(resolveMany).not.toHaveBeenCalled();
+  });
+  // catalog-delivery-release-hardening-v1 (F9): a failed rendition-fact lookup
+  // is a media resolution failure (the documented 503), like a URL failure,
+  // never a raw error that the editorial handler answers with a 500.
+  it("rejects rendition-fact failures through the same Catalog media failure boundary", async () => {
+    const passedThrough = new CatalogMediaResolutionError();
+    for (const failure of [
+      new Error("Catalog published source incomplete"),
+      Object.assign(new Error("synthetic connection terminated"), {
+        code: "57P01",
+      }),
+      passedThrough,
+    ]) {
+      const { pool, release } = database([
+        catalogRow("catalog-a", "media-a", "synthetic/a.webp"),
+      ]);
+      const resolveMany = vi.fn(async () => new Map());
+      const error = await new PostgresAuthoredArticleCatalogMediaResolver(
+        pool,
+        {
+          resolveMany,
+          catalogFacts: async () => {
+            throw failure;
+          },
+        },
+      )
+        .resolveCatalog([
+          { catalogId: "catalog-a", mediaId: "media-a" },
+        ] as never)
+        .then(
+          () => undefined,
+          (rejected: unknown) => rejected,
+        );
+      expect(isCatalogMediaResolutionError(error)).toBe(true);
+      if (failure === passedThrough) expect(error).toBe(passedThrough);
+      else expect((error as Error).cause).toBe(failure);
+      expect(resolveMany).not.toHaveBeenCalled();
+      expect(release).toHaveBeenCalledOnce();
+    }
   });
   it("rejects URL failures through the existing Catalog media failure boundary", async () => {
     const { pool } = database([

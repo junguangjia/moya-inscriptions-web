@@ -238,11 +238,13 @@ const partialAnswerMatches = (
  * viewer that stops reading and an overlong response are cut off; a viewer
  * that goes away cancels the Backend request, before or after its headers.
  */
-export const openCommunityOperatorMedia: OperatorMediaCall = async (
-  path,
-  range,
-  signal,
-) => {
+const openOperatorBinary = async (
+  path: string,
+  range: string | null,
+  signal: AbortSignal | undefined,
+  allowedTypes: ReadonlySet<string>,
+  maximumBytes: number,
+): Promise<OperatorMediaResponse> => {
   const url = new URL(`internal/community/${path}`, operatorBaseUrl());
   const token = operatorToken();
   const controller = new AbortController();
@@ -284,7 +286,7 @@ export const openCommunityOperatorMedia: OperatorMediaCall = async (
       redirect: "error",
       signal: controller.signal,
       headers: {
-        Accept: [...OPERATOR_MEDIA_TYPES].join(", "),
+        Accept: [...allowedTypes].join(", "),
         "Accept-Encoding": "identity",
         Authorization: `Bearer ${token}`,
         ...(range === null ? {} : { Range: range }),
@@ -325,21 +327,17 @@ export const openCommunityOperatorMedia: OperatorMediaCall = async (
   const source = response.body;
   if (
     (response.status !== 200 && response.status !== 206) ||
-    !OPERATOR_MEDIA_TYPES.has(contentType) ||
+    !allowedTypes.has(contentType) ||
     encoding !== "identity" ||
     source === null ||
     (declaredLength !== null && contentLength === null) ||
-    (contentLength !== null &&
-      Number(contentLength) > OPERATOR_MEDIA_MAXIMUM_BYTES) ||
+    (contentLength !== null && Number(contentLength) > maximumBytes) ||
     (response.status === 206 &&
       !partialAnswerMatches(range, contentRange, contentLength))
   )
     throw refusal("OPERATOR_RESPONSE_INVALID", 502);
   // Never more than declared, and never more than the derivative bound.
-  const limit =
-    contentLength === null
-      ? OPERATOR_MEDIA_MAXIMUM_BYTES
-      : Number(contentLength);
+  const limit = contentLength === null ? maximumBytes : Number(contentLength);
   const backend = source.getReader();
   reader = backend;
   let relayed = 0;
@@ -396,3 +394,38 @@ export const openCommunityOperatorMedia: OperatorMediaCall = async (
     body,
   };
 };
+
+/** Existing publishing previews retain their derivative-only policy. */
+export const openCommunityOperatorMedia: OperatorMediaCall = (
+  path,
+  range,
+  signal,
+) =>
+  openOperatorBinary(
+    path,
+    range,
+    signal,
+    OPERATOR_MEDIA_TYPES,
+    OPERATOR_MEDIA_MAXIMUM_BYTES,
+  );
+
+/** Private report evidence is downloaded as an attachment, never embedded. */
+export const OPERATOR_EVIDENCE_TYPES: ReadonlySet<string> = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "application/pdf",
+]);
+export const OPERATOR_EVIDENCE_MAXIMUM_BYTES = 8 * 1024 * 1024;
+export const openCommunityOperatorEvidence: OperatorMediaCall = (
+  path,
+  range,
+  signal,
+) =>
+  openOperatorBinary(
+    path,
+    range,
+    signal,
+    OPERATOR_EVIDENCE_TYPES,
+    OPERATOR_EVIDENCE_MAXIMUM_BYTES,
+  );

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { operatorModerationReasonSchema } from "./moderation-reason.js";
 
 import {
   WORK_BODY_MAXIMUM,
@@ -209,13 +210,17 @@ export const workSubmissionModerationActionSchema = z.enum([
 
 /** The Backend command body; the revision id travels in the route. */
 export const moderateWorkSubmissionCommandSchema = z.strictObject({
+  reason: operatorModerationReasonSchema.optional(),
   requestId,
   action: workSubmissionModerationActionSchema,
   expectedVersion: version,
 });
 
 export const adminModerateWorkSubmissionRequestSchema =
-  moderateWorkSubmissionCommandSchema.extend({ id: workRevisionIdSchema });
+  moderateWorkSubmissionCommandSchema.extend({
+    reason: operatorModerationReasonSchema,
+    id: workRevisionIdSchema,
+  });
 
 export const adminReadWorkSubmissionRequestSchema = z.strictObject({
   id: workRevisionIdSchema,

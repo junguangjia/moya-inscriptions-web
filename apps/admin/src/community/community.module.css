@@ -937,3 +937,63 @@
   position: relative;
   z-index: 1;
 }
+
+/* Cases use the existing queue shell; only the case detail has local geometry. */
+.reportPanel {
+  max-height: none;
+  position: static;
+}
+.reportSection {
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid #e3e3e3;
+}
+.reportSection p {
+  margin: 0;
+}
+.reportText {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+.reportSnapshot {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.reportField {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.reportField textarea,
+.reportField select {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  border: 1px solid #cfcfcf;
+  border-radius: 6px;
+  font: inherit;
+  background: #fff;
+  color: #1a1a1a;
+}
+.reportMaterial,
+.reportConfirmation {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #cfcfcf;
+  border-radius: 6px;
+}
+.reportConfirmation {
+  background: #f7f7f7;
+}
+.reportHistory {
+  display: grid;
+  gap: 12px;
+  padding-left: 20px;
+}

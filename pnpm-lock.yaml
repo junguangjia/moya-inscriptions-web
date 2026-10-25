@@ -51,6 +51,12 @@ importers:
 
   apps/admin:
     dependencies:
+      '@aws-sdk/client-s3':
+        specifier: 3.1127.0
+        version: 3.1127.0
+      '@aws-sdk/s3-request-presigner':
+        specifier: 3.1127.0
+        version: 3.1127.0
       '@moya/api':
         specifier: workspace:*
         version: link:../../services/api

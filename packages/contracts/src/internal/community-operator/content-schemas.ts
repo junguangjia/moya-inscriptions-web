@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { operatorModerationReasonSchema } from "./moderation-reason.js";
 import {
   contentIdentitySchema,
   catalogCommentIdSchema,
@@ -98,11 +99,13 @@ export const operatorWorkPageSchema = z.strictObject({
   pageSize: z.number().int().positive(),
 });
 export const moderateWorkCommandSchema = z.strictObject({
+  reason: operatorModerationReasonSchema.optional(),
   requestId: z.uuid(),
   state: z.enum(["visible", "hidden", "removed"]),
   expectedVersion: version,
 });
 export const adminModerateWorkRequestSchema = moderateWorkCommandSchema.extend({
+  reason: operatorModerationReasonSchema,
   id: workId,
 });
 export const featuredMutationSchema = z.strictObject({
@@ -183,15 +186,21 @@ export const featuredPageSchema = z.strictObject({
   enabledQuantity: position.nullable(),
   settingsVersion: version,
 });
-export const operatorDeleteBodySchema = z.strictObject({ requestId: z.uuid() });
+export const operatorDeleteBodySchema = z.strictObject({
+  requestId: z.uuid(),
+  reason: operatorModerationReasonSchema.optional(),
+});
 export const operatorRemoveThreadSchema = z.strictObject({
+  reason: operatorModerationReasonSchema.optional(),
   requestId: z.uuid(),
   expectedAffectedCount: z.number().int().positive(),
 });
 export const adminDeleteBodySchema = operatorDeleteBodySchema.extend({
+  reason: operatorModerationReasonSchema,
   id: catalogCommentIdSchema.refine((id) => /^comment-[0-9a-f]{32}$/u.test(id)),
 });
 export const adminRemoveThreadSchema = operatorRemoveThreadSchema.extend({
+  reason: operatorModerationReasonSchema,
   id: catalogCommentIdSchema.refine((id) => /^comment-[0-9a-f]{32}$/u.test(id)),
 });
 export type OperatorContentQuery = z.infer<typeof operatorContentQuerySchema>;

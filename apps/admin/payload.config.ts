@@ -22,6 +22,7 @@ import { agentConnectionAuthenticateHeader } from "./src/agent-connections/disco
 import { communityEndpoints } from "./src/community/endpoints";
 import { analyticsEndpoints } from "./src/analytics/endpoints";
 import { editorialMcp } from "./src/mcp";
+import { createCatalogIngestEndpoints } from "./src/media/catalog-ingest";
 import { createMediaCollection } from "./src/media/collection";
 import { createResumableMediaEndpoints } from "./src/media/resumable-upload";
 import { createEditorialStoragePlugin } from "./src/media/storage";
@@ -34,11 +35,19 @@ import { adminPreviewURL, editorialPreviewEndpoint } from "./src/preview";
 import {
   cmsDatabasePool,
   assertCmsProductionEnvironment,
+  catalogDirectPublishEnabled,
+  catalogIngestEnabled,
   cmsRuntimeLogFields,
   requiredSetting,
 } from "./src/runtime-settings";
 assertCmsProductionEnvironment();
+// Read at publish time; checked here so an invalid value refuses to load.
+catalogDirectPublishEnabled();
 const dirname = path.dirname(fileURLToPath(import.meta.url));
+// A relative value, as in the local template, names a directory relative to
+// the Admin workspace the process starts in, exactly as Payload already reads
+// a relative upload directory. One absolute path serves every consumer.
+const mediaDirectory = path.resolve(requiredSetting("CMS_MEDIA_DIR"));
 export default buildConfig({
   secret: requiredSetting("CMS_SECRET"),
   admin: {
@@ -79,6 +88,16 @@ export default buildConfig({
           path: "/community-moderation",
           exact: true,
         },
+        communityReports: {
+          Component: "/src/community/View#CommunityReportsView",
+          path: "/community-moderation/reports",
+          exact: true,
+        },
+        communityAppeals: {
+          Component: "/src/community/View#CommunityAppealsView",
+          path: "/community-moderation/appeals",
+          exact: true,
+        },
         // content-community-completion-v1: Threads over Works (Development).
         communityThreads: {
           Component: "/src/community/View#ThreadsView",
@@ -98,6 +117,11 @@ export default buildConfig({
         communityContent: {
           Component: "/src/community/View#CommunityContentView",
           path: "/community-moderation/content",
+          exact: true,
+        },
+        communityFeedback: {
+          Component: "/src/community/View#CommunityFeedbackView",
+          path: "/community-moderation/feedback",
           exact: true,
         },
         communityHistory: {
@@ -227,7 +251,7 @@ export default buildConfig({
       read: ({ req }) => catalogScopeAccess(req),
       canWrite: canEditCatalog,
       canRegister: isOwner,
-      localDirectory: requiredSetting("CMS_MEDIA_DIR"),
+      localDirectory: mediaDirectory,
     }),
     EditorialIdentities,
     EditorialApprovals,
@@ -241,11 +265,23 @@ export default buildConfig({
     ...editorialEndpoints,
     ...createResumableMediaEndpoints({
       directory: path.join(
-        path.dirname(requiredSetting("CMS_MEDIA_DIR")),
+        path.dirname(mediaDirectory),
         "editorial-upload-sessions",
       ),
-      mediaDirectory: requiredSetting("CMS_MEDIA_DIR"),
+      mediaDirectory,
     }),
+    // Catalog ingest: empty unless CMS_CATALOG_INGEST=on, so the routes do
+    // not exist (404) when it is off. Its settings and storage clients are
+    // read on the first request, never while the config loads.
+    ...(catalogIngestEnabled()
+      ? createCatalogIngestEndpoints({
+          mediaDirectory,
+          stagingDirectory: path.join(
+            path.dirname(mediaDirectory),
+            "editorial-ingest-staging",
+          ),
+        })
+      : []),
     ...communityEndpoints,
     ...analyticsEndpoints,
     // Empty unless the connection surface is composed at all; the gate is the

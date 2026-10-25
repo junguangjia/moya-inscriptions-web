@@ -2,7 +2,9 @@ import { readFile } from "node:fs/promises";
 
 import {
   analyticsJsonSchemas,
+  reportingJsonSchemas,
   authJsonSchemas,
+  feedbackJsonSchemas,
   authorCommunityJsonSchemas,
   workPublishingJsonSchemas,
   articleAuthoringJsonSchemas,
@@ -115,8 +117,29 @@ const articleAuthoringMethods: Record<string, string[]> = {
   "/v1/community/article-authoring/approvals": ["post"],
 };
 
+/** Approved authenticated reporting and restricted appeal bootstrap additions (#326). */
+const reportingMethods: Record<string, string[]> = {
+  "/v1/community/reports": ["get", "post"],
+  "/v1/community/reports/{caseId}": ["get"],
+  "/v1/community/reports/{caseId}/materials": ["post"],
+  "/v1/community/reports/{caseId}/statements": ["post"],
+  "/v1/community/reports/{caseId}/evidence": ["post"],
+  "/v1/community/reports/{caseId}/evidence/{evidenceId}": ["get"],
+  "/v1/community/decisions": ["get"],
+  "/v1/community/decisions/{decisionId}/appeals": ["post"],
+  "/v1/community/reporting-inbox": ["get"],
+  "/v1/community/reporting-inbox/{messageId}/read": ["post"],
+};
+const appealAuthMethods: Record<string, string[]> = {
+  "/v1/community/auth/appeals/login": ["post"],
+  "/v1/community/auth/appeals/challenges": ["post"],
+  "/v1/community/auth/appeals/verify": ["post"],
+  "/v1/community/auth/appeals/session": ["get"],
+  "/v1/community/auth/appeals/sign-out": ["post"],
+};
+
 describe("inscription-first OpenAPI 3.1.1 contract", () => {
-  it("contains exactly the approved Catalog, Community V1, Phase 4 and work publishing routes", () => {
+  it("contains exactly the approved Catalog, community, publishing, reporting and appeal routes", () => {
     expect(openApiDocument.openapi).toBe("3.1.1");
     expect(openApiDocument.jsonSchemaDialect).toBe(
       "https://json-schema.org/draft/2020-12/schema",
@@ -134,6 +157,7 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
         "/v1/catalog-search",
         "/v1/me",
         "/v1/community/access",
+        "/v1/community/feedback",
         "/v1/community/discover",
         "/v1/community/filter-options",
         "/v1/community/content/{type}/{id}/card",
@@ -190,6 +214,8 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
         "/v1/community/messages/{conversationId}/unmute",
         "/v1/community/messages/{conversationId}/read",
         ...Object.keys(publishingMethods),
+        ...Object.keys(reportingMethods),
+        ...Object.keys(appealAuthMethods),
         "/v1/community/article-authoring",
         "/v1/community/article-authoring/media",
         "/v1/community/article-authoring/{articleId}",
@@ -231,6 +257,7 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
       "/v1/catalog/{catalogId}/comments/{commentId}/replies",
     ]);
     const authorMethods: Record<string, string[]> = {
+      "/v1/community/feedback": ["post"],
       "/v1/community/notifications": ["get"],
       "/v1/community/notifications/read": ["post"],
       "/v1/community/notifications/stream": ["get"],
@@ -289,6 +316,8 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
       "/v1/community/messages/{conversationId}/read": ["post"],
       ...publishingMethods,
       ...articleAuthoringMethods,
+      ...reportingMethods,
+      ...appealAuthMethods,
     };
     for (const [name, pathItem] of Object.entries(paths)) {
       expect(Object.keys(asObject(pathItem))).toEqual(
@@ -528,6 +557,55 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
     expect(schemas.CatalogId).toEqual(catalogIdJsonSchema);
   });
 
+  it("keeps reporting authenticated and excludes staff identity, claimant and storage fields", () => {
+    for (const name of Object.keys(reportingMethods)) {
+      for (const operation of Object.values(asObject(paths[name])))
+        expect(asObject(operation).security).toEqual([{ session: [] }]);
+    }
+    const reportProperties = Object.keys(
+      asObject(asObject(schemas.CommunityReport).properties),
+    );
+    for (const privateField of [
+      "reporterId",
+      "affectedUserId",
+      "claimant",
+      "snapshot",
+      "history",
+      "legalHold",
+      "allowedActions",
+    ])
+      expect(reportProperties).not.toContain(privateField);
+    const evidenceProperties = Object.keys(
+      asObject(asObject(schemas.CommunityReportEvidence).properties),
+    );
+    expect(evidenceProperties).toEqual([
+      "id",
+      "fileName",
+      "mimeType",
+      "size",
+      "sensitive",
+      "createdAt",
+      "downloadPath",
+    ]);
+    for (const forbidden of ["objectKey", "bucket", "storageKey", "sha256"])
+      expect(evidenceProperties).not.toContain(forbidden);
+    const binary = asObject(
+      asObject(
+        getOperation("/v1/community/reports/{caseId}/evidence/{evidenceId}")
+          .responses,
+      )["200"],
+    );
+    expect(Object.keys(asObject(binary.content)).sort()).toEqual([
+      "application/pdf",
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+    ]);
+    expect(getOperation("/v1/community/auth/appeals/session").security).toEqual(
+      [{ session: [] }],
+    );
+  });
+
   it("uses only contract-derived public components", () => {
     // Embedding changes only each component's local definition location.
     const standalone = JSON.parse(
@@ -542,8 +620,10 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
     ) as unknown;
     expect(standalone).toEqual({
       ...analyticsJsonSchemas,
+      ...reportingJsonSchemas,
       ...authorCommunityJsonSchemas,
       ...authJsonSchemas,
+      ...feedbackJsonSchemas,
       ...workPublishingJsonSchemas,
       ...articleAuthoringJsonSchemas,
       CatalogId: catalogIdJsonSchema,
@@ -681,6 +761,8 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
       ...Object.keys(authJsonSchemas),
       ...Object.keys(workPublishingJsonSchemas),
       ...Object.keys(articleAuthoringJsonSchemas),
+      // Issue #326 authenticated reporting vocabulary is not Catalog curation data.
+      ...Object.keys(reportingJsonSchemas),
     ]);
     const serialized = JSON.stringify({
       paths: Object.fromEntries(

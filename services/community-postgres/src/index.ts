@@ -2,6 +2,7 @@ export { PostgresCommunityIdentityAdapter } from "./adapter.js";
 export { PostgresArticleAuthoringAdapter } from "./article-authoring/postgres-article-authoring-adapter.js";
 export type { PostgresArticleAuthoringOptions } from "./article-authoring/postgres-article-authoring-adapter.js";
 export { PostgresCommunityAuthAdapter } from "./auth-adapter.js";
+export { createPostgresBetaAccountAccess } from "./beta-account-access.js";
 export { asCommunityOperationError } from "./availability.js";
 export { PostgresCommunityCommentAdapter } from "./comment-adapter.js";
 export {
@@ -32,9 +33,84 @@ export { PostgresWorkPublishingAdapter } from "./work-publishing-adapter.js";
 export {
   synchronizeCatalogDeliveryIntents,
   parseCatalogPrepareRows,
+  partitionCatalogPrepareRows,
   inspectCatalogDelivery,
   readCatalogDeliveryProjection,
 } from "./publishing/catalog-delivery-intents.js";
+// catalog-scale-v1 (W9/W10): the render tiers, the queue's backlog for the
+// later pacing, and render grace (R as the App reads it, G's margin inside
+// it, the render-only reference and the sync's grace members).
+export {
+  CATALOG_PREPARE_RETENTION_HOURS,
+  CATALOG_RENDER_GRACE_MARGIN_HOURS,
+  catalogRenderGraceReferenceSql,
+  catalogRenderGraceSourcesSql,
+} from "./publishing/catalog-delivery-intents.js";
+export {
+  CATALOG_RENDER_TIERS,
+  catalogRenderBacklogWriteSql,
+  readCatalogRenderBacklog,
+} from "./publishing/catalog-assets.js";
+export type {
+  CatalogRenderBacklog,
+  CatalogRenderTier,
+} from "./publishing/catalog-assets.js";
+// catalog-scale-v1 (W3): the one ceiling of a complete Catalog snapshot,
+// shared by the worker's cursor reads and the store's bounds.
+export {
+  CATALOG_SNAPSHOT_FETCH_ROWS,
+  CATALOG_SNAPSHOT_MAX_PRIVATE_ROWS,
+  CATALOG_SNAPSHOT_MAX_SOURCES,
+  CATALOG_SNAPSHOT_WARN_RATIO,
+  nearCatalogSnapshotCeiling,
+  readCatalogSnapshotCursor,
+} from "./publishing/catalog-snapshot-ceiling.js";
+// catalog-scale-v1 (W7/W8): the one writer of the scoped reconcile's dirty
+// queue (its mark, its consumers' lock and the lock order every writer
+// keeps) and the per-minute membership fingerprints (App migration A1's two
+// tables).
+export {
+  CATALOG_MEMBERSHIP_FIRST_WINDOW_MINUTES,
+  CATALOG_PUBLICATION_DIRTY_REASONS,
+  CATALOG_RENDER_GRACE_HOURS,
+  CatalogReconcileStateMissingError,
+  applyCatalogMembership,
+  catalogIntentAssetsSql,
+  catalogMembershipBoundariesSql,
+  catalogMembershipBuckets,
+  catalogMembershipChanged,
+  catalogMembershipHashSql,
+  catalogMembershipHoldsSql,
+  catalogMembershipStateSql,
+  catalogMembershipStore,
+  catalogMembershipTotal,
+  catalogMirrorStatesSql,
+  catalogPrivateMembershipAppBucketsSql,
+  catalogPrivateMembershipAppMembersSql,
+  catalogPublicMembershipAppBucketsSql,
+  catalogPublicMembershipAppMembersSql,
+  catalogPublicationDirtyLockSql,
+  catalogPublicationDirtyMarkSql,
+  differingCatalogMembershipBuckets,
+  lockCatalogPublicationDirty,
+  markCatalogPublicationDirty,
+  readCatalogMembershipAppBuckets,
+  readCatalogMembershipHolds,
+  readCatalogMembershipState,
+} from "./publishing/catalog-publication-dirty.js";
+export type {
+  CatalogMembershipBucket,
+  CatalogMembershipBuckets,
+  CatalogMembershipFingerprint,
+  CatalogMembershipIntent,
+  CatalogMembershipMarks,
+  CatalogMembershipObservation,
+  CatalogMembershipSide,
+  CatalogMembershipState,
+  CatalogMirrorState,
+  CatalogPublicationDirtyMark,
+  CatalogPublicationDirtyReason,
+} from "./publishing/catalog-publication-dirty.js";
 // unified-media-pipeline-v1: the recorded form of rendition recipe
 // identities (the registry itself lives with the processor) and the D7 hold.
 export {
@@ -196,3 +272,6 @@ export {
 export type { PublicationSyncOptions } from "./publishing/publication-sync.js";
 
 export { PostgresAnalyticsAdapter } from "./analytics-adapter.js";
+
+export { PostgresCommunityReportingAdapter } from "./reporting-adapter.js";
+export { PostgresFeedbackAdapter } from "./feedback-adapter.js";

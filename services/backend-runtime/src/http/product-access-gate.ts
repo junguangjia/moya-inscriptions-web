@@ -23,12 +23,12 @@ import type {
 export interface ProductAccessPolicy {
   readonly mode: ProductAccess["mode"];
   /** Asked on every protected request, so a change applies to sessions that already exist. */
-  admits(userId: string): boolean;
+  admits(userId: string): Promise<boolean>;
 }
 
 export const publicProductAccess: ProductAccessPolicy = Object.freeze({
   mode: "public",
-  admits: () => true,
+  admits: async () => true,
 });
 
 type SessionIdentity = Pick<CommunitySessionService, "identify">;
@@ -46,7 +46,7 @@ export const admittedSessions = (
     : {
         identify: async (token) => {
           const user = await sessions.identify(token);
-          return user !== null && policy.admits(user.id) ? user : null;
+          return user !== null && (await policy.admits(user.id)) ? user : null;
         },
       };
 
@@ -74,6 +74,11 @@ const openAuthOperations: ReadonlySet<string> = new Set([
   "POST passwords/reset",
   "POST registrations",
   "POST sign-out",
+  "POST appeals/login",
+  "POST appeals/challenges",
+  "POST appeals/verify",
+  "GET appeals/session",
+  "POST appeals/sign-out",
 ]);
 /** The Owner's operator boundary answers only to its own credential. */
 const operatorPrefix = "/internal/community/";
@@ -92,6 +97,19 @@ export const productRouteAuthority = (
     openAuthOperations.has(`${method} ${pathname.slice(authPrefix.length)}`)
   )
     return "open";
+  // These operations have a separate case-owner/appeal-session boundary.
+  // Opening their outer beta gate never grants ordinary community access.
+  if (
+    (method === "GET" &&
+      /^\/v1\/community\/(?:decisions(?:\/[^/]+)?|reports\/[^/]+(?:\/evidence\/[^/]+)?)$/u.test(
+        pathname,
+      )) ||
+    (method === "POST" &&
+      /^\/v1\/community\/(?:decisions\/[^/]+\/appeals|reports\/[^/]+\/(?:statements|evidence))$/u.test(
+        pathname,
+      ))
+  )
+    return "boundary";
   if (pathname.startsWith(operatorPrefix) || delegatedPaths.has(pathname))
     return "boundary";
   return "session";
@@ -128,7 +146,7 @@ export const createProductAccessGate = (
       return "sign_in_required";
     const user = await sessions.identify(token);
     if (user === null) return "sign_in_required";
-    return policy.admits(user.id) ? "granted" : "restricted";
+    return (await policy.admits(user.id)) ? "granted" : "restricted";
   };
 
   const refuse = (

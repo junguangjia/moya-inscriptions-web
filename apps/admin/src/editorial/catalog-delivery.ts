@@ -2,8 +2,11 @@ import { randomUUID } from "node:crypto";
 
 import {
   cancelCatalogDeliverySchema,
+  catalogDeliveryCapabilitiesRequestSchema,
+  catalogDeliveryCapabilitiesSchema,
   catalogDeliveryManifestSchema,
   catalogDeliveryResultSchema,
+  catalogRenderBacklogAnswerSchema,
   prepareCatalogDeliverySchema,
   readCatalogDeliverySchema,
   releaseCatalogDeliverySchema,
@@ -11,6 +14,7 @@ import {
   type CatalogDeliveryMedia,
   type CatalogDeliveryResult,
   type CatalogDeliveryState,
+  type CatalogRenderBacklogAnswer,
   type EditorialDraft,
 } from "@moya/contracts/internal/editorial";
 import { sql } from "@payloadcms/db-postgres";
@@ -19,6 +23,9 @@ import type { PayloadRequest } from "payload";
 import { canEditCatalog, isOwner, requireActor } from "./access";
 import {
   catalogDeliveryReadiness,
+  catalogRenderBacklog,
+  probeCatalogDeliveryBackend,
+  readCatalogPublishedRenditions,
   readCatalogRecipePolicy,
   requireCatalogDeliveryBackend,
   readCatalogReadiness,
@@ -42,6 +49,7 @@ import {
   withEditorialTransaction,
 } from "./transaction";
 import { validateCatalogMedia } from "../media/validation";
+import { catalogDirectPublishEnabled } from "../runtime-settings";
 
 // Storage-only row shape, never an HTTP DTO. In particular, the persisted B
 // snapshot and source object keys are not returned by the five endpoints.
@@ -245,11 +253,14 @@ const currentDraft = async (req: PayloadRequest, row: IntentRow) => {
   return latest;
 };
 
-const manifestFor = async (req: PayloadRequest, content: EditorialDraft) => {
-  await validateCatalogMedia(req, content, { publishing: false });
+/** Registered source hashes of the selected media, read with the caller's access. */
+const sourceHashes = async (
+  req: PayloadRequest,
+  selected: readonly { mediaId: string }[],
+) => {
   const hashes = new Map<string, string>();
-  for (let offset = 0; offset < content.media.length; offset += 100) {
-    const slice = content.media.slice(offset, offset + 100);
+  for (let offset = 0; offset < selected.length; offset += 100) {
+    const slice = selected.slice(offset, offset + 100);
     const result = await req.payload.find({
       collection: "media",
       overrideAccess: false,
@@ -261,6 +272,12 @@ const manifestFor = async (req: PayloadRequest, content: EditorialDraft) => {
     });
     for (const media of result.docs) hashes.set(media.mediaId, media.sha256);
   }
+  return hashes;
+};
+
+const manifestFor = async (req: PayloadRequest, content: EditorialDraft) => {
+  await validateCatalogMedia(req, content, { publishing: false });
+  const hashes = await sourceHashes(req, content.media);
   return parse(
     catalogDeliveryManifestSchema,
     content.media.map((media) => ({
@@ -268,6 +285,28 @@ const manifestFor = async (req: PayloadRequest, content: EditorialDraft) => {
       sourceSha256: hashes.get(media.mediaId),
     })),
   );
+};
+
+/** The private processing snapshot (`catalogProcessingIntentSchema`) and the
+ * App `catalog_delivery_media_refs` CHECK bound each source edge at 65,535 px,
+ * while Admin accepts any upload up to 80 MP. A longer edge is refused here,
+ * before any intent is written, instead of becoming an undecodable intent.
+ */
+const CATALOG_DELIVERY_MAX_SOURCE_EDGE = 65_535;
+
+const assertCatalogDeliverySourceEdges = (
+  media: readonly Pick<CatalogDeliveryMedia, "width" | "height">[],
+) => {
+  if (
+    media.some(
+      ({ width, height }) =>
+        width > CATALOG_DELIVERY_MAX_SOURCE_EDGE ||
+        height > CATALOG_DELIVERY_MAX_SOURCE_EDGE,
+    )
+  )
+    throw new EditorialError("CATALOG_DELIVERY_SOURCE_TOO_LARGE", 422, [
+      "media",
+    ]);
 };
 
 export const prepareCatalogDelivery = async (
@@ -291,6 +330,8 @@ export const prepareCatalogDelivery = async (
     if (!canEditCatalog(req, content.catalogId))
       throw new EditorialError("RECORD_UNAVAILABLE", 404);
     const manifest = await manifestFor(req, content);
+    // manifestFor verified the registered dimensions; nothing is written yet.
+    assertCatalogDeliverySourceEdges(content.media);
     const manifestSha256 = requestFingerprint(manifest);
     const primary = await req.payload.findByID({
       collection: "catalogs",
@@ -527,16 +568,98 @@ export const invalidateCatalogDelivery = async (
   `);
 };
 
-export const assertCatalogDeliveryPublication = (
+/** Editorial originals are published by the release path, or when every one
+ * of them already has its complete, current and published rendition set (a
+ * text-only edit of a live record). Anything less still needs preparation,
+ * unless CMS_CATALOG_DIRECT_PUBLISH is on.
+ */
+export const assertCatalogDeliveryPublication = async (
   content: EditorialDraft,
   req?: PayloadRequest,
 ) => {
+  if (catalogDirectPublishEnabled()) return;
   if (
     req &&
     catalogDeliveryPublishProof(req)?.fingerprint ===
       contentFingerprint(content)
   )
     return;
-  if (content.media.some(({ objectKey }) => objectKey.startsWith("editorial/")))
-    throw new EditorialError("CATALOG_DELIVERY_PREPARATION_REQUIRED", 409);
+  const editorial = content.media.filter(({ objectKey }) =>
+    objectKey.startsWith("editorial/"),
+  );
+  if (!editorial.length) return;
+  if (req) {
+    const hashes = await sourceHashes(req, editorial);
+    const media = editorial.map(({ mediaId, objectKey }) => ({
+      mediaId,
+      objectKey,
+      sourceSha256: hashes.get(mediaId) ?? "",
+    }));
+    const proof = media.every(({ sourceSha256 }) =>
+      /^[a-f0-9]{64}$/.test(sourceSha256),
+    )
+      ? await readCatalogPublishedRenditions(media)
+      : null;
+    if (
+      proof &&
+      proof.media.length === media.length &&
+      media.every(
+        (item, index) =>
+          proof.media[index]!.mediaId === item.mediaId &&
+          proof.media[index]!.objectKey === item.objectKey &&
+          proof.media[index]!.complete,
+      )
+    )
+      return;
+  }
+  throw new EditorialError("CATALOG_DELIVERY_PREPARATION_REQUIRED", 409);
+};
+
+/** Release tooling's preflight before any write; it reads and changes nothing. */
+export const catalogDeliveryCapabilities = async (
+  req: PayloadRequest,
+  input: unknown,
+) => {
+  requireActor(req);
+  parse(catalogDeliveryCapabilitiesRequestSchema, input);
+  return catalogDeliveryCapabilitiesSchema.parse({
+    delivery: await probeCatalogDeliveryBackend(),
+  });
+};
+
+/** The pacing read of bulk Catalog work (catalog-scale-v1 I9, D5): the
+ * App's render backlog, plus the images of every delivery intent prepared
+ * since that count and still live or released, which only the worker's next
+ * sync pass queues. Counts only, over every Catalog: the render queue is one.
+ *
+ * An intent's created_at is its prepare transaction's start, and the count's
+ * time is the worker pass's start by the worker's clock. A prepare that began
+ * before the count can commit after the pass read its snapshot (it waits up
+ * to 5 s for each lock and 15 s for the recipe policy), and the CLI accepts a
+ * count up to 5 minutes ahead of its own clock. So every intent created from
+ * PREPARED_SINCE_MARGIN before the count is added: an intent the pass already
+ * held is counted twice for that long, which only slows a wave, and one is
+ * missed only if its prepare and the clocks' skew together exceed the margin.
+ */
+const PREPARED_SINCE_MARGIN = "10 minutes";
+
+export const catalogRenderBacklogForPacing = async (
+  req: PayloadRequest,
+  input: unknown,
+): Promise<CatalogRenderBacklogAnswer> => {
+  const backlog = await catalogRenderBacklog(req, input);
+  const preparedSince =
+    backlog.countedAt === null
+      ? 0
+      : await withEditorialTransaction(req, async () => {
+          const db = await editorialTransaction(req);
+          const result = await db.execute(sql`
+            SELECT coalesce(sum(jsonb_array_length(media_manifest)), 0)::bigint AS images
+            FROM catalog_delivery_intents
+            WHERE created_at > ${backlog.countedAt}::timestamptz - ${PREPARED_SINCE_MARGIN}::interval
+              AND state IN ('prepared', 'release_requested', 'released')
+          `);
+          return Number((result.rows[0] as { images: unknown }).images);
+        });
+  return catalogRenderBacklogAnswerSchema.parse({ ...backlog, preparedSince });
 };

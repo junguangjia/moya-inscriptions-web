@@ -280,7 +280,7 @@ export class CommunityModerationService {
      */
     receipt?: CommandReceipt,
   ): Promise<ModerationResult> {
-    const { action } = this.parse(moderateCommentCommandSchema, body);
+    const { action, reason } = this.parse(moderateCommentCommandSchema, body);
     const at = this.clock();
     const transition = moderationTransitions[action];
     // The audit row is written in the same transaction as the transition, so
@@ -291,7 +291,7 @@ export class CommunityModerationService {
       transition.from,
       this.operatorLabel,
       at,
-      this.draft(action, at),
+      this.draft(action, at, { ...(reason === undefined ? {} : { reason }) }),
       receipt,
     );
     if (moderated === null) {
@@ -313,12 +313,18 @@ export class CommunityModerationService {
    * conflicts, never a second effective transition or audit entry.
    */
   async moderateComments(body: unknown): Promise<BulkModerationResult> {
-    const { action, ids } = this.parse(bulkModerateCommentsCommandSchema, body);
+    const { action, ids, reason } = this.parse(
+      bulkModerateCommentsCommandSchema,
+      body,
+    );
     const results: BulkModerationResult["results"] = [];
     const tally = { applied: 0, conflicts: 0, notFound: 0, failed: 0 };
     for (const id of ids) {
       try {
-        const result = await this.moderateComment(id, { action });
+        const result = await this.moderateComment(id, {
+          action,
+          ...(reason === undefined ? {} : { reason }),
+        });
         results.push({
           id,
           outcome: "applied",
@@ -357,13 +363,13 @@ export class CommunityModerationService {
     id: PublicUserId,
     body: unknown,
   ): Promise<UserModerationResult> {
-    const { action } = this.parse(moderateUserCommandSchema, body);
+    const { action, reason } = this.parse(moderateUserCommandSchema, body);
     const at = this.clock();
     const result = await this.identityPort.setUserStatus(
       id,
       action === "suspend" ? "suspended" : "active",
       at,
-      this.draft(action, at),
+      this.draft(action, at, { ...(reason === undefined ? {} : { reason }) }),
     );
     if (result === null) throw new CommunityNotFoundError("User was not found");
     return {
@@ -470,7 +476,7 @@ export class CommunityModerationService {
   private draft(
     action: ModerationEventAction,
     occurredAt: Date,
-    options: { readonly detail?: string } = {},
+    options: { readonly detail?: string; readonly reason?: string } = {},
   ): ModerationEventDraft {
     return {
       id: generateOpaqueId("moderation", this.randomBytes),
@@ -478,6 +484,7 @@ export class CommunityModerationService {
       operatorLabel: this.operatorLabel,
       action,
       ...(options.detail === undefined ? {} : { detail: options.detail }),
+      ...(options.reason === undefined ? {} : { reason: options.reason }),
     };
   }
 }

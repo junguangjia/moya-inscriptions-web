@@ -12,7 +12,10 @@ export type {
   CommunityAuthPort,
 } from "@moya/api";
 export { authRegistrationAgreementSchema } from "@moya/contracts/schemas";
-export type { AuthRegistrationAgreement } from "@moya/contracts";
+export type {
+  AuthRegistrationAgreement,
+  BetaAccountAccessPort,
+} from "@moya/contracts";
 export {
   assertProductionAuthConfiguration,
   createDevelopmentAuthService,

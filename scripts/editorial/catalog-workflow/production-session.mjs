@@ -6,6 +6,8 @@ import { open, realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { privateJSON } from "../../curation/adapter.mjs";
 import {
+  catalogDeliveryCapabilitiesSchema,
+  catalogRenderBacklogAnswerSchema,
   editorialDraftSchema,
   editorialContentFromDocument,
   editorialSaveDraftSchema,
@@ -19,7 +21,10 @@ import {
 } from "./production-authority.mjs";
 import { withNativeHTTPSCheckpointStore } from "./checkpoint-store.mjs";
 import { openProductionTransportJournal } from "./payload-isolated-session.mjs";
-import { createProductionNativeHTTP } from "./local-native-http.mjs";
+import {
+  createProductionNativeHTTP,
+  definitivelyRejected,
+} from "./local-native-http.mjs";
 import {
   createCatalogDeliveryClient,
   openCatalogDeliveryJournal,
@@ -45,6 +50,43 @@ import {
 
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const bytesHash = (x) => createHash("sha256").update(x).digest("hex");
+const CAPABILITIES_ROUTE = "/api/editorial/catalog-delivery-capabilities";
+const RENDER_BACKLOG_ROUTE = "/api/editorial/catalog-render-backlog";
+/** Owner decisions D4 and D5 (catalog-scale-v1 I9): one background render
+ * makes about 7 Catalog images a minute, and the next wave is prepared only
+ * while the render backlog ahead of it drains within 12 hours at that rate.
+ * The rate is a session option; above one image a second it is a unit
+ * mistake, not a measurement. */
+export const RENDER_IMAGES_PER_MINUTE = 7;
+export const RENDER_BACKLOG_MAX_DRAIN_MINUTES = 12 * 60;
+const MAX_RENDER_IMAGES_PER_MINUTE = 60;
+/** The oldest per-tier count a wave is paced on, by this machine's clock:
+ * twelve of the worker's 5-minute sync passes. An older one says the worker
+ * or its Catalog sync stopped counting (down, skipped passes, failed backlog
+ * writes), and the queued and running renders cannot show a larger backlog
+ * (the queue is capped at 300), so the wave stops rather than prepare on it.
+ * A count up to a few minutes ahead is clock skew; further ahead, one of the
+ * clocks is wrong and the count's age is unknown. */
+export const RENDER_BACKLOG_MAX_AGE_MINUTES = 60;
+const RENDER_BACKLOG_MAX_SKEW_MINUTES = 5;
+/** The images a newly prepared wave renders behind: those a published record,
+ * a requested, prepared or grace intent still waits for (tiers t0-t3 of the
+ * last sync pass, queued or not), or the base renders queued and running now
+ * when more (a queued recipe re-render is claimed before a later wave too),
+ * and the images of every intent prepared since that count, which no count
+ * holds yet (the Admin counts them), so the sessions of one batch inside a
+ * sync interval are paced on each other. A published image's re-render not
+ * queued yet (t4) runs after the wave while its earlier set keeps serving,
+ * so it is not counted. */
+const renderBacklogImages = ({ tiers, queued, running, preparedSince }) =>
+  Math.max(tiers.t0 + tiers.t1 + tiers.t2 + tiers.t3, queued + running) +
+  preparedSince;
+const TERMINAL_INTENT_CODES = Object.freeze({
+  cancelled: "DELIVERY_INTENT_CANCELLED",
+  superseded: "DELIVERY_INTENT_SUPERSEDED",
+  expired: "DELIVERY_INTENT_EXPIRED",
+  withdrawn: "DELIVERY_INTENT_WITHDRAWN",
+});
 const positive = (x) => Number.isSafeInteger(x) && x > 0;
 const hash = (x) => typeof x === "string" && /^[a-f0-9]{64}$/.test(x);
 async function maybe(file) {
@@ -61,6 +103,14 @@ export async function withProductionCatalogSession(options, work) {
   const { manifest, command } = options;
   const binding = normalizeProductionAuthority(manifest, options.authority);
   assertProductionCommand(binding, command, manifest);
+  const imagesPerMinute =
+    options.renderImagesPerMinute ?? RENDER_IMAGES_PER_MINUTE;
+  if (
+    typeof imagesPerMinute !== "number" ||
+    !(imagesPerMinute > 0) ||
+    imagesPerMinute > MAX_RENDER_IMAGES_PER_MINUTE
+  )
+    fail("RENDER_PACING_INVALID");
   const controlled = validateControlledInput(
     manifest,
     options.input.controlled,
@@ -212,6 +262,20 @@ export async function withProductionCatalogSession(options, work) {
               }))
         )
           fail("PRODUCTION_RECEIPT_MISMATCH");
+      };
+      // A Native write may be sent again only when the transport journal shows
+      // that none of its attempts can have been applied: none was recorded, or
+      // Native answered each one with a refusal.
+      const unapplied = (route, method, bodyText) => {
+        const logicalKey = digest({
+          scope: journal.scopeSha256,
+          route,
+          method,
+          bodySha256: bytesHash(bodyText),
+        });
+        return journal.requests
+          .filter((row) => row.logicalKey === logicalKey)
+          .every(definitivelyRejected);
       };
       const conversionCache = new Map();
       const verifyConversion = async (reference) => {
@@ -385,6 +449,20 @@ export async function withProductionCatalogSession(options, work) {
         )
           return;
         if (
+          method === "POST" &&
+          route === CAPABILITIES_ROUTE &&
+          ["upload", "run", "publish"].includes(command) &&
+          JSON.stringify(body) === "{}"
+        )
+          return;
+        if (
+          method === "POST" &&
+          route === RENDER_BACKLOG_ROUTE &&
+          ["run", "publish"].includes(command) &&
+          JSON.stringify(body) === "{}"
+        )
+          return;
+        if (
           method === "GET" &&
           state.save &&
           route ===
@@ -471,6 +549,8 @@ export async function withProductionCatalogSession(options, work) {
                 "/api/editorial/read-draft",
                 "/api/editorial/read-catalog-delivery",
                 "/api/editorial/media-upload/status",
+                CAPABILITIES_ROUTE,
+                RENDER_BACKLOG_ROUTE,
               ].includes(route))
           )
             await verifySourceFiles();
@@ -498,6 +578,83 @@ export async function withProductionCatalogSession(options, work) {
         const result = await request(...args);
         if (!result.ok) fail(result.code);
         return result.result;
+      };
+      // Asked once, before this command's first write (upload, draft save or
+      // delivery intent): an Admin without the endpoints the command uses, or
+      // a publication whose Backend cannot pin a recipe and prove readiness,
+      // stops here with nothing written.
+      const needsDelivery =
+        command === "publish" ||
+        (command === "run" && record.disposition === "publish");
+      const needsUpload =
+        ["upload", "run"].includes(command) && !record.reuseOnly;
+      let capabilities = null;
+      const preflight = async () => {
+        if ((!needsDelivery && !needsUpload) || capabilities) return;
+        const response = await request(CAPABILITIES_ROUTE, "POST", {});
+        if (!response.ok)
+          fail(
+            response.httpStatus === 404
+              ? "ADMIN_CAPABILITY_MISSING"
+              : response.code,
+          );
+        const parsed = catalogDeliveryCapabilitiesSchema.safeParse(
+          response.result?.result,
+        );
+        if (response.result?.ok !== true || !parsed.success)
+          fail("ADMIN_CAPABILITY_INVALID");
+        if (needsDelivery && parsed.data.delivery !== "AVAILABLE")
+          fail(
+            parsed.data.delivery === "NOT_CONFIGURED"
+              ? "BACKEND_DELIVERY_NOT_CONFIGURED"
+              : "BACKEND_DELIVERY_UNAVAILABLE",
+          );
+        capabilities = parsed.data;
+      };
+      // The pacing of prepare waves (catalog-scale-v1 I9): asked after the
+      // capability preflight, before a new prepare. A backlog that drains
+      // within the limit lets the wave through; a longer one returns a
+      // content-free WAITING_FOR_RENDER_BACKLOG (counts only) with nothing
+      // prepared, and `publish` runs again later. The session does not wait
+      // in-process: its deadline is minutes, the count is refreshed by each
+      // sync pass. Each run spends this state directory's request and
+      // response budget (its reads, the preflight and this read), so a wait
+      // is re-run no sooner than the next sync pass. A backlog this Admin
+      // cannot report, one never counted, or one counted too long ago stops
+      // the wave.
+      const paceWave = async () => {
+        const response = await request(RENDER_BACKLOG_ROUTE, "POST", {});
+        if (!response.ok)
+          fail(
+            response.httpStatus === 404
+              ? "ADMIN_RENDER_BACKLOG_MISSING"
+              : response.code,
+          );
+        const parsed = catalogRenderBacklogAnswerSchema.safeParse(
+          response.result?.result,
+        );
+        if (response.result?.ok !== true || !parsed.success)
+          fail("RENDER_BACKLOG_INVALID");
+        if (parsed.data.tiers === null) fail("RENDER_BACKLOG_NOT_COUNTED");
+        const age = Date.now() - Date.parse(parsed.data.countedAt);
+        const recent =
+          age <= RENDER_BACKLOG_MAX_AGE_MINUTES * 60_000 &&
+          age >= -RENDER_BACKLOG_MAX_SKEW_MINUTES * 60_000;
+        if (!recent) fail("RENDER_BACKLOG_STALE");
+        const images = renderBacklogImages(parsed.data);
+        if (images <= imagesPerMinute * RENDER_BACKLOG_MAX_DRAIN_MINUTES)
+          return null;
+        return {
+          status: "WAITING_FOR_RENDER_BACKLOG",
+          renderBacklog: {
+            images,
+            imagesPerMinute,
+            drainMinutes: Math.ceil(images / imagesPerMinute),
+            maxDrainMinutes: RENDER_BACKLOG_MAX_DRAIN_MINUTES,
+            countedAt: parsed.data.countedAt,
+          },
+          anonymousDeliveryVerified: false,
+        };
       };
       const protect = () => {
         if (
@@ -651,6 +808,7 @@ export async function withProductionCatalogSession(options, work) {
             continue;
           }
           if (record.reuseOnly) fail("REUSE_ONLY_PROOF_MISSING");
+          await preflight();
           const bytes = await imageBytes(controlled.root, mediaMapping, asset),
             { body, requestHash } = uploadProofInputs(
               record,
@@ -781,6 +939,17 @@ export async function withProductionCatalogSession(options, work) {
           )
             fail("REUSE_ONLY_PROOF_MISSING");
         }
+        if (
+          state.save &&
+          state.save.status !== "CONFIRMED" &&
+          digest(baseline(current.draft)) ===
+            digest(options.input.expectedNative) &&
+          unapplied("/api/editorial/save-draft", "POST", state.save.bodyText)
+        ) {
+          // Rejected or never sent, and Native is unchanged: send it again.
+          state.save = null;
+          await saveState();
+        }
         if (state.save) return reconcileSavedDraft(current.draft);
         if (
           digest(baseline(current.draft)) !==
@@ -789,6 +958,7 @@ export async function withProductionCatalogSession(options, work) {
           fail("NATIVE_PREFLIGHT_CHANGED");
         if (digest(current.draft.content) === record.contentSha256)
           return current.draft;
+        await preflight();
         const body = editorialSaveDraftSchema.parse({
           id: binding.nativeId,
           expectedRevision: current.draft.revision,
@@ -806,6 +976,14 @@ export async function withProductionCatalogSession(options, work) {
           "POST",
           body,
         );
+        if (
+          !response.ok &&
+          unapplied("/api/editorial/save-draft", "POST", state.save.bodyText)
+        ) {
+          state.save = null;
+          await saveState();
+          fail(response.code);
+        }
         state.save.status = "UNKNOWN";
         await saveState();
         if (!response.ok) fail("NATIVE_RECONCILIATION_PENDING");
@@ -932,6 +1110,10 @@ export async function withProductionCatalogSession(options, work) {
             operation,
             input,
           );
+          // An ended intent never becomes ready again, and this state
+          // directory cannot open another one: report the end, not a wait.
+          if (Object.hasOwn(TERMINAL_INTENT_CODES, result.result?.state ?? ""))
+            fail(TERMINAL_INTENT_CODES[result.result.state]);
           if (
             result.status === "UNKNOWN" ||
             result.status === "HOLD" ||
@@ -946,6 +1128,13 @@ export async function withProductionCatalogSession(options, work) {
             fail("NATIVE_PUBLICATION_UNVERIFIED");
           return result;
         };
+        await preflight();
+        // A wave whose prepare was already sent is in the queue (or may be):
+        // only a new one is paced.
+        if (!delivery.snapshot().actions[`${record.recordId}:prepare`]) {
+          const waiting = await paceWave();
+          if (waiting) return waiting;
+        }
         let result = await action("prepare", {
           id: binding.nativeId,
           expectedRevision: state.frozen.revision,
@@ -981,7 +1170,21 @@ export async function withProductionCatalogSession(options, work) {
         const current = await inspect();
         if (binding.role !== "owner") fail("OWNER_AUTHORITY_REQUIRED");
         const d = current.draft,
-          main = current.main;
+          main = current.main,
+          route = `/api/catalogs/${binding.nativeId}?draft=false&depth=0`;
+        if (
+          state.withdraw &&
+          !state.withdraw.nativeReceipt &&
+          main.status === "published" &&
+          main.revision === state.withdraw.before.revision &&
+          digest(baseline(d)) === digest(state.withdraw.before) &&
+          digest(main.content) === state.withdraw.before.contentSha256 &&
+          unapplied(route, "PATCH", state.withdraw.bodyText)
+        ) {
+          // Rejected or never sent, and still published: send it again.
+          state.withdraw = null;
+          await saveState();
+        }
         if (state.withdraw) {
           const old = state.withdraw.before;
           if (
@@ -1030,16 +1233,24 @@ export async function withProductionCatalogSession(options, work) {
         };
         await saveState();
         const response = await request(
-          `/api/catalogs/${binding.nativeId}?draft=false&depth=0`,
+          route,
           "PATCH",
           JSON.parse(state.withdraw.bodyText),
         );
+        if (
+          !response.ok &&
+          unapplied(route, "PATCH", state.withdraw.bodyText)
+        ) {
+          state.withdraw = null;
+          await saveState();
+          fail(response.code);
+        }
         state.withdraw.status = "UNKNOWN";
         await saveState();
         if (!response.ok) fail("WITHDRAWAL_RECONCILIATION_PENDING");
         rowReceipt(
           response.nativeReceipt,
-          `/api/catalogs/${binding.nativeId}?draft=false&depth=0`,
+          route,
           "PATCH",
           state.withdraw.bodyText,
           digest(response.result),

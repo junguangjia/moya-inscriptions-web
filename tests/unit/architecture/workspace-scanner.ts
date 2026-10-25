@@ -683,6 +683,13 @@ const articleClientImports: ReadonlyMap<
 > = new Map(
   (
     Object.entries({
+      "features/settings/feedback-upload-session.ts": {
+        "feedback-client": ["feedbackImageLimits"],
+        "work-publishing-client": ["publishingClient"],
+      },
+      "features/settings/feedback-form.tsx": {
+        "feedback-client": ["feedbackClient", "feedbackImageLimits"],
+      },
       "features/editorial-content/article-authoring/use-article-draft-creation.ts":
         {
           "author-community-client": ["authorClient"],
@@ -985,6 +992,20 @@ const isForbiddenServerReference = (specifier: string): boolean => {
 };
 
 const allowedClientContractTypes = new Set([
+  // Issue #326 public reporting and restricted appeal DTOs (types only).
+  "AuthCapabilities",
+  "AuthChallengeAccepted",
+  "AuthPasswordLoginRequest",
+  "CommunityAppealSession",
+  "CommunityReportReason",
+  "CommunityReportTarget",
+  "CreateCommunityReportRequest",
+  "CommunityReport",
+  "CommunityReportEvidence",
+  "CommunityReportingDecision",
+  "CommunityReportingInbox",
+
+  "SubmitFeedbackRequest",
   "MentionReference",
   "NotificationPage",
   "NotificationItem",
@@ -1195,7 +1216,7 @@ export const isAuthorizedCmsServerFile = (
       relative,
     ) ||
     relative === "src/analytics/View.tsx" ||
-    /^scripts\/(?:build\.mjs|bootstrap-synthetic\.ts|provision-initial-owner\.ts|benchmark-synthetic\.ts|migrate-legacy\.ts|recovery-synthetic\.ts|seed-community-acceptance\.ts)$/.test(
+    /^scripts\/(?:build\.mjs|bootstrap-synthetic\.ts|provision-initial-owner\.ts|benchmark-synthetic\.ts|migrate-legacy\.ts|recovery-synthetic\.ts|seed-community-acceptance\.ts|catalog-ingest-probes\.ts)$/.test(
       relative,
     ) ||
     /^src\/owner-workflow\/(?:View|NavLink)\.tsx$/.test(relative) ||

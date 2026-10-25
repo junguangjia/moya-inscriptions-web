@@ -19,8 +19,15 @@ import type {
  * every value still crosses the same-origin Payload endpoints.
  */
 export type {
+  OperatorReport,
+  OperatorReportDecisionRequest,
+  OperatorReportForwardRequest,
+  OperatorReportMetadataRequest,
+  OperatorReportPage,
+  OperatorReportReviewRequest,
   AccountCapacityClass,
   OperatorAccountCapacity,
+  OperatorFeedbackPage,
   OperatorPublishingJob,
   OperatorPublishingJobPage,
   OperatorSubmissionMedia,

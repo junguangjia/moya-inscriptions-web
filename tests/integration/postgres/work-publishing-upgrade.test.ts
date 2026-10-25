@@ -92,6 +92,14 @@ const workPublishingMigrations = [
   "20261019020000",
   "20261020010000",
   "20261020160000",
+  "20261023010000",
+  "20261023020000",
+  "20261024010000",
+  "20261024020000",
+  "20261024030000",
+  "20261025010000",
+  "20261026010000",
+  "20261026020000",
 ];
 const backfillMigration = "20260914092000";
 const bridgeMigration = "20260914093000";
@@ -260,6 +268,14 @@ describe("work publishing migrations on dedicated synthetic databases", () => {
       "20261019020000",
       "20261020010000",
       "20261020160000",
+      "20261023010000",
+      "20261023020000",
+      "20261024010000",
+      "20261024020000",
+      "20261024030000",
+      "20261025010000",
+      "20261026010000",
+      "20261026020000",
     ]);
     for (const [index, user] of users.entries())
       expect(
@@ -914,13 +930,22 @@ describe("work publishing migrations on dedicated synthetic databases", () => {
         comments: before.comments!.map((comment) => ({
           ...comment,
           mentions: [],
+          reporting_revision: "0",
+          reporting_thread_revision: "0",
         })),
-        replies: before.replies!.map((reply) => ({ ...reply, mentions: [] })),
+        replies: before.replies!.map((reply) => ({
+          ...reply,
+          mentions: [],
+          reporting_revision: "0",
+        })),
         users: before.users!.map((user) => ({
           ...user,
           background_media_id: null,
           studio_name: "",
           studio_name_suffix: "",
+          reporting_comments_restricted: false,
+          reporting_revision: "0",
+          reporting_comment_revision: "0",
         })),
       });
       expect(
@@ -1650,6 +1675,14 @@ describe("work publishing migrations on dedicated synthetic databases", () => {
         "20261019020000",
         "20261020010000",
         "20261020160000",
+        "20261023010000",
+        "20261023020000",
+        "20261024010000",
+        "20261024020000",
+        "20261024030000",
+        "20261025010000",
+        "20261026010000",
+        "20261026020000",
       ]);
 
       // Declared submissions: stored hashes unchanged and still exactly what

@@ -61,7 +61,10 @@ export interface CatalogAssetSyncOptions {
 
 /** Counts of one sync pass (content-free; for logs). */
 export interface CatalogAssetSyncCounts {
-  /** Approved source pairs named by the list. */
+  /**
+   * Approved source pairs the pass names: the list's, and those a store
+   * names for rendering only (an intent in render grace).
+   */
   readonly referenced: number;
   /** Sources outside both approved key forms. */
   readonly skipped: number;
@@ -140,8 +143,9 @@ export interface CatalogMediaAssetPort {
    * asset still missing a listed identity (a rejected re-render, see
    * `failCatalogAsset`) is queued again, with fresh attempts, once 24 hours
    * passed since it failed; an abandoned job always waits. At most `limit`
-   * jobs are queued per pass. Nothing is deleted. A list longer than 10,000
-   * entries is refused (TypeError).
+   * jobs are queued per pass (a store may bound them by a render queue
+   * target instead). Nothing is deleted. A list longer than the store's
+   * snapshot ceiling is refused (TypeError).
    */
   syncCatalogAssets(
     sources: readonly CatalogMediaSource[],

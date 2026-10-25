@@ -12,6 +12,7 @@ export type DeliveryOutcome =
   | { readonly state: "unknown" };
 
 export interface TencentSendEmailRequest {
+  readonly TriggerType: 1;
   readonly FromEmailAddress: string;
   readonly Destination: readonly [string];
   readonly Subject: string;
@@ -34,6 +35,7 @@ export interface AliyunSendSmsVerifyCodeRequest {
   readonly ReturnVerifyCode: false;
   readonly OutId: string;
   readonly Interval: 60;
+  readonly DuplicatePolicy: 1;
 }
 
 export interface AliyunCheckSmsVerifyCodeRequest {
@@ -99,6 +101,7 @@ export const mapTencentSendEmail = (input: {
   readonly code: string;
   readonly minutes: number;
 }): TencentSendEmailRequest => ({
+  TriggerType: 1,
   FromEmailAddress: input.from,
   Destination: [input.to],
   Subject: authenticationEmail(input).subject,
@@ -145,6 +148,7 @@ export const mapAliyunSendSmsVerifyCode = (input: {
   ReturnVerifyCode: false,
   OutId: input.outId,
   Interval: 60,
+  DuplicatePolicy: 1,
 });
 
 export const mapAliyunCheckSmsVerifyCode = (input: {

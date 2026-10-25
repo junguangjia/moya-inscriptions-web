@@ -137,8 +137,25 @@ export const cmsDatabasePool = (): PostgresConfig => {
 
 export const cmsDatabase = (): string => cmsDatabasePool().connectionString;
 
+// Fixed, content-free event names a caller may log as `{ category }`; any
+// other category is reported as the generic runtime event.
+const CMS_EVENT_CATEGORIES: ReadonlySet<unknown> = new Set([
+  "EDITORIAL_MEDIA_INGEST_FAILED",
+  "EDITORIAL_MEDIA_INGEST_CONFIGURATION_INVALID",
+  "EDITORIAL_MEDIA_INGEST_FINAL_INVALID",
+  "EDITORIAL_MEDIA_INGEST_ORPHAN",
+  "EDITORIAL_MEDIA_INGEST_STAGING_DELETE_FAILED",
+]);
+
 /** Fixed diagnostics only: never forward Pino args, messages, paths or values. */
 export const cmsRuntimeLogFields = (args: readonly unknown[]) => {
+  const event = args.find(
+    (value): value is { category: string } =>
+      !!value &&
+      typeof value === "object" &&
+      "category" in value &&
+      CMS_EVENT_CATEGORIES.has(value.category),
+  );
   const allowedNames = new Set([
     "TypeError",
     "ReferenceError",
@@ -186,7 +203,7 @@ export const cmsRuntimeLogFields = (args: readonly unknown[]) => {
     }
   }
   return {
-    category: "CMS_RUNTIME_EVENT",
+    category: event?.category ?? "CMS_RUNTIME_EVENT",
     ...(errorName ? { errorName } : {}),
     ...(frames.length ? { frames } : {}),
   };
@@ -249,4 +266,139 @@ export const assertInitialOwnerDatabaseTLS = (
   } catch {
     throw new Error("INITIAL_OWNER_DATABASE_TLS_REFUSED");
   }
+};
+
+type Environment = Readonly<Record<string, string | undefined>>;
+
+/**
+ * CMS_CATALOG_INGEST gates the Catalog ingest routes at config load: absent,
+ * empty (a blanked switch) or `off` composes none (they answer 404), `on`
+ * composes them, and any other value refuses to load (design-ingest J), which
+ * stops the Admin and `payload migrate` alike. Nothing else about ingest is
+ * read here.
+ */
+export const catalogIngestEnabled = (
+  environment: Environment = process.env,
+): boolean => {
+  const value = environment.CMS_CATALOG_INGEST;
+  if (value === undefined || value === "" || value === "off") return false;
+  if (value === "on") return true;
+  throw new Error("CMS_CATALOG_INGEST_INVALID");
+};
+
+/**
+ * CMS_CATALOG_DIRECT_PUBLISH lets a Catalog record with editorial originals
+ * publish without the delivery preparation the release path proves, until
+ * Admin has prepare and release controls: absent, empty or `off` keeps that
+ * guard, `on` publishes at once (the worker renders the published images and
+ * the public answer leaves them out until it has), and any other value refuses
+ * to load, which stops the Admin and `payload migrate` alike.
+ */
+export const catalogDirectPublishEnabled = (
+  environment: Environment = process.env,
+): boolean => {
+  const value = environment.CMS_CATALOG_DIRECT_PUBLISH;
+  if (value === undefined || value === "" || value === "off") return false;
+  if (value === "on") return true;
+  throw new Error("CMS_CATALOG_DIRECT_PUBLISH_INVALID");
+};
+
+/** The Development ingest store: local storage outside a production environment. */
+export const catalogIngestDevelopmentStore = (
+  environment: Environment = process.env,
+): boolean =>
+  (environment.CMS_STORAGE_MODE ?? "local") === "local" &&
+  environment.CMS_ENVIRONMENT !== "production";
+
+export type CatalogIngestSettings = Readonly<{
+  storage:
+    | {
+        mode: "cos";
+        endpoint: URL;
+        region: string;
+        bucket: string;
+        accessKeyId: string;
+        secretAccessKey: string;
+      }
+    | { mode: "local" };
+  /** The origin the uploader PUTs to; a staging signature binds its host. */
+  uploadEndpoint: URL;
+  /**
+   * D9: `on` reads and hashes staging on the server (an intranet COS host);
+   * `off` checks the MD5 ETag, the header and the tail only, and leaves the
+   * SHA-256 check to the worker's render.
+   */
+  serverSha256: boolean;
+  /** D8: `on` is lifecycle L1 (tagged staging); `off` is L2 (no tag). */
+  stagingTag: boolean;
+}>;
+
+/**
+ * The ingest settings, read on the first ingest request only, so neither
+ * Admin start nor `payload migrate` depends on them. An error names the
+ * setting, never its value.
+ */
+export const catalogIngestSettings = (
+  environment: Environment = process.env,
+): CatalogIngestSettings => {
+  const invalid = (name: string): never => {
+    throw new Error(`CMS_CATALOG_INGEST_SETTING_INVALID:${name}`);
+  };
+  const toggle = (name: string, fallback: boolean) => {
+    const value = environment[name];
+    if (value === undefined) return fallback;
+    if (value !== "on" && value !== "off") invalid(name);
+    return value === "on";
+  };
+  const text = (name: string) => {
+    const value = environment[name];
+    if (!value || value.trim() !== value || /[\s\0]/.test(value)) invalid(name);
+    return value!;
+  };
+  const origin = (name: string, local: boolean) => {
+    let url: URL;
+    try {
+      url = new URL(text(name));
+    } catch {
+      return invalid(name);
+    }
+    if (
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      url.pathname !== "/" ||
+      !(
+        url.protocol === "https:" ||
+        (local &&
+          url.protocol === "http:" &&
+          ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname))
+      )
+    )
+      invalid(name);
+    return url;
+  };
+  const mode = environment.CMS_STORAGE_MODE ?? "local";
+  if (mode === "local" && !catalogIngestDevelopmentStore(environment))
+    invalid("CMS_STORAGE_MODE");
+  if (mode !== "local" && mode !== "cos") invalid("CMS_STORAGE_MODE");
+  return {
+    storage:
+      mode === "cos"
+        ? {
+            mode,
+            endpoint: origin("CMS_COS_ENDPOINT", false),
+            region: text("CMS_COS_REGION"),
+            bucket: text("CMS_COS_BUCKET"),
+            accessKeyId: text("CMS_COS_ACCESS_KEY_ID"),
+            secretAccessKey: text("CMS_COS_SECRET_ACCESS_KEY"),
+          }
+        : { mode: "local" },
+    uploadEndpoint: origin(
+      "CMS_CATALOG_INGEST_UPLOAD_ENDPOINT",
+      mode === "local",
+    ),
+    serverSha256: toggle("CMS_CATALOG_INGEST_SERVER_SHA256", true),
+    stagingTag: toggle("CMS_CATALOG_INGEST_STAGING_TAG", false),
+  };
 };

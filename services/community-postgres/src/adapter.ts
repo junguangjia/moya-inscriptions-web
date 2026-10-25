@@ -1,4 +1,8 @@
 import {
+  captureStaffSubject,
+  recordStaffModeration,
+} from "./staff-moderation-reporting.js";
+import {
   requestOwnerPublicationSync,
   type PublicationSyncOptions,
 } from "./publishing/publication-sync.js";
@@ -99,6 +103,11 @@ export class PostgresCommunityIdentityAdapter implements CommunityIdentityPort {
     const client = await this.connect();
     try {
       await client.query("BEGIN");
+      const staff = await captureStaffSubject(
+        client,
+        { type: "user", id },
+        audit?.reason,
+      );
       const updated = await client.query<
         PublicUserRow & { readonly changed: unknown }
       >(setUserStatusSql, [id, status, at]);
@@ -129,6 +138,14 @@ export class PostgresCommunityIdentityAdapter implements CommunityIdentityPort {
           status === "active" ? "publish" : "withdraw",
           at,
           this.options.publication,
+        );
+      if (row.changed === true)
+        await recordStaffModeration(
+          client,
+          staff,
+          audit?.operatorLabel ?? "owner",
+          status === "suspended" ? "suspend" : "restore",
+          at,
         );
       await client.query("COMMIT");
       return { user, revokedSessions: revoked?.rowCount ?? 0 };

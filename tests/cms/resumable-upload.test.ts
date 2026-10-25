@@ -328,4 +328,90 @@ describe("real Native resumable media endpoints", () => {
     expect(requestCount).toBeLessThan(40);
     expect(sentBodyBytes).toBeLessThan(5 * bytes.length);
   });
+  it("maps a reuse of a registered original over 40 MiB to an identity conflict", async () => {
+    // A Catalog ingest registers originals up to 128 MiB; an Owner
+    // registration of an existing object stands in for one here.
+    const mediaId = `upload-registered-large-${suffix}`;
+    const objectKey = `editorial/${digest(Buffer.from(catalogId))}/${digest(Buffer.from(mediaId))}-${digest(bytes)}.png`;
+    const registered = await handleEndpoints({
+      config,
+      request: new Request("http://127.0.0.1:3002/api/media", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          Authorization: `JWT ${ownerToken}`,
+        },
+        body: JSON.stringify({
+          mediaId,
+          catalogId,
+          origin: "existing",
+          objectKey,
+          sha256: digest(bytes),
+          mimeType: "image/png",
+          filesize: 64 * 1024 * 1024,
+          width: 384,
+          height: 384,
+          alt: "Synthetic original",
+          rights: "Synthetic test",
+          orderConfidence: "HIGH",
+        }),
+      }),
+    });
+    expect(registered.status).toBe(201);
+    const reuse = await json("start", {
+      transferId: digest(Buffer.from(`${suffix}:registered-large-reuse`)),
+      catalogId,
+      mediaId,
+      sha256: digest(bytes),
+      bytes: bytes.length,
+      mimeType: "image/png",
+      alt: "Synthetic original",
+      rights: "Synthetic test",
+      orderConfidence: "HIGH",
+    });
+    expect(reuse.status).toBe(200);
+    const reuseSession = (await reuse.json())
+      .result as EditorialMediaUploadSession;
+    expect((await stream(reuseSession, bytes)).status).toBe(200);
+    const complete = await json("complete", {
+      uploadId: reuseSession.uploadId,
+    });
+    expect(complete.status).toBe(409);
+    expect(await complete.json()).toEqual({
+      ok: false,
+      error: { code: "MEDIA_IDENTITY_CONFLICT", fields: [] },
+    });
+  });
+
+  it("composes no Catalog ingest route while CMS_CATALOG_INGEST is off", async () => {
+    expect(process.env.CMS_CATALOG_INGEST).toBeUndefined();
+    expect(
+      (await config).endpoints.filter(({ path }) =>
+        path.startsWith("/editorial/media-ingest/"),
+      ),
+    ).toEqual([]);
+    for (const [method, route] of [
+      ["POST", "start"],
+      ["POST", "complete"],
+      ["POST", "abandon"],
+      ["POST", "verify"],
+      ["PUT", `dev-put/${"a".repeat(64)}`],
+    ] as const) {
+      const response = await handleEndpoints({
+        config,
+        request: new Request(
+          `http://127.0.0.1:3002/api/editorial/media-ingest/${route}`,
+          {
+            method,
+            headers: {
+              "content-type": "application/json",
+              Authorization: `JWT ${ownerToken}`,
+            },
+            body: "{}",
+          },
+        ),
+      });
+      expect(response.status).toBe(404);
+    }
+  });
 });
