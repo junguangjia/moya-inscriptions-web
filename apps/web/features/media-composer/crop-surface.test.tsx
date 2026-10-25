@@ -303,6 +303,32 @@ it("takes no input while frozen, but stays focusable and takes layout re-reports
   expect(document.getElementById(hint)!.textContent).toContain("双指缩放");
 });
 
+it("leaves no refused touch behind a hold: the same cropper remounts, a new generation mounts once", async () => {
+  await render({ generation: 1 });
+  await act(async () => cropper.props!.onZoomChange(1.5));
+  const mounts = cropper.mounts;
+  // A hold that refused nothing ends as it began.
+  await render({ generation: 1, frozen: true });
+  await render({ generation: 1, frozen: false });
+  expect(cropper.mounts).toBe(mounts);
+  // react-easy-crop marks itself touching before it asks: a refused touch
+  // would leave its Safari gestures dead, so the cropper remounts, zoom kept.
+  await render({ generation: 1, frozen: true });
+  expect(cropper.props!.onTouchRequest()).toBe(false);
+  await render({ generation: 1, frozen: false });
+  expect(cropper.mounts).toBe(mounts + 1);
+  expect(cropper.props!.zoom).toBe(1.5);
+  // A hold that ends with a new generation (a corner's reframe) mounts once.
+  await render({ generation: 1, frozen: true });
+  expect(cropper.props!.onTouchRequest()).toBe(false);
+  await render({ generation: 2, frozen: false });
+  expect(cropper.mounts).toBe(mounts + 2);
+  // Nothing refused is carried into the next hold.
+  await render({ generation: 2, frozen: true });
+  await render({ generation: 2, frozen: false });
+  expect(cropper.mounts).toBe(mounts + 2);
+});
+
 it("tells its caller what it shows now", async () => {
   const areaRef: { current: (() => Area | null) | null } = { current: null };
   await render({ areaRef, generation: 1 });

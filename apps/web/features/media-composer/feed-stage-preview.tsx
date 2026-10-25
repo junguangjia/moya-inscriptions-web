@@ -49,7 +49,10 @@ export interface FeedStagePreviewSlide {
   readonly size: { readonly width: number; readonly height: number } | null;
   readonly status: "ready" | "loading" | "unavailable";
   readonly placeholderColor?: string | undefined;
-  /** The item's feed framing (`MediaEdit.feed`); absent, centred. */
+  /**
+   * The item's feed framing as the feed reads it (its effective one, so an
+   * uncropped taller picture is whole; `readerFeed`); absent, centred.
+   */
   readonly feed?: MediaFeedFraming | undefined;
 }
 

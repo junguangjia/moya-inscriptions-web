@@ -6,14 +6,17 @@ import {
   centeredCrop,
   closeEdit,
   cropFromPercentages,
+  defaultFeed,
   drawPlan,
   editedSize,
+  effectiveFeed,
   feedRegionText,
   feedStageWindow,
   matchPreset,
   normalizeCrop,
   normalizeFeed,
   previewPlacement,
+  readerFeed,
   rotatedSize,
   sameEdit,
   sameFeed,
@@ -221,50 +224,162 @@ describe("media edit geometry", () => {
     );
   });
 
-  it("stores a feed framing rounded, with the centred cover as none", () => {
-    expect(normalizeFeed(undefined)).toBeUndefined();
-    expect(normalizeFeed({ fit: "contain" })).toEqual({ fit: "contain" });
-    expect(normalizeFeed({ fit: "cover", y: 1 / 3 })).toEqual({
+  it("frames an uncropped photo whole and a cropped one centred by default (#341 r3)", () => {
+    const crop = { x: 0, y: 0.1, width: 1, height: 0.5 };
+    expect(defaultFeed({ crop: null })).toEqual({ fit: "contain" });
+    expect(defaultFeed({ crop })).toEqual({ fit: "cover", y: 0.5 });
+
+    // The author's choice wins; without one the crop's default shows.
+    expect(effectiveFeed({ rotation: 0, crop: null })).toEqual({
+      fit: "contain",
+    });
+    expect(effectiveFeed({ rotation: 90, crop })).toEqual({
+      fit: "cover",
+      y: 0.5,
+    });
+    expect(
+      effectiveFeed({
+        rotation: 0,
+        crop: null,
+        feed: { fit: "cover", y: 0.5 },
+      }),
+    ).toEqual({ fit: "cover", y: 0.5 });
+    expect(
+      effectiveFeed({ rotation: 0, crop, feed: { fit: "contain" } }),
+    ).toEqual({ fit: "contain" });
+    expect(
+      effectiveFeed({ rotation: 0, crop, feed: { fit: "cover", y: 1 / 3 } }),
+    ).toEqual({ fit: "cover", y: 0.3333 });
+    // An invalid one is none.
+    expect(
+      effectiveFeed({
+        rotation: 0,
+        crop: null,
+        feed: { fit: "cover", y: Number.NaN },
+      }),
+    ).toEqual({ fit: "contain" });
+  });
+
+  it("stores only a framing that differs from the photo's default, rounded", () => {
+    const crop = { x: 0, y: 0.1, width: 1, height: 0.5 };
+    const uncropped = { crop: null };
+    const cropped = { crop };
+    expect(normalizeFeed(undefined, uncropped)).toBeUndefined();
+    expect(normalizeFeed(undefined, cropped)).toBeUndefined();
+    // Uncropped: 整张 is the default, 局部 is stored even at the centre.
+    expect(normalizeFeed({ fit: "contain" }, uncropped)).toBeUndefined();
+    expect(normalizeFeed({ fit: "cover", y: 0.5 }, uncropped)).toEqual({
+      fit: "cover",
+      y: 0.5,
+    });
+    // Cropped: the centred cover is the default, 整张 is stored.
+    expect(normalizeFeed({ fit: "contain" }, cropped)).toEqual({
+      fit: "contain",
+    });
+    expect(normalizeFeed({ fit: "cover", y: 0.5 }, cropped)).toBeUndefined();
+    expect(
+      normalizeFeed({ fit: "cover", y: 0.50004 }, cropped),
+    ).toBeUndefined();
+    expect(normalizeFeed({ fit: "cover", y: 1 / 3 }, cropped)).toEqual({
       fit: "cover",
       y: 0.3333,
     });
-    expect(normalizeFeed({ fit: "cover", y: 0.5 })).toBeUndefined();
-    expect(normalizeFeed({ fit: "cover", y: 0.50004 })).toBeUndefined();
-    expect(normalizeFeed({ fit: "cover", y: -0.2 })).toEqual({
+    expect(normalizeFeed({ fit: "cover", y: -0.2 }, uncropped)).toEqual({
       fit: "cover",
       y: 0,
     });
-    expect(normalizeFeed({ fit: "cover", y: 1.5 })).toEqual({
+    expect(normalizeFeed({ fit: "cover", y: 1.5 }, cropped)).toEqual({
       fit: "cover",
       y: 1,
     });
-    expect(normalizeFeed({ fit: "cover", y: Number.NaN })).toBeUndefined();
-
-    expect(sameFeed(undefined, { fit: "cover", y: 0.5 })).toBe(true);
     expect(
-      sameFeed({ fit: "cover", y: 0.2 }, { fit: "cover", y: 0.20001 }),
-    ).toBe(true);
-    expect(sameFeed({ fit: "cover", y: 0.2 }, { fit: "cover", y: 0.3 })).toBe(
+      normalizeFeed({ fit: "cover", y: Number.NaN }, uncropped),
+    ).toBeUndefined();
+
+    // Compared as the photo shows them: absent is its default.
+    expect(sameFeed(undefined, { fit: "cover", y: 0.5 }, cropped)).toBe(true);
+    expect(sameFeed(undefined, { fit: "cover", y: 0.5 }, uncropped)).toBe(
       false,
     );
-    expect(sameFeed({ fit: "contain" }, { fit: "contain" })).toBe(true);
-    expect(sameFeed({ fit: "contain" }, { fit: "cover", y: 0 })).toBe(false);
-    expect(sameFeed(undefined, { fit: "contain" })).toBe(false);
+    expect(sameFeed(undefined, { fit: "contain" }, uncropped)).toBe(true);
+    expect(sameFeed(undefined, { fit: "contain" }, cropped)).toBe(false);
+    expect(
+      sameFeed(
+        { fit: "cover", y: 0.2 },
+        { fit: "cover", y: 0.20001 },
+        uncropped,
+      ),
+    ).toBe(true);
+    expect(
+      sameFeed({ fit: "cover", y: 0.2 }, { fit: "cover", y: 0.3 }, cropped),
+    ).toBe(false);
+    expect(sameFeed({ fit: "contain" }, { fit: "contain" }, cropped)).toBe(
+      true,
+    );
+    expect(
+      sameFeed({ fit: "contain" }, { fit: "cover", y: 0 }, uncropped),
+    ).toBe(false);
 
-    const crop = { x: 0, y: 0.1, width: 1, height: 0.5 };
+    // `withFeed` stores relative to the edit it is given.
     const centred = withFeed({ rotation: 90, crop }, { fit: "cover", y: 0.5 });
     expect(centred).toEqual({ rotation: 90, crop });
     expect("feed" in centred).toBe(false);
     expect(
+      withFeed({ rotation: 0, crop: null }, { fit: "cover", y: 0.5 }),
+    ).toEqual({ rotation: 0, crop: null, feed: { fit: "cover", y: 0.5 } });
+    const whole = withFeed({ rotation: 0, crop: null }, { fit: "contain" });
+    expect(whole).toEqual({ rotation: 0, crop: null });
+    expect("feed" in whole).toBe(false);
+    expect(withFeed({ rotation: 0, crop }, { fit: "contain" })).toEqual({
+      rotation: 0,
+      crop,
+      feed: { fit: "contain" },
+    });
+    expect(
       "feed" in
-        withFeed(
-          { rotation: 0, crop: null, feed: { fit: "contain" } },
-          undefined,
-        ),
+        withFeed({ rotation: 0, crop, feed: { fit: "contain" } }, undefined),
     ).toBe(false);
     expect(
       withFeed({ rotation: 0, crop: null }, { fit: "cover", y: 0.25 }),
     ).toEqual({ rotation: 0, crop: null, feed: { fit: "cover", y: 0.25 } });
+  });
+
+  it("gives readers the effective framing, absent for a centred cover (#341 r3)", () => {
+    const crop = { x: 0, y: 0.1, width: 1, height: 0.5 };
+    const tall = { width: 300, height: 900 };
+    const square = { width: 500, height: 500 };
+    const wide = { width: 900, height: 300 };
+    // Uncropped: whole, spelled out only for a frame taller than a square.
+    expect(readerFeed({ rotation: 0, crop: null }, tall)).toEqual({
+      fit: "contain",
+    });
+    expect(readerFeed({ rotation: 0, crop: null }, square)).toBeUndefined();
+    expect(
+      readerFeed({ rotation: 0, crop: null }, { width: 1000, height: 1001 }),
+    ).toBeUndefined();
+    expect(readerFeed({ rotation: 0, crop: null }, wide)).toBeUndefined();
+    expect(readerFeed({ rotation: 0, crop: null }, null)).toBeUndefined();
+    // An explicit 局部 at the centre reads as the centred cover.
+    expect(
+      readerFeed(
+        { rotation: 0, crop: null, feed: { fit: "cover", y: 0.5 } },
+        tall,
+      ),
+    ).toBeUndefined();
+    expect(
+      readerFeed(
+        { rotation: 0, crop: null, feed: { fit: "cover", y: 0.2 } },
+        tall,
+      ),
+    ).toEqual({ fit: "cover", y: 0.2 });
+    // Cropped: centred by default, an explicit 整张 kept.
+    expect(readerFeed({ rotation: 0, crop }, tall)).toBeUndefined();
+    expect(
+      readerFeed({ rotation: 0, crop, feed: { fit: "contain" } }, tall),
+    ).toEqual({ fit: "contain" });
+    expect(
+      readerFeed({ rotation: 0, crop, feed: { fit: "contain" } }, wide),
+    ).toEqual({ fit: "contain" });
   });
 
   it("compares edits by their pixels alone, never their feed framing", () => {

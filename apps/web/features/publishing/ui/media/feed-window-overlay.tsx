@@ -24,7 +24,8 @@ import type {
  * The feed display window drawn over the crop box of the edit dialog (#244):
  * what the phone single-column stage will show of this frame. The stage crops
  * a frame taller than itself at the author's region (#341; centred by
- * default), so a `cover` window dims the bands above and below the visible
+ * default once cropped, an uncropped one shown whole), so a `cover` window
+ * dims the bands above and below the visible
  * part, each only where the stage cuts something; a frame the stage shows
  * whole gets no marks (the switch's description says so). With `region` the
  * author places the shown part: a handle on the window drags it up and down,

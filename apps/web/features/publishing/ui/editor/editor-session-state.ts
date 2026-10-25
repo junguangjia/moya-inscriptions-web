@@ -2,7 +2,7 @@ import { remapMentions } from "../../../notifications/mention-edits";
 import type { MentionReference } from "@moya/contracts";
 import { itemDerivation } from "../../edit-readiness";
 import { createExternalStore } from "../../upload-manager-store";
-import { normalizeFeed } from "../media/media-geometry";
+import { effectiveFeed } from "../media/media-geometry";
 import {
   bodyRule,
   checkEditorText,
@@ -25,7 +25,6 @@ import type { EditorTarget } from "../../../product-shell/product-history";
 import type {
   MediaCrop,
   MediaEdit,
-  MediaFeedFraming,
   PublishingMediaItem,
   WorkAuthorship,
   WorkAuthorshipKind,
@@ -250,9 +249,10 @@ export const mergeManagedItems = (
 
 /**
  * Whether two contents carry the same author input: text, settings, order,
- * edits (their feed framing included, a centred one as none) and cover.
- * Upload identities (item id, quality, pending label) are not author input
- * and may differ between an editor and a saved copy.
+ * edits (their feed framing included, as the feed shows it: an absent one
+ * is the photo's default) and cover. Upload identities (item id, quality,
+ * pending label) are not author input and may differ between an editor and
+ * a saved copy.
  */
 export const sameAuthorContent = (
   left: WorkDraftContent,
@@ -260,13 +260,9 @@ export const sameAuthorContent = (
 ): boolean => {
   const crop = (value: MediaCrop | null) =>
     value === null ? null : [value.x, value.y, value.width, value.height];
-  const feed = (value: MediaFeedFraming | undefined) => {
-    const framing = normalizeFeed(value);
-    return framing === undefined
-      ? null
-      : framing.fit === "contain"
-        ? ["contain"]
-        : ["cover", framing.y];
+  const feed = (edit: MediaEdit) => {
+    const framing = effectiveFeed(edit);
+    return framing.fit === "contain" ? ["contain"] : ["cover", framing.y];
   };
   const project = (content: WorkDraftContent) =>
     JSON.stringify([
@@ -291,7 +287,7 @@ export const sameAuthorContent = (
         item.kind,
         item.edit.rotation,
         crop(item.edit.crop),
-        feed(item.edit.feed),
+        feed(item.edit),
       ]),
       content.coverKey,
       content.coverKey === null ? null : crop(content.coverCrop),

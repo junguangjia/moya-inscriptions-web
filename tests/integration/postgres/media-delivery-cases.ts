@@ -405,6 +405,8 @@ export const registerMediaDeliveryTests = (pool: Pool) => {
               candidate(other, "display", "base", 1536, 2048),
               candidate(other, "full", "base", 3000, 4000),
             ],
+            // An uncropped portrait shows whole in the feed by default.
+            feed: { fit: "contain" },
           },
         ]);
         expect(view.media[1]).not.toHaveProperty("placeholderColor");
@@ -469,6 +471,7 @@ export const registerMediaDeliveryTests = (pool: Pool) => {
             candidate(other, "cover", "base", 810, 1080),
             candidate(other, "display", "base", 1536, 2048),
           ],
+          feed: { fit: "contain" },
         },
       ]);
       // Every gallery candidate is one the relay serves to every reader.
@@ -612,6 +615,168 @@ export const registerMediaDeliveryTests = (pool: Pool) => {
         placeholderColor: "#203040",
       });
       expect(composedCard.gallery).toEqual([tallImage(display), otherImage]);
+    });
+
+    it("reads an uncropped taller photo as whole and a cropped one as a centred cover unless the author chose otherwise", async () => {
+      const cropped: MediaEdit = {
+        rotation: 0,
+        crop: { x: 0.25, y: 0, width: 0.5, height: 1 },
+      };
+      const croppedKey = await editKeyOf(cropped, null);
+      /** A ready item with its card and display stills under `editKey`. */
+      const item = async (
+        presentation: { readonly width: number; readonly height: number },
+        [width, height]: readonly [number, number],
+        editKey = "base",
+      ) => {
+        const itemId = await mediaItem(author, presentation);
+        await renditions(
+          itemId,
+          author,
+          [
+            ["thumb", Math.round(width / 4), Math.round(height / 4)],
+            ["cover", Math.round(width / 2), Math.round(height / 2)],
+            ["display", width, height],
+          ],
+          editKey,
+        );
+        return itemId;
+      };
+      const portrait = { width: 3000, height: 4000 };
+      const landscape = { width: 4000, height: 3000 };
+      const whole: MediaFeedFraming = { fit: "contain" };
+      const region: MediaFeedFraming = { fit: "cover", y: 0.2 };
+      const centredRegion: MediaFeedFraming = { fit: "cover", y: 0.5 };
+      // An uncropped portrait as every work published before framing has it.
+      const tall = await item(portrait, [1536, 2048]);
+      const square = await item({ width: 2000, height: 2000 }, [2048, 2048]);
+      // Within the tolerance of a square.
+      const nearSquare = await item(
+        { width: 2048, height: 2050 },
+        [2048, 2050],
+      );
+      const wide = await item(landscape, [2048, 1536]);
+      const centred = await item(portrait, [1536, 2048]);
+      // Half the landscape's width: a frame taller than a square.
+      const croppedTall = await item(landscape, [1365, 2048], croppedKey);
+      const croppedWhole = await item(landscape, [1365, 2048], croppedKey);
+      const damaged = await item(portrait, [1536, 2048]);
+      const entries = [
+        entry(tall),
+        entry(square),
+        entry(nearSquare),
+        entry(wide),
+        // An explicit centred region on an uncropped photo.
+        { ...entry(centred), edit: { ...identity, feed: centredRegion } },
+        { ...entry(croppedTall), edit: cropped },
+        { ...entry(croppedWhole), edit: { ...cropped, feed: whole } },
+        { ...entry(damaged), edit: { ...identity, feed: region } },
+      ];
+
+      /** Every framing a reader receives: Work media and cover, card image and gallery. */
+      const framing = async (workId: string, viewer: string | null) => {
+        const view = await authors.readWork(workId, viewer);
+        expect(workSchema.safeParse(view).success).toBe(true);
+        const card = await service.card({ type: "work", id: workId }, viewer);
+        expect(contentCardSchema.parse(card)).toEqual(card);
+        // Absent means a centred cover: no key at all, never `undefined`.
+        for (const image of [
+          ...view.media,
+          ...(card.gallery ?? []),
+          ...(card.media === null ? [] : [card.media]),
+        ])
+          if (image.feed === undefined)
+            expect(image).not.toHaveProperty("feed");
+        if (view.coverFeed === undefined)
+          expect(view).not.toHaveProperty("coverFeed");
+        return {
+          media: view.media.map((media) => media.feed),
+          cover: view.coverFeed,
+          card: card.media?.feed,
+          gallery: card.gallery?.map((image) => image.feed),
+        };
+      };
+      const itemFraming = [
+        whole,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        whole,
+        region,
+      ];
+
+      // The uncropped portrait is the cover: whole on its card as well.
+      const plain = await publish(author, {
+        title: "整张默认",
+        items: entries,
+        coverKey: entries[0]!.key,
+      });
+      for (const viewer of [visitor, author, null])
+        expect(await framing(plain.workId, viewer)).toEqual({
+          media: itemFraming,
+          cover: whole,
+          card: whole,
+          gallery: itemFraming,
+        });
+
+      // A stored framing that is not valid is dropped: the photo takes its
+      // default, the whole image for an uncropped one.
+      await pool.query(
+        `UPDATE community.work_revision_items SET edit=jsonb_set(edit,'{feed}','{"fit":"cover","y":2}'::jsonb)
+        WHERE revision_id=$1 AND item_id=$2`,
+        [plain.revisionId, damaged],
+      );
+      const repaired = [...itemFraming.slice(0, -1), whole];
+      expect(await framing(plain.workId, visitor)).toMatchObject({
+        media: repaired,
+        gallery: repaired,
+      });
+
+      // A cropped cover defaults to a centred cover; the author's whole
+      // image wins over that default.
+      for (const [cover, expected] of [
+        [entries[5]!, undefined],
+        [entries[6]!, whole],
+      ] as const) {
+        const work = await publish(author, {
+          title: "裁切封面",
+          items: entries,
+          coverKey: cover.key,
+        });
+        expect(await framing(work.workId, visitor)).toEqual({
+          media: itemFraming,
+          cover: expected,
+          card: expected,
+          gallery: itemFraming,
+        });
+      }
+
+      // A cover composition frames the card itself, also over the default,
+      // even when the composition is taller than a square (3:4 here).
+      const coverCrop: MediaCrop = { x: 0.1, y: 0, width: 0.8, height: 0.8 };
+      await renditions(
+        tall,
+        author,
+        [
+          ["thumb", 360, 480],
+          ["cover", 810, 1080],
+        ],
+        await editKeyOf(identity, coverCrop),
+      );
+      const composed = await publish(author, {
+        title: "封面构图",
+        items: entries,
+        coverKey: entries[0]!.key,
+        coverCrop,
+      });
+      expect(await framing(composed.workId, visitor)).toEqual({
+        media: itemFraming,
+        cover: undefined,
+        card: undefined,
+        gallery: itemFraming,
+      });
     });
 
     it("anchors the first-item cover on the derivative its src names, with only smaller card candidates of that framing", async () => {

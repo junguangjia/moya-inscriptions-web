@@ -487,17 +487,19 @@ describe("Conflict chooser", () => {
     );
     const device = version(node, "device");
     const account = version(node, "account");
-    // Only the framing differs, and the version that has one says so.
+    // Only the framing differs, and the version that chose one says so: an
+    // uncropped photo shows whole by default (r3), so 局部 at the centre is
+    // the author's choice.
     expect(device.querySelector("dl[data-differs] dt")?.textContent).toContain(
       "图片顺序（2 项）与另一版本不同",
     );
-    expect(device.querySelector("[data-edit-notes]")?.textContent).toBe(
-      "第 1 项动态流整张显示",
+    expect(account.querySelector("[data-edit-notes]")?.textContent).toBe(
+      "第 1 项动态流显示局部",
     );
-    expect(device.querySelector("li[data-item-key]")?.textContent).toContain(
-      "第 1 项，封面，动态流整张显示",
+    expect(account.querySelector("li[data-item-key]")?.textContent).toContain(
+      "第 1 项，封面，动态流显示局部",
     );
-    // A centred cover is no framing: nothing to name.
-    expect(account.querySelector("[data-edit-notes]")).toBeNull();
+    // 整张 is that photo's default: nothing to name.
+    expect(device.querySelector("[data-edit-notes]")).toBeNull();
   });
 });

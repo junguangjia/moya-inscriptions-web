@@ -49,9 +49,10 @@ export type DiscoveryCardMediaRecord =
       /** The item's loading colour; absent for a non-opaque image. */
       readonly placeholderColor?: string;
       /**
-       * The item's feed framing (its `MediaEdit.feed`), only when it differs
-       * from the centred cover; on the card image only while the revision
-       * has no cover crop.
+       * The item's effective feed framing in the reader form (its
+       * `MediaEdit.feed`, else the item's default), only when it is not the
+       * centred cover; on the card image only while the revision has no
+       * cover crop.
        */
       readonly feed?: MediaFeedFraming;
     };

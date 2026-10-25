@@ -19,12 +19,14 @@ test.beforeAll(async ({ request }) => {
 });
 
 /**
- * #341: the phone feed and the work cards show a work image as its author
- * framed it for the feed (`MediaEdit.feed`): a taller image cropped at the
- * chosen region (局部) or kept whole with blank sides (整张), centred as
- * before when it was never framed. Community requests are page routes with
- * synthetic works whose images (900 × 1800) are taller than every box they
- * meet. Browser emulation, not physical-device QA.
+ * #341: the phone feed and the work cards show a work image in the framing
+ * its read carries (`feed`, the reader form): a taller image cropped at the
+ * chosen region (局部) or kept whole with blank sides (整张), and cropped at
+ * the centre without one. The server reads an uncropped image its author
+ * never framed as 整张 (r3), and a centred cover as no framing. Community
+ * requests are page routes with synthetic works whose images (900 × 1800)
+ * are taller than every box they meet. Browser emulation, not
+ * physical-device QA.
  */
 const viewer = {
   id: `user-${"b".repeat(32)}`,
@@ -61,13 +63,13 @@ const FRAMED = {
     still("3"),
   ],
 } as const;
-/** No gallery: its cover is the post's one image, kept whole. */
+/** No gallery: its cover is the post's one image, kept whole (an uncropped one's default). */
 const WHOLE = {
   id: workId("2"),
   title: "整张作品",
   media: { ...still("4"), feed: { fit: "contain" } },
 } as const;
-/** Never framed: cropped at the centre, as every image was before #341. */
+/** No framing read: a centred cover (a cropped image never framed, or 局部 at the centre). */
 const PLAIN = {
   id: workId("3"),
   title: "居中作品",
@@ -315,7 +317,7 @@ test("the phone feed shows each work image at its author's region, whole, or cen
     );
     expect(colours.token).not.toBe("");
     expect(colours.background).toBe(colours.token);
-    // Never framed: cropped at the centre.
+    // No framing read: cropped at the centre.
     await expect(slide(2)).toHaveAttribute("data-fit", "cover");
     await expect(slide(2)).not.toHaveAttribute("data-feed-framing");
     await expect(picture(2)).toHaveCSS("object-position", "50% 50%");
@@ -366,7 +368,7 @@ test("a two-column work card follows its cover's framing", async ({
     expect(colours.token).not.toBe("");
     expect(colours.background).toBe(colours.token);
 
-    // Never framed: the card covers its box at the centre, as before.
+    // No framing read: the card covers its box at the centre, as before.
     const plain = media(PLAIN.id);
     await expect(plain).toBeVisible();
     await expect(plain).not.toHaveAttribute("data-fit");

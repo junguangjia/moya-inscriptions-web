@@ -334,7 +334,10 @@ export const mediaCropSchema = z
 
 export const mediaRotationSchema = z.literal([0, 90, 180, 270]);
 
-/** Where an absent `feed` frames a taller image: today's centred cover. */
+/**
+ * The centred cover's `y`: a cropped item's default framing, and what an
+ * absent `feed` means on a read (`mediaFeedFramingSchema`).
+ */
 export const MEDIA_FEED_CENTRE = 0.5;
 
 /**
@@ -345,7 +348,14 @@ export const MEDIA_FEED_CENTRE = 0.5;
  * It matters only while the frame is taller than the box it is shown in:
  * `cover` shows the region at `y`, the vertical position inside the
  * overflow (0 top, 0.5 centre, 1 bottom); `contain` shows the whole frame
- * with blank sides. Absent means a centred cover; clients omit it then.
+ * with blank sides. Each item has a default: the whole frame (`contain`)
+ * without a crop, a centred cover with one. As `MediaEdit.feed` it is only
+ * the author's explicit choice, omitted when it equals that default (an
+ * uncropped item never stores `contain`, a cropped one never the centred
+ * cover). Reads carry the effective framing (the stored choice, else the
+ * default) in the reader form, where absent means a centred cover; a
+ * default whole frame no taller than a square, which a centred cover shows
+ * the same, is omitted too.
  */
 export const mediaFeedFramingSchema = z.discriminatedUnion("fit", [
   z.strictObject({ fit: z.literal("contain") }),
@@ -852,10 +862,10 @@ export const workMediaSchema = z
   .superRefine(refineWorkMedia);
 
 /**
- * A user work's media entry: a work media entry plus its feed framing
- * (`MediaEdit.feed`), sent only when it differs from the centred cover.
- * Detail and the Viewer always show the whole image; Article media shapes
- * use `workMediaSchema` and never carry it.
+ * A user work's media entry: a work media entry plus its effective feed
+ * framing in the reader form (`mediaFeedFramingSchema`), absent for a
+ * centred cover. Detail and the Viewer always show the whole image; Article
+ * media shapes use `workMediaSchema` and never carry it.
  */
 export const userWorkMediaSchema = z
   .strictObject({ ...workMediaFields, feed: mediaFeedFramingSchema.optional() })

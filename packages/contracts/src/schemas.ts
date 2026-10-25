@@ -997,9 +997,10 @@ export const workSchema = z
      */
     coverRenditions: mediaRenditionListSchema.optional(),
     /**
-     * The cover still's feed framing (its item's `MediaEdit.feed`), sent only
-     * when the revision has no cover composition and the framing differs
-     * from the centred cover.
+     * The cover still's effective feed framing in the reader form
+     * (`mediaFeedFramingSchema`: its item's `MediaEdit.feed`, else the item's
+     * default), sent only when the revision has no cover composition and the
+     * framing is not the centred cover.
      */
     coverFeed: mediaFeedFramingSchema.optional(),
     /** Null until the first public exposure (a self-only or pending first submission). */
@@ -1223,8 +1224,9 @@ const addCardMediaAnchorIssues = (
 /**
  * One shown image of a card's item in its full framing, in the same delivery
  * form as the card's `media`; a Live Photo is its still plus the flag.
- * `feed` is a work image's feed framing (`MediaEdit.feed`), sent only when it
- * differs from the centred cover; never on a Catalog image.
+ * `feed` is a work image's effective feed framing in the reader form
+ * (`mediaFeedFramingSchema`), absent for a centred cover; never on a Catalog
+ * image.
  */
 const cardGalleryEntrySchema = z
   .strictObject({
@@ -1234,9 +1236,10 @@ const cardGalleryEntrySchema = z
   })
   .superRefine(addCardMediaAnchorIssues);
 /**
- * The card image. `feed` is a work cover's feed framing, sent only when the
- * revision has no cover composition and the framing differs from the
- * centred cover; never on a Catalog image.
+ * The card image. `feed` is a work cover's effective feed framing in the
+ * reader form (`mediaFeedFramingSchema`), sent only when the revision has no
+ * cover composition and the framing is not the centred cover; never on a
+ * Catalog image.
  */
 const cardCoverMediaSchema = z
   .strictObject({ ...cardMediaFields, feed: mediaFeedFramingSchema.optional() })

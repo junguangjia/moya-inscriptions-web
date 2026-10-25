@@ -1209,7 +1209,8 @@ test("inline crop offers 自由 and 4:5, the 「动态流」 tool and apply-all 
     exact: true,
   });
 
-  // Photo 2 at 3:4 is taller than the stage photo 1 gives the feed: 整张.
+  // Photo 2 at 3:4 is taller than the stage photo 1 gives the feed. Cropped,
+  // the feed cuts it at its centre (局部) until its author picks 整张.
   await click(thumb(composer, 1));
   await expect(thumb(composer, 1)).toHaveAttribute("aria-current", "true");
   await click(ratio(composer, "3:4"));
@@ -1218,6 +1219,13 @@ test("inline crop offers 自由 and 4:5, the 「动态流」 tool and apply-all 
   // The crop rests meanwhile: its ratios and corners are away.
   await expect(ratios).toHaveCount(0);
   await expect(handles).toHaveCount(0);
+  await expect(window).toHaveAttribute("data-feed-fit", "cover");
+  await expect(window.locator("[data-edge]")).toHaveCount(2);
+  await expect(feedFit(composer, "局部")).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await expect(feedRegion(composer)).toHaveAttribute("aria-valuenow", "50");
   await click(feedFit(composer, "整张"));
   await expect(feedFit(composer, "整张")).toHaveAttribute(
     "aria-checked",
@@ -1227,16 +1235,18 @@ test("inline crop offers 自由 and 4:5, the 「动态流」 tool and apply-all 
   await expect(window).toHaveAttribute("data-feed-whole", "");
   await expect(window.locator("[data-edge]")).toHaveCount(0);
 
-  // The tool stays on for photo 1, which the feed crops at its centre: 局部.
+  // The tool stays on for photo 1, uncropped (原始比例), which the feed
+  // shows whole (#341 r3) until its author picks 局部.
   await click(thumb(composer, 0));
   await expect(thumb(composer, 0)).toHaveAttribute("aria-current", "true");
-  await expect(window).toHaveAttribute("data-feed-fit", "cover");
-  await expect(window.locator("[data-edge]")).toHaveCount(2);
-  await expect(feedFit(composer, "局部")).toHaveAttribute(
+  await expect(window).toHaveAttribute("data-feed-fit", "contain");
+  await expect(window).toHaveAttribute("data-feed-whole", "");
+  await expect(window.locator("[data-edge]")).toHaveCount(0);
+  await expect(feedFit(composer, "整张")).toHaveAttribute(
     "aria-checked",
     "true",
   );
-  await expect(feedRegion(composer)).toHaveAttribute("aria-valuenow", "50");
+  await expect(feedRegion(composer)).toHaveCount(0);
   await expect(applyAll).toHaveAttribute("aria-disabled", "true");
 
   // Off again, the ratios are back; at 4:5 the feed fills its stage with
@@ -1258,7 +1268,7 @@ test("inline crop offers 自由 and 4:5, the 「动态流」 tool and apply-all 
   await click(thumb(composer, 1));
   await expect(ratio(composer, "4:5")).toHaveAttribute("aria-checked", "true");
   // 应用到全部 gave photo 2 the crop, never the framing: taller again, it is
-  // still shown whole.
+  // still shown whole, as its author chose (cropped, it would be 局部).
   await click(ratio(composer, "3:4"));
   await click(tool);
   await expect(feedFit(composer, "整张")).toHaveAttribute(
@@ -1304,21 +1314,42 @@ test("「动态流」 framing is kept per photo across 发布 and 编辑, and is
     name: "返回编辑照片",
     exact: true,
   });
-  // Unframed, the feed crops the taller photo 1 at its centre.
+  // Unframed and uncropped (原始比例), the taller photo 1 is shown whole
+  // (#341 r3), its blank sides on the feed stage's page colour.
   await publishScreen(composer);
-  await expect(first).toHaveAttribute("data-fit", "cover");
-  await expect(first).not.toHaveAttribute("data-feed-framing");
-  await expect(first.locator("img")).toHaveCSS("object-position", "50% 50%");
+  await expect(first).toHaveAttribute("data-fit", "contain");
+  await expect(first).toHaveAttribute("data-feed-framing", "whole");
+  await expect(first).not.toHaveAttribute("style", /--feed-slide-y/u);
+  await expect(first.locator("img")).toHaveCSS("object-fit", "contain");
+  const colours = await backgroundAndToken(
+    first,
+    "--yoyi-color-background-page",
+  );
+  expect(colours.token).not.toBe("");
+  expect(colours.background).toBe(colours.token);
   await expect(publishCard(composer, 1)).toHaveAttribute("data-fit", "contain");
+  await expect(publishCard(composer, 1)).not.toHaveAttribute(
+    "data-feed-framing",
+  );
   await click(back);
   await present(screen(composer, "edit"));
   await expect(thumb(composer, 0)).toHaveAttribute("aria-current", "true");
 
-  // 局部 at the top (End): only what lies below is cut.
+  // 编辑 agrees: 整张 until 局部 is picked, which starts at the centre.
   await click(feedTool(composer));
+  const window = composer.editor.locator("[data-feed-window]");
+  await expect(feedFit(composer, "整张")).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await expect(window).toHaveAttribute("data-feed-whole", "");
+  await expect(feedRegion(composer)).toHaveCount(0);
+  await click(feedFit(composer, "局部"));
+  await expect(feedRegion(composer)).toHaveAttribute("aria-valuenow", "50");
+  await expect(window.locator("[data-edge]")).toHaveCount(2);
+  // 局部 at the top (End): only what lies below is cut.
   await press(feedRegion(composer), "End");
   await expect(feedRegion(composer)).toHaveAttribute("aria-valuenow", "100");
-  const window = composer.editor.locator("[data-feed-window]");
   await expect(window.locator('[data-edge="top"]')).toHaveCount(0);
   await expect(window.locator('[data-edge="bottom"]')).toHaveCount(1);
   await publishScreen(composer);
@@ -1355,24 +1386,17 @@ test("「动态流」 framing is kept per photo across 发布 and 编辑, and is
     "aria-checked",
     "true",
   );
-
-  // 整张: the whole photo, its blank sides on the feed stage's page colour.
+  // 整张 → 局部 returns to the region photo 1 had: the top.
+  await click(feedFit(composer, "局部"));
+  await expect(feedRegion(composer)).toHaveAttribute("aria-valuenow", "100");
   await publishScreen(composer);
-  await expect(first).toHaveAttribute("data-fit", "contain");
-  await expect(first).toHaveAttribute("data-feed-framing", "whole");
-  await expect(first).not.toHaveAttribute("style", /--feed-slide-y/u);
-  await expect(first.locator("img")).toHaveCSS("object-fit", "contain");
-  const colours = await backgroundAndToken(
-    first,
-    "--yoyi-color-background-page",
-  );
-  expect(colours.token).not.toBe("");
-  expect(colours.background).toBe(colours.token);
+  await expect(first).toHaveAttribute("data-feed-framing", "region");
+  await expect(first).toHaveAttribute("style", /--feed-slide-y:\s*0%/u);
 
   const publish = screen(composer, "publish");
   // #305: a work needs a title as well as its photos.
   await fill(publish.locator('[data-editor-input="title"]'), "合成动态流构图");
-  await fill(publish.locator('[data-editor-input="body"]'), "第一张整张显示");
+  await fill(publish.locator('[data-editor-input="body"]'), "第一张显示上部");
   await press(publish.locator('[data-editor-input="body"]'), "Tab");
   await expect(publish.locator("[data-editor-submit]")).not.toHaveAttribute(
     "aria-disabled",
@@ -1386,12 +1410,13 @@ test("「动态流」 framing is kept per photo across 发布 and 编辑, and is
   await expect
     .poll(() => composer.fixture.submitted().length, { timeout: 15_000 })
     .toBe(1);
-  // The framing travels in the photo's edit and never touches its pixels.
+  // The framing travels in the photo's edit and never touches its pixels;
+  // a photo's default (an uncropped one whole) is never sent.
   const [framed, plain] = composer.fixture.submitted()[0]!.content.items;
   expect(framed!.edit).toEqual({
     rotation: 0,
     crop: null,
-    feed: { fit: "contain" },
+    feed: { fit: "cover", y: 0 },
   });
   expect(plain!.edit).not.toHaveProperty("feed");
 });
@@ -1413,16 +1438,18 @@ test("存草稿并退出 keeps a photo's framing in the draft, and reopening the
     timeout: ACTION_TIMEOUT,
   });
   // Photo 1 (3:4, now its derivative) is taller than the feed's 4:5 stage.
+  // Uncropped, it is shown whole (#341 r3); 局部 at the centre is a choice.
   await expect(
     composer.editor.locator("[data-edit-stage] img").first(),
   ).toHaveAttribute("src", /\/display\/base$/u);
   await click(feedTool(composer));
   await expect(feedTool(composer)).toHaveAttribute("aria-pressed", "true");
-  await click(feedFit(composer, "整张"));
   await expect(feedFit(composer, "整张")).toHaveAttribute(
     "aria-checked",
     "true",
   );
+  await click(feedFit(composer, "局部"));
+  await expect(feedRegion(composer)).toHaveAttribute("aria-valuenow", "50");
   const saved = composer.fixture.saved();
   await click(
     screen(composer, "edit").getByRole("button", { name: "返回", exact: true }),
@@ -1435,8 +1462,9 @@ test("存草稿并退出 keeps a photo's framing in the draft, and reopening the
   );
   await expect(composer.editor).toHaveCount(0);
   expect(composer.fixture.saved()).toBeGreaterThan(saved);
+  // Stored as chosen: the centred cover is not photo 1's default.
   const content = composer.fixture.draft();
-  expect(content?.items[0]?.edit.feed).toEqual({ fit: "contain" });
+  expect(content?.items[0]?.edit.feed).toEqual({ fit: "cover", y: 0.5 });
   expect(content?.items[1]?.edit).not.toHaveProperty("feed");
 
   // 草稿箱 on a new work's start screen reopens the draft at 发布.
@@ -1460,10 +1488,10 @@ test("存草稿并退出 keeps a photo's framing in the draft, and reopening the
   await expect(picker).toHaveCount(0);
   const publish = screen(composer, "publish");
   await present(publish);
-  await expect(publishCard(composer, 0)).toHaveAttribute("data-fit", "contain");
-  await expect(publishCard(composer, 0)).toHaveAttribute(
+  // Read back as the feed reads it: a centred cover, no longer whole.
+  await expect(publishCard(composer, 0)).toHaveAttribute("data-fit", "cover");
+  await expect(publishCard(composer, 0)).not.toHaveAttribute(
     "data-feed-framing",
-    "whole",
   );
   await expect(publishCard(composer, 1)).not.toHaveAttribute(
     "data-feed-framing",
@@ -1475,10 +1503,11 @@ test("存草稿并退出 keeps a photo's framing in the draft, and reopening the
   await expect(thumb(composer, 0)).toHaveAttribute("aria-current", "true");
   await click(feedTool(composer));
   await expect(feedTool(composer)).toHaveAttribute("aria-pressed", "true");
-  await expect(feedFit(composer, "整张")).toHaveAttribute(
+  await expect(feedFit(composer, "局部")).toHaveAttribute(
     "aria-checked",
     "true",
   );
+  await expect(feedRegion(composer)).toHaveAttribute("aria-valuenow", "50");
 });
 
 test("「动态流」 keeps a dragged region once the finger lifts, and a cancelled drag leaves it", async ({
@@ -1490,6 +1519,8 @@ test("「动态流」 keeps a dragged region once the finger lifts, and a cancel
   await pickPhotos(composer);
   const stage = composer.editor.locator("[data-edit-stage]");
   await click(feedTool(composer));
+  // Uncropped, photo 1 starts whole (#341 r3); 局部 starts at the centre.
+  await click(feedFit(composer, "局部"));
   const region = feedRegion(composer);
   await expect(region).toHaveAttribute("aria-valuenow", "50");
   await expect(region).toHaveAccessibleDescription(/居中/u);
@@ -1673,9 +1704,13 @@ test("发布 previews the feed right to left and card taps return to the corresp
   const strip = composer.editor.locator("[data-publish-strip]");
   await expect(strip).toHaveCSS("direction", "rtl");
   await expect(strip).toHaveAttribute("data-count", "2");
+  // The uncropped, taller photo 1 is shown whole (#341 r3).
   await expect(
     composer.editor.locator('[data-publish-card="0"]'),
-  ).toHaveAttribute("data-fit", "cover");
+  ).toHaveAttribute("data-fit", "contain");
+  await expect(
+    composer.editor.locator('[data-publish-card="0"]'),
+  ).toHaveAttribute("data-feed-framing", "whole");
   await expect(
     composer.editor.locator('[data-publish-card="1"]'),
   ).toHaveAttribute("data-fit", "contain");
@@ -2044,9 +2079,14 @@ test("desktop preserves the entry choice, all-at-once editor, feed stage and cro
   const stage = desktop.locator("[data-feed-preview-stage]");
   await expect(stage).toHaveAttribute("data-feed-stage-count", "2");
   await expect(stage).toHaveCSS("direction", "rtl");
+  // The uncropped, taller photo 1 is shown whole (#341 r3).
   await expect(stage.locator('[data-feed-slide="0"]')).toHaveAttribute(
     "data-fit",
-    "cover",
+    "contain",
+  );
+  await expect(stage.locator('[data-feed-slide="0"]')).toHaveAttribute(
+    "data-feed-framing",
+    "whole",
   );
   await expect(stage.locator('[data-feed-slide="1"]')).toHaveAttribute(
     "data-fit",
@@ -2066,7 +2106,7 @@ test("desktop preserves the entry choice, all-at-once editor, feed stage and cro
   await expect(dialog.locator("input[type=range]")).toHaveCount(0);
   await expect(dialog.locator("[data-feed-window]")).toHaveAttribute(
     "data-feed-fit",
-    "cover",
+    "contain",
   );
   await (
     await present(dialog.getByRole("radio", { name: "4:5", exact: true }))
@@ -2077,9 +2117,13 @@ test("desktop preserves the entry choice, all-at-once editor, feed stage and cro
   );
   await click(dialog.getByRole("button", { name: "完成", exact: true }));
   await expect(dialog).toHaveCount(0);
+  // At 4:5 it fills the 4:5 stage: shown whole, with nothing to frame.
   await expect(stage.locator('[data-feed-slide="0"]')).toHaveAttribute(
     "data-fit",
     "contain",
+  );
+  await expect(stage.locator('[data-feed-slide="0"]')).not.toHaveAttribute(
+    "data-feed-framing",
   );
 });
 
@@ -2100,12 +2144,13 @@ test("desktop edit dialog keeps 局部 · 整张 with 完成, and 还原 resets 
     desktop.getByRole("button", { name: "选择文件", exact: true }),
     await photos(),
   );
-  // Photo 1 (3:4) is taller than the 4:5 stage it sets.
+  // Photo 1 (3:4) is taller than the 4:5 stage it sets. Uncropped, it is
+  // shown whole (#341 r3).
   const slide = desktop.locator(
     '[data-feed-preview-stage] [data-feed-slide="0"]',
   );
-  await expect(slide).toHaveAttribute("data-fit", "cover");
-  await expect(slide).not.toHaveAttribute("data-feed-framing");
+  await expect(slide).toHaveAttribute("data-fit", "contain");
+  await expect(slide).toHaveAttribute("data-feed-framing", "whole");
   const dialog = composer.page.getByRole("dialog", {
     name: "编辑第 1 项",
     exact: true,
@@ -2127,25 +2172,29 @@ test("desktop edit dialog keeps 局部 · 整张 with 完成, and 还原 resets 
   await open();
   // The desktop crop has no corner handles.
   await expect(dialog.locator("[data-crop-handle]")).toHaveCount(0);
-  await expect(fit("局部")).toBeChecked();
-  await (await present(fit("整张"))).check({ timeout: ACTION_TIMEOUT });
   const window = dialog.locator("[data-feed-window]");
+  await expect(fit("整张")).toBeChecked();
   await expect(window).toHaveAttribute("data-feed-fit", "contain");
   await expect(window).toHaveAttribute("data-feed-whole", "");
-  // Pending until 完成: the stage still shows the stored framing.
-  await expect(slide).toHaveAttribute("data-fit", "cover");
-  await done();
-  await expect(slide).toHaveAttribute("data-fit", "contain");
-  await expect(slide).toHaveAttribute("data-feed-framing", "whole");
-
-  // 局部 with the region handle's End: the top of the photo.
-  await open();
-  await expect(fit("整张")).toBeChecked();
+  // 局部 starts at the centre.
   await (await present(fit("局部"))).check({ timeout: ACTION_TIMEOUT });
   const region = dialog.getByRole("slider", {
     name: "动态流显示范围",
     exact: true,
   });
+  await expect(region).toHaveAttribute("aria-valuenow", "50");
+  await expect(window).toHaveAttribute("data-feed-fit", "cover");
+  // Pending until 完成: the stage still shows the stored framing.
+  await expect(slide).toHaveAttribute("data-fit", "contain");
+  await done();
+  // Kept at the centre: a centred cover, read as no framing.
+  await expect(slide).toHaveAttribute("data-fit", "cover");
+  await expect(slide).not.toHaveAttribute("data-feed-framing");
+  await expect(slide).not.toHaveAttribute("style", /--feed-slide-y/u);
+
+  // 局部 with the region handle's End: the top of the photo.
+  await open();
+  await expect(fit("局部")).toBeChecked();
   await expect(region).toHaveAttribute("aria-valuenow", "50");
   await press(region, "End");
   await expect(region).toHaveAttribute("aria-valuenow", "100");
@@ -2154,13 +2203,15 @@ test("desktop edit dialog keeps 局部 · 整张 with 完成, and 还原 resets 
   await expect(slide).toHaveAttribute("data-feed-framing", "region");
   await expect(slide).toHaveAttribute("style", /--feed-slide-y:\s*0%/u);
 
-  // 还原 brings back the centred cover.
+  // 还原 brings back the uncropped photo's default: whole.
   await open();
   await click(dialog.getByRole("button", { name: "还原", exact: true }));
-  await expect(region).toHaveAttribute("aria-valuenow", "50");
+  await expect(fit("整张")).toBeChecked();
+  await expect(window).toHaveAttribute("data-feed-whole", "");
+  await expect(region).toHaveCount(0);
   await done();
-  await expect(slide).toHaveAttribute("data-fit", "cover");
-  await expect(slide).not.toHaveAttribute("data-feed-framing");
+  await expect(slide).toHaveAttribute("data-fit", "contain");
+  await expect(slide).toHaveAttribute("data-feed-framing", "whole");
 });
 
 test("phone preview-first processing keeps editing usable and retries only high resolution", async ({

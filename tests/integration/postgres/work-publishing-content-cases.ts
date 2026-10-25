@@ -2518,18 +2518,22 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         sequence: 1,
         title: "旧式作品",
       });
+      // Phase 4 photos are never cropped: a taller one keeps its default
+      // whole-image framing.
       expect((await authors.readWork(work, b)).media).toEqual([
         {
           id: second,
           src: `/api/community/media/${second}`,
           width: 50,
           height: 60,
+          feed: { fit: "contain" },
         },
         {
           id: first,
           src: `/api/community/media/${first}`,
           width: 30,
           height: 40,
+          feed: { fit: "contain" },
         },
       ]);
       expect(
@@ -2540,6 +2544,7 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
         width: 50,
         height: 60,
         src: `/api/community/media/${second}`,
+        feed: { fit: "contain" },
       });
       expect(await authors.readMedia(first, b)).not.toBeNull();
       // Phase 4 authors never declared authorship: nothing claims one.
@@ -2836,13 +2841,16 @@ export const registerWorkPublishingContentTests = (pool: Pool) => {
       }
       const derivedEdit = confirmed(await editWork(a, work, edited, editedAt));
       // Others see the edited PNG through derivatives and the unedited one
-      // through user media; the card cover honors the cover crop key.
+      // through user media; the card cover honors the cover crop key. The
+      // taller uncut PNG keeps its whole-image framing; the rotated one is
+      // wider and needs none.
       expect((await authors.readWork(work, b)).media).toEqual([
         {
           id: second,
           src: `/api/community/media/${second}`,
           width: 50,
           height: 60,
+          feed: { fit: "contain" },
         },
         {
           id: firstItem.itemId,

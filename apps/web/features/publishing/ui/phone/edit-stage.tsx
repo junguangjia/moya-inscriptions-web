@@ -44,6 +44,7 @@ import {
   cropFromPercentages,
   cropRatio,
   normalizeCrop,
+  normalizeFeed,
   rotatedSize,
   sameEdit,
   turn,
@@ -274,8 +275,8 @@ export interface StageCrop {
   /** The edit the stage shows now (the stored one while nothing changed). */
   readonly next: MediaEdit;
   /**
-   * 还原 has something to undo: a turn, a crop, a chosen ratio or the feed
-   * framing (a carried-over photo's framing only).
+   * 还原 has something to undo: a turn, a crop, a chosen ratio or a feed
+   * framing the author chose (a carried-over photo's framing only).
    */
   readonly restorable: boolean;
   /** The photo is larger than the frame at this zoom, so a drag moves it. */
@@ -467,7 +468,7 @@ export const useStageCrop = ({
           frame,
         );
   // The photo's feed framing is presentation, not pixels: every crop it
-  // keeps carries it as it is.
+  // keeps carries it, as that crop stores it (its default as none).
   const original = withFeed(
     { rotation: edit.rotation, crop: normalizeCrop(edit.crop) },
     edit.feed,
@@ -707,7 +708,7 @@ export const useStageCrop = ({
         (next.rotation !== 0 ||
           next.crop !== null ||
           session.preset !== "original")) ||
-      edit.feed !== undefined,
+      normalizeFeed(edit.feed, edit) !== undefined,
     pannable,
     report: (reported) =>
       onSession((current) => ({

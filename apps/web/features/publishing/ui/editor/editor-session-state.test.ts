@@ -426,21 +426,43 @@ describe("editor session store", () => {
     ).toBe(false);
   });
 
-  it("counts a feed framing as author input, a centred one as none (#341)", () => {
+  it("counts a feed framing as author input, the photo's default as none (#341)", () => {
     const base = contentOf(
       createEditorSessionStore(ACCOUNT, { type: "new" }).get(),
     );
-    const framed = (feed: WorkDraftItem["edit"]["feed"]) => ({
+    const cut = { x: 0, y: 0.25, width: 1, height: 0.5 };
+    const framed = (
+      feed: WorkDraftItem["edit"]["feed"],
+      crop: WorkDraftItem["edit"]["crop"] = null,
+    ) => ({
       ...base,
       items: [
         {
           ...item("a", itemId(1)),
-          edit: { rotation: 0 as const, crop: null, ...(feed ? { feed } : {}) },
+          edit: { rotation: 0 as const, crop, ...(feed ? { feed } : {}) },
         },
       ],
     });
+    // Uncropped, the default is the whole photo (r3); 局部 at the centre is
+    // a choice.
     expect(
       sameAuthorContent(framed(undefined), framed({ fit: "contain" })),
+    ).toBe(true);
+    expect(
+      sameAuthorContent(framed(undefined), framed({ fit: "cover", y: 0.5 })),
+    ).toBe(false);
+    // Cropped, the default is the centred cover; 整张 is a choice.
+    expect(
+      sameAuthorContent(
+        framed(undefined, cut),
+        framed({ fit: "cover", y: 0.5 }, cut),
+      ),
+    ).toBe(true);
+    expect(
+      sameAuthorContent(
+        framed(undefined, cut),
+        framed({ fit: "contain" }, cut),
+      ),
     ).toBe(false);
     expect(
       sameAuthorContent(
@@ -448,9 +470,6 @@ describe("editor session store", () => {
         framed({ fit: "cover", y: 0.3 }),
       ),
     ).toBe(false);
-    expect(
-      sameAuthorContent(framed(undefined), framed({ fit: "cover", y: 0.5 })),
-    ).toBe(true);
     expect(
       sameAuthorContent(
         framed({ fit: "cover", y: 0.2 }),
@@ -461,8 +480,12 @@ describe("editor session store", () => {
     const device = framed(undefined);
     const selected = { ...framed(undefined), title: "账号" };
     expect(
-      preserveLaterConflictEdits(selected, device, framed({ fit: "contain" })),
-    ).toEqual({ ...framed({ fit: "contain" }), title: "账号" });
+      preserveLaterConflictEdits(
+        selected,
+        device,
+        framed({ fit: "cover", y: 0.3 }),
+      ),
+    ).toEqual({ ...framed({ fit: "cover", y: 0.3 }), title: "账号" });
   });
 
   it("carries feed framing through the content, adoption and upload identities", () => {

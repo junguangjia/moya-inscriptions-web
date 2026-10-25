@@ -21,10 +21,12 @@ recovery, explicit draft saving, conflict protection, upload quality, limits,
 Live Photo pairing and manual failure recovery remain authoritative.
 
 Issue [#341](https://github.com/junguangjia/moya-inscriptions-web/issues/341)
-later added one optional, render-only field, `MediaEdit.feed` (the feed framing
-of a tall work photo), and the public `feed` it is read back as on card gallery
-entries, the card cover and `Work.media`. It needs no migration, creates no
-derivative and never changes content identity; see
+later added one optional, render-only field, `MediaEdit.feed` (the author's feed
+framing of a tall work photo, stored only when it differs from the photo's
+default: whole when uncropped, else a centred cover), and the public `feed` it
+is read back as (the effective framing, an uncropped photo's whole default
+included) on card gallery entries, the card cover and `Work.media`. It needs no
+migration, creates no derivative and never changes content identity; see
 [Media composer tall-work framing V1](./media-composer-tall-work-framing-v1.md).
 The statement above describes #244 as delivered.
 
@@ -94,12 +96,14 @@ gesture or key reaches the photo. The frame then shows what the phone
 single-column feed shows of it.
 
 - A photo taller than the feed's stage (1:1 to 4:5, set by photo 1) is the
-  author's to frame. The ratio row becomes **局部 · 整张**. **局部** (the
-  default, centred) makes the whole frame a vertical slider: a finger drags the
-  shown region and keeps it once it lifts; ↑ and ↓ (Shift for a fine step), Page
-  Up / Down, Home (the bottom) and End (the top) keep each step at once.
-  **整张** shows the whole photo with blank sides. 整张 → 局部 returns to the
-  photo's last region in this opening.
+  author's to frame. The ratio row becomes **局部 · 整张**. **局部** (a cropped
+  photo's default, centred) makes the whole frame a vertical slider: a finger
+  drags the shown region and keeps it once it lifts; ↑ and ↓ (Shift for a fine
+  step), Page Up / Down, Home (the bottom) and End (the top) keep each step at
+  once. **整张** (an uncropped photo's default, #341 r3) shows the whole photo
+  with blank sides. 整张 → 局部 returns to the photo's last region in this
+  opening, or the centre. The author's choice always
+  wins; 原始比例 or 还原 brings back 整张 for a photo without one.
 - Any other photo says the feed shows it whole or full, with no choice. A
   framing it kept from an earlier, taller crop stays dormant: neither the feed
   nor a work card uses it, not even a 3:2 card across the row.
@@ -108,10 +112,11 @@ single-column feed shows of it.
   still, here on the phone only: the desktop has never offered 编辑 for it.
 
 Each photo keeps its framing at once, like a ratio, with no toast or 撤销.
-**还原** resets the crop, the turn and the framing together, and its 撤销 brings
-all three back. A turn keeps the framing. 应用到全部 is off while the tool is on
-and never changes framing. A cancelled pointer, the page losing focus, Escape or
-the back sheet take a region drag back; a second finger never takes it over.
+**还原** resets the crop, the turn and the framing together (an uncropped photo
+is whole again), and its 撤销 brings all three back. A turn keeps the author's
+choice. 应用到全部 is off while the tool is on and never changes framing. A
+cancelled pointer, the page losing focus, Escape or the back sheet take a region
+drag back; a second finger never takes it over.
 
 **应用到全部** applies the chosen ratio once to the photos currently present.
 Each eligible photo receives a crop calculated from its own rotated frame;
@@ -184,9 +189,10 @@ cover-reset semantics.
 
 - An RTL feed preview uses the edited photos, the first photo's stage geometry,
   status chips and existing gallery limit. A tall photo shows the author's
-  region or the whole photo (#341), its blank sides the page background. A photo
-  tap returns to 编辑 for that item. Photos beyond the feed limit remain in the
-  work and are identified as visible only on its page.
+  region or the whole photo (#341; an uncropped one is whole until its author
+  picks 局部), its blank sides the page background. A photo tap returns
+  to 编辑 for that item. Photos beyond the feed limit remain in the work and are
+  identified as visible only on its page.
 - Title and body use the existing text validation. **建议添加标题** remains a
   hint rather than a new title requirement.
 - **作品性质** is an optional chip group: **原创 · 临摹或练习 · 素材分享**, with
@@ -223,12 +229,13 @@ edit intent; a mount re-report is not a user edit.
 
 `feed-stage-preview.tsx` shares the feed's stage geometry and RTL scroll-snap
 presentation. `feedStageWindow` in publishing's media geometry describes the
-visible window of an edited frame: centred by default, at the author's region
-with uneven cuts above and below, or the whole frame for 整张 (#341). Framing is
-never a crop. 编辑's **动态流** starts off. The desktop edit dialog's feed
-window shows the stored framing and offers the same 局部 · 整张, the region
-placed by a handle on the window or its arrow keys, kept by 完成 and reset
-by 还原. The shared edit presets include 4:5 for existing crop consumers,
+visible window of an edited frame: centred (a cropped frame's default), at the
+author's region with uneven cuts above and below, or the whole frame
+for 整张 (#341; an uncropped frame's default). Framing is never a crop. 编辑's
+**动态流** starts off. The desktop edit dialog's feed window shows the photo's
+framing (its default when none is stored) and offers the same 局部 · 整张, the
+region placed by a handle on the window or its arrow keys, kept by 完成 and
+reset by 还原. The shared edit presets include 4:5 for existing crop consumers,
 including article body images.
 
 `article-cover-preview.tsx` continues to show the selected article cover in the
@@ -243,7 +250,7 @@ the existing `coverRefId`; no article-cover crop field is introduced.
 | Select or capture photos          | System picker/camera → 编辑 without a selected-photo grid                          | Same                                                                   | Accepted formats, quality choice, item limits and Live pairing             |
 | Crop one photo                    | Full-frame default; independent ratio, position and rotation                       | Same                                                                   | Non-destructive `MediaEdit`, stored crops and local recovery               |
 | Freeform crop (#341)              | Corner handles in a 60/16 px crop field; 自由; release re-centres and zooms        | Same                                                                   | Stored crops, 原始比例 = crop null, rotation in 90° steps                  |
-| Feed framing (#341)               | 「动态流」: 局部 slider or 整张 per tall photo; 还原 with 撤销; desktop 完成       | Same after the joint Web, Backend and Admin release                    | Detail/Viewer whole frame, no 已编辑, no re-derivation, stage ratio rule   |
+| Feed framing (#341)               | 「动态流」: 整张 if uncropped, 局部 if cropped, or chosen; 还原; desktop 完成      | Same after the joint Web, Backend and Admin release                    | Detail/Viewer whole frame, no 已编辑, no re-derivation, stage ratio rule   |
 | 应用到全部                        | One-time ratio application with per-photo geometry and 撤销                        | Same                                                                   | Rotation, existing same-ratio position and unsupported-photo handling      |
 | Reorder and 首图                  | RTL strip, drag/keyboard/sheet actions; first photo badge                          | Same                                                                   | Logical order, current-photo identity and cover reset rule                 |
 | Remove or reselect                | Immediate visual removal; 撤销; empty album returns to start                       | Same                                                                   | Cancelled-upload ownership, correct focus and no stale 撤销                |
@@ -289,7 +296,8 @@ integration cases listed in its task record.
 
 - Stored article-cover cropping, which requires separate contract/backend scope.
 - Feed framing in the native clients (Apple, HarmonyOS), which do not parse
-  `feed` yet; they must treat its absence as the centred cover.
+  `feed` yet; they must treat its absence as the centred cover. Until they read
+  it, they show an uncropped tall photo centred, where the Web shows it whole.
 - Byte-level progress for profile images under the separately authorized media
   pipeline work.
 - Broader device/browser acceptance and further visual refinements beyond the

@@ -178,6 +178,20 @@ export const CropSurface = ({
       ? seeded.current.seed
       : undefined;
 
+  // A hold (frozen) ends: on the same generation's cropper, a touch it was
+  // refused meanwhile must not leave the library touching (gestures.endHold).
+  const heldFrom = useRef<number | string | null>(null);
+  useEffect(() => {
+    if (frozen) {
+      heldFrom.current ??= generation;
+      return;
+    }
+    if (heldFrom.current === null) return;
+    const same = heldFrom.current === generation;
+    heldFrom.current = null;
+    gestures.endHold(same);
+  }, [frozen, generation]);
+
   // A new generation starts from zoom 1 at the centre before its seed
   // applies: reset while rendering, so the new cropper mounts there and its
   // seed (applied as it mounts) is never overwritten afterwards (#341).

@@ -186,41 +186,102 @@ export const sameEdit = (left: MediaEdit, right: MediaEdit): boolean =>
 
 /** Rounding of a stored feed position. */
 const FEED_PRECISION = 1e4;
+/** Same tolerance as the stage's `slideFit`. */
+const FEED_FIT_TOLERANCE = 0.001;
+
+/** The part of an edit its default feed framing follows. */
+type FramedCrop = Pick<MediaEdit, "crop">;
 
 /**
- * A feed framing as stored: `y` rounded and clamped, and the centred cover
- * (the default) as absent.
+ * How the phone feed frames an item its author did not frame (#341 r3): an
+ * uncropped photo (原始比例) whole, a cropped one (自由 or a preset) as a
+ * centred cover.
  */
-export const normalizeFeed = (
+export const defaultFeed = (edit: FramedCrop): MediaFeedFraming =>
+  edit.crop === null ? { fit: "contain" } : { fit: "cover", y: FEED_CENTRE_Y };
+
+/**
+ * A framing with `y` rounded and clamped, whatever the edit's default; an
+ * invalid one is none.
+ */
+export const cleanFeed = (
   feed: MediaFeedFraming | undefined,
 ): MediaFeedFraming | undefined => {
   if (feed === undefined) return undefined;
   if (feed.fit === "contain") return { fit: "contain" };
   if (!Number.isFinite(feed.y)) return undefined;
-  const y = Math.round(clamp(feed.y, 0, 1) * FEED_PRECISION) / FEED_PRECISION;
-  return y === FEED_CENTRE_Y ? undefined : { fit: "cover", y };
+  return {
+    fit: "cover",
+    y: Math.round(clamp(feed.y, 0, 1) * FEED_PRECISION) / FEED_PRECISION,
+  };
 };
 
+const equalFeed = (left: MediaFeedFraming, right: MediaFeedFraming) =>
+  left.fit === "contain"
+    ? right.fit === "contain"
+    : right.fit === "cover" && left.y === right.y;
+
+/** The framing the feed shows an item with: its author's, else its default. */
+export const effectiveFeed = (edit: MediaEdit): MediaFeedFraming =>
+  cleanFeed(edit.feed) ?? defaultFeed(edit);
+
+/**
+ * A feed framing as stored on `edit`: only an author's choice that differs
+ * from the edit's default (`defaultFeed`), with `y` rounded and clamped; the
+ * default is absent.
+ */
+export const normalizeFeed = (
+  feed: MediaFeedFraming | undefined,
+  edit: FramedCrop,
+): MediaFeedFraming | undefined => {
+  const framing = cleanFeed(feed);
+  return framing === undefined || equalFeed(framing, defaultFeed(edit))
+    ? undefined
+    : framing;
+};
+
+/** Whether two framings show `edit`'s frame alike (absent is its default). */
 export const sameFeed = (
   left: MediaFeedFraming | undefined,
   right: MediaFeedFraming | undefined,
-): boolean => {
-  const a = normalizeFeed(left);
-  const b = normalizeFeed(right);
-  if (a === undefined || b === undefined) return a === b;
-  return a.fit === "contain"
-    ? b.fit === "contain"
-    : b.fit === "cover" && a.y === b.y;
-};
+  edit: FramedCrop,
+): boolean =>
+  equalFeed(
+    cleanFeed(left) ?? defaultFeed(edit),
+    cleanFeed(right) ?? defaultFeed(edit),
+  );
 
-/** `edit` with `feed` as its framing, omitted when centred. */
+/** `edit` with `feed` as its framing, omitted when it is the edit's default. */
 export const withFeed = (
   edit: MediaEdit,
   feed: MediaFeedFraming | undefined,
 ): MediaEdit => {
   const pixels = { rotation: edit.rotation, crop: edit.crop };
-  const framing = normalizeFeed(feed);
+  const framing = normalizeFeed(feed, pixels);
   return framing === undefined ? pixels : { ...pixels, feed: framing };
+};
+
+/**
+ * The framing a reader of the feed gets for `edit` shown at `frame` (its
+ * edited frame), as the server reads it out (#341 r3): the effective
+ * framing, absent for a centred cover. An uncropped photo's whole-image
+ * default is spelled out only for a frame taller than a square, the only
+ * frame it changes.
+ */
+export const readerFeed = (
+  edit: MediaEdit,
+  frame: Size | null,
+): MediaFeedFraming | undefined => {
+  const chosen = cleanFeed(edit.feed);
+  if (chosen === undefined)
+    return edit.crop === null &&
+      frame !== null &&
+      frame.height / frame.width > 1 + FEED_FIT_TOLERANCE
+      ? { fit: "contain" }
+      : undefined;
+  return chosen.fit === "cover" && chosen.y === FEED_CENTRE_Y
+    ? undefined
+    : chosen;
 };
 
 export const sameCrop = (
@@ -349,7 +410,9 @@ export const drawPlan = (
  * it), or shows it whole with blank at the sides when the author keeps it
  * whole (`feed.fit` 'contain'). A frame of the stage's shape fills it
  * (`fill`); any other frame is shown whole with blank above and below
- * (`contain`), and a framing it carries stays dormant.
+ * (`contain`), and a framing it carries stays dormant. `feed` is read as
+ * the feed reads it (absent is a centred cover): an item's framing is
+ * passed as `effectiveFeed` gives it, so its default counts.
  */
 export interface FeedStageWindow {
   readonly fit: "cover" | "fill" | "contain";
@@ -362,9 +425,6 @@ export interface FeedStageWindow {
   /** The stage's height / width ratio the window was computed against. */
   readonly stageRatio: number;
 }
-
-/** Same tolerance as the stage's `slideFit`. */
-const FEED_FIT_TOLERANCE = 0.001;
 
 export const feedStageWindow = (
   cropRatio: number,

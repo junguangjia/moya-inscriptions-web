@@ -74,7 +74,7 @@ export interface DetailMediaPresentation {
   /** Present only for a Live Photo; the still stays the presented image. */
   readonly live?: DetailLiveMotionPresentation;
   /**
-   * How the phone feed frames a work image (its `MediaEdit.feed`, from the
+   * How the phone feed frames a work image (its effective framing, from the
    * card); absent, a taller image is cropped at the centre. Only the feed's
    * adaptive stage reads it: Detail and the Viewer always show the whole
    * image.

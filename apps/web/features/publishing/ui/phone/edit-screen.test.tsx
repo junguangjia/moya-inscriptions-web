@@ -1721,8 +1721,17 @@ describe("EditScreen", () => {
   });
 
   it("draws the 「动态流」 band with its caption once the tool is on", () => {
+    // 局部 at the centre, the author's choice: an uncropped photo shows whole
+    // by default (#341 r3).
     render({
-      items: [item("tall"), item("wide")],
+      items: [
+        item("tall", {
+          rotation: 0,
+          crop: null,
+          feed: { fit: "cover", y: 0.5 },
+        }),
+        item("wide"),
+      ],
       servers: new Map([
         ["tall", server("tall", { width: 1000, height: 3000 })],
         ["wide", server("wide")],
@@ -4002,9 +4011,18 @@ describe("EditScreen 「动态流」 tool (#341)", () => {
   ) => item(key, edit, qualityMode);
   const tallServer = (key: string) =>
     server(key, { width: 1000, height: 3000 });
+  /**
+   * 局部 at the centre: the author's choice, since an uncropped photo shows
+   * whole by default (r3).
+   */
+  const centred = {
+    rotation: 0,
+    crop: null,
+    feed: { fit: "cover", y: 0.5 },
+  } as const;
   const renderTall = (setup: Partial<Setup> = {}) =>
     render({
-      items: [tall("a"), tall("b"), item("c")],
+      items: [tall("a", centred), tall("b", centred), item("c")],
       servers: new Map([
         ["a", tallServer("a")],
         ["b", tallServer("b")],
@@ -4235,10 +4253,9 @@ describe("EditScreen 「动态流」 tool (#341)", () => {
     expect(slider()!.getAttribute("aria-valuetext")).toBe(
       "上方裁去 26%，下方裁去 32%",
     );
-    // Back to the centre: stored as no framing at all.
+    // Back to the centre: still the author's 局部, kept as such.
     keyOn(slider()!, "ArrowDown");
-    expect(feedOf("a")).toBeUndefined();
-    expect("feed" in album.items[0]!.edit).toBe(false);
+    expect(feedOf("a")).toEqual({ fit: "cover", y: 0.5 });
     keyOn(slider()!, "ArrowDown", { shiftKey: true });
     expect(feedOf("a")).toEqual({ fit: "cover", y: 0.51 });
     keyOn(slider()!, "PageUp");
@@ -4289,7 +4306,7 @@ describe("EditScreen 「动态流」 tool (#341)", () => {
     expect(edges()[0]![1]).toBeCloseTo(137.5, 3);
     act(() => vi.advanceTimersByTime(2000));
     expect(spies.applyFeed).not.toHaveBeenCalled();
-    expect(feedOf("a")).toBeUndefined();
+    expect(feedOf("a")).toEqual({ fit: "cover", y: 0.5 });
     press("pointerup", slider()!, 150);
     expect(spies.applyFeed).toHaveBeenCalledExactlyOnceWith("a", {
       fit: "cover",
@@ -4369,8 +4386,9 @@ describe("EditScreen 「动态流」 tool (#341)", () => {
     for (let step = 0; step < 8; step += 1) keyOn(slider()!, "ArrowUp");
     expect(feedOf("a")).toEqual({ fit: "cover", y: 0.1 });
 
+    // 整张 is the uncropped photo's default: no framing is stored.
     click(fit("whole"));
-    expect(feedOf("a")).toEqual({ fit: "contain" });
+    expect(feedOf("a")).toBeUndefined();
     expect(spies.announce).toHaveBeenLastCalledWith("动态流整张显示，左右留白");
     expect(fit("whole").getAttribute("aria-checked")).toBe("true");
     expect(slider()).toBe(null);
@@ -4393,21 +4411,22 @@ describe("EditScreen 「动态流」 tool (#341)", () => {
     );
     expect(valueNow()).toBe(90);
 
-    // 还原: centred again; 整张 and back stays centred.
+    // 还原: whole again (r3), and 局部 starts centred, never at the region
+    // 还原 reset.
     click(button("还原"));
     layOutFrame();
     expect(feedOf("a")).toBeUndefined();
-    click(fit("whole"));
+    expect(fit("whole").getAttribute("aria-checked")).toBe("true");
     click(fit("region"));
-    expect(feedOf("a")).toBeUndefined();
+    expect(feedOf("a")).toEqual({ fit: "cover", y: 0.5 });
     expect(valueNow()).toBe(50);
     // The roving radio group: arrows pick and move focus.
     act(() => fit("region").focus());
     keyOn(fit("region"), "ArrowRight");
-    expect(feedOf("a")).toEqual({ fit: "contain" });
+    expect(feedOf("a")).toBeUndefined();
     expect(document.activeElement).toBe(fit("whole"));
     keyOn(fit("whole"), "ArrowRight");
-    expect(feedOf("a")).toBeUndefined();
+    expect(feedOf("a")).toEqual({ fit: "cover", y: 0.5 });
     expect(document.activeElement).toBe(fit("region"));
   });
 
@@ -4483,21 +4502,27 @@ describe("EditScreen 「动态流」 tool (#341)", () => {
 
   it("leaves every photo's framing alone through 应用到全部 and its 撤销", () => {
     const placed = { fit: "cover", y: 0.3 } as const;
+    const middle = { fit: "cover", y: 0.5 } as const;
+    const cut = { x: 0, y: 0.1, width: 0.9, height: 0.8 };
     render({
       items: [
         item("a", { rotation: 0, crop: null, feed: placed }),
-        item("b", { rotation: 0, crop: null, feed: { fit: "contain" } }),
+        // 局部 at the centre of an uncropped photo, 整张 of a cropped one.
+        item("b", { rotation: 0, crop: null, feed: middle }),
+        item("d", { rotation: 0, crop: cut, feed: { fit: "contain" } }),
         item("c"),
       ],
     });
     click(ratio("4:5"));
     click(applyAll());
+    expect(album.items.every((entry) => entry.edit.crop !== null)).toBe(true);
+    // Each choice still shows; b's centred 局部 is now its crop's default.
     expect(album.items.map((entry) => entry.edit.feed)).toEqual([
       placed,
+      undefined,
       { fit: "contain" },
       undefined,
     ]);
-    expect(album.items[1]!.edit.crop).not.toBe(null);
     undo();
     expect(album.items.map((entry) => entry.edit)).toEqual([
       {
@@ -4505,7 +4530,9 @@ describe("EditScreen 「动态流」 tool (#341)", () => {
         crop: { x: 0.2, y: 0, width: 0.6, height: 1 },
         feed: placed,
       },
-      { rotation: 0, crop: null, feed: { fit: "contain" } },
+      // Uncropped again: its 局部 comes back, not the whole default.
+      { rotation: 0, crop: null, feed: middle },
+      { rotation: 0, crop: cut, feed: { fit: "contain" } },
       { rotation: 0, crop: null },
     ]);
     expect(spies.applyFeed).not.toHaveBeenCalled();
@@ -4515,7 +4542,7 @@ describe("EditScreen 「动态流」 tool (#341)", () => {
     // b is 1000 × 1200: whole on a 4:5 stage, taller than a square one.
     render({
       items: [
-        tall("a"),
+        tall("a", centred),
         item("b", { rotation: 0, crop: null, feed: { fit: "cover", y: 0 } }),
         item("c"),
       ],
@@ -4666,15 +4693,106 @@ describe("EditScreen 「动态流」 tool (#341)", () => {
     click(button("向右旋转 90°"));
     click(button("向右旋转 90°"));
     expect(album.items[0]!.edit.rotation).toBe(180);
+    // 整张: the uncropped photo's default, so no framing is stored.
     click(fit("whole"));
-    expect(feedOf("a")).toEqual({ fit: "contain" });
+    expect(feedOf("a")).toBeUndefined();
     expect(toastText()).toBe("已向右旋转 90°撤销");
+    undo();
+    expect(album.items[0]!.edit).toEqual({ rotation: 90, crop: null });
+  });
+
+  it("gives a turn's 撤销 the framing the turn no longer stored (#341 r3)", () => {
+    // A 自由 crop with 整张: the turn makes it 原始比例, whose default is
+    // whole, so the choice is no longer stored; its 撤销 brings it back.
+    const free = { x: 0, y: 0.1, width: 1, height: 0.6 };
+    const whole = {
+      rotation: 0,
+      crop: free,
+      feed: { fit: "contain" },
+    } as const;
+    renderTall({ items: [tall("a", whole), tall("b"), item("c")] });
+    layOutFrame(100, 180);
+    click(button("向右旋转 90°"));
+    expect(album.items[0]!.edit).toEqual({ rotation: 90, crop: null });
+    undo();
+    expect(album.items[0]!.edit).toEqual(whole);
+    // Its default after a turn, then a 局部 chosen since: that one stays.
+    click(tool());
+    click(button("向右旋转 90°"));
+    click(button("向右旋转 90°"));
+    expect(fit("whole").getAttribute("aria-checked")).toBe("true");
+    click(fit("region"));
+    expect(feedOf("a")).toEqual({ fit: "cover", y: 0.5 });
     undo();
     expect(album.items[0]!.edit).toEqual({
       rotation: 90,
       crop: null,
-      feed: { fit: "contain" },
+      feed: { fit: "cover", y: 0.5 },
     });
+  });
+
+  it("shows an uncropped tall photo whole by default and a cropped one centred (#341 r3)", () => {
+    const cut = { x: 0, y: 0.1, width: 1, height: 0.6 };
+    renderTall({
+      items: [tall("a"), tall("b", { rotation: 0, crop: cut }), item("c")],
+    });
+    layOutFrame();
+    expect(button("还原").getAttribute("aria-disabled")).toBe("true");
+    click(tool());
+    expect(toastText()).toBe("动态流：这张整张显示，左右留白");
+    expect(fit("whole").getAttribute("aria-checked")).toBe("true");
+    expect(slider()).toBe(null);
+    expect(band()!.hasAttribute("data-feed-whole")).toBe(true);
+    expect(feedOf("a")).toBeUndefined();
+    // An older work opened this way is left as it was.
+    expect(spies.applyFeed).not.toHaveBeenCalled();
+    expect(spies.applyEdit).not.toHaveBeenCalled();
+    // 局部 is a choice, kept even at the centre.
+    click(fit("region"));
+    expect(feedOf("a")).toEqual({ fit: "cover", y: 0.5 });
+    expect(valueNow()).toBe(50);
+    expect(button("还原").getAttribute("aria-disabled")).toBe("false");
+    click(fit("whole"));
+    expect(feedOf("a")).toBeUndefined();
+    // Cropped: centred by default, 整张 a choice.
+    click(thumb("b"));
+    layOutFrame(100, 180);
+    expect(fit("region").getAttribute("aria-checked")).toBe("true");
+    expect(valueNow()).toBe(50);
+    expect(feedOf("b")).toBeUndefined();
+    click(fit("whole"));
+    expect(feedOf("b")).toEqual({ fit: "contain" });
+  });
+
+  it("follows the crop with the default: 原始比例 whole again, a ratio for every photo centred (#341 r3)", () => {
+    const cut = { x: 0, y: 0.1, width: 1, height: 0.6 };
+    renderTall({
+      items: [tall("a", { rotation: 0, crop: cut }), tall("b"), item("c")],
+    });
+    layOutFrame(100, 180);
+    click(tool());
+    expect(fit("region").getAttribute("aria-checked")).toBe("true");
+    // Back to 原始比例: uncropped again, so whole, with nothing stored.
+    click(tool());
+    click(ratio("原始比例"));
+    expect(album.items[0]!.edit).toEqual({ rotation: 0, crop: null });
+    layOutFrame();
+    click(tool());
+    expect(fit("whole").getAttribute("aria-checked")).toBe("true");
+    expect(band()!.hasAttribute("data-feed-whole")).toBe(true);
+    expect(spies.applyFeed).not.toHaveBeenCalled();
+    // 3:4 for every photo: b, uncropped and whole before, is now centred.
+    click(tool());
+    click(ratio("3:4"));
+    click(applyAll());
+    expect(album.items[1]!.edit.crop).not.toBe(null);
+    expect(feedOf("b")).toBeUndefined();
+    click(thumb("b"));
+    layOutFrame(100, 133);
+    click(tool());
+    expect(fit("region").getAttribute("aria-checked")).toBe("true");
+    expect(valueNow()).toBe(50);
+    expect(spies.applyFeed).not.toHaveBeenCalled();
   });
 
   it("never turns on or off under a finger on the photo", () => {
@@ -4718,15 +4836,15 @@ describe("EditScreen 「动态流」 tool (#341)", () => {
     expect(names(frame)).toEqual(["frame"]);
     expect(frame.style.width).toBe("100px");
     expect(frame.style.height).toBe("300px");
-    expect(fit("region").getAttribute("aria-checked")).toBe("true");
+    // Never cropped, it shows whole by default (r3).
+    expect(fit("whole").getAttribute("aria-checked")).toBe("true");
+    click(fit("region"));
     expect(slider()!.closest("[data-edit-still-frame]")).toBe(frame);
     keyOn(slider()!, "End");
     expect(feedOf("old")).toEqual({ fit: "cover", y: 0 });
     grab(70);
     press("pointerup", slider()!, 170);
     expect(feedOf("old")).toEqual({ fit: "cover", y: 0.4 });
-    click(fit("whole"));
-    expect(feedOf("old")).toEqual({ fit: "contain" });
     // Its crop stays off; its framing is the author's to reset.
     expect(container.querySelector("[data-edit-locked]")!.textContent).toBe(
       LEGACY_NOTE,
@@ -4734,9 +4852,10 @@ describe("EditScreen 「动态流」 tool (#341)", () => {
     expect(button("还原").getAttribute("aria-disabled")).toBe("false");
     click(button("还原"));
     expect(feedOf("old")).toBeUndefined();
+    expect(fit("whole").getAttribute("aria-checked")).toBe("true");
     expect(spies.applyEdit).not.toHaveBeenCalled();
     undo();
-    expect(feedOf("old")).toEqual({ fit: "contain" });
+    expect(feedOf("old")).toEqual({ fit: "cover", y: 0.4 });
     expect(spies.applyEdit).not.toHaveBeenCalled();
   });
 

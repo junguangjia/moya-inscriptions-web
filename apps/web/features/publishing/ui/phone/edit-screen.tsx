@@ -5,11 +5,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { FEED_CENTRE_Y } from "../../../authors/feed-post-strip-geometry";
 import editorStyles from "../editor/editor.module.css";
 import { feedWindowHint } from "../media/feed-window-overlay";
-import { feedStageWindow, sameEdit } from "../media/media-geometry";
+import {
+  effectiveFeed,
+  feedStageWindow,
+  sameEdit,
+} from "../media/media-geometry";
 import {
   effectiveCoverKey,
   indexOfKey,
   setItemEdit,
+  setItemFeed,
+  undoneFeed,
 } from "../media/media-order";
 import { derivativeExpected } from "../media/media-status";
 import { useMediaUiState } from "../media/media-ui-store";
@@ -81,8 +87,9 @@ import type { ReactNode, Ref, RefObject } from "react";
  * 「动态流」 at the stage's top (#341, off at first) shows what the phone
  * feed shows of each photo and rests the crop meanwhile; for a photo taller
  * than the feed's stage the ratio row turns into 局部 · 整张, and 局部's
- * region is dragged on the stage. Each photo keeps its framing at once, as
- * a ratio; 还原 resets it with the crop and the turn.
+ * region is dragged on the stage. Without a choice an uncropped photo shows
+ * whole and a cropped one centred (r3). Each photo keeps its framing at
+ * once, as a ratio; 还原 resets it with the crop and the turn.
  *
  * The order is changed here (r4 R4): a long-press drag in the strip,
  * Alt + arrows, or the current photo's sheet (设为首图 · 前移 · 后移 ·
@@ -788,16 +795,18 @@ const EditWorkspace = ({
   };
 
   // The stage takes its shape from the first photo (as the feed does), and
-  // shows each photo as its framing asks (#341).
+  // shows each photo as its framing asks (#341): the author's, else the
+  // default of the crop shown (whole when uncropped, else centred).
   const stageRatio = media.feed.slides[0]?.size ? media.feed.stageRatio : null;
+  const framing = effectiveFeed(crop.next);
   const feedWindow =
     crop.frame === null
       ? null
       : index === 0
-        ? feedStageWindow(crop.ratio, undefined, item.edit.feed)
+        ? feedStageWindow(crop.ratio, undefined, framing)
         : stageRatio === null
           ? null
-          : feedStageWindow(crop.ratio, stageRatio, item.edit.feed);
+          : feedStageWindow(crop.ratio, stageRatio, framing);
   // On, the tool keeps the stage until it is turned off, whatever the photo
   // shown: one whose window is still unknown waits for it, crop resting.
   const feedState = feedToolState(
@@ -915,11 +924,11 @@ const EditWorkspace = ({
   };
 
   /**
-   * 撤销 of a turn or 还原 (taken before it): the photo's edit and, for
-   * 还原 (`feed`), its feed framing back and, when the step reset the
-   * cover's composition (the photo is the cover), that composition too, as
-   * 应用到全部's 撤销 brings it back. A turn leaves the framing as it is, so
-   * its 撤销 never takes back a framing chosen since.
+   * 撤销 of a turn or 还原 (taken before it): the photo's edit and its feed
+   * framing back and, when the step reset the cover's composition (the photo
+   * is the cover), that composition too, as 应用到全部's 撤销 brings it back.
+   * 还原 (`feed`) reset the framing, so it always comes back. A turn left it
+   * as it was (`undoneFeed`), so its 撤销 never takes back one chosen since.
    */
   const stageUndo = (
     before: StageSnapshot,
@@ -928,9 +937,15 @@ const EditWorkspace = ({
     const album = editor.actions.media();
     const edited = album.items.find((entry) => entry.key === before.key);
     return () => {
+      const shown = editor.actions
+        .media()
+        .items.find((entry) => entry.key === before.key);
       crop.restore(before);
       // The framing is not the pixels: it comes back on its own.
-      if (feed) media.applyFeed(before.key, before.feed);
+      media.applyFeed(
+        before.key,
+        feed ? before.feed : undoneFeed(before.feed, shown),
+      );
       if (
         edited === undefined ||
         album.coverCrop === null ||
@@ -961,18 +976,24 @@ const EditWorkspace = ({
   };
 
   /**
-   * 还原: the whole frame, unturned, and the feed's centred cover (#341); a
-   * carried-over photo has only its framing to reset.
+   * 还原: the whole frame, unturned, and the photo's default feed framing
+   * (#341 r3: whole, as it is uncropped again); a carried-over photo has
+   * only its framing to reset. The region 整张 → 局部 would bring back goes
+   * too (局部 starts centred), until 撤销.
    */
   const revert = () => {
     if (!crop.restorable) return;
     const undo = stageUndo(crop.snapshot());
+    const key = item.key;
+    const region = regions.current.get(key);
+    regions.current.delete(key);
     setApplied(false);
     if (editable) crop.revert();
-    media.applyFeed(item.key, undefined);
+    media.applyFeed(key, undefined);
     say(`第 ${number} 项已还原`, {
       undo: () => {
         setApplied(false);
+        if (region !== undefined) regions.current.set(key, region);
         undo();
       },
     });
@@ -996,14 +1017,16 @@ const EditWorkspace = ({
   /** 局部's region, as the finger lifts or a key moves it: kept at once. */
   const placeRegion = (y: number) =>
     media.applyFeed(item.key, { fit: "cover", y });
-  /** 局部 or 整张; 整张 → 局部 returns to the region the photo had. */
+  /**
+   * 局部 or 整张; 整张 → 局部 returns to the region the photo had (centred
+   * when it had none). Each is kept as chosen, the photo's default as none.
+   */
   const chooseFeedFit = (fit: FeedFit) => {
     if (fit === feedState) return;
     if (fit === "whole") {
-      const feed = item.edit.feed;
       regions.current.set(
         item.key,
-        feed?.fit === "cover" ? feed.y : FEED_CENTRE_Y,
+        framing.fit === "cover" ? framing.y : FEED_CENTRE_Y,
       );
       media.applyFeed(item.key, { fit: "contain" });
       media.announce("动态流整张显示，左右留白");
@@ -1039,12 +1062,20 @@ const EditWorkspace = ({
     say(appliedText(album.items, sizes), {
       kind: "apply-all",
       undo: () => {
-        // Each changed photo gets its own edit back, the cover its composition.
+        // Each changed photo gets its own edit back, its framing as a turn's
+        // 撤销 gives it (`undoneFeed`), the cover its composition.
         let restored: MediaValue = editor.actions.media();
         for (const change of changes) {
           const before = album.items.find((entry) => entry.key === change.key);
-          if (before !== undefined)
-            restored = setItemEdit(restored, change.key, before.edit).value;
+          if (before === undefined) continue;
+          const shown = restored.items.find(
+            (entry) => entry.key === change.key,
+          );
+          restored = setItemFeed(
+            setItemEdit(restored, change.key, before.edit).value,
+            change.key,
+            undoneFeed(before.edit.feed, shown),
+          );
         }
         if (coverCropReset && restored.coverKey === album.coverKey) {
           restored = { ...restored, coverCrop: album.coverCrop };

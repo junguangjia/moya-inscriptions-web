@@ -1742,31 +1742,32 @@ describe("MediaSection feed preview (#244)", () => {
     )!;
     // Presentation 4 × 3 is shown whole: nothing to choose.
     expect(fitPicker()).toBe(null);
-    // Turned, the 3 × 4 frame is taller than its 4:5 stage.
+    // Turned, the 3 × 4 frame is taller than its 4:5 stage; uncropped, it
+    // shows whole by default (r3), so 局部 is the author's choice.
     await click(buttonByText("向右旋转 90°", dialog));
-    expect(choice("region").checked).toBe(true);
-    await click(choice("whole"));
-    await click(buttonByText("完成", dialog));
-    expect(probe.store!.get().items[0]!.edit).toEqual({
-      rotation: 90,
-      crop: null,
-      feed: { fit: "contain" },
-    });
-
-    // A framing-only change is kept too; the pixels stay.
-    await click(buttonByText("编辑第 1 项"));
-    dialog = document.querySelector<HTMLElement>("[data-media-edit-dialog]")!;
     expect(choice("whole").checked).toBe(true);
     await click(choice("region"));
     await click(buttonByText("完成", dialog));
     expect(probe.store!.get().items[0]!.edit).toEqual({
       rotation: 90,
       crop: null,
+      feed: { fit: "cover", y: 0.5 },
+    });
+
+    // A framing-only change is kept too; the pixels stay.
+    await click(buttonByText("编辑第 1 项"));
+    dialog = document.querySelector<HTMLElement>("[data-media-edit-dialog]")!;
+    expect(choice("region").checked).toBe(true);
+    await click(choice("whole"));
+    await click(buttonByText("完成", dialog));
+    expect(probe.store!.get().items[0]!.edit).toEqual({
+      rotation: 90,
+      crop: null,
     });
 
     await click(buttonByText("编辑第 1 项"));
     dialog = document.querySelector<HTMLElement>("[data-media-edit-dialog]")!;
-    await click(choice("whole"));
+    await click(choice("region"));
     await click(buttonByText("还原", dialog));
     expect(fitPicker()).toBe(null);
     await click(buttonByText("完成", dialog));
@@ -1965,8 +1966,8 @@ describe("useMediaActions for the phone composer (#244)", () => {
         {},
       ],
     });
-    // A centred cover is no framing.
-    await run((actions) => actions.applyFeed(a!, undefined));
+    // The photo's default (whole, as it is uncropped) is no framing.
+    await run((actions) => actions.applyFeed(a!, { fit: "contain" }));
     expect(probe.store!.get().items[0]!.edit).toEqual({
       rotation: 90,
       crop: null,
@@ -1977,7 +1978,7 @@ describe("useMediaActions for the phone composer (#244)", () => {
     await renderActions({});
     await stage(photos(2));
     const [a, b] = storeKeys();
-    await run((actions) => actions.applyFeed(a!, { fit: "contain" }));
+    await run((actions) => actions.applyFeed(a!, { fit: "cover", y: 0.3 }));
     await act(async () => {
       hook.actions!.startReplacement(a!, [
         fileOf(jpeg({ width: 9 }), "again.jpg"),
@@ -1991,7 +1992,7 @@ describe("useMediaActions for the phone composer (#244)", () => {
     expect(first!.edit).toEqual({
       rotation: 0,
       crop: null,
-      feed: { fit: "contain" },
+      feed: { fit: "cover", y: 0.3 },
     });
     expect(second!.key).toBe(b);
   });

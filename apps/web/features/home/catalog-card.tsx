@@ -109,8 +109,9 @@ export type CatalogCardMediaSource = Pick<
   /** The opaque asset's colour, painted behind the covered box while it loads. */
   readonly placeholderColor?: string | undefined;
   /**
-   * A work cover's feed framing (its item's `MediaEdit.feed`), sent only
-   * without a cover composition; never on a Catalog image.
+   * A work cover's effective feed framing as the Backend reads it (absent:
+   * a centred cover), sent only without a cover composition; never on a
+   * Catalog image.
    */
   readonly feed?: MediaFeedFraming | undefined;
 };

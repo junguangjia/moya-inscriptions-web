@@ -66,7 +66,8 @@ export const useCropGestures = ({
     interacting = useRef(false),
     latestLocked = useRef(locked),
     latestFrozen = useRef(frozen),
-    latestMaxZoom = useRef(maxZoom);
+    latestMaxZoom = useRef(maxZoom),
+    refused = useRef(false);
   latestLocked.current = locked;
   latestFrozen.current = frozen;
   latestMaxZoom.current = maxZoom;
@@ -196,6 +197,16 @@ export const useCropGestures = ({
     coarse,
     pristine: zoom === 1 && crop.x === 0 && crop.y === 0,
     reset,
+    /**
+     * A hold ends on the same cropper: if it refused a touch meanwhile, the
+     * surface is remounted (crop and zoom kept) so the library is not left
+     * touching. A hold that ends with a new cropper only forgets it.
+     */
+    endHold: (sameCropper: boolean) => {
+      if (!refused.current) return;
+      refused.current = false;
+      if (sameCropper) setSurface((value) => value + 1);
+    },
     /** A new frame or aspect: centred at zoom 1 (not the author's input, so never blocked). */
     restart,
     /** Put on an element around the crop surface and its controls. */
@@ -236,7 +247,13 @@ export const useCropGestures = ({
       // pointer-events); what still arrives is layout re-reporting.
       onCropChange: setCrop,
       onZoomChange: setZoom,
-      onTouchRequest: () => !blocked(),
+      onTouchRequest: () => {
+        if (!blocked()) return true;
+        // react-easy-crop marks itself touching before it asks, and a refused
+        // touch never ends: until a remount its Safari gestures do nothing.
+        refused.current = true;
+        return false;
+      },
       // Plain wheel and two-finger scroll keep scrolling the page; trackpad
       // pinch arrives with ctrlKey (Safari uses gesture events).
       onWheelRequest: (event: WheelEvent) => !blocked() && event.ctrlKey,

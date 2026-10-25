@@ -3,7 +3,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 
 import { AuthorDialog } from "../../../authors/author-dialog";
-import { FEED_CENTRE_Y } from "../../../authors/feed-post-strip-geometry";
 import { seedMaxZoom } from "../../../media-composer/crop-window";
 import { EditorSwitch } from "../editor/mode-switches";
 import editor from "../editor/editor.module.css";
@@ -27,14 +26,15 @@ import {
   EDIT_PRESETS,
   closeEdit,
   cropFromPercentages,
+  effectiveFeed,
   feedStageWindow,
   matchPreset,
   normalizeCrop,
-  normalizeFeed,
   rotatedSize,
   sameEdit,
   sameFeed,
   turn,
+  withFeed,
 } from "./media-geometry";
 import { useBoundedPreview } from "./media-preview";
 import styles from "./media.module.css";
@@ -60,9 +60,10 @@ import type { Dispatch, SetStateAction } from "react";
  * the part of the frame the phone single-column stage will show. For a frame
  * taller than that stage the author also picks how the feed shows it (#341):
  * 局部 (the region the window's handle or its arrow keys place) or 整张
- * (whole, blank at the sides). Like the crop, the choice is kept by 完成
- * (`onApplyFeed`), reset by 还原 and handed on with the unfinished work; it
- * is offered only to a caller that keeps it.
+ * (whole, blank at the sides); without a choice an uncropped frame shows
+ * whole and a cropped one centred (r3). Like the crop, the choice is kept
+ * by 完成 (`onApplyFeed`), reset by 还原 and handed on with the unfinished
+ * work; it is offered only to a caller that keeps it.
  */
 
 /** 局部 · 整张: how the feed shows a frame taller than its stage. */
@@ -147,11 +148,12 @@ export const MediaEditDialog = ({
       ? initialDraft
       : null,
   );
-  // The feed framing as the author sets it here, kept by 完成; an unkept one
-  // comes back from before a remount while the item keeps its own.
+  // The feed framing as the author sets it here, kept by 完成: their choice,
+  // or none for the default of the crop shown (#341 r3). An unkept one comes
+  // back from before a remount while the item keeps its own.
   const [feed, setFeed] = useState<MediaFeedFraming | undefined>(() =>
-    resumed?.feed !== undefined && sameFeed(resumed.basis.feed, edit.feed)
-      ? normalizeFeed(resumed.feed)
+    resumed?.feed !== undefined && sameFeed(resumed.basis.feed, edit.feed, edit)
+      ? (resumed.feed ?? undefined)
       : edit.feed,
   );
   // 整张 → 局部 returns to the region left last.
@@ -186,18 +188,6 @@ export const MediaEditDialog = ({
     draftChange.current = onDraftChange;
   });
   const keepsFeed = onApplyFeed !== undefined;
-  useEffect(() => {
-    draftChange.current?.({
-      basis: edit,
-      rotation,
-      stored,
-      // The framing 完成 would keep, the centred cover spelled out.
-      feed:
-        keepsFeed && !sameFeed(feed, edit.feed)
-          ? (feed ?? { fit: "cover", y: FEED_CENTRE_Y })
-          : undefined,
-    });
-  }, [edit, rotation, stored, feed, keepsFeed]);
 
   // The session starts once it is known whether the frame can be previewed.
   const session =
@@ -245,25 +235,38 @@ export const MediaEditDialog = ({
   // The cropper's re-report of the stored crop is not a change.
   const unchanged = closeEdit(candidate, original);
   const next = unchanged ? original : candidate;
+  // What the feed shows of the crop shown: the framing set here, else that
+  // crop's default (whole when uncropped, else centred).
+  const shownFeed = effectiveFeed(withFeed(next, feed));
   // The feed window: the frame's shape against the stage, and the framing.
   const feedWindow =
     feedStage === null || frame === null
       ? null
       : feedStage.first
-        ? feedStageWindow(ratio, undefined, feed)
+        ? feedStageWindow(ratio, undefined, shownFeed)
         : feedStage.stageRatio === null
           ? null
-          : feedStageWindow(ratio, feedStage.stageRatio, feed);
+          : feedStageWindow(ratio, feedStage.stageRatio, shownFeed);
   const framing = onApplyFeed !== undefined && feedWindow?.tall === true;
   const feedFit = feedWindow?.fit === "contain" ? "whole" : "region";
-  const feedChanged = !sameFeed(feed, edit.feed);
+  // Against what the item would show with the edit kept (`onApply` first).
+  const feedChanged = !sameFeed(feed, edit.feed, next);
   const chooseFeedFit = (fit: "region" | "whole") => {
     if (fit === feedFit) return;
     if (fit === "whole") {
-      lastRegion.current = regionOf(feed);
+      lastRegion.current = regionOf(shownFeed);
       setFeed({ fit: "contain" });
     } else setFeed({ fit: "cover", y: lastRegion.current });
   };
+  useEffect(() => {
+    draftChange.current?.({
+      basis: edit,
+      rotation,
+      stored,
+      // The framing 完成 would keep, a return to the default as null.
+      feed: keepsFeed && feedChanged ? (feed ?? null) : undefined,
+    });
+  }, [edit, rotation, stored, feed, keepsFeed, feedChanged]);
 
   const rotate = (direction: 1 | -1) => {
     setRotation((current) => turn(current, direction));
@@ -303,7 +306,7 @@ export const MediaEditDialog = ({
                   region={
                     framing
                       ? {
-                          y: regionOf(feed),
+                          y: regionOf(shownFeed),
                           onChange: (y) => setFeed({ fit: "cover", y }),
                           describedBy: regionHintId,
                         }

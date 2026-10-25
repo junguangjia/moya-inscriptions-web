@@ -1,5 +1,7 @@
 import {
   FULL_EDIT,
+  cleanFeed,
+  effectiveFeed,
   normalizeCrop,
   sameCrop,
   sameEdit,
@@ -127,8 +129,10 @@ export const setCoverCrop = (
 
 /**
  * Applies a rotate/crop edit; the item keeps its feed framing, which only
- * `setItemFeed` changes. The cover crop is normalized to the item's edited
- * frame, so a changed edit of the cover item resets it.
+ * `setItemFeed` changes, as the new edit stores it: a choice that is the new
+ * crop's default (`defaultFeed`) is no longer stored, and an item without
+ * one takes the new crop's default. The cover crop is normalized to the
+ * item's edited frame, so a changed edit of the cover item resets it.
  */
 export const setItemEdit = (
   value: MediaValue,
@@ -159,7 +163,8 @@ export const setItemEdit = (
 /**
  * Sets how the phone feed frames one item (`MediaEdit.feed`, #341). It is
  * presentation only: the item's pixels stay, so its cover composition does
- * too. A centred cover is stored as no framing.
+ * too. The item's default (`defaultFeed`: whole when uncropped, else a
+ * centred cover) is stored as no framing; absent `feed` asks for it.
  */
 export const setItemFeed = (
   value: MediaValue,
@@ -167,7 +172,7 @@ export const setItemFeed = (
   feed: MediaFeedFraming | undefined,
 ): MediaValue => {
   const current = value.items[indexOfKey(value, key)];
-  if (!current || sameFeed(current.edit.feed, feed)) return value;
+  if (!current || sameFeed(current.edit.feed, feed, current.edit)) return value;
   return {
     ...value,
     items: value.items.map((item) =>
@@ -175,6 +180,56 @@ export const setItemFeed = (
     ),
   };
 };
+
+/**
+ * `setItemFeed` ahead of a crop the item does not have yet (#341 r3): the
+ * desktop edit dialog's unkept crop, which a layout swap hands to the stage
+ * as its draft. The choice stays spelled out even when it is the current
+ * crop's default (the photo shows it alike meanwhile), so the stage's
+ * `setItemEdit` stores it against the crop it was made with once it keeps
+ * that crop.
+ */
+export const setItemFeedAhead = (
+  value: MediaValue,
+  key: string,
+  feed: MediaFeedFraming,
+): MediaValue => {
+  const current = value.items[indexOfKey(value, key)];
+  const framing = cleanFeed(feed);
+  if (!current || framing === undefined) return value;
+  if (
+    current.edit.feed !== undefined &&
+    sameFeed(current.edit.feed, framing, current.edit)
+  )
+    return value;
+  const edit = {
+    rotation: current.edit.rotation,
+    crop: current.edit.crop,
+    feed: framing,
+  };
+  return {
+    ...value,
+    items: value.items.map((item) =>
+      item.key === key ? { ...item, edit } : item,
+    ),
+  };
+};
+
+/**
+ * The framing an item takes back with its edit `before` on 撤销 of a pixel
+ * change (a turn, 应用到全部; #341 r3), for `setItemFeed`. The change kept
+ * the author's framing, but stores a choice that became the new crop's
+ * default as none, so its 撤销 gives `before`'s framing back while the item
+ * (`shown`, as it is now) still shows it; one chosen since stays as it
+ * shows, rather than turning into the old crop's default.
+ */
+export const undoneFeed = (
+  before: MediaFeedFraming | undefined,
+  shown: Pick<WorkDraftItem, "edit"> | undefined,
+): MediaFeedFraming | undefined =>
+  shown === undefined || sameFeed(shown.edit.feed, before, shown.edit)
+    ? before
+    : effectiveFeed(shown.edit);
 
 /**
  * Puts re-selected items where a missing one was (its cover role moves to

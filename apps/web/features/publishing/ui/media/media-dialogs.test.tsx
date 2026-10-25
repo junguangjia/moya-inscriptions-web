@@ -252,22 +252,28 @@ describe("MediaEditDialog feed window (#244)", () => {
     );
 
   it("draws the feed window for the first item and says what the stage shows", async () => {
-    // A turned 4:3 is a 3:4 frame: the 4:5 stage cuts 3% above and below.
+    // A turned 4:3 is a 3:4 frame, taller than the 4:5 stage: uncropped, the
+    // feed shows it whole by default (#341 r3).
     await renderWithStage(
       { first: true, stageRatio: null },
       { rotation: 90, crop: null },
     );
     const overlay = () =>
       document.querySelector<HTMLElement>("[data-feed-window]")!;
-    expect(overlay().getAttribute("data-feed-fit")).toBe("cover");
-    expect(overlay().style.getPropertyValue("--feed-band-top")).toBe("3.125%");
-    expect(overlay().style.getPropertyValue("--feed-band-bottom")).toBe(
-      "3.125%",
-    );
+    expect(overlay().getAttribute("data-feed-fit")).toBe("contain");
+    expect(overlay().hasAttribute("data-feed-whole")).toBe(true);
     expect(overlay().hidden).toBe(true);
-    expect(document.body.textContent).toContain("居中，上下各裁去 3%");
-    expect(document.body.textContent).not.toContain("始终居中");
+    expect(document.body.textContent).toContain("动态中整张显示，左右留白");
     expect(document.body.textContent).toContain("由第 1 张决定");
+    // Cropped (9:16), it is a centred cover: the stage cuts 15% above and below.
+    await click(radio("9:16"));
+    expect(overlay().getAttribute("data-feed-fit")).toBe("cover");
+    expect(overlay().style.getPropertyValue("--feed-band-top")).toBe("14.844%");
+    expect(overlay().style.getPropertyValue("--feed-band-bottom")).toBe(
+      "14.844%",
+    );
+    expect(document.body.textContent).toContain("居中，上下各裁去 15%");
+    expect(document.body.textContent).not.toContain("始终居中");
     const toggle = document.querySelector<HTMLButtonElement>(
       '[data-editor-switch="feed-window"] [role="switch"]',
     )!;
@@ -559,6 +565,29 @@ describe("MediaEditDialog 动态流显示 (#341)", () => {
       );
     });
 
+  it("opens an older work's uncropped tall photo at 整张, leaving it unedited (#341 r3)", async () => {
+    const onApplyFeed = vi.fn();
+    const drafts: EditDraft[] = [];
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await act(async () =>
+      root.render(
+        dialog({ onApplyFeed, onDraftChange: (draft) => drafts.push(draft) }),
+      ),
+    );
+    await layOut();
+    expect(radio("整张").checked).toBe(true);
+    // Nothing waits to be kept, and leaving asks nothing.
+    expect(drafts.at(-1)!.feed).toBe(undefined);
+    await click(buttonByText("返回"));
+    expect(confirm).not.toHaveBeenCalled();
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await act(async () => root.render(dialog({ onApplyFeed })));
+    await layOut();
+    await click(buttonByText("完成"));
+    expect(onApplyFeed).not.toHaveBeenCalled();
+  });
+
   it("offers 局部 · 整张 for a frame taller than the stage, kept with 完成", async () => {
     const onApply = vi.fn();
     const onApplyFeed = vi.fn();
@@ -566,9 +595,15 @@ describe("MediaEditDialog 动态流显示 (#341)", () => {
     await layOut();
     const picker = document.querySelector("[data-feed-fit-picker]")!;
     expect(picker.querySelector("legend")!.textContent).toBe("动态流显示");
-    expect(radio("局部").checked).toBe(true);
-    expect(radio("整张").checked).toBe(false);
-    expect(handle()).not.toBe(null);
+    // Uncropped, the photo shows whole by default (#341 r3).
+    expect(radio("整张").checked).toBe(true);
+    expect(radio("局部").checked).toBe(false);
+    expect(overlay().hasAttribute("data-feed-whole")).toBe(true);
+    expect(handle()).toBe(null);
+    expect(document.body.textContent).toContain("动态中整张显示，左右留白");
+    // 局部 starts centred.
+    await click(radio("局部"));
+    expect(handle()!.getAttribute("aria-valuenow")).toBe("50");
     expect(
       document.getElementById(handle()!.getAttribute("aria-describedby")!)!
         .textContent,
@@ -578,49 +613,102 @@ describe("MediaEditDialog 动态流显示 (#341)", () => {
     expect(onApplyFeed).not.toHaveBeenCalled();
     expect(handle()!.getAttribute("aria-valuenow")).toBe("55");
     await click(radio("整张"));
-    expect(overlay().hasAttribute("data-feed-whole")).toBe(true);
     expect(handle()).toBe(null);
-    expect(document.body.textContent).toContain("动态中整张显示，左右留白");
     // 整张 → 局部: where the region was.
     await click(radio("局部"));
     expect(handle()!.getAttribute("aria-valuenow")).toBe("55");
-    await click(radio("整张"));
     await click(buttonByText("完成"));
     expect(onApply).toHaveBeenCalledWith({ rotation: 0, crop: null });
+    expect(onApplyFeed).toHaveBeenCalledExactlyOnceWith({
+      fit: "cover",
+      y: 0.45,
+    });
+
+    // 局部 at the centre is a choice too: kept as the author made it.
+    onApplyFeed.mockClear();
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await act(async () => root.render(dialog({ onApplyFeed })));
+    await layOut();
+    await click(radio("局部"));
+    await click(buttonByText("完成"));
+    expect(onApplyFeed).toHaveBeenCalledExactlyOnceWith({
+      fit: "cover",
+      y: 0.5,
+    });
+  });
+
+  it("frames a cropped tall photo centred by default, and keeps its 整张 (#341 r3)", async () => {
+    const onApplyFeed = vi.fn();
+    const cut = { x: 0, y: 0.25, width: 1, height: 0.5 };
+    await act(async () =>
+      root.render(dialog({ edit: { rotation: 0, crop: cut }, onApplyFeed })),
+    );
+    await layOut();
+    expect(radio("局部").checked).toBe(true);
+    expect(handle()!.getAttribute("aria-valuenow")).toBe("50");
+    await click(radio("整张"));
+    expect(overlay().hasAttribute("data-feed-whole")).toBe(true);
+    await click(buttonByText("完成"));
+    expect(onApplyFeed).toHaveBeenCalledExactlyOnceWith({ fit: "contain" });
+
+    // Its 原始比例 is uncropped again: whole, the photo's default, nothing
+    // to keep beyond the crop.
+    onApplyFeed.mockClear();
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    const onApply = vi.fn();
+    await act(async () =>
+      root.render(
+        dialog({ edit: { rotation: 0, crop: cut }, onApply, onApplyFeed }),
+      ),
+    );
+    await layOut();
+    await click(radio("原始比例"));
+    expect(radio("整张").checked).toBe(true);
+    await click(buttonByText("完成"));
+    expect(onApply).toHaveBeenCalledWith({ rotation: 0, crop: null });
+    expect(onApplyFeed).not.toHaveBeenCalled();
+
+    // Cropped here: centred by default, and 整张 is kept against that crop.
+    onApply.mockClear();
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await act(async () => root.render(dialog({ onApply, onApplyFeed })));
+    await layOut();
+    expect(radio("整张").checked).toBe(true);
+    await click(radio("9:16"));
+    expect(radio("局部").checked).toBe(true);
+    await click(radio("整张"));
+    await click(buttonByText("完成"));
+    expect(onApply.mock.calls[0]![0].crop).not.toBe(null);
     expect(onApplyFeed).toHaveBeenCalledExactlyOnceWith({ fit: "contain" });
   });
 
   it("resets the framing with 还原, guards it as unsaved, and keeps nothing it did not change", async () => {
     const onApplyFeed = vi.fn();
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    await act(async () =>
-      root.render(
-        dialog({
-          edit: { rotation: 0, crop: null, feed: { fit: "contain" } },
-          onApplyFeed,
-        }),
-      ),
-    );
+    const placed = {
+      rotation: 0,
+      crop: null,
+      feed: { fit: "cover", y: 0.2 },
+    } as const;
+    await act(async () => root.render(dialog({ edit: placed, onApplyFeed })));
     await layOut();
-    expect(radio("整张").checked).toBe(true);
+    expect(radio("局部").checked).toBe(true);
+    expect(handle()!.getAttribute("aria-valuenow")).toBe("80");
     // Unchanged: leaving asks nothing.
     await click(buttonByText("返回"));
     expect(confirm).not.toHaveBeenCalled();
     await act(async () => root.unmount());
     root = createRoot(container);
 
-    await act(async () =>
-      root.render(
-        dialog({
-          edit: { rotation: 0, crop: null, feed: { fit: "contain" } },
-          onApplyFeed,
-        }),
-      ),
-    );
+    await act(async () => root.render(dialog({ edit: placed, onApplyFeed })));
     await layOut();
     await click(buttonByText("还原"));
-    expect(radio("局部").checked).toBe(true);
-    expect(handle()!.getAttribute("aria-valuenow")).toBe("50");
+    // The photo's default: whole, as it is uncropped (#341 r3).
+    expect(radio("整张").checked).toBe(true);
+    expect(handle()).toBe(null);
     // A framing change alone is a change.
     await click(buttonByText("返回"));
     expect(confirm).toHaveBeenCalledOnce();
@@ -668,42 +756,44 @@ describe("MediaEditDialog 动态流显示 (#341)", () => {
     await open();
     // Nothing chosen yet: nothing waits.
     expect(drafts.at(-1)!.feed).toBe(undefined);
+    await click(radio("局部"));
+    expect(drafts.at(-1)!.feed).toEqual({ fit: "cover", y: 0.5 });
     await keyOn(handle()!, "ArrowUp");
     expect(drafts.at(-1)!.feed).toEqual({ fit: "cover", y: 0.45 });
     // The layout swap: a new dialog with the saved work.
     await open({ initialDraft: drafts.at(-1)! });
     expect(handle()!.getAttribute("aria-valuenow")).toBe("55");
+    // Back to 整张, the uncropped photo's own default: nothing waits.
     await click(radio("整张"));
-    expect(drafts.at(-1)!.feed).toEqual({ fit: "contain" });
+    expect(drafts.at(-1)!.feed).toBe(undefined);
     await open({ initialDraft: drafts.at(-1)! });
     expect(radio("整张").checked).toBe(true);
     expect(overlay().hasAttribute("data-feed-whole")).toBe(true);
     await click(buttonByText("完成"));
-    expect(onApplyFeed).toHaveBeenCalledExactlyOnceWith({ fit: "contain" });
+    expect(onApplyFeed).not.toHaveBeenCalled();
 
-    // 还原 of a stored 整张, unkept: the centred cover waits, spelled out.
-    onApplyFeed.mockClear();
-    const whole = {
+    // 还原 of a stored 局部, unkept: the default waits, as null.
+    const placed = {
       rotation: 0,
       crop: null,
-      feed: { fit: "contain" },
+      feed: { fit: "cover", y: 0.2 },
     } as const;
-    await open({ edit: whole });
+    await open({ edit: placed });
     await click(buttonByText("还原"));
     const reverted = drafts.at(-1)!;
-    expect(reverted.feed).toEqual({ fit: "cover", y: 0.5 });
-    await open({ edit: whole, initialDraft: reverted });
-    expect(radio("局部").checked).toBe(true);
-    expect(handle()!.getAttribute("aria-valuenow")).toBe("50");
+    expect(reverted.feed).toBe(null);
+    await open({ edit: placed, initialDraft: reverted });
+    expect(radio("整张").checked).toBe(true);
+    expect(handle()).toBe(null);
     await click(buttonByText("完成"));
     expect(onApplyFeed).toHaveBeenCalledExactlyOnceWith(undefined);
 
     // Made on a framing the photo no longer has: the photo's own shows.
     await open({
-      edit: { rotation: 0, crop: null, feed: { fit: "cover", y: 0.2 } },
+      edit: { rotation: 0, crop: null, feed: { fit: "cover", y: 0.3 } },
       initialDraft: reverted,
     });
-    expect(handle()!.getAttribute("aria-valuenow")).toBe("80");
+    expect(handle()!.getAttribute("aria-valuenow")).toBe("70");
     expect(drafts.at(-1)!.feed).toBe(undefined);
   });
 

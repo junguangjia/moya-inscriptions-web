@@ -159,12 +159,13 @@ export const missingLocalText = (count: number): string =>
 
 /**
  * A rotation, crop or feed framing the thumbnails cannot show (they are the
- * unedited image); a centred framing is no framing.
+ * unedited image). A framing is named only when it is the author's choice
+ * and not the photo's default (whole when uncropped, else a centred cover).
  */
 export const itemEditText = (
   edit: WorkDraftContent["items"][number]["edit"],
 ): string | null => {
-  const feed = normalizeFeed(edit.feed);
+  const feed = normalizeFeed(edit.feed, edit);
   const parts = [
     edit.rotation === 0 ? null : `已旋转 ${edit.rotation}°`,
     edit.crop === null ? null : "已裁剪",
@@ -243,7 +244,7 @@ export const compareContent = (
         other.key !== item.key ||
         other.itemId !== item.itemId ||
         !sameEdit(other.edit, item.edit) ||
-        !sameFeed(other.edit.feed, item.edit.feed)
+        !sameFeed(other.edit.feed, item.edit.feed, item.edit)
       );
     }),
   cover:

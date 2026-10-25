@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createEditorSessionStore } from "../editor/editor-session-state";
 import { startCrop } from "../media/crop-workspace";
+import { setItemEdit } from "../media/media-order";
 import { createMediaUiStore } from "../media/media-ui-store";
 import {
   PHONE_MEDIA_TARGET,
@@ -22,7 +23,7 @@ import { START_FOCUS } from "./select-screen";
 import type { EditorTarget } from "../../../product-shell/product-history";
 import type { EditorSessionStore } from "../editor/editor-session-state";
 import type { EditDraft, MediaUiStore } from "../media/media-ui-store";
-import type { WorkDraftItem } from "@moya/contracts";
+import type { MediaEdit, WorkDraftItem } from "@moya/contracts";
 
 const item = (key: string): WorkDraftItem => ({
   key,
@@ -520,10 +521,9 @@ describe("adoptDesktopDialog", () => {
   });
 
   it("keeps the dialog's unkept 局部 · 整张 choice at once, as the phone keeps framing (#341)", () => {
-    const adopt = (draft: EditDraft, stored?: { fit: "contain" }) => {
+    const adopt = (draft: EditDraft, stored?: MediaEdit) => {
       const { store, ui } = session(2, "media");
-      if (stored !== undefined)
-        store.setItemEdit("p2", { rotation: 0, crop: null, feed: stored });
+      if (stored !== undefined) store.setItemEdit("p2", stored);
       const dialog = { type: "edit", key: "p2" } as const;
       ui.openDialog(dialog);
       ui.saveDraft(dialog, draft);
@@ -535,49 +535,128 @@ describe("adoptDesktopDialog", () => {
     const crop = {
       basis,
       rotation: 90,
-      stored: { previewable: true, session: startCrop("1:1", null) },
+      stored: { previewable: true, session: startCrop("3:4", null) },
     } as const;
-    // 整张 chosen with a turn: the turn waits on the stage, 整张 is kept.
-    const whole = adopt({ ...crop, feed: { fit: "contain" } });
-    expect(whole.store.media().items[1]!.edit).toEqual({
+    // 局部 chosen with a turn: the turn waits on the stage, 局部 is kept,
+    // at the centre too, as the uncropped photo shows whole by default (r3).
+    const centred = adopt({ ...crop, feed: { fit: "cover", y: 0.5 } });
+    expect(centred.store.media().items[1]!.edit).toEqual({
       rotation: 0,
       crop: null,
-      feed: { fit: "contain" },
+      feed: { fit: "cover", y: 0.5 },
     });
-    expect(whole.ui.cropDraftFor("p2")).toEqual({ ...crop, explicit: true });
-    expect(whole.ui.cropDraftFor("p2")).not.toHaveProperty("feed");
-    expect(shown(whole.store, whole.ui)).toBe("edit");
+    expect(centred.ui.cropDraftFor("p2")).toEqual({ ...crop, explicit: true });
+    expect(centred.ui.cropDraftFor("p2")).not.toHaveProperty("feed");
+    expect(shown(centred.store, centred.ui)).toBe("edit");
     // Nothing waits to travel back: a desktop dialog opened after a swap
     // back starts from the framing kept here.
-    expect(whole.ui.draftFor({ type: "edit", key: "p2" })).toBe(null);
+    expect(centred.ui.draftFor({ type: "edit", key: "p2" })).toBe(null);
     // A region placed.
     const region = adopt({ ...crop, feed: { fit: "cover", y: 0.2 } });
     expect(region.store.media().items[1]!.edit.feed).toEqual({
       fit: "cover",
       y: 0.2,
     });
-    // 还原 of a stored 整张: back to the centred cover.
-    const contain = { fit: "contain" } as const;
-    const onWhole = { ...basis, feed: contain };
+    // 整张 of a cropped photo, whose default is the centred cover.
+    const cut = { x: 0, y: 0.25, width: 1, height: 0.5 };
+    const cropped = { rotation: 0, crop: cut } as const;
+    const whole = adopt(
+      { basis: cropped, rotation: 0, stored: null, feed: { fit: "contain" } },
+      cropped,
+    );
+    expect(whole.store.media().items[1]!.edit).toEqual({
+      ...cropped,
+      feed: { fit: "contain" },
+    });
+    // 还原 of a stored 局部 (null): back to the photo's default, whole.
+    const placed = { ...basis, feed: { fit: "cover", y: 0.3 } } as const;
     const reverted = adopt(
-      {
-        basis: onWhole,
-        rotation: 0,
-        stored: null,
-        feed: { fit: "cover", y: 0.5 },
-      },
-      contain,
+      { basis: placed, rotation: 0, stored: null, feed: null },
+      placed,
     );
     expect(reverted.store.media().items[1]!.edit).toEqual(basis);
     // Nothing pending: the photo keeps its framing and the work is unedited.
     const untouched = adopt(
-      { basis: onWhole, rotation: 0, stored: null },
-      contain,
+      { basis: placed, rotation: 0, stored: null },
+      placed,
     );
     expect(untouched.store.media().items[1]!.edit.feed).toEqual({
-      fit: "contain",
+      fit: "cover",
+      y: 0.3,
     });
     expect(untouched.edited).toBe(false);
+  });
+
+  it("keeps a choice made with the dialog's unkept crop for that crop, once the stage keeps it (#341 r3)", () => {
+    const adopt = (stored: MediaEdit, draft: EditDraft) => {
+      const { store, ui } = session(2, "media");
+      store.setItemEdit("p2", stored);
+      const dialog = { type: "edit", key: "p2" } as const;
+      ui.openDialog(dialog);
+      ui.saveDraft(dialog, draft);
+      adoptDesktopDialog(store, ui);
+      expect(ui.cropDraftFor("p2")?.explicit).toBe(true);
+      return store;
+    };
+    /** The stage keeps the dialog's crop, as `media.applyEdit` does. */
+    const keep = (store: EditorSessionStore, edit: MediaEdit) => {
+      store.updateMedia((media) => setItemEdit(media, "p2", edit).value);
+      return store.media().items[1]!.edit;
+    };
+    const restarted = (preset: "3:4" | "original") => ({
+      previewable: true,
+      session: { ...startCrop(preset, null), generation: 1 },
+    });
+    const cut = { x: 0, y: 0.25, width: 1, height: 0.5 };
+    // 3:4 with 整张 on an uncropped photo: whole is that photo's default,
+    // never the crop's, so the choice waits for the crop.
+    const whole = adopt(
+      { rotation: 0, crop: null },
+      {
+        basis: { rotation: 0, crop: null },
+        rotation: 0,
+        stored: restarted("3:4"),
+        feed: { fit: "contain" },
+      },
+    );
+    expect(keep(whole, { rotation: 0, crop: cut })).toEqual({
+      rotation: 0,
+      crop: cut,
+      feed: { fit: "contain" },
+    });
+    // 原始比例 with 局部 at the centre on a cropped photo, the reverse.
+    const centred = adopt(
+      { rotation: 0, crop: cut },
+      {
+        basis: { rotation: 0, crop: cut },
+        rotation: 0,
+        stored: restarted("original"),
+        feed: { fit: "cover", y: 0.5 },
+      },
+    );
+    expect(keep(centred, { rotation: 0, crop: null })).toEqual({
+      rotation: 0,
+      crop: null,
+      feed: { fit: "cover", y: 0.5 },
+    });
+    // 还原 (null) stays the default of whatever the crop becomes.
+    const reverted = adopt(
+      { rotation: 90, crop: cut, feed: { fit: "contain" } },
+      {
+        basis: { rotation: 90, crop: cut, feed: { fit: "contain" } },
+        rotation: 0,
+        stored: restarted("original"),
+        feed: null,
+      },
+    );
+    expect(reverted.media().items[1]!.edit).toEqual({
+      rotation: 90,
+      crop: cut,
+    });
+    expect(keep(reverted, { rotation: 0, crop: null })).toEqual({
+      rotation: 0,
+      crop: null,
+    });
   });
 
   it("keeps no framing the dialog's 返回 discarded", () => {
