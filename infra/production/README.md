@@ -522,8 +522,11 @@ image out until its renditions are ready. Any other value (`ON`, `true`, a typo)
 refuses to load the Admin's configuration, which stops both the Admin and
 `payload migrate`. The value is read when the Admin starts, so changing it needs
 an Admin restart; change the staged copy in `/etc/yoyi/production-v3/` too. It
-changes nothing in the Backend, the worker or the prepare chain. Turn it back to
-`off` once the Admin's prepare and release controls are in use.
+changes nothing in the Backend, the worker or the prepare chain. Production sets
+it to `on` in the first release whose Admin carries the guard (an Admin upgraded
+from a build before #320 without it answers 409 to every publish of a new
+image). Turn it back to `off` once the Admin's prepare and release controls are
+in use.
 
 ## Catalog scale: database steps of increment 1B (catalog-scale-v1)
 

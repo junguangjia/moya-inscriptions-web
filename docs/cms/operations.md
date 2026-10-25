@@ -84,7 +84,9 @@ key 与业务身份分离；默认 2 并发、3 次尝试、30 秒请求超时�
 `off`）保留检查；`on`
 时发布不经检查，记录立即上线，worker 渲染已发布的图，渲染完成前公开结果不包含该图；其他值使 Admin 和
 `payload migrate` 都拒绝启动。改值须重启 Admin，并同步
-`/etc/yoyi/production-v3/` 下的副本。Admin 的 prepare/release 控件可用后改回
+`/etc/yoyi/production-v3/`
+下的副本。Production 在第一次发布带这项检查的 Admin 时设为
+`on`（从 #320 之前的 Admin 升级而不设，所有带新图的发布都会 409）。Admin 的 prepare/release 控件可用后改回
 `off`。
 
 ### Catalog 原图直传（catalog-scale-v1 增量 2）

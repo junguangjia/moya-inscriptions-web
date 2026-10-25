@@ -898,8 +898,6 @@ describe
     });
 
     it("publishes unprepared editorial originals through approved automation and Native Owner PATCH while CMS_CATALOG_DIRECT_PUBLISH is on", async () => {
-      // No operator is configured here, so the guard could only refuse; with
-      // the switch on it is not consulted.
       const { draft } = await draftB(ids[8]!);
       const { draft: native } = await draftB(ids[9]!);
       const primaryTitle = async (id: number | string) =>
@@ -912,6 +910,21 @@ describe
             overrideAccess: false,
           })
         ).title;
+      // The operator would refuse every image; with the switch on it is
+      // never asked, so publication holds no Backend read.
+      let asked = 0;
+      const close = await syntheticOperatorBoundary({
+        catalogPublishedRenditions: async (media) => {
+          asked++;
+          return {
+            media: media.map(({ mediaId, objectKey }) => ({
+              mediaId,
+              objectKey,
+              complete: false,
+            })),
+          };
+        },
+      });
       try {
         vi.stubEnv("CMS_CATALOG_DIRECT_PUBLISH", "on");
         const approval = await approveBatch(await reqFor(), {
@@ -943,8 +956,10 @@ describe
         });
         expect(response.status).toBe(200);
         expect(await primaryTitle(native.id)).toBe("Synthetic private B");
+        expect(asked).toBe(0);
       } finally {
         vi.stubEnv("CMS_CATALOG_DIRECT_PUBLISH", "");
+        await close();
       }
     });
 
