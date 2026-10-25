@@ -28,17 +28,25 @@ import {
   type EditorialUploadedMedia,
 } from "@moya/contracts/internal/editorial";
 import { canEditCatalog, requireActor } from "../editorial/access";
-import { requestFingerprint } from "../editorial/content";
+import {
+  UPLOAD_SESSION_TTL,
+  UploadSessionGcError,
+  parseUploadSessionManifest,
+  readUploadSessionRetention,
+  retireExpiredUploadSession,
+  uploadSessionId,
+  uploadIntentMatches,
+  type UploadSessionManifest,
+} from "../operations/upload-session-gc";
 import { EditorialError, safeEditorialFailure } from "../editorial/errors";
 import {
   lockEditorialKey,
   withEditorialTransaction,
 } from "../editorial/transaction";
 
-const SESSION_TTL = 24 * 60 * 60 * 1000;
+const SESSION_TTL = UPLOAD_SESSION_TTL;
 const MAX_SESSIONS = 128;
 const MAX_RETAINED_SESSIONS = 512;
-const TERMINAL_RECONCILIATION_TTL = 15 * 60 * 1000;
 const MAX_ACTOR_SESSIONS = 64;
 const MAX_RESERVED_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_ACTOR_RESERVED_BYTES = 512 * 1024 * 1024;
@@ -76,14 +84,7 @@ const nativeMediaCodes = new Set([
 ]);
 const missing = (error: unknown) =>
   (error as { code?: string })?.code === "ENOENT";
-type Manifest = {
-  version: 1;
-  uploadId: string;
-  actorId: string;
-  intent: EditorialMediaUploadStart;
-  createdAt: number;
-  expiresAt: number;
-};
+type Manifest = UploadSessionManifest;
 type InstalledFile = {
   file: string;
   inode: number;
@@ -91,12 +92,12 @@ type InstalledFile = {
   bytes: number;
   sha256: string;
 };
-const idFor = (actorId: string, intent: EditorialMediaUploadStart) =>
-  requestFingerprint({ version: "editorial-upload-v1", actorId, intent });
+const idFor = uploadSessionId;
 
 /** Private session bytes only. This directory must never be a served media subtree. */
 export class EditorialUploadStore {
   readonly root: string;
+  readonly mediaRoot: string;
   constructor(directory: string, mediaDirectory: string) {
     if (
       path.resolve(directory) !== directory ||
@@ -127,6 +128,7 @@ export class EditorialUploadStore {
         fail("UPLOAD_STORAGE_UNSAFE", 503);
       }
     }
+    this.mediaRoot = media;
     if (
       this.root === media ||
       this.root.startsWith(media + path.sep) ||
@@ -285,28 +287,9 @@ export class EditorialUploadStore {
       if (error instanceof SyntaxError) fail("UPLOAD_STORAGE_UNSAFE", 503);
       throw error;
     }
-    if (!raw || typeof raw !== "object" || Array.isArray(raw))
-      fail("UPLOAD_STORAGE_UNSAFE", 503);
-    const value = raw as Manifest;
-    const parsed = editorialMediaUploadStartSchema.safeParse(value.intent);
-    if (
-      Object.keys(value).sort().join(",") !==
-        "actorId,createdAt,expiresAt,intent,uploadId,version" ||
-      value.version !== 1 ||
-      value.uploadId !== uploadId ||
-      typeof value.actorId !== "string" ||
-      !value.actorId ||
-      !parsed.success ||
-      !Number.isSafeInteger(value.createdAt) ||
-      value.createdAt < 0 ||
-      !Number.isSafeInteger(value.expiresAt) ||
-      value.expiresAt > 8_640_000_000_000_000 ||
-      value.expiresAt - value.createdAt !== SESSION_TTL ||
-      idFor(value.actorId, parsed.data) !== uploadId
-    )
-      fail("UPLOAD_STORAGE_UNSAFE", 503);
-    return { ...value, intent: parsed.data };
+    return parseUploadSessionManifest(raw, uploadId);
   }
+
   async authorize(req: PayloadRequest, uploadId: string) {
     const actor = requireActor(req);
     const manifest = await this.manifest(uploadId);
@@ -582,51 +565,9 @@ export class EditorialUploadStore {
   }
   /** Terminal checkpoints are minted only after full staged SHA and native success. */
   async retention(manifest: Manifest) {
-    const file = path.join(
-      this.sessionPath(manifest.uploadId),
-      "complete.json",
-    );
-    let before;
-    try {
-      before = await lstat(file);
-    } catch (error) {
-      if (missing(error))
-        return { terminal: false, reclaimAt: manifest.expiresAt };
-      throw error;
-    }
-    let raw: unknown;
-    try {
-      raw = JSON.parse((await this.read(file, 32 * 1024)).toString("utf8"));
-    } catch (error) {
-      if (error instanceof SyntaxError) fail("UPLOAD_STORAGE_UNSAFE", 503);
-      throw error;
-    }
-    const result = editorialMediaUploadCompleteResultSchema.safeParse(raw);
-    const after = await lstat(file);
-    if (
-      !result.success ||
-      result.data.reused !== false ||
-      result.data.validatedBytes !== manifest.intent.bytes ||
-      result.data.validatedSha256 !== manifest.intent.sha256 ||
-      !matchesIntent(result.data.media, manifest.intent) ||
-      !Number.isFinite(before.mtimeMs) ||
-      before.mtimeMs <= 0 ||
-      after.ino !== before.ino ||
-      after.dev !== before.dev ||
-      after.size !== before.size ||
-      after.mtimeMs !== before.mtimeMs ||
-      after.ctimeMs !== before.ctimeMs
-    )
-      fail("UPLOAD_STORAGE_UNSAFE", 503);
-    return {
-      terminal: true,
-      // Replays do not rewrite the immutable checkpoint or extend its grace.
-      reclaimAt: Math.min(
-        manifest.expiresAt,
-        before.mtimeMs + TERMINAL_RECONCILIATION_TTL,
-      ),
-    };
+    return readUploadSessionRetention(this.root, manifest);
   }
+
   async allocations(): Promise<Manifest[]> {
     await this.ready();
     const names = await readdir(this.root);
@@ -670,22 +611,12 @@ export class EditorialUploadStore {
     return manifests;
   }
   async removeExpired(manifest: Manifest) {
-    if ((await this.retention(manifest)).reclaimAt > Date.now()) return;
-    const directory = this.sessionPath(manifest.uploadId),
-      names = await this.inventory(manifest);
-    // Only recognized, expired or terminal-after-grace private session files; never native media/COS.
-    for (const name of names) {
-      await this.read(
-        path.join(directory, name),
-        name.endsWith(".bin") || name.includes(".bin.")
-          ? MEDIA_UPLOAD_CHUNK_BYTES
-          : 32 * 1024,
-      );
-      await unlink(path.join(directory, name));
-    }
-    await this.sync(directory);
-    await rmdir(directory);
-    await this.sync(this.root);
+    // The sibling quarantine is invisible to an older Admin allocator. The
+    // shared reaper can finish a killed deletion without invalidating its root.
+    await retireExpiredUploadSession(
+      { root: this.root, mediaDirectory: this.mediaRoot, execute: true },
+      manifest,
+    );
   }
 }
 
@@ -897,18 +828,7 @@ const mediaProjection = (
   if (!projected.success) invalid();
   return projected.data;
 };
-const matchesIntent = (
-  media: EditorialUploadedMedia,
-  intent: EditorialMediaUploadStart,
-) =>
-  media.mediaId === intent.mediaId &&
-  media.catalogId === intent.catalogId &&
-  media.sha256 === intent.sha256 &&
-  media.filesize === intent.bytes &&
-  media.mimeType === intent.mimeType &&
-  media.alt === intent.alt &&
-  media.rights === intent.rights &&
-  media.orderConfidence === intent.orderConfidence;
+const matchesIntent = uploadIntentMatches;
 
 /** Reuses native Actor/catalog access, transaction locks, media hooks and storage. */
 export function createResumableMediaEndpoints(options: {
@@ -945,10 +865,15 @@ export function createResumableMediaEndpoints(options: {
           },
         );
       } catch (error) {
-        const safeError =
-          error instanceof APIError && nativeMediaCodes.has(error.message)
-            ? new EditorialError(error.message, error.status)
+        const mappedError =
+          error instanceof UploadSessionGcError
+            ? new EditorialError(error.code, error.status)
             : error;
+        const safeError =
+          mappedError instanceof APIError &&
+          nativeMediaCodes.has(mappedError.message)
+            ? new EditorialError(mappedError.message, mappedError.status)
+            : mappedError;
         if (!(safeError instanceof EditorialError))
           req.payload.logger.error({
             category: "EDITORIAL_MEDIA_UPLOAD_FAILED",

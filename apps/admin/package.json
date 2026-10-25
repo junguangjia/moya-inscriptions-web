@@ -12,7 +12,8 @@
     "cms:migrate:create": "payload migrate:create",
     "cms:types": "payload generate:types",
     "cms:importmap": "payload generate:importmap",
-    "cms:legacy": "payload run scripts/migrate-legacy.ts --"
+    "cms:legacy": "payload run scripts/migrate-legacy.ts --",
+    "cms:upload-gc": "node src/operations/upload-session-gc-cli.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1127.0",
@@ -90,6 +91,8 @@
     "./analytics-upstream": "./src/analytics/upstream.ts",
     "./analytics-endpoints": "./src/analytics/endpoints.ts",
     "./analytics-client": "./src/analytics/client.tsx",
-    "./analytics-config": "./src/analytics/config.ts"
+    "./analytics-config": "./src/analytics/config.ts",
+    "./upload-session-gc": "./src/operations/upload-session-gc.ts",
+    "./upload-session-gc-postgres": "./src/operations/upload-session-gc-postgres.ts"
   }
 }

@@ -220,6 +220,39 @@ describe("frontend and browser boundaries", () => {
     ).not.toEqual([]);
   });
 
+  it("permits only the exact upload maintenance server modules, never their browser forms", () => {
+    const source =
+      'import { open } from "node:fs/promises"; import { parsePostgresConfig } from "@moya/catalog-postgres";';
+    for (const name of [
+      "upload-session-gc",
+      "upload-session-gc-postgres",
+      "upload-session-gc-cli",
+    ]) {
+      const file = path.join(
+        repositoryRoot,
+        "apps/admin/src/operations",
+        name + ".ts",
+      );
+      expect(isAuthorizedCmsServerFile(file, source)).toBe(true);
+      expect(frontendBoundaryViolations(file, source)).toEqual([]);
+      expect(
+        frontendBoundaryViolations(file, '"use client";\n' + source).length,
+      ).toBeGreaterThan(0);
+    }
+    expect(
+      clientBoundaryViolations(
+        path.join(repositoryRoot, "apps/admin/components/browser.tsx"),
+        '"use client"; import { pruneUploadSessions } from "../src/operations/upload-session-gc";',
+      ),
+    ).toContain("../src/operations/upload-session-gc is server/runtime-only");
+    expect(
+      isAuthorizedCmsServerFile(
+        path.join(repositoryRoot, "apps/admin/src/operations/unreviewed.ts"),
+        source,
+      ),
+    ).toBe(false);
+  });
+
   it("allows Client Components to type-import public DTOs", () => {
     const file = path.join(repositoryRoot, "apps", "web", "example.tsx");
     const allowed = `

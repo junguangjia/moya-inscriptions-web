@@ -1,0 +1,31 @@
+[Unit]
+Description=Bounded private editorial upload buffer retention
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/yoyi/upload-session-gc.env
+
+[Service]
+Type=oneshot
+User=yoyi-admin
+Group=yoyi-admin
+# Install a separately traced Node 24 maintenance package; do not replace Admin.
+WorkingDirectory=/opt/yoyi/upload-session-gc/current
+EnvironmentFile=/etc/yoyi/upload-session-gc.env
+ExecStart=/usr/bin/node apps/admin/src/operations/upload-session-gc-cli.js --execute
+TimeoutStartSec=60
+TimeoutStopSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/yoyi-admin
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+MemoryMax=192M
+CPUQuota=20%
+Nice=15

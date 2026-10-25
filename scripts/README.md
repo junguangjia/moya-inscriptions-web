@@ -45,3 +45,20 @@ refuses incomplete or stale plans without an explicit flag, and is idempotent.
 Path guards limit it to a real `.turbo/cache` directory and the three recognized
 files per hash. Policy and limits: `docs/development/turbo-cache-retention.md`.
 It never runs automatically.
+
+## Immutable runtime artifacts and retirement
+
+`operations/runtime-artifact.py` plans existing current-role bytes, verifies a
+content-hash manifest, packs production closures and extracts new immutable
+runtime directories without installation or product compilation. The issuer has
+its own entry; Next packages preserve traced output and Web's custom HTTP
+server.
+
+`operations/runtime-retention.py` maintains a small version catalog and performs
+expiry-authorized retirement of newly typed runtime artifacts after fresh
+consumer/compatibility/ownership checks. Unknown legacy trees remain for a
+private reviewed controller. Inputs, CLI examples, cache-mount requirements,
+interruption recovery and the producer's required success/failure/periodic calls
+are in [the deployment guide](../docs/deployment/runtime-artifact-retention.md).
+The Node wrapper `runtime-artifact.test.mjs` runs Python stdlib filesystem tests
+through the existing script-tests job; no Python packages are installed.
