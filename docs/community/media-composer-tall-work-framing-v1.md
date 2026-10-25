@@ -129,8 +129,8 @@ MEDIA_FEED_CENTRE      = 0.5
 - **Public reads** carry the reader form (`publicFeed` in `media-read.ts`):
   - A valid stored choice is emitted unless it is the centred cover, so an
     explicit `{fit:"cover", y:0.5}` reads absent, on an uncropped item too. A
-    stored cover position is rounded to 1e-4 first, as the editor stores it,
-    and the rounded `y` is emitted: `0.50004` reads absent, `0.12345` reads
+    stored cover position is rounded to 1e-4 first, as the editor stores it, and
+    the rounded `y` is emitted: `0.50004` reads absent, `0.12345` reads
     `0.1235`.
   - Without a valid stored choice (none, or an invalid value, which is dropped),
     the item's default applies. An uncropped item gets `{fit:"contain"}` only
