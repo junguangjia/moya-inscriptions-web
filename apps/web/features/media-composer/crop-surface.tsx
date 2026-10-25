@@ -57,6 +57,8 @@ export interface CropSurfaceProps {
    * framing tool): the photo takes no input, but stays focusable.
    */
   readonly frozen?: boolean;
+  /** `frozen` set inside an event, ahead of its render (see useCropGestures). */
+  readonly holdRef?: { readonly current: boolean } | undefined;
   /** How far zoom goes; the shared 3× by default. */
   readonly maxZoom?: number | undefined;
   /**
@@ -107,6 +109,7 @@ export const CropSurface = ({
   generation,
   locked = false,
   frozen = false,
+  holdRef,
   maxZoom,
   keepControlFocus = false,
   areaRef,
@@ -127,6 +130,7 @@ export const CropSurface = ({
     autoFocus,
     frozen,
     keepControlFocus,
+    ...(holdRef === undefined ? {} : { holdRef }),
     ...(maxZoom === undefined ? {} : { maxZoom }),
   });
   const hintId = useId();

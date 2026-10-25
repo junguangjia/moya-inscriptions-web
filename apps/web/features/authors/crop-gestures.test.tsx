@@ -167,6 +167,25 @@ it("takes nothing while frozen: touch, wheel, keys, the mouse and Safari's pinch
   expect(free.stopPropagation).not.toHaveBeenCalled();
 });
 
+it("holds the photo from a hold the caller sets ahead of its render", async () => {
+  const hold = { current: false };
+  await render(false, { holdRef: hold });
+  expect(latest!.cropperProps.onTouchRequest()).toBe(true);
+  // Set inside an event, with no render in between: already held.
+  hold.current = true;
+  expect(latest!.cropperProps.onTouchRequest()).toBe(false);
+  const stopped = { stopPropagation: vi.fn() };
+  latest!.frameProps.onMouseDownCapture(stopped);
+  expect(stopped.stopPropagation).toHaveBeenCalledOnce();
+  const pinch = new Event("gesturestart", { bubbles: true, cancelable: true });
+  await act(async () =>
+    document.querySelector("[data-area]")!.dispatchEvent(pinch),
+  );
+  expect(pinch.defaultPrevented).toBe(true);
+  hold.current = false;
+  expect(latest!.cropperProps.onTouchRequest()).toBe(true);
+});
+
 it("leaves the caller's own controls their keys", async () => {
   await render();
   await key("[data-handle]", "+");

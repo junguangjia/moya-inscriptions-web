@@ -3547,6 +3547,30 @@ describe("EditScreen corner handles and the crop field (#341)", () => {
     expect(spies.applyEdit).toHaveBeenCalledOnce();
   });
 
+  it("holds the photo in the very turn a corner is taken, before any render", () => {
+    layOutStage();
+    render({ items: three() });
+    layOutFrame(4 / 3);
+    mountReport(full);
+    const frame = container.querySelector("[data-media-crop]")!;
+    let rendered = true;
+    let touch = true;
+    // Both fingers land in one turn: nothing renders between them.
+    act(() => {
+      press("pointerdown", handle("nw"), 0, 0, { id: 1 });
+      rendered = frame.hasAttribute("data-frozen");
+      touch = cropper.props!.onTouchRequest();
+      press("pointerdown", cropTarget(), 200, 200, { id: 2 });
+    });
+    expect(rendered).toBe(false);
+    expect(touch).toBe(false);
+    expect(stage().hasAttribute("data-gesture")).toBe(false);
+    press("pointerup", handle("nw"), 0, 0, { id: 1 });
+    pointer("pointerup", window, 2);
+    expect(spies.applyEdit).not.toHaveBeenCalled();
+    expect(cropper.props!.onTouchRequest()).toBe(true);
+  });
+
   it("frees a 16:9 a desktop dialog handed over: 自由 at its own shape, in the same cropper, the corners free", () => {
     layOutStage();
     // The desktop dialog's 16:9, adopted by a layout swap (`explicit`).

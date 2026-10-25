@@ -1141,6 +1141,9 @@ export const EditStage = ({
   const [gesture, setGesture] = useState(false);
   // A corner is taken (#341): from the finger's landing, inside its slop too.
   const [grabbed, setGrabbed] = useState(false);
+  // The same, set in the corner's own pointerdown: read before that event's
+  // render, by the photo's handlers and the cropper (holdRef).
+  const grabbedNow = useRef(false);
   // A corner's window is off the frame (#341).
   const [resizing, setResizing] = useState(false);
   const [reframe, setReframe] = useState<Reframe | null>(null);
@@ -1349,7 +1352,8 @@ export const EditStage = ({
   const frozen = grabbed || resizing || reframing || cropPaused;
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!editing || frozen || !inCrop(event.target)) return;
+    if (!editing || frozen || grabbedNow.current || !inCrop(event.target))
+      return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
     // A primary pointer starts a new touch: any finger still counted lifted
     // unseen, and its gesture (and hold) are over.
@@ -1367,7 +1371,14 @@ export const EditStage = ({
     setGesture(true);
   };
   const onWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
-    if (!editing || frozen || !event.ctrlKey || !inCrop(event.target)) return;
+    if (
+      !editing ||
+      frozen ||
+      grabbedNow.current ||
+      !event.ctrlKey ||
+      !inCrop(event.target)
+    )
+      return;
     crop.noteInput();
     onInput();
   };
@@ -1480,6 +1491,7 @@ export const EditStage = ({
         interrupted={interrupted}
         offered={fielded && !cropPaused}
         onBegin={() => {
+          grabbedNow.current = true;
           setGrabbed(true);
           crop.noteInput();
           onInput();
@@ -1487,6 +1499,7 @@ export const EditStage = ({
           if (crop.image !== null) predecode(crop.image);
         }}
         onEnd={() => {
+          grabbedNow.current = false;
           setGrabbed(false);
           crop.hold(false);
         }}
@@ -1507,6 +1520,7 @@ export const EditStage = ({
           cropAreaClassName={styles.stageCropArea}
           frozen={frozen}
           generation={crop.session.generation}
+          holdRef={grabbedNow}
           image={crop.image}
           keepControlFocus
           label={
@@ -1670,7 +1684,7 @@ export const EditStage = ({
             if (!feedOn && feedWindow === null) return;
             // Never under a finger on the photo or a corner: what it does is
             // not kept until it lifts (#341).
-            if (gesture || grabbed || resizing) return;
+            if (gesture || grabbed || grabbedNow.current || resizing) return;
             onToggleFeedTool();
           }}
           title="动态流"

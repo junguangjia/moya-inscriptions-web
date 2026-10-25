@@ -25,6 +25,7 @@ export const useCropGestures = ({
   locked,
   autoFocus = false,
   frozen = false,
+  holdRef,
   maxZoom = CROP_MAX_ZOOM,
   keepControlFocus = false,
 }: {
@@ -38,6 +39,11 @@ export const useCropGestures = ({
    * no more. Unlike `locked`, the crop area stays focusable.
    */
   frozen?: boolean;
+  /**
+   * `frozen` as the caller sets it inside an event, before that event's
+   * render: a second finger in the same turn already finds the photo held.
+   */
+  holdRef?: { readonly current: boolean };
   /** How far zoom goes (a small stored crop may need more than the shared 3×). */
   maxZoom?: number;
   /**
@@ -64,8 +70,9 @@ export const useCropGestures = ({
   latestLocked.current = locked;
   latestFrozen.current = frozen;
   latestMaxZoom.current = maxZoom;
+  const held = () => latestFrozen.current || holdRef?.current === true;
   /** Nothing the author does reaches the photo. */
-  const blocked = () => latestLocked.current || latestFrozen.current;
+  const blocked = () => latestLocked.current || held();
   // react-easy-crop keeps document listeners until touchend or mouseup. A
   // cancelled touch (system gesture, call) or a lost mouseup would leave the
   // next touch dragging: end it by remounting; crop and zoom stay controlled.
@@ -95,7 +102,7 @@ export const useCropGestures = ({
     // container: a frozen frame takes them first.
     const node = frame.current;
     const gesture = (event: Event) => {
-      if (!latestFrozen.current) return;
+      if (!held()) return;
       event.preventDefault();
       event.stopPropagation();
     };
@@ -213,7 +220,7 @@ export const useCropGestures = ({
       },
       // The library's own mousedown, while the frame is the caller's.
       onMouseDownCapture: (event: { stopPropagation: () => void }) => {
-        if (latestFrozen.current) event.stopPropagation();
+        if (held()) event.stopPropagation();
       },
       onContextMenu: (event: { preventDefault: () => void }) =>
         event.preventDefault(),
