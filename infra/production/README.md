@@ -107,6 +107,12 @@ rollback that keeps access restricted — is in
 
 ## Existing processes behind Nginx
 
+Private reporting attachments can be moved from the existing filesystem to the
+explicit, independently configured COS adapter. Follow the
+[evidence cutover procedure](../../docs/deployment/report-evidence-cos.md),
+including complete byte verification before switching. This is a prepared
+runtime option; it does not establish storage provisioning or live cutover.
+
 | Process        | Unix identity                | Listener         | EnvironmentFile                       |
 | -------------- | ---------------------------- | ---------------- | ------------------------------------- |
 | Web            | `yoyi-web`                   | `127.0.0.1:3000` | `/etc/yoyi/web.env`                   |
@@ -944,3 +950,12 @@ batches by Codex, with its identity); an `INGEST_ACTOR_MISMATCH` count means the
 wrong credential. Then list `catalog-ingest/v1/` and delete what is left by
 hand. Keep the L1 lifecycle rule until `catalog-ingest/v1/` is empty; the CAM
 statement and the rule are then removed by writing back the captured undo files.
+
+## Persistent runtime data and operational archives
+
+Keep canonical user/algorithm data in PostgreSQL and durable private bytes in
+COS. The
+[bounded runtime archive guide](../../docs/deployment/runtime-data-storage.md)
+describes the independent operations identity, archive verification, fixed
+retention namespaces and standalone service. Passing local tests or preparing
+the unit templates is not a production activation claim.

@@ -1,4 +1,4 @@
-import { PrivateReportingEvidenceStore } from "./reporting/evidence-store.js";
+import { openReportingEvidenceStore } from "./reporting/store.js";
 import { loadOfflineIpLocation } from "./reporting/geography.js";
 import {
   ReportingMaintenanceWorker,
@@ -227,6 +227,7 @@ const parseOperatorCredential = (environment: RuntimeEnvironment): string => {
 /** Code-only low-level dependencies for isolated acceptance; main uses real transports. */
 export interface ProductionBackendDependencies {
   readonly publishingCosTransport?: PublishingCosTransport;
+  readonly reportingCosTransport?: PublishingCosTransport;
   readonly authProvider?: AuthProviderDependencies;
 }
 
@@ -235,6 +236,10 @@ export const prepareProductionBackend = async (
   dependencies: ProductionBackendDependencies = {},
 ): Promise<PreparedProductionBackend> => {
   const runtimeConfig = parseRuntimeConfig(environment);
+  const reportingEvidenceStore = openReportingEvidenceStore(
+    environment,
+    dependencies.reportingCosTransport,
+  );
   const catalogPrepareConfiguration =
     parseCatalogPrepareDatabaseConfig(environment);
   const analyticsConfiguration = parseAnalyticsConfiguration(
@@ -654,10 +659,6 @@ export const prepareProductionBackend = async (
   const ipLocations = await loadOfflineIpLocation(
     environment.MOYA_REPORT_IP_DATABASE,
   );
-  const evidenceDirectory = environment.MOYA_REPORT_EVIDENCE_DIRECTORY;
-  const reportingEvidenceStore = evidenceDirectory
-    ? new PrivateReportingEvidenceStore(evidenceDirectory)
-    : undefined;
   const reportingPort = new PostgresCommunityReportingAdapter(communityPool, {
     publication: { allowPublish, isPublic },
     resolveExternalTarget: async (target) => {
