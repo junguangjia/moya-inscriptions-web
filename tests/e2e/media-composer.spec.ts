@@ -34,7 +34,7 @@ test.beforeAll(async ({ request }) => {
 /**
  * #244 r4: dock + → start → 编辑 → 发布. Community routes use synthetic
  * data; held registrations keep photos local and make upload waiting
- * deterministic. Text-only submission exercises the existing public contract.
+ * deterministic. Every submission carries a title and a photo (#305).
  * Browser emulation complements the Owner's physical-device acceptance.
  */
 const authorId = `user-${"7".repeat(32)}`;
@@ -1029,7 +1029,7 @@ test("phone dock + opens the complete start screen directly", async ({
   skipUnlessPhone(testInfo);
   const composer = await openComposer(browser, page, testInfo);
   const start = screen(composer, "select");
-  for (const name of ["选择照片", "拍照", "专题", "跳过，只发布文字", "草稿箱"])
+  for (const name of ["选择照片", "拍照", "专题", "先写标题和正文", "草稿箱"])
     await expect(
       start.getByRole("button", { name, exact: true }),
     ).toBeVisible();
@@ -1672,6 +1672,11 @@ test("发布 previews the feed right to left and card taps return to the corresp
     composer.editor.locator("[data-feed-preview-caption]"),
   ).toHaveText(/^第 1 张在最右/u);
   await expect(composer.editor.locator("[data-publish-reason]")).toBeVisible();
+  // #305: a work needs a title as well as its photos.
+  await fill(
+    composer.editor.locator('[data-editor-input="title"]'),
+    "合成预览",
+  );
   await expect(
     composer.editor.locator("[data-editor-submit]"),
   ).not.toHaveAttribute("aria-disabled", "true");
@@ -1813,15 +1818,18 @@ test("Back follows 发布 → 编辑 → back sheet and an upload wait can be ca
   await expect(back).toHaveCount(0);
 });
 
-test("text-only 发布 keeps reference edits, visibility, preview and explicit save before submission", async ({
+test("先写标题和正文 keeps reference edits, visibility, preview and explicit save, and 发布 waits for a photo", async ({
   browser,
   page,
 }, testInfo) => {
   skipUnlessPhone(testInfo);
-  const composer = await openComposer(browser, page, testInfo);
+  const composer = await openComposer(browser, page, testInfo, {
+    successfulPhotos: true,
+  });
+  composer.fixture.releaseUploads();
   await click(
     screen(composer, "select").getByRole("button", {
-      name: "跳过，只发布文字",
+      name: "先写标题和正文",
       exact: true,
     }),
   );
@@ -1830,6 +1838,9 @@ test("text-only 发布 keeps reference edits, visibility, preview and explicit s
   await expect(publish.locator("[data-editor-submit]")).toHaveAttribute(
     "aria-disabled",
     "true",
+  );
+  await expect(publish.locator("[data-publish-reason]")).toHaveText(
+    "请填写标题并至少添加一张图片",
   );
   await fill(publish.locator('[data-editor-input="title"]'), "合成文字作品");
   await fill(publish.locator('[data-editor-input="body"]'), "第一行\n第二行");
@@ -1884,6 +1895,40 @@ test("text-only 发布 keeps reference edits, visibility, preview and explicit s
   await expect(
     publish.getByRole("button", { name: "更多操作", exact: true }),
   ).toBeVisible();
+  // #305: the written work still needs a photo before 发布 can go.
+  await expect(publish.locator("[data-editor-submit]")).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  await expect(publish.locator("[data-publish-reason]")).toHaveText(
+    "请至少添加一张图片",
+  );
+  expect(composer.fixture.submitted()).toHaveLength(0);
+  await click(
+    publish.locator("[data-publish-add]").getByRole("button", {
+      name: "添加照片",
+      exact: true,
+    }),
+  );
+  await chooseFiles(
+    composer.page,
+    screen(composer, "select").getByRole("button", {
+      name: "选择照片",
+      exact: true,
+    }),
+    [(await photos())[0]!],
+  );
+  await present(screen(composer, "edit"));
+  await expect(composer.strip.locator("[data-edit-index]")).toHaveCount(1);
+  await expect.poll(composer.fixture.uploaded).toBe(1);
+  composer.fixture.releaseReady();
+  await expect(composer.editor.locator("[data-edit-status]")).toHaveText("", {
+    timeout: ACTION_TIMEOUT,
+  });
+  await publishScreen(composer);
+  await expect(publish.locator('[data-editor-input="title"]')).toHaveValue(
+    "合成文字作品",
+  );
   await expect(publish.locator("[data-editor-submit]")).not.toHaveAttribute(
     "aria-disabled",
     "true",
@@ -1894,7 +1939,8 @@ test("text-only 发布 keeps reference edits, visibility, preview and explicit s
       timeout: ACTION_TIMEOUT,
     })
     .toBe(1);
-  expect(composer.fixture.submitted()[0]!.content).toMatchObject({
+  const command = composer.fixture.submitted()[0]!;
+  expect(command.content).toMatchObject({
     title: "合成文字作品",
     body: "第一行\n第二行",
     visibility: "self",
@@ -1904,8 +1950,9 @@ test("text-only 发布 keeps reference edits, visibility, preview and explicit s
       originalAuthor: "合成作者",
       sourceNote: "本地合成回归资料",
     },
-    items: [],
   });
+  expect(command.content.items).toHaveLength(1);
+  expect(command.content.items[0]!.itemId).not.toBeNull();
   await expect(composer.editor).toHaveCount(0);
 });
 
@@ -2250,6 +2297,11 @@ for (const [scenario, title] of Object.entries(lostAnswers) as [
     expect(composer.fixture.resetComponents()).toBe(0);
     expect(composer.fixture.registered()).toBe(1);
     await publishScreen(composer);
+    // #305: a work needs a title as well as its photo.
+    await fill(
+      screen(composer, "publish").locator('[data-editor-input="title"]'),
+      "合成上传恢复",
+    );
     await expect(
       screen(composer, "publish").locator("[data-editor-submit]"),
     ).not.toHaveAttribute("aria-disabled", "true");
