@@ -333,7 +333,10 @@ permission changes and deployment remain pending Owner gates. PR195 stays Draft.
 ## PNVS authentication continuation
 
 The bounded `aliyun-pnvs-live-auth-v1` continuation permits independently
-configured email and phone delivery under the existing auth profile. The
+configured email and phone delivery under the existing auth profile. Its phone
+registration path also requires the forward community migration
+`20261026020000_phone_registration_invitations.sql`; the initial runtime-only
+candidate did not satisfy PostgreSQL invitation registration. The
 [configuration, acceptance and rollback procedure](../development/aliyun-pnvs-live-auth-v1.md)
 is the current source for SMS-only startup, purpose-specific templates and
 challenge-bound provider verification. The historical r3 authorization and

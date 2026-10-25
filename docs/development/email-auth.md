@@ -141,9 +141,12 @@ CommunityAuthService still owns every identity and Session. `password-only`
 continues to require both OTP providers disabled and no delivery configuration.
 
 Phone registration uses the same invitation, approved agreement and atomic beta
-grant as email registration. Linking an email-only account still requires its
-existing usable email factor; disabling email does not bypass reauthentication.
-See [PNVS configuration and release procedure](aliyun-pnvs-live-auth-v1.md) for
+grant as email registration. The forward migration
+`20261026020000_phone_registration_invitations.sql` is required: the original
+invitation checks and redemption function admitted email only. Linking an
+email-only account still requires its existing usable email factor; disabling
+email does not bypass reauthentication. See
+[PNVS configuration and release procedure](aliyun-pnvs-live-auth-v1.md) for
 purpose templates, challenge-bound schemes and current acceptance boundaries.
 
 `AUTH_REGISTRATION_AGREEMENT_FILE` points to private approved plain-text JSON

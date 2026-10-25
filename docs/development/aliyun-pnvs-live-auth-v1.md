@@ -2,8 +2,9 @@
 
 Task `aliyun-pnvs-live-auth-v1` completes the existing Backend-owned identity,
 challenge and Session path. The Tencent-hosted Backend calls Dypnsapi
-`2017-05-25`; the browser never receives provider credentials. No migration or
-new public profile is introduced.
+`2017-05-25`; the browser never receives provider credentials. One forward
+community migration extends the existing invitation authority; no new public
+profile is introduced.
 
 ## Configuration
 
@@ -67,6 +68,35 @@ consumption. Only the exact response field `Model.VerifyResult === "PASS"`
 verifies ownership. HTTP success, `Code=OK`, `Success=true`, OutId or a request
 ID never suffices. Unknown transmission is not automatically retried.
 
+## PostgreSQL invitation authority
+
+`20261026020000_phone_registration_invitations.sql` widens only the existing
+invitation-bound challenge and handoff checks to email or phone, with their
+existing registration purposes. The existing redemption function binds the new
+identity's kind to the handoff's channel as well as its target and provider
+provenance. Its signature, owner, privileges, fixed search path, new-account and
+new-identity transaction checks, invitation lock/quota/expiry/environment and
+atomic redemption/beta grant remain unchanged. There are no new tables, columns,
+grants or identity rewrites.
+
+The initial implementation's full test selection passed but did not include
+phone invitation registration through PostgreSQL. Memory service tests did not
+exercise the database's email-only constraints. The correction adds an actual
+Production auth-service/provider-fixture/PostgreSQL flow, including baseline
+refusal before migration, registration, sign-in identity, ownership conflict,
+concurrent proof/last-slot consumption, failed-consumption rollback, and a
+mismatched-channel proof with the same synthetic digest.
+
+Apply this forward migration through the existing migration runner before the
+new Backend starts; startup checks the pinned ledger read-only. For a scoped
+compatibility release on the inspected existing release, use its reviewed
+migration manifest rather than applying unrelated main migrations. The changes
+briefly lock the two auth tables while validating their wider checks; preserve
+the existing production backup, lock/statement timeout and native approval
+gates. Old rows already satisfy the wider checks. Application rollback keeps the
+forward schema and ledger entry; never reintroduce email-only checks after phone
+invitation rows exist.
+
 ## Acceptance and deployment
 
 The release record must distinguish controlled fixtures from live operations. At
@@ -99,7 +129,9 @@ Release steps, after required review/CI and concrete Production authorization:
 
 1. Record the running release/tag, service configuration identities and current
    auth capabilities privately. Prepare the approved annotated tag from merged
-   main and the existing verified-release package. No schema change is needed.
+   main and the existing verified-release package. Include the pinned
+   phone-invitation migration and verify its ledger before starting the updated
+   Backend.
 2. Verify current services, signature, templates, quota and runtime RAM policy.
    Install only the approved protected Backend configuration delta: enable
    `AUTH_PHONE_PROVIDER=aliyun-dypns` and the verified Aliyun inputs, keeping
