@@ -129,8 +129,9 @@ export class CosReportingEvidenceStore implements EvidenceStore {
         } catch {
           return { status: "uncertain" };
         }
+        if (existing === null) return { status: "uncertain" };
         if (
-          existing?.mimeType === input.mimeType &&
+          existing.mimeType === input.mimeType &&
           existing.bytes.length === input.bytes.length &&
           timingSafeEqual(existing.bytes, input.bytes)
         )

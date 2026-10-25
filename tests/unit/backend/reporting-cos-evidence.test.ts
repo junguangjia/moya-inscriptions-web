@@ -65,6 +65,22 @@ function fixture() {
 }
 
 describe("explicit private COS reporting evidence", () => {
+  it.each([409, 412])(
+    "keeps an overwrite conflict uncertain when GET reports 404 (%s)",
+    async (status) => {
+      const f = fixture();
+      f.state.putFailure = new PublishingCosResponseError(status);
+      await expect(
+        f.store.put({ id, mimeType: "application/pdf", bytes }),
+      ).resolves.toEqual({ status: "uncertain" });
+      expect(f.calls.map((call) => call.method)).toEqual([
+        "getBucketVersioning",
+        "putObject",
+        "getObject",
+      ]);
+      expect(f.objects.size).toBe(0);
+    },
+  );
   it("classifies a timed-out PUT or server failure as uncertain, without retry or compensation", async () => {
     for (const error of [
       new Error("synthetic transport timeout"),
@@ -101,10 +117,18 @@ describe("explicit private COS reporting evidence", () => {
       claimUrgent: vi.fn(async () => []),
       purgeExpiredCases: vi.fn(async () => 0),
       purgeExpiredEvidence: vi.fn(
-        async (remove: (value: string) => Promise<void>) => {
-          await remove(id);
-          await remove("evidence-" + "2".repeat(32));
-          return 2;
+        async (
+          remove: (value: string) => Promise<void>,
+          _limit: number,
+          shouldStop: () => boolean,
+        ) => {
+          let count = 0;
+          for (const value of [id, "evidence-" + "2".repeat(32)]) {
+            if (shouldStop()) break;
+            await remove(value);
+            count++;
+          }
+          return count;
         },
       ),
     };

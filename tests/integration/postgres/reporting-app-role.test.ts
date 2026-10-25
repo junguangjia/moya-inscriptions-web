@@ -186,6 +186,31 @@ const file = () => ({
   sensitive: false,
   requestId: randomUUID(),
 });
+const expiredEvidenceCase = async (attachments = 2) => {
+  const reporter = await seedUser(),
+    author = await seedUser(),
+    work = await seedWork(author);
+  const report = await service.create(reporter, {
+    kind: "standard",
+    target: { type: "work", id: work },
+    reason: "other",
+    requestId: randomUUID(),
+  });
+  const ids: string[] = [];
+  for (let index = 0; index < attachments; index++)
+    ids.push((await service.uploadEvidence(reporter, report.id, file())).id);
+  const row = await service.operatorRead(report.id);
+  await service.decide(report.id, {
+    expectedVersion: row.version,
+    action: "retain",
+    reason: "Synthetic resolved retention fixture",
+  });
+  await setup!.query(
+    "UPDATE community.report_cases SET closed_at=CURRENT_TIMESTAMP-interval '181 days' WHERE id=$1",
+    [report.id],
+  );
+  return { caseId: report.id, ids: ids.sort() };
+};
 const publicSubstrate = async (pool: Pool) => {
   await pool.query(
     "CREATE TABLE public.catalog_entries(catalog_id text PRIMARY KEY,province text,province_state text); CREATE TABLE public.catalog_discovery(catalog_id text PRIMARY KEY,kind text,title text,aliases varchar[],first_published_at timestamptz,filter_metadata jsonb); CREATE TABLE public.catalog_media(catalog_id text,media_id text,object_key text,width integer,height integer,is_representative boolean,position integer NOT NULL DEFAULT 0); CREATE TABLE public.article_entries(article_id text PRIMARY KEY,title text)",
@@ -251,6 +276,118 @@ afterAll(async () => {
 });
 
 describe("complete reporting runtime through the canonical non-owner App role", () => {
+  it("commits the first object's metadata before shutdown prevents the second deletion", async () => {
+    const { caseId, ids } = await expiredEvidenceCase();
+    let stopped = false;
+    const removed: string[] = [];
+    const count = await adapter.purgeExpiredEvidence(
+      async (id) => {
+        await store.delete(id);
+        removed.push(id);
+        stopped = true;
+      },
+      100,
+      () => stopped,
+    );
+    expect(count).toBe(1);
+    expect(removed).toEqual([ids[0]]);
+    expect(
+      (
+        await app!.query(
+          "SELECT id FROM community.report_evidence WHERE case_id=$1 ORDER BY id",
+          [caseId],
+        )
+      ).rows,
+    ).toEqual([{ id: ids[1] }]);
+    expect(store.files.has(ids[0]!)).toBe(false);
+    expect(store.files.has(ids[1]!)).toBe(true);
+    expect(
+      await adapter.purgeExpiredEvidence((id) => store.delete(id), 100),
+    ).toBe(1);
+    expect(
+      (
+        await app!.query(
+          "SELECT id FROM community.report_evidence WHERE case_id=$1",
+          [caseId],
+        )
+      ).rows,
+    ).toEqual([]);
+  });
+
+  it("keeps an earlier committed purge when a later delete response fails and idempotently finishes the tracked object", async () => {
+    const { caseId, ids } = await expiredEvidenceCase();
+    await expect(
+      adapter.purgeExpiredEvidence(async (id) => {
+        await store.delete(id);
+        if (id === ids[1])
+          throw new Error("synthetic second delete response failure");
+      }, 100),
+    ).rejects.toThrow("second delete response failure");
+    expect(
+      (
+        await app!.query(
+          "SELECT id FROM community.report_evidence WHERE case_id=$1 ORDER BY id",
+          [caseId],
+        )
+      ).rows,
+    ).toEqual([{ id: ids[1] }]);
+    expect(store.files.has(ids[0]!)).toBe(false);
+    expect(store.files.has(ids[1]!)).toBe(false);
+    // A missing object is an idempotent successful removal on the next pass;
+    // it cannot resurrect the already committed first row.
+    expect(
+      await adapter.purgeExpiredEvidence((id) => store.delete(id), 100),
+    ).toBe(1);
+    expect(
+      await adapter.purgeExpiredEvidence((id) => store.delete(id), 100),
+    ).toBe(0);
+    expect(
+      (
+        await app!.query(
+          "SELECT id FROM community.report_evidence WHERE case_id=$1",
+          [caseId],
+        )
+      ).rows,
+    ).toEqual([]);
+  });
+
+  it.each(["legal_hold", "reopened"])(
+    "rechecks a candidate's current %s after another object's transaction",
+    async (change) => {
+      const cases = [
+        await expiredEvidenceCase(1),
+        await expiredEvidenceCase(1),
+      ].sort((a, b) => a.caseId.localeCompare(b.caseId));
+      const first = cases[0]!,
+        next = cases[1]!;
+      const removed: string[] = [];
+      expect(
+        await adapter.purgeExpiredEvidence(async (id) => {
+          await store.delete(id);
+          removed.push(id);
+          if (id === first.ids[0]) {
+            await setup!.query(
+              change === "legal_hold"
+                ? "UPDATE community.report_cases SET legal_hold=true WHERE id=$1"
+                : "UPDATE community.report_cases SET closed_at=NULL,status='reviewing' WHERE id=$1",
+              [next.caseId],
+            );
+          }
+        }, 100),
+      ).toBe(1);
+      expect(removed).toEqual(first.ids);
+      expect(
+        (
+          await app!.query(
+            "SELECT id FROM community.report_evidence WHERE case_id=$1",
+            [next.caseId],
+          )
+        ).rows,
+      ).toEqual([{ id: next.ids[0] }]);
+      expect(store.files.has(next.ids[0]!)).toBe(true);
+    },
+  );
+
   it("keeps a timed-out PUT tracked when it commits late, then purges it through the existing day-old sweep", async () => {
     const reporter = await seedUser();
     const author = await seedUser();

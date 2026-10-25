@@ -106,10 +106,11 @@ export class ReportingMaintenanceWorker {
     this.lastRetention = Date.now();
     try {
       if (this.evidence)
-        await this.adapter.purgeExpiredEvidence((id) => {
-          if (this.stopped) throw new Error("REPORTING_MAINTENANCE_STOPPED");
-          return this.evidence!.delete(id);
-        }, 20);
+        await this.adapter.purgeExpiredEvidence(
+          (id) => this.evidence!.delete(id),
+          20,
+          () => this.stopped,
+        );
       if (this.stopped) return;
       await this.adapter.purgeExpiredCases(20);
     } catch {

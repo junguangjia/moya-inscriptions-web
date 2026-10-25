@@ -13,7 +13,12 @@ otherwise the existing day-old pending sweep deletes it after the settling
 window. A failed retry of an older pending lease preserves that earlier
 uncertainty too. Only a first attempt known to have been rejected uses immediate
 compensation. Shutdown drains the current bounded evidence operation and starts
-no next evidence deletion or case-retention pass.
+no next evidence deletion or case-retention pass. Each retention object uses its
+own database transaction, fresh case/evidence locks and a current
+legal-hold/expiry check. Once that object's row deletion has committed, a later
+failure or shutdown cannot roll it back. An uncertain deletion of the current
+object remains tracked for an idempotent later pass; the batch does not claim a
+distributed database/COS transaction.
 
 | Scenario                                  | Development                           | Production                                                                          | Preserved behavior                                                |
 | ----------------------------------------- | ------------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
