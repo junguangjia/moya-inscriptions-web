@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 
 import { AuthorDialog } from "../../../authors/author-dialog";
+import { FEED_CENTRE_Y } from "../../../authors/feed-post-strip-geometry";
 import { seedMaxZoom } from "../../../media-composer/crop-window";
 import { EditorSwitch } from "../editor/mode-switches";
 import editor from "../editor/editor.module.css";
@@ -29,6 +30,7 @@ import {
   feedStageWindow,
   matchPreset,
   normalizeCrop,
+  normalizeFeed,
   rotatedSize,
   sameEdit,
   sameFeed,
@@ -59,8 +61,8 @@ import type { Dispatch, SetStateAction } from "react";
  * taller than that stage the author also picks how the feed shows it (#341):
  * 局部 (the region the window's handle or its arrow keys place) or 整张
  * (whole, blank at the sides). Like the crop, the choice is kept by 完成
- * (`onApplyFeed`) and reset by 还原; it is offered only to a caller that
- * keeps it.
+ * (`onApplyFeed`), reset by 还原 and handed on with the unfinished work; it
+ * is offered only to a caller that keeps it.
  */
 
 /** 局部 · 整张: how the feed shows a frame taller than its stage. */
@@ -139,8 +141,19 @@ export const MediaEditDialog = ({
   const feedFitName = useId();
   const regionHintId = useId();
   const [feedGuide, setFeedGuide] = useState(true);
-  // The feed framing as the author sets it here, kept by 完成.
-  const [feed, setFeed] = useState<MediaFeedFraming | undefined>(edit.feed);
+  // Work from before a remount, while the item still has the same edit.
+  const [resumed] = useState(() =>
+    initialDraft !== null && sameEdit(initialDraft.basis, edit)
+      ? initialDraft
+      : null,
+  );
+  // The feed framing as the author sets it here, kept by 完成; an unkept one
+  // comes back from before a remount while the item keeps its own.
+  const [feed, setFeed] = useState<MediaFeedFraming | undefined>(() =>
+    resumed?.feed !== undefined && sameFeed(resumed.basis.feed, edit.feed)
+      ? normalizeFeed(resumed.feed)
+      : edit.feed,
+  );
   // 整张 → 局部 returns to the region left last.
   const lastRegion = useRef(regionOf(edit.feed));
   const [cropSize, setCropSize] = useState<Size | null>(null);
@@ -157,12 +170,6 @@ export const MediaEditDialog = ({
     (src === null && local.status === "loading") ||
     (image !== null && size === null && !natural.failed);
 
-  // Work from before a remount, while the item still has the same edit.
-  const [resumed] = useState(() =>
-    initialDraft !== null && sameEdit(initialDraft.basis, edit)
-      ? initialDraft
-      : null,
-  );
   const [rotation, setRotation] = useState<MediaRotation>(
     resumed?.rotation ?? edit.rotation,
   );
@@ -178,9 +185,19 @@ export const MediaEditDialog = ({
   useEffect(() => {
     draftChange.current = onDraftChange;
   });
+  const keepsFeed = onApplyFeed !== undefined;
   useEffect(() => {
-    draftChange.current?.({ basis: edit, rotation, stored });
-  }, [edit, rotation, stored]);
+    draftChange.current?.({
+      basis: edit,
+      rotation,
+      stored,
+      // The framing 完成 would keep, the centred cover spelled out.
+      feed:
+        keepsFeed && !sameFeed(feed, edit.feed)
+          ? (feed ?? { fit: "cover", y: FEED_CENTRE_Y })
+          : undefined,
+    });
+  }, [edit, rotation, stored, feed, keepsFeed]);
 
   // The session starts once it is known whether the frame can be previewed.
   const session =

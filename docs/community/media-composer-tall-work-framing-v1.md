@@ -79,7 +79,7 @@ MEDIA_FEED_CENTRE      = 0.5
   - `contain` shows the whole frame with blank sides.
   - On a frame that is not taller than its box, a stored framing is dormant. It
     is kept, and comes back if the frame becomes tall again (for example after a
-    reorder changes photo 1).
+    reorder changes photo 1). A card never brings it back (see Rendering).
 - **Normal form.** Clients round `y` to 1e-4 and omit the centred cover;
   `normalizeFeed` and `withFeed` do both. `sameFeed` compares normal forms, so
   `{fit:"cover", y:0.5}` equals absent.
@@ -147,8 +147,16 @@ On the Web:
 - **Cards** follow decision 4b, from `ContentCard.media.feed` (on 作品, from
   `Work.coverFeed`).
   - The card box is the cover's own shape clamped to 3:4 … 3:2, or 3:2 for a
-    card that spans the whole row. The framing applies only while the cover is
-    taller than that box.
+    card that spans the whole row.
+  - The framing applies only while the cover's h/w is greater than both that
+    box's and the tallest feed stage's (`FEED_STAGE_MAX_RATIO`, 4:5 or 1.25),
+    each with `slideFit`'s 0.001 tolerance. A card therefore follows a framing
+    only when 编辑 offers the choice for that cover as photo 1.
+  - A framing kept dormant from an earlier, taller crop never frames a card.
+    Example: a 9:16 photo 1 set to 整张 or 局部 and then cropped to 1:1 or 4:5.
+    Even a 3:2 card across the row covers that cover at the centre.
+  - A card in its own clamped box only follows framing on covers taller than
+    3:4, so the 4:5 test changes only the full-row card.
   - 局部 sets `object-position: 50% var(--feed-media-y)`; 整张 is contain, its
     sides on the card's own surface (`--yoyi-color-background-surface`).
   - A card without `media.feed`, a Catalog card and an inscription card render
@@ -229,7 +237,10 @@ stage; a later photo uses photo 1's, and its window is unknown while that is.
   - A turn's 撤销 leaves framing as it is.
 - **Carried-over photos.** The band and slider lie over the still's own laid out
   box, measured from the image. 还原 resets their framing only; crop and turn
-  stay off (这张图片来自早期作品，不能裁剪或旋转).
+  stay off (这张图片来自早期作品，不能裁剪或旋转). Their framing is set, changed
+  and reset on phone 编辑 only. The desktop item tile has never offered 编辑 for
+  a carried-over photo, and this task does not add one, so the desktop dialog
+  never opens for it.
 
 ### Desktop dialog (decision 4a)
 
@@ -241,7 +252,12 @@ stage; a later photo uses photo 1's, and its window is unknown while that is.
 - The choice is pending until 完成, which calls `onApply` and then
   `onApplyFeed`, only when the framing changed. 还原 resets it, and the dialog's
   dirty guard counts it.
+- A pending choice travels in the dialog's edit draft: a remount resumes it, and
+  a desktop-to-phone layout swap keeps it at once, as phone 编辑 keeps its own
+  framing. Cancel discards it.
 - Both the first item and later items pass the framing into `feedStageWindow`.
+- Carried-over photos get no desktop entry: the tile shows no 编辑 for them, as
+  before. Their framing is set on phone 编辑 only.
 
 ## Behavior Matrix
 
@@ -255,12 +271,12 @@ stage; a later photo uses photo 1's, and its window is unknown while that is.
 | 「动态流」 on                             | Crop rests, handles hidden, row → 局部 · 整张 or a note                         | Same                                     | Field and frame unchanged; 旋转 · 还原 available             |
 | 局部 drag or keys                         | Region kept on lift or per key; interrupted drag taken back                     | Feed, cards and previews show the region | No 已编辑, no derivative, no readiness re-check              |
 | 整张                                      | Whole photo, blank sides; 整张 → 局部 returns to the last region                | Feed, cards and previews show it whole   | Stage ratio rule (photo 1 at 整张 still sets 4:5)            |
-| Photo not taller than the stage           | 无需选择 note; a stored framing stays dormant                                   | Rendered whole or full                   | Stored framing kept                                          |
+| Photo not taller than the stage           | 无需选择 note; a stored framing stays dormant                                   | Rendered whole or full; cards centre it  | Stored framing kept                                          |
 | 还原 · 撤销                               | Crop, turn and framing reset together, all back with 撤销                       | Same                                     | Cover composition rule                                       |
 | 应用到全部                                | Ratio only, `aria-disabled` while the tool is on                                | Same                                     | Every photo's framing                                        |
-| Carried-over photo                        | 局部 · 整张 over the still; 还原 resets framing only                            | Legacy branches emit `feed`              | No crop or turn; display stays `base`                        |
+| Carried-over photo                        | Phone 编辑 only: 局部 · 整张 over the still; 还原 resets framing only           | Legacy branches emit `feed`              | No crop or turn; display stays `base`; no desktop 编辑       |
 | Desktop dialog (≥ 896 px)                 | 局部 · 整张 and a region handle in the feed window; 完成 keeps, 还原 resets     | Same                                     | No corner handles; desktop crop labels                       |
-| Two-column, tablet and PC work cards      | Cover framing followed when there is no cover composition                       | Same                                     | Cards with a cover composition unchanged                     |
+| Two-column, tablet and PC work cards      | Cover framing followed without a cover composition, if taller than box and 4:5  | Same                                     | Cover composition unchanged; dormant framing never shown     |
 | Detail and the Viewer                     | Whole image                                                                     | Same                                     | Framing ignored                                              |
 | 封面构图, avatar, profile cover, articles | Unchanged; 封面构图 keeps inset 0 and 3× zoom                                   | Same                                     | Their own flows and contracts                                |
 | Drafts, autosave, recovery, conflicts     | Framing saved, restored and compared; chooser notes say 动态流整张显示/显示局部 | Same                                     | Centred framing equals absent                                |
@@ -292,7 +308,7 @@ stage; a later photo uses photo 1's, and its window is unknown while that is.
   - drafts-format, conflict chooser and editor session;
   - readiness, runtime and preview;
   - feed-post-stage, card, profile-list, publish-screen and feed-stage-preview
-    suites.
+    suites, including a dormant 1:1 and 4:5 framing on a full-row 3:2 card.
 - **Contracts, backend and integration:**
   - schema acceptance and rejection;
   - OpenAPI drift with no Article `feed`;

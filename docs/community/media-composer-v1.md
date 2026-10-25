@@ -100,10 +100,12 @@ single-column feed shows of it.
   Up / Down, Home (the bottom) and End (the top) keep each step at once.
   **整张** shows the whole photo with blank sides. 整张 → 局部 returns to the
   photo's last region in this opening.
-- Any other photo says the feed shows it whole or full, with no choice.
+- Any other photo says the feed shows it whole or full, with no choice. A
+  framing it kept from an earlier, taller crop stays dormant: neither the feed
+  nor a work card uses it, not even a 3:2 card across the row.
 - A photo whose window is not known yet waits, the crop still resting.
 - A carried-over photo, which cannot be cropped, is framed the same way over its
-  still.
+  still, here on the phone only: the desktop has never offered 编辑 for it.
 
 Each photo keeps its framing at once, like a ratio, with no toast or 撤销.
 **还原** resets the crop, the turn and the framing together, and its 撤销 brings
@@ -252,7 +254,7 @@ the existing `coverRefId`; no article-cover crop field is introduced.
 | 发布                              | Mockup A chips, visibility segment, reference sheet, menu and footer               | Same where available                                                   | Existing text rules, visibility semantics and submission readiness         |
 | Preview and media failures        | Feed geometry, gallery-limit note, truthful statuses and remedies                  | Same                                                                   | Existing resolved media sources; no synthetic fallback for real media      |
 | 专题 and article cover            | Existing article-draft entry and two cover-card previews                           | Existing capability gate retained                                      | Article editor, `coverRefId` and account isolation                         |
-| Keyboard, Back and layout swap    | Topmost sheet handling, keyboard-aware footer, session/crop retained across 896 px | Same                                                                   | IME handling, focus restoration, reduced motion and one editor session     |
+| Keyboard, Back and layout swap    | Topmost sheet handling, keyboard-aware footer, session/crop/framing kept at 896 px | Same                                                                   | IME handling, focus restoration, reduced motion and one editor session     |
 | Desktop, avatar and profile cover | Existing workflows retained                                                        | Same                                                                   | Accepted desktop editor and profile image flows                            |
 
 Development sign-in and synthetic acceptance fixtures remain Development-only.

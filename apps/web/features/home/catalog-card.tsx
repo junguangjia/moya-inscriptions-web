@@ -7,6 +7,7 @@ import {
   localCatalogRenditions,
 } from "../detail/local-catalog-media";
 import {
+  FEED_STAGE_MAX_RATIO,
   slideFit,
   slideFraming,
   slidePositionY,
@@ -165,16 +166,20 @@ export const CatalogCardMedia = ({
   );
   // A feed card whose work cover is taller than its box keeps the author's
   // feed framing there, as the phone feed does: the chosen region, or the
-  // whole still; every other card covers its box at the centre.
+  // whole still; every other card covers its box at the centre. Only a
+  // framing the author could choose counts: 编辑 offers one for a cover
+  // taller than even the tallest feed stage (photo 1's own, at most 4:5),
+  // and one kept from an earlier, taller crop is dormant on any other, which
+  // a wider box (a 3:2 card across the row) must not bring back.
+  const feed =
+    variant === "feed" && slideFit(media, FEED_STAGE_MAX_RATIO) === "cover"
+      ? media.feed
+      : undefined;
   const boxRatio = feedMediaBoxRatio(media, slot?.span === true);
-  const framing =
-    variant === "feed" ? slideFraming(media, boxRatio, media.feed) : undefined;
-  const fit =
-    framing === undefined ? "cover" : slideFit(media, boxRatio, media.feed);
+  const framing = slideFraming(media, boxRatio, feed);
+  const fit = framing === undefined ? "cover" : slideFit(media, boxRatio, feed);
   const positionY =
-    framing === undefined
-      ? undefined
-      : slidePositionY(media, boxRatio, media.feed);
+    framing === undefined ? undefined : slidePositionY(media, boxRatio, feed);
   return (
     <div
       className={`${styles.media} ${

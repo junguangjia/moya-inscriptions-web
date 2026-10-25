@@ -13,6 +13,7 @@ import type {
 import type {
   MediaCrop,
   MediaEdit,
+  MediaFeedFraming,
   MediaRotation,
   WorkDraftItem,
 } from "@moya/contracts";
@@ -56,6 +57,14 @@ export interface EditDraft {
    * layout swap): the stage keeps it like its own change.
    */
   readonly explicit?: boolean | undefined;
+  /**
+   * The feed framing the desktop edit dialog shows and has not kept yet
+   * (#341), when it is not the item's own; absent when there is none. A
+   * return to the centred cover (还原) is spelled out as the cover at the
+   * centre, so absent never stands for it. The phone keeps framing at once:
+   * a layout swap keeps this choice instead of handing it to the stage.
+   */
+  readonly feed?: MediaFeedFraming | undefined;
 }
 
 /** Unfinished work in the cover dialog, valid while edit and crop are unchanged. */

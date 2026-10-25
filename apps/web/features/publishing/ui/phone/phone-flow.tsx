@@ -7,7 +7,7 @@ import { fieldStep, isEmptyWork } from "../editor/editor-session-state";
 import editorStyles from "../editor/editor.module.css";
 import { FEED_GALLERY_MAXIMUM } from "../media/feed-stage-slides";
 import { closeCrop, normalizeCrop } from "../media/media-geometry";
-import { indexOfKey } from "../media/media-order";
+import { indexOfKey, setItemFeed } from "../media/media-order";
 import { mediaUiFor, useMediaUiState } from "../media/media-ui-store";
 import mediaStyles from "../media/media.module.css";
 import { useMediaActions } from "../media/use-media-actions";
@@ -212,7 +212,9 @@ export const draftChanged = (draft: EditDraft): boolean => {
  * A layout swap from the desktop editor with one of its media dialogs open.
  * The phone draws no 编辑 dialog: the photo opens on 编辑 instead, with the
  * dialog's unfinished crop as the stage's draft, kept like the stage's own
- * change when the author made one there (it is not lost to the swap). A
+ * change when the author made one there (it is not lost to the swap). Its
+ * unkept 局部 / 整张 choice is kept at once, as the phone keeps framing and
+ * as 完成 would have kept it (#341); the stage's draft is the crop alone. A
  * 封面构图 of a photo other than the 首图 ends, since here the cover is the
  * first photo (§6 G6); the first photo's stays open over 编辑, as 封面构图
  * from its photo sheet would be. Without a dialog the album picks the
@@ -229,8 +231,12 @@ export const adoptDesktopDialog = (
     return;
   }
   const draft = ui.draftFor(dialog);
-  if (draft !== null)
-    ui.saveCropDraft(dialog.key, { ...draft, explicit: draftChanged(draft) });
+  if (draft !== null) {
+    const { feed, ...crop } = draft;
+    ui.saveCropDraft(dialog.key, { ...crop, explicit: draftChanged(crop) });
+    if (feed !== undefined)
+      store.updateMedia((media) => setItemFeed(media, dialog.key, feed));
+  }
   ui.closeDialog();
   if (indexOfKey(store.media(), dialog.key) < 0) return;
   ui.setCurrentKey(dialog.key);

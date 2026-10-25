@@ -646,6 +646,67 @@ describe("MediaEditDialog 动态流显示 (#341)", () => {
     expect(onApplyFeed).not.toHaveBeenCalled();
   });
 
+  it("hands an unkept choice on with the unfinished work, so a remount keeps it", async () => {
+    const drafts: EditDraft[] = [];
+    const onApplyFeed = vi.fn();
+    const open = async (
+      props: Partial<Parameters<typeof MediaEditDialog>[0]> = {},
+    ) => {
+      await act(async () => root.unmount());
+      root = createRoot(container);
+      await act(async () =>
+        root.render(
+          dialog({
+            onApplyFeed,
+            onDraftChange: (draft) => drafts.push(draft),
+            ...props,
+          }),
+        ),
+      );
+      await layOut();
+    };
+    await open();
+    // Nothing chosen yet: nothing waits.
+    expect(drafts.at(-1)!.feed).toBe(undefined);
+    await keyOn(handle()!, "ArrowUp");
+    expect(drafts.at(-1)!.feed).toEqual({ fit: "cover", y: 0.45 });
+    // The layout swap: a new dialog with the saved work.
+    await open({ initialDraft: drafts.at(-1)! });
+    expect(handle()!.getAttribute("aria-valuenow")).toBe("55");
+    await click(radio("整张"));
+    expect(drafts.at(-1)!.feed).toEqual({ fit: "contain" });
+    await open({ initialDraft: drafts.at(-1)! });
+    expect(radio("整张").checked).toBe(true);
+    expect(overlay().hasAttribute("data-feed-whole")).toBe(true);
+    await click(buttonByText("完成"));
+    expect(onApplyFeed).toHaveBeenCalledExactlyOnceWith({ fit: "contain" });
+
+    // 还原 of a stored 整张, unkept: the centred cover waits, spelled out.
+    onApplyFeed.mockClear();
+    const whole = {
+      rotation: 0,
+      crop: null,
+      feed: { fit: "contain" },
+    } as const;
+    await open({ edit: whole });
+    await click(buttonByText("还原"));
+    const reverted = drafts.at(-1)!;
+    expect(reverted.feed).toEqual({ fit: "cover", y: 0.5 });
+    await open({ edit: whole, initialDraft: reverted });
+    expect(radio("局部").checked).toBe(true);
+    expect(handle()!.getAttribute("aria-valuenow")).toBe("50");
+    await click(buttonByText("完成"));
+    expect(onApplyFeed).toHaveBeenCalledExactlyOnceWith(undefined);
+
+    // Made on a framing the photo no longer has: the photo's own shows.
+    await open({
+      edit: { rotation: 0, crop: null, feed: { fit: "cover", y: 0.2 } },
+      initialDraft: reverted,
+    });
+    expect(handle()!.getAttribute("aria-valuenow")).toBe("80");
+    expect(drafts.at(-1)!.feed).toBe(undefined);
+  });
+
   it("shows the stored framing for the first item and later ones, and no choice without a caller that keeps it", async () => {
     // The first item: its own stage.
     await act(async () =>

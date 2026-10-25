@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { spacing, typography } from "@moya/design-tokens";
 import { act, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1791,7 +1792,7 @@ describe("EditScreen", () => {
     const tool = container.querySelector<HTMLButtonElement>(
       "[data-edit-feed-tool]",
     )!;
-    expect(tool.disabled).toBe(true);
+    expect(tool.getAttribute("aria-disabled")).toBe("true");
     click(tool);
     expect(tool.getAttribute("aria-pressed")).toBe("false");
     expect(tool.hasAttribute("aria-describedby")).toBe(false);
@@ -1939,6 +1940,76 @@ describe("EditScreen", () => {
     // the next thumbnail.
     expect(cross).toContain("right: -6px;");
     expect(rule(".stripTrack")).toContain("gap: var(--yoyi-space-4);");
+  });
+
+  it("keeps each of the six ratio segments whole from a 320px phone to a 390px one", () => {
+    const css = (editCss as string).replace(/\/\*[\s\S]*?\*\//gu, "");
+    /** A rule's `property`, in px: a spacing token as the tokens define it. */
+    const declared = (
+      selector: string,
+      property: string,
+      pattern = "([^;]+)",
+    ) => {
+      const start = css.indexOf(`${selector} {`);
+      expect(start).toBeGreaterThanOrEqual(0);
+      const body = css
+        .slice(start, css.indexOf("}", start))
+        .replace(/\s+/gu, " ");
+      const value = new RegExp(`[{;] ${property}: ${pattern};`, "u").exec(
+        body,
+      )?.[1];
+      const step = /^var\(--yoyi-space-(\d+)\)$/u.exec(value ?? "")?.[1];
+      expect(step).toBeDefined();
+      return Number.parseFloat(spacing[Number(step) as keyof typeof spacing]);
+    };
+    // The row's sides (no safe area on these phones) and the track's insets.
+    const side = declared(
+      ".ratioRow",
+      "padding",
+      "\\S+ max\\((\\S+), env\\(safe-area-inset-right\\)\\) [^;]+",
+    );
+    const inset = declared(".segment", "padding");
+    const wordPadding = declared(
+      '.segment[data-count="6"] .segmentButton:nth-child(-n + 2)',
+      "padding",
+      "0 (\\S+)",
+    );
+    const gap = declared(
+      '.segment[data-count="6"] .segmentButton:nth-child(n + 3)',
+      "gap",
+    );
+    const em = Number.parseFloat(typography.label.mobileSize);
+    // 原始比例 (1.2fr) and 自由 (0.8fr), never narrower than their words.
+    const words = [
+      { flex: 1.2, width: 4 * em + 2 * wordPadding },
+      { flex: 0.8, width: 2 * em + 2 * wordPadding },
+    ];
+    /** Each shape's 1fr: a word whose share is under its width keeps its width. */
+    const shapeColumn = (track: number) => {
+      let rest = track;
+      let factors = 6;
+      const fixed = new Set<(typeof words)[number]>();
+      for (;;) {
+        const fr = rest / factors;
+        const narrow = words.find(
+          (word) => !fixed.has(word) && word.flex * fr < word.width,
+        );
+        if (narrow === undefined) return fr;
+        fixed.add(narrow);
+        rest -= narrow.width;
+        factors -= narrow.flex;
+      }
+    };
+    // A 20px glyph, the gap and a semibold 4:5 (21.8px in SF Pro, at most
+    // 23.7px in a fallback face as wide as Verdana).
+    const shape = 20 + gap + 23.7;
+    for (const width of [320, 360, 375, 390])
+      expect(shapeColumn(width - 2 * side - 2 * inset)).toBeGreaterThanOrEqual(
+        shape,
+      );
+    // At 320px: 284px of track, the words 60 and 37.3px, each shape 46.7px.
+    expect(shapeColumn(284)).toBeCloseTo(224 / 4.8, 5);
+    expect(320 - 2 * side - 2 * inset).toBe(284);
   });
 
   it("declares only tokens, the mockup's token mixes and its shape values", () => {
@@ -3434,6 +3505,81 @@ describe("EditScreen corner handles and the crop field (#341)", () => {
     });
   });
 
+  it("holds the photo still from the moment a corner is taken, before the finger has moved", () => {
+    layOutStage();
+    render({ items: three() });
+    layOutFrame(4 / 3);
+    mountReport(full);
+    press("pointerdown", handle("nw"), 0, 0, { id: 1 });
+    // Inside the slop: no drag yet, but the photo takes no touch already,
+    // so a second finger landing with the first never pinches it.
+    expect(resizing()).toBe(false);
+    expect(
+      container.querySelector("[data-media-crop]")!.hasAttribute("data-frozen"),
+    ).toBe(true);
+    expect(cropper.props!.onTouchRequest()).toBe(false);
+    press("pointerdown", cropTarget(), 200, 200, { id: 2 });
+    expect(stage().hasAttribute("data-gesture")).toBe(false);
+    // The corner drags on over the photo as it was, and the crop is the
+    // window over what was shown.
+    press("pointermove", handle("nw"), 50, 40, { id: 1 });
+    act(() => vi.advanceTimersByTime(16));
+    expect(resizing()).toBe(true);
+    expect(stage().hasAttribute("data-gesture")).toBe(false);
+    press("pointerup", handle("nw"), 50, 40, { id: 1 });
+    pointer("pointerup", window, 2);
+    expect(spies.applyEdit).toHaveBeenCalledOnce();
+    expectCrop(lastEdit().crop, {
+      x: 50 / 358,
+      y: 40 / 268.5,
+      width: 308 / 358,
+      height: 228.5 / 268.5,
+    });
+    expect(cropper.props!.zoom).toBe(1);
+    // Let go, and once the new cropper shows the crop, the photo is the
+    // fingers' again; a tap on a corner gives it back at once.
+    reportSeed();
+    expect(cropper.props!.onTouchRequest()).toBe(true);
+    press("pointerdown", handle("se"), 5, 5);
+    expect(cropper.props!.onTouchRequest()).toBe(false);
+    press("pointerup", handle("se"), 6, 5);
+    expect(cropper.props!.onTouchRequest()).toBe(true);
+    expect(spies.applyEdit).toHaveBeenCalledOnce();
+  });
+
+  it("frees a 16:9 a desktop dialog handed over: 自由 at its own shape, in the same cropper, the corners free", () => {
+    layOutStage();
+    // The desktop dialog's 16:9, adopted by a layout swap (`explicit`).
+    ui.saveCropDraft("a", {
+      basis: { rotation: 0, crop: null },
+      rotation: 0,
+      stored: {
+        previewable: true,
+        session: { ...startCrop("16:9", null), generation: 1 },
+      },
+      explicit: true,
+    });
+    render({ items: three() });
+    expect(checkedRatios()).toEqual(["自由"]);
+    expect(ratio("自由").tabIndex).toBe(0);
+    expect(cropper.mounts).toBe(1);
+    expect(cropper.props!.aspect).toBeCloseTo(16 / 9);
+    expect(applyAll().getAttribute("aria-disabled")).toBe("true");
+    // A sideways drag changes the shape: nothing holds 16:9 any more.
+    layOutFrame(16 / 9);
+    mountReport({ x: 0, y: 12.5, width: 100, height: 75 });
+    expect(cropper.mounts).toBe(1);
+    dragCorner("se", { x: -60, y: 0 });
+    expectCrop(lastEdit().crop, {
+      x: 0,
+      y: 0.125,
+      width: 298 / 358,
+      height: 0.75,
+    });
+    expect(checkedRatios()).toEqual(["自由"]);
+    expect(cropper.props!.aspect).toBeCloseTo((298 / 358 / 0.75) * (4 / 3), 5);
+  });
+
   it("resizes from the keyboard: a run of arrow presses is one reframe once they rest, Escape drops one, focus stays", () => {
     layOutStage();
     render({ items: three() });
@@ -4401,7 +4547,7 @@ describe("EditScreen 「动态流」 tool (#341)", () => {
     expect(note()!.textContent).toBe("正在确定动态流画幅…");
     expect(note()!.getAttribute("data-edit-feed-note")).toBe("pending");
     expect(container.querySelector("[data-edit-ratio]")).toBe(null);
-    expect(tool().disabled).toBe(false);
+    expect(tool().getAttribute("aria-disabled")).toBe("false");
     expect(
       container.querySelector("[data-media-crop]")!.hasAttribute("data-frozen"),
     ).toBe(true);
@@ -4432,7 +4578,79 @@ describe("EditScreen 「动态流」 tool (#341)", () => {
       "这张图片暂时无法预览，不能选择动态流显示",
     );
     click(tool());
-    expect(tool().disabled).toBe(true);
+    expect(tool().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("keeps focus on 「动态流」 as the press that leaves the tool turns it off on a photo without a window", () => {
+    const servers = (c: PublishingMediaItem | null) =>
+      new Map([
+        ["a", tallServer("a")],
+        ["b", tallServer("b")],
+        ["c", c],
+      ]);
+    const leave = (state: string) => {
+      expect(note()!.getAttribute("data-edit-feed-note")).toBe(state);
+      act(() => tool().focus());
+      click(tool());
+      expect(tool().getAttribute("aria-pressed")).toBe("false");
+      // Off now and unavailable, yet never natively disabled under focus.
+      expect(tool().getAttribute("aria-disabled")).toBe("true");
+      expect(tool().disabled).toBe(false);
+      expect(document.activeElement).toBe(tool());
+      // Another press does nothing.
+      click(tool());
+      expect(tool().getAttribute("aria-pressed")).toBe("false");
+      expect(document.activeElement).toBe(tool());
+    };
+    // `pending`: photo 2 while the feed's stage is not known yet.
+    renderTall();
+    layOutFrame();
+    click(tool());
+    render({
+      items: album.items,
+      servers: servers(server("c")),
+      stageRatio: null,
+    });
+    click(thumb("b"));
+    leave("pending");
+    // `none`: a photo without a preview.
+    render({
+      items: album.items,
+      servers: servers(server("c")),
+      stageRatio: 1.25,
+    });
+    click(thumb("a"));
+    layOutFrame();
+    click(tool());
+    render({ items: album.items, servers: servers(null), stageRatio: 1.25 });
+    click(thumb("c"));
+    leave("none");
+  });
+
+  it("takes a turn back with its 撤销, never a framing chosen after the turn", () => {
+    renderTall({
+      items: [
+        tall("a", { rotation: 0, crop: null, feed: { fit: "cover", y: 0.2 } }),
+        tall("b"),
+        item("c"),
+      ],
+    });
+    layOutFrame();
+    click(tool());
+    expect(fit("region").getAttribute("aria-checked")).toBe("true");
+    // Turned twice, upside down: taller than the stage again.
+    click(button("向右旋转 90°"));
+    click(button("向右旋转 90°"));
+    expect(album.items[0]!.edit.rotation).toBe(180);
+    click(fit("whole"));
+    expect(feedOf("a")).toEqual({ fit: "contain" });
+    expect(toastText()).toBe("已向右旋转 90°撤销");
+    undo();
+    expect(album.items[0]!.edit).toEqual({
+      rotation: 90,
+      crop: null,
+      feed: { fit: "contain" },
+    });
   });
 
   it("never turns on or off under a finger on the photo", () => {

@@ -1569,8 +1569,8 @@ test("a corner drag crops freely at 原始比例 and keeps a chosen ratio, and �
   await reframed();
   await expect(ratio(composer, "4:5")).toHaveAttribute("aria-checked", "true");
 
-  // While 「动态流」 has the stage, a mouse drag on the photo moves nothing
-  // (review G2); with the tool off the same drag pans it.
+  // While 「动态流」 has the stage, the frozen cropper ignores a mouse drag on
+  // the photo, so nothing moves; with the tool off the same drag pans it.
   const picture = composer.editor.locator("[data-media-crop] img").first();
   const placement = () =>
     picture.evaluate(
@@ -1629,12 +1629,26 @@ test("the six-segment ratio row keeps every segment whole from 320 to 390 px", a
       .poll(() =>
         ratios.evaluate(
           (group) => {
-            const whole = (node: Element) =>
-              node.scrollWidth <= node.clientWidth + 1 &&
-              node.scrollHeight <= node.clientHeight + 1;
+            // Each segment's ::before extends its target to the track's 44px,
+            // so only the width overflows, and the word and glyph boxes are
+            // compared with the segment's own box.
+            const inside = (inner: DOMRect, outer: DOMRect) =>
+              inner.left >= outer.left - 0.5 &&
+              inner.right <= outer.right + 0.5 &&
+              inner.top >= outer.top - 0.5 &&
+              inner.bottom <= outer.bottom + 0.5;
+            const whole = (node: Element) => {
+              const box = node.getBoundingClientRect();
+              return (
+                node.scrollWidth <= node.clientWidth + 1 &&
+                [...node.children].every((child) =>
+                  inside(child.getBoundingClientRect(), box),
+                )
+              );
+            };
             const row = group.getBoundingClientRect();
             return (
-              whole(group) &&
+              group.scrollWidth <= group.clientWidth + 1 &&
               row.left >= -0.5 &&
               row.right <= document.documentElement.clientWidth + 0.5 &&
               [...group.querySelectorAll("[role=radio]")].every(whole)

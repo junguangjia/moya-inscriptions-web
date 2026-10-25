@@ -38,6 +38,7 @@ import {
 } from "../media/feed-window-overlay";
 import { initialSession } from "../media/media-edit-dialog";
 import {
+  EDIT_PRESETS,
   closeCrop,
   closeEdit,
   cropFromPercentages,
@@ -399,8 +400,15 @@ export const useStageCrop = ({
   const edit = item.edit;
   const frameAt = (turned: MediaRotation): Size | null =>
     size === null || !previewable ? null : rotatedSize(size, turned);
-  /** 原始比例 is the whole frame: a crop made at it is 自由 (`freedOriginal`). */
+  /**
+   * 原始比例 is the whole frame: a crop made at it is 自由 (`freedOriginal`).
+   * 16:9 and 9:16 are not the phone's: a desktop dialog's (a layout swap
+   * hands its draft over) is 自由 at its own shape, in the same cropper.
+   */
   const settle = (session: CropSession, turned: MediaRotation) => {
+    const fixed = EDIT_PRESETS.find((preset) => preset.id === session.preset);
+    if (fixed !== undefined && fixed.ratio !== null && !isPhonePreset(fixed.id))
+      return freeCrop(session, fixed.ratio);
     const shown = frameAt(turned);
     return shown === null
       ? session
@@ -1131,6 +1139,8 @@ export const EditStage = ({
   } | null>(null);
   const cropSize = measured?.surface === surface ? measured.size : null;
   const [gesture, setGesture] = useState(false);
+  // A corner is taken (#341): from the finger's landing, inside its slop too.
+  const [grabbed, setGrabbed] = useState(false);
   // A corner's window is off the frame (#341).
   const [resizing, setResizing] = useState(false);
   const [reframe, setReframe] = useState<Reframe | null>(null);
@@ -1333,9 +1343,10 @@ export const EditStage = ({
     stageSize.width - 2 * CROP_FIELD_INSETS.inline >= CROP_FIELD_MINIMUM &&
     stageSize.height - 2 * CROP_FIELD_INSETS.block >= CROP_FIELD_MINIMUM;
   const inset = fielded ? CROP_FIELD_INSETS : NO_INSET;
-  // The photo is someone else's for now: a corner's window, the reframe
-  // zoom or another tool.
-  const frozen = resizing || reframing || cropPaused;
+  // The photo is someone else's for now: a corner taken (as the finger
+  // lands, so a second finger meanwhile never pinches the photo under the
+  // window), the reframe zoom or another tool.
+  const frozen = grabbed || resizing || reframing || cropPaused;
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!editing || frozen || !inCrop(event.target)) return;
@@ -1469,12 +1480,16 @@ export const EditStage = ({
         interrupted={interrupted}
         offered={fielded && !cropPaused}
         onBegin={() => {
+          setGrabbed(true);
           crop.noteInput();
           onInput();
           crop.hold(true);
           if (crop.image !== null) predecode(crop.image);
         }}
-        onEnd={() => crop.hold(false)}
+        onEnd={() => {
+          setGrabbed(false);
+          crop.hold(false);
+        }}
         onRelease={release}
         onResizing={setResizing}
         ratio={crop.locked ? crop.ratio : null}
@@ -1644,15 +1659,18 @@ export const EditStage = ({
           aria-describedby={
             feedOn && feedHint !== null ? feedHintId : undefined
           }
+          // Off (`aria-disabled`, so focus stays on it as the press that
+          // leaves the tool on a photo without a window turns it off).
+          aria-disabled={!feedOn && feedWindow === null}
           aria-label="动态流"
           aria-pressed={feedOn}
           className={styles.fab}
           data-edit-feed-tool=""
-          disabled={!feedOn && feedWindow === null}
           onClick={() => {
+            if (!feedOn && feedWindow === null) return;
             // Never under a finger on the photo or a corner: what it does is
             // not kept until it lifts (#341).
-            if (gesture || resizing) return;
+            if (gesture || grabbed || resizing) return;
             onToggleFeedTool();
           }}
           title="动态流"

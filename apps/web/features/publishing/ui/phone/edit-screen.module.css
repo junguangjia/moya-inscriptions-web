@@ -752,8 +752,11 @@ span.icon14 {
 /*
  * 编辑's six (#341): 原始比例 and 自由 as words, each never narrower than
  * its word; the four shapes share the rest. Whole from a 320px phone: its
- * 284px track gives the words 60 and 37px, each shape 47px (a 20px glyph,
- * 4px, a 20px label).
+ * track is 320 less the row's 16px sides and the track's 2px insets, 284px.
+ * The words take 60px (52 + 2 × 4) and 37.3px (0.8fr of the rest), so each
+ * shape has 46.7px: a 20px glyph, a 2px gap and up to 24px of label (a
+ * semibold 4:5 is 21.8px in SF Pro, 23.7px in a fallback as wide as
+ * Verdana; a 4px gap would leave that one 1px short).
  */
 .segment[data-count="6"] {
   grid-template-columns:
@@ -763,6 +766,10 @@ span.icon14 {
 
 .segment[data-count="6"] .segmentButton:nth-child(-n + 2) {
   padding: 0 var(--yoyi-space-2);
+}
+
+.segment[data-count="6"] .segmentButton:nth-child(n + 3) {
+  gap: var(--yoyi-space-1);
 }
 
 .segmentButton {

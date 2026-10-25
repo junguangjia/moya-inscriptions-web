@@ -144,6 +144,35 @@ describe("CatalogCardMedia feed framing", () => {
     ).toEqual([null, null, ""]);
   });
 
+  // 编辑 offers a framing only for a cover taller than its feed stage (at
+  // most 4:5); one kept from an earlier, taller crop is dormant there, and a
+  // 3:2 card covering every column must not bring it back.
+  it("keeps a framing gone dormant in 编辑 off a card covering every column", () => {
+    slot.value = { platform: "phone", columns: 2, span: true };
+    for (const [width, height] of [
+      [600, 600],
+      [800, 1000],
+    ] as const)
+      for (const feed of [
+        { fit: "contain" },
+        { fit: "cover", y: 0 },
+      ] as const) {
+        const { image, framing } = render(cover({ width, height, feed }));
+        expect(framing).toEqual([null, null, ""]);
+        // A centred cover, with its asset colour while it loads.
+        expect(image.style.backgroundColor).toBe("rgb(74, 64, 56)");
+      }
+    // A 9:16 cover is taller than every feed stage, so its framing holds.
+    expect(
+      render(cover({ width: 900, height: 1600, feed: { fit: "contain" } }))
+        .framing,
+    ).toEqual(["contain", "whole", ""]);
+    expect(
+      render(cover({ width: 900, height: 1600, feed: { fit: "cover", y: 0 } }))
+        .framing,
+    ).toEqual(["cover", "region", "0%"]);
+  });
+
   it("measures the card box as the stylesheet draws it", () => {
     expect(feedMediaBoxRatio({ width: 600, height: 1800 }, false)).toBe(4 / 3);
     expect(feedMediaBoxRatio({ width: 3000, height: 300 }, false)).toBe(2 / 3);

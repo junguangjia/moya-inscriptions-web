@@ -915,17 +915,22 @@ const EditWorkspace = ({
   };
 
   /**
-   * 撤销 of a turn or 还原 (taken before it): the photo's edit and feed
-   * framing back and, when the step reset the cover's composition (the photo
-   * is the cover), that composition too, as 应用到全部's 撤销 brings it back.
+   * 撤销 of a turn or 还原 (taken before it): the photo's edit and, for
+   * 还原 (`feed`), its feed framing back and, when the step reset the
+   * cover's composition (the photo is the cover), that composition too, as
+   * 应用到全部's 撤销 brings it back. A turn leaves the framing as it is, so
+   * its 撤销 never takes back a framing chosen since.
    */
-  const stageUndo = (before: StageSnapshot) => {
+  const stageUndo = (
+    before: StageSnapshot,
+    { feed = true }: { readonly feed?: boolean } = {},
+  ) => {
     const album = editor.actions.media();
     const edited = album.items.find((entry) => entry.key === before.key);
     return () => {
       crop.restore(before);
       // The framing is not the pixels: it comes back on its own.
-      media.applyFeed(before.key, before.feed);
+      if (feed) media.applyFeed(before.key, before.feed);
       if (
         edited === undefined ||
         album.coverCrop === null ||
@@ -950,7 +955,7 @@ const EditWorkspace = ({
 
   const rotate = () => {
     if (!editable) return;
-    const undo = stageUndo(crop.snapshot());
+    const undo = stageUndo(crop.snapshot(), { feed: false });
     crop.rotate();
     say("已向右旋转 90°", { undo });
   };

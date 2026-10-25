@@ -519,6 +519,84 @@ describe("adoptDesktopDialog", () => {
     ).toBe(false);
   });
 
+  it("keeps the dialog's unkept 局部 · 整张 choice at once, as the phone keeps framing (#341)", () => {
+    const adopt = (draft: EditDraft, stored?: { fit: "contain" }) => {
+      const { store, ui } = session(2, "media");
+      if (stored !== undefined)
+        store.setItemEdit("p2", { rotation: 0, crop: null, feed: stored });
+      const dialog = { type: "edit", key: "p2" } as const;
+      ui.openDialog(dialog);
+      ui.saveDraft(dialog, draft);
+      const version = store.get().editVersion;
+      adoptDesktopDialog(store, ui);
+      return { store, ui, edited: store.get().editVersion !== version };
+    };
+    const basis = { rotation: 0, crop: null } as const;
+    const crop = {
+      basis,
+      rotation: 90,
+      stored: { previewable: true, session: startCrop("1:1", null) },
+    } as const;
+    // 整张 chosen with a turn: the turn waits on the stage, 整张 is kept.
+    const whole = adopt({ ...crop, feed: { fit: "contain" } });
+    expect(whole.store.media().items[1]!.edit).toEqual({
+      rotation: 0,
+      crop: null,
+      feed: { fit: "contain" },
+    });
+    expect(whole.ui.cropDraftFor("p2")).toEqual({ ...crop, explicit: true });
+    expect(whole.ui.cropDraftFor("p2")).not.toHaveProperty("feed");
+    expect(shown(whole.store, whole.ui)).toBe("edit");
+    // Nothing waits to travel back: a desktop dialog opened after a swap
+    // back starts from the framing kept here.
+    expect(whole.ui.draftFor({ type: "edit", key: "p2" })).toBe(null);
+    // A region placed.
+    const region = adopt({ ...crop, feed: { fit: "cover", y: 0.2 } });
+    expect(region.store.media().items[1]!.edit.feed).toEqual({
+      fit: "cover",
+      y: 0.2,
+    });
+    // 还原 of a stored 整张: back to the centred cover.
+    const contain = { fit: "contain" } as const;
+    const onWhole = { ...basis, feed: contain };
+    const reverted = adopt(
+      {
+        basis: onWhole,
+        rotation: 0,
+        stored: null,
+        feed: { fit: "cover", y: 0.5 },
+      },
+      contain,
+    );
+    expect(reverted.store.media().items[1]!.edit).toEqual(basis);
+    // Nothing pending: the photo keeps its framing and the work is unedited.
+    const untouched = adopt(
+      { basis: onWhole, rotation: 0, stored: null },
+      contain,
+    );
+    expect(untouched.store.media().items[1]!.edit.feed).toEqual({
+      fit: "contain",
+    });
+    expect(untouched.edited).toBe(false);
+  });
+
+  it("keeps no framing the dialog's 返回 discarded", () => {
+    const { store, ui } = session(2, "media");
+    const dialog = { type: "edit", key: "p1" } as const;
+    ui.openDialog(dialog);
+    ui.saveDraft(dialog, {
+      basis: { rotation: 0, crop: null },
+      rotation: 0,
+      stored: null,
+      feed: { fit: "contain" },
+    });
+    // 返回 closes the dialog, and its work with it, before any swap.
+    ui.closeDialog();
+    adoptDesktopDialog(store, ui);
+    expect(store.media().items[0]!.edit).toEqual({ rotation: 0, crop: null });
+    expect(ui.cropDraftFor("p1")).toBe(null);
+  });
+
   it("keeps the 首图's 封面构图 and ends one for another photo", () => {
     const first = session(2, "media");
     first.ui.openDialog({ type: "cover", key: "p1" });
