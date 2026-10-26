@@ -1,5 +1,7 @@
 "use client";
 
+import { workspacePageLabel } from "../workspace/routes";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -93,18 +95,17 @@ export const CommunityHistoryClient = () => {
     <div className={styles.workspace}>
       <SetStepNav
         nav={[
-          { label: "社区", url: "/admin/community-moderation" },
-          { label: "操作历史" },
+          { label: "操作记录", url: "/admin/community-moderation/history" },
+          { label: "社区操作" },
         ]}
       />
       <header className={styles.header}>
         <div>
-          <h1 className={styles.title}>操作历史</h1>
+          <h1 className={styles.title}>
+            {workspacePageLabel("/admin/community-moderation/history")}
+          </h1>
           <p className={styles.lead}>
-            每一条审核、账号与设置操作的审计记录，最新在前；{TIME_ZONE_NOTE}。
-            <Link href="/admin/community-moderation">返回审核队列</Link>
-            {" · "}
-            <Link href="/admin">工作台</Link>
+            查看审核、账号和设置的操作记录；{TIME_ZONE_NOTE}。
           </p>
         </div>
       </header>
@@ -147,7 +148,7 @@ export const CommunityHistoryClient = () => {
       <section aria-busy={loading} aria-label="操作记录" data-history-list="">
         {error !== null ? (
           <p className={styles.state} role="alert">
-            无法读取操作历史：{error}{" "}
+            无法读取操作记录：{error}{" "}
             <button
               className={styles.rowLink}
               onClick={() => void load()}
@@ -220,16 +221,20 @@ export const CommunityHistoryClient = () => {
                 disabled={page.page <= 1 || loading}
                 onClick={() => navigate({ page: query.page - 1 })}
                 type="button"
+                aria-label="上一页"
+                title="上一页"
               >
-                上一页
+                <span aria-hidden="true">←</span>
               </button>
               <button
                 className={styles.actionButton}
                 disabled={page.page >= page.totalPages || loading}
                 onClick={() => navigate({ page: query.page + 1 })}
                 type="button"
+                aria-label="下一页"
+                title="下一页"
               >
-                下一页
+                <span aria-hidden="true">→</span>
               </button>
             </div>
           </div>

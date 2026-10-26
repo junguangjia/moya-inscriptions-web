@@ -1,4 +1,6 @@
 import { MediaSnapshotPicker as MediaSnapshotPicker_a43c203023e3389c5dc6b4863a273b24 } from "../../../src/media/MediaSnapshotPicker";
+import { MediaTitleCell } from "../../../src/media/MediaTitleCell";
+import { LoginIntro } from "../../../src/branding/LoginIntro";
 import { OwnerWithdrawButton as OwnerWithdrawButton_9e998a9a7cb97e1d133b14fcf3c6aaf1 } from "../../../src/owner-workflow/OwnerWithdrawButton";
 import { CatalogOwnershipField as CatalogOwnershipField_d68431953f65de60bd9cd6665817055b } from "../../../src/media/CatalogOwnershipField";
 import { OriginalRightsField as OriginalRightsField_f0988f7c8f9ddbf7bb7be320ee5c0422 } from "../../../src/media/OriginalMediaMetadataField";
@@ -29,9 +31,19 @@ import { PublishingJobsView as PublishingJobsView_86a1b3c9ec56e37b61bf12e13c3d66
 import { AgentOperationsView as AgentOperationsView_86a1b3c9ec56e37b61bf12e13c3d66d2 } from "../../../src/community/View";
 import { CollectionCards as CollectionCards_f9c02e79a4aed9a3924487c0cd4cafb1 } from "@payloadcms/next/rsc";
 import { AnalyticsView } from "../../../src/analytics/View";
+import {
+  WorkspaceNavigation,
+  WorkspaceTabs,
+} from "../../../src/workspace/Navigation";
+import { WorkspaceDashboard } from "../../../src/community/View";
 
 /** @type import('payload').ImportMap */
 export const importMap = {
+  "/src/branding/LoginIntro#LoginIntro": LoginIntro,
+  "/src/media/MediaTitleCell#MediaTitleCell": MediaTitleCell,
+  "/src/workspace/Navigation#WorkspaceNavigation": WorkspaceNavigation,
+  "/src/workspace/Navigation#WorkspaceTabs": WorkspaceTabs,
+  "/src/community/View#WorkspaceDashboard": WorkspaceDashboard,
   "/src/community/View#CommunityReportsView": CommunityReportsView,
   "/src/community/View#CommunityAppealsView": CommunityAppealsView,
   "/src/analytics/View#AnalyticsView": AnalyticsView,

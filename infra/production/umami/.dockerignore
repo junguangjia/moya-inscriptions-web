@@ -9,3 +9,8 @@
 !patched-chinese.sha256
 !generated-chinese.sha256
 !generate-chinese-dictionaries.mjs
+!pg-tls-host.patch
+!upstream-pg-tls.sha256
+!patched-pg-tls.sha256
+!china-provinces.json
+!china-map-NOTICE.txt

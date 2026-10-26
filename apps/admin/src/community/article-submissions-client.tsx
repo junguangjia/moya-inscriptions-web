@@ -1,7 +1,8 @@
 "use client";
 
+import { workspacePageLabel } from "../workspace/routes";
+
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ConfirmationModal, SetStepNav, useModal } from "@payloadcms/ui";
 import type {
@@ -59,6 +60,7 @@ export const ArticleSubmissionsQueueClient = () => {
   const [revision, setRevision] = useState(0);
   const lock = useRef(false);
   const panel = useRef<HTMLElement | null>(null);
+  const returnFocus = useRef<HTMLElement | null>(null);
   const currentDetail = useRef(detail);
   currentDetail.current = detail;
 
@@ -66,6 +68,13 @@ export const ArticleSubmissionsQueueClient = () => {
     cursor?: string | undefined;
     item?: string | null;
   }) => {
+    const active = document.activeElement;
+    if (
+      next.item &&
+      active instanceof HTMLElement &&
+      active.closest("[data-article-submission-list]")
+    )
+      returnFocus.current = active;
     const query = new URLSearchParams();
     if (next.cursor !== undefined) query.set("cursor", next.cursor);
     if (next.item) query.set("item", next.item);
@@ -104,6 +113,8 @@ export const ArticleSubmissionsQueueClient = () => {
     setPreviewReady(false);
     setDetailError(null);
     setReading(item !== null);
+    if (item === null && returnFocus.current?.isConnected)
+      returnFocus.current.focus();
     if (item !== null) {
       void call<ArticlePendingPreview>(
         "read-article-submission",
@@ -190,22 +201,34 @@ export const ArticleSubmissionsQueueClient = () => {
 
   return (
     <div className={styles.workspace}>
-      <SetStepNav nav={[{ label: "作者文章审核" }]} />
+      <SetStepNav
+        nav={[
+          { label: "审核", url: "/admin/community-moderation" },
+          {
+            label: workspacePageLabel(
+              "/admin/community-moderation/article-submissions",
+            ),
+          },
+        ]}
+      />
       <header className={styles.header}>
         <div>
-          <h1 className={styles.title}>作者文章审核</h1>
-          <p className={styles.lead}>
-            审核作者明确提交的文章版本。草稿不会进入队列。
-            <Link href="/admin">返回工作台</Link>
-          </p>
+          <h1 className={styles.title}>
+            {workspacePageLabel(
+              "/admin/community-moderation/article-submissions",
+            )}
+          </h1>
+          <p className={styles.lead}>审核作者提交的公开版本。</p>
         </div>
         <button
           type="button"
           className={styles.actionButton}
           disabled={busy}
           onClick={refresh}
+          aria-label="刷新"
+          title="刷新"
         >
-          刷新
+          <span aria-hidden="true">↻</span>
         </button>
       </header>
       {notice === null ? null : (
@@ -223,7 +246,7 @@ export const ArticleSubmissionsQueueClient = () => {
         </p>
       )}
       <div className={styles.layout} data-panel-open={item !== null}>
-        <section aria-label="待审核文章">
+        <section aria-label="待审核文章" data-article-submission-list="">
           {loading ? (
             <p role="status">正在读取待审核文章…</p>
           ) : listError !== null ? (
@@ -266,8 +289,10 @@ export const ArticleSubmissionsQueueClient = () => {
                 type="button"
                 disabled={loading || busy}
                 onClick={() => navigate({ cursor: page.nextCursor!, item })}
+                aria-label="下一页"
+                title="下一页"
               >
-                下一页
+                <span aria-hidden="true">→</span>
               </button>
             ) : null}
           </div>
@@ -284,7 +309,7 @@ export const ArticleSubmissionsQueueClient = () => {
               disabled={busy}
               onClick={() => navigate({ cursor })}
             >
-              关闭详情
+              <span aria-hidden="true">← </span>返回列表
             </button>
             {reading ? (
               <p role="status">正在读取文章版本…</p>

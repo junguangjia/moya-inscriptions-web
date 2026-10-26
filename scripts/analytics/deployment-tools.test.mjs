@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import {
   UMAMI_WORKSPACE_IDENTITY,
+  UMAMI_GEOGRAPHY_POLICY,
+  UMAMI_CHINA_MAP_SHA256,
   UMAMI_PG_TLS_HOST_SHA256,
 } from "./common.mjs";
 import { createHash } from "node:crypto";
@@ -53,6 +55,51 @@ test("pinned build isolates its context and checks the exact pool-only patch", a
     .filter((line) => line.startsWith("+") && !line.startsWith("+++"));
   assert.equal(added.length, 2);
   assert.ok(added.every((line) => line.includes("max: 3")));
+});
+
+test("every local Docker COPY input is in the exact build-context whitelist", async () => {
+  const directory = new URL("../../infra/production/umami/", import.meta.url);
+  const dockerfile = await readFile(new URL("Dockerfile", directory), "utf8");
+  const rules = (await readFile(new URL(".dockerignore", directory), "utf8"))
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"));
+  const sources = new Set(
+    dockerfile
+      .replace(/[ \t]*\\\n[ \t]*/gu, " ")
+      .split("\n")
+      .filter((line) => /^COPY /u.test(line) && !/ --from=/u.test(line))
+      .flatMap((line) => line.split(/\s+/u).slice(1, -1)),
+  );
+  assert.equal(sources.size, 13);
+  const checkWhitelist = (candidate) => {
+    assert.equal(candidate[0], "**");
+    assert.ok(
+      candidate.slice(1).every((line) => /^![A-Za-z0-9._-]+$/u.test(line)),
+      "Context exceptions must stay exact filenames, without wildcard or directory grants",
+    );
+    const allowed = new Set(candidate.slice(1).map((line) => line.slice(1)));
+    for (const source of sources) {
+      assert.ok(allowed.has(source), `Docker COPY input is ignored: ${source}`);
+    }
+    assert.deepEqual(
+      [...allowed].sort(),
+      [...sources, "Dockerfile", ".dockerignore"].sort(),
+      "Only Docker metadata and explicit COPY inputs may enter this build context",
+    );
+  };
+  checkWhitelist(rules);
+  for (const source of sources) {
+    assert.ok((await readFile(new URL(source, directory))).byteLength > 0);
+    assert.throws(
+      () => checkWhitelist(rules.filter((line) => line !== `!${source}`)),
+      assert.AssertionError,
+    );
+  }
+  assert.throws(
+    () => checkWhitelist([...rules, "!*.patch"]),
+    assert.AssertionError,
+  );
 });
 
 test("pg TLS patch only adds the original host to the existing socket options", async () => {
@@ -266,7 +313,8 @@ test("standalone runtime export requires immutable glibc image metadata and expl
       "com.artvenn.umami.locale": "zh-CN",
       "com.artvenn.umami.patch-sha256": UMAMI_WORKSPACE_IDENTITY,
       "com.artvenn.umami.pg-tls-host-sha256": UMAMI_PG_TLS_HOST_SHA256,
-      "com.artvenn.umami.geography": "cn-province-v1",
+      "com.artvenn.umami.geography": UMAMI_GEOGRAPHY_POLICY,
+      "com.artvenn.umami.china-map-sha256": UMAMI_CHINA_MAP_SHA256,
       "com.artvenn.umami.geo-sha256":
         "fd112e5b13ca19e8bb0bf2e1902fb0694f6ba1940bef916e0d8d9d9346f4e029",
     },
@@ -278,6 +326,7 @@ test("standalone runtime export requires immutable glibc image metadata and expl
     "com.artvenn.umami.locale",
     "com.artvenn.umami.geography",
     "com.artvenn.umami.geo-sha256",
+    "com.artvenn.umami.china-map-sha256",
   ]) {
     const labels = { ...metadata.labels };
     delete labels[key];
@@ -327,4 +376,37 @@ test("Chinese native patch, generator and immutable export identity stay bound",
   assert.ok(dockerfile.includes(UMAMI_WORKSPACE_IDENTITY));
   assert.match(dockerfile, /sha256sum -c \/tmp\/generated-chinese.sha256/u);
   assert.match(dockerfile, /vitest run src\/lib\/format.test.ts/u);
+});
+
+test("the unmodified learning-use China map, province count and notice are independently hash-bound", async () => {
+  const directory = new URL("../../infra/production/umami/", import.meta.url);
+  const source = JSON.parse(
+    await readFile(new URL("source.json", directory), "utf8"),
+  );
+  const map = await readFile(new URL("china-provinces.json", directory));
+  const notice = await readFile(new URL("china-map-NOTICE.txt", directory));
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  assert.equal(hash(map), UMAMI_CHINA_MAP_SHA256);
+  assert.equal(hash(map), source.chinaMap.sha256);
+  assert.equal(hash(notice), source.chinaMap.noticeSha256);
+  const features = JSON.parse(map).features;
+  assert.equal(features.length, 35);
+  assert.equal(
+    features.filter((feature) => feature.properties.name).length,
+    34,
+  );
+  assert.ok(features.some((feature) => feature.properties.adcode === 710000));
+  assert.ok(features.some((feature) => feature.properties.adcode === 810000));
+  assert.ok(features.some((feature) => feature.properties.adcode === 820000));
+  assert.match(notice.toString(), /learning and exchange/u);
+  assert.match(notice.toString(), /No unrestricted, commercial-use/u);
+  const dockerfile = await readFile(new URL("Dockerfile", directory), "utf8");
+  assert.equal(
+    (dockerfile.match(/COPY china-provinces.json china-map-NOTICE.txt/g) ?? [])
+      .length,
+    2,
+  );
+  assert.ok(dockerfile.includes(UMAMI_CHINA_MAP_SHA256));
+  assert.ok(dockerfile.includes(source.chinaMap.noticeSha256));
+  assert.ok(dockerfile.includes("com.artvenn.umami.china-map-sha256"));
 });

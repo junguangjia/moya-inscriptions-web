@@ -34,6 +34,9 @@ import {
 } from "./bulk-actions";
 import type { WorkBulkAction } from "./bulk-actions";
 import { CommunityUsers } from "./users-client";
+import { contentTab } from "../workspace/routes";
+import { UiIcon } from "../workspace/Icon";
+import { useNavigationGuard } from "../workspace/use-navigation-guard";
 
 type Tab = "works" | "featured" | "users";
 type CandidatePage = {
@@ -49,6 +52,10 @@ type Operation = {
 };
 const labels = { visible: "正常", hidden: "已隐藏", removed: "已移除" };
 const PAGE_SIZE = 20;
+const positivePage = (value: string | null) => {
+  const page = Number(value);
+  return Number.isSafeInteger(page) && page > 0 ? page : 1;
+};
 const Pager = ({
   page,
   total,
@@ -89,9 +96,17 @@ const Pager = ({
 /** Owner commands retain their request identity until the response is reconciled. */
 export const CommunityContentClient = () => {
   const params = useSearchParams();
+  const authorFromURL = params.get("author");
   const { openModal, closeModal } = useModal();
   const [selectedWork, setSelectedWork] = useState<OperatorWork | null>(null);
   const detailOpener = useRef<HTMLElement | null>(null);
+  const restoreDetailFocus = useRef(false);
+  useEffect(() => {
+    if (selectedWork === null && restoreDetailFocus.current) {
+      restoreDetailFocus.current = false;
+      if (detailOpener.current?.isConnected) detailOpener.current.focus();
+    }
+  }, [selectedWork]);
   const detailRequest = useRef(0);
   const [activeUser, setActiveUser] = useState<OperatorUser | null>(null);
   const [userReload, setUserReload] = useState(0);
@@ -99,9 +114,9 @@ export const CommunityContentClient = () => {
     "active",
   );
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [tab, setTab] = useState<Tab>("works");
+  const [tab, setTab] = useState<Tab>(() => contentTab(params.get("tab")));
   const [query, setQuery] = useState({
-    page: 1,
+    page: positivePage(params.get("page")),
     search: params.get("q") ?? "",
   });
   const [search, setSearch] = useState(query.search);
@@ -122,6 +137,42 @@ export const CommunityContentClient = () => {
   const [reasonDraft, setReasonDraft] = useState("");
   const reason = readModerationReason(reasonDraft);
   const [quantity, setQuantity] = useState("");
+  const urlQuery = params.toString();
+  const updateURL = (
+    changes: Record<string, string | null>,
+    replace = false,
+  ) => {
+    const next = new URL(window.location.href);
+    for (const [name, value] of Object.entries(changes)) {
+      if (value === null || value === "") next.searchParams.delete(name);
+      else next.searchParams.set(name, value);
+    }
+    window.history[replace ? "replaceState" : "pushState"](
+      null,
+      "",
+      `${next.pathname}${next.search}`,
+    );
+  };
+  useNavigationGuard(busy || retry !== null || bulkPending > 0, () =>
+    setNotice("请先确认当前操作的结果，再切换页面。"),
+  );
+  useEffect(() => {
+    if (commandLock.current || retry !== null || bulkPending > 0) return;
+    const next = new URLSearchParams(urlQuery);
+    const nextTab = contentTab(next.get("tab"));
+    setTab(nextTab);
+    const searchText = next.get("q") ?? "";
+    setSearch(searchText);
+    const page = positivePage(next.get("page"));
+    setQuery((current) =>
+      current.page === page && current.search === searchText
+        ? current
+        : { page, search: searchText },
+    );
+    setFeaturedFilter(next.get("filter") === "all" ? "all" : "active");
+    if (activeUser && activeUser.id !== authorFromURL) setActiveUser(null);
+    setSelectedIds(new Set());
+  }, [urlQuery, busy, retry, bulkPending]);
   const settingsVersion = useRef<number | null>(null);
   const load = useCallback(async () => {
     const epoch = ++request.current;
@@ -133,7 +184,11 @@ export const CommunityContentClient = () => {
       if (tab === "works") {
         const result = await call<OperatorWorkPage>("read-works", {
           ...query,
-          ...(activeUser ? { authorId: activeUser.id } : {}),
+          ...(activeUser
+            ? { authorId: activeUser.id }
+            : authorFromURL
+              ? { authorId: authorFromURL }
+              : {}),
           pageSize: PAGE_SIZE,
         });
         if (epoch === request.current) {
@@ -168,7 +223,7 @@ export const CommunityContentClient = () => {
     } finally {
       if (epoch === request.current) setLoading(false);
     }
-  }, [tab, query, activeUser, featuredFilter]);
+  }, [tab, query, activeUser, featuredFilter, authorFromURL]);
   useEffect(() => {
     void load();
     return () => {
@@ -240,14 +295,26 @@ export const CommunityContentClient = () => {
     setBusy(value);
   };
   const chooseTab = (next: Tab) => {
+    if (busy || retry !== null || bulkPending > 0) return;
     detailRequest.current++;
     setSelectedWork(null);
     setActiveUser(null);
     setSelectedIds(new Set());
     setSkipped([]);
     setTab(next);
-    setQuery({ page: 1, search: "" });
-    setSearch("");
+    const rememberedSearch =
+      next === "users" ? (params.get("usersQ") ?? "") : "";
+    const rememberedPage =
+      next === "users" ? positivePage(params.get("usersPage")) : 1;
+    setQuery({ page: rememberedPage, search: rememberedSearch });
+    setSearch(rememberedSearch);
+    updateURL({
+      tab: next === "works" ? null : next,
+      q: rememberedSearch || null,
+      page: rememberedPage === 1 ? null : String(rememberedPage),
+      item: null,
+      author: null,
+    });
   };
   const feature = (target: ContentIdentity, title: string) =>
     execute(
@@ -274,6 +341,7 @@ export const CommunityContentClient = () => {
     id: string,
     opener: HTMLElement,
     known?: OperatorWork,
+    syncLocation = true,
   ) => {
     const sequence = ++detailRequest.current;
     detailOpener.current = opener;
@@ -294,11 +362,35 @@ export const CommunityContentClient = () => {
         return;
       }
       setSelectedWork(item);
+      if (syncLocation) updateURL({ item: id });
     } catch (error) {
       if (sequence === detailRequest.current)
         setNotice(describeFailure(error).text);
     }
   };
+  const itemFromURL = params.get("item");
+  useEffect(() => {
+    if (commandLock.current || retry !== null || bulkPending > 0) return;
+    if (
+      query.search !== (params.get("q") ?? "") ||
+      query.page !== positivePage(params.get("page"))
+    )
+      return;
+    if (!itemFromURL || tab === "users") {
+      if (selectedWork !== null) restoreDetailFocus.current = true;
+      setSelectedWork(null);
+      return;
+    }
+    if (selectedWork?.id !== itemFromURL)
+      void openWork(
+        itemFromURL,
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : document.body,
+        undefined,
+        false,
+      );
+  }, [itemFromURL, tab, query.search, query.page, busy, retry, bulkPending]);
   const workActions = (item: OperatorWork) => (
     <div className={styles.actions}>
       {(["visible", "hidden", "removed"] as const)
@@ -349,468 +441,521 @@ export const CommunityContentClient = () => {
     <div className={styles.workspace}>
       <SetStepNav
         nav={[
-          { label: "社区", url: "/admin/community-moderation" },
-          { label: "作品与推荐" },
+          { label: tab === "users" ? "用户" : "内容" },
+          {
+            label:
+              tab === "users"
+                ? "网站用户"
+                : tab === "featured"
+                  ? "推荐"
+                  : "用户作品",
+          },
         ]}
       />
       <header className={styles.header}>
         <div>
-          <h1 className={styles.title}>作品与推荐</h1>
+          <h1 className={styles.title}>
+            {tab === "users"
+              ? "网站用户"
+              : tab === "featured"
+                ? "推荐"
+                : "用户作品"}
+          </h1>
           <p className={styles.lead}>
-            管理已有作品的可见性与首页推荐。更新不改变内容的首次发布时间。
+            {tab === "users"
+              ? "查看网站用户和已提交作品。"
+              : tab === "featured"
+                ? "调整推荐内容与展示顺序。"
+                : "查看作品，管理可见性与推荐。"}
           </p>
         </div>
-        <Link href="/admin/community-moderation">评论审核队列</Link>
       </header>
-      <div className={styles.tabs} aria-label="内容管理">
-        <button
-          className={styles.tab}
-          type="button"
-          aria-pressed={tab === "works"}
-          disabled={busy || retry !== null || bulkPending > 0}
-          onClick={() => chooseTab("works")}
-        >
-          用户作品
-        </button>
-        <button
-          className={styles.tab}
-          type="button"
-          aria-pressed={tab === "featured"}
-          disabled={busy || retry !== null || bulkPending > 0}
-          onClick={() => chooseTab("featured")}
-        >
-          推荐内容
-        </button>
-        <button
-          className={styles.tab}
-          type="button"
-          aria-pressed={tab === "users"}
-          disabled={busy || retry !== null || bulkPending > 0}
-          onClick={() => chooseTab("users")}
-        >
-          用户管理
-        </button>
-      </div>
-      {activeUser && tab === "works" ? (
-        <section className={styles.userDetail} aria-label="用户详情">
-          <button
-            type="button"
-            className={styles.rowLink}
-            disabled={disabled}
-            onClick={() => chooseTab("users")}
-          >
-            返回用户列表
-          </button>
-          <h2>{activeUser.displayName}</h2>
-          <p>
-            @{activeUser.handle} ·{" "}
-            {activeUser.status === "active" ? "正常" : "已停用"}
-          </p>
-          <p>{activeUser.bio || "尚未填写简介"}</p>
-          <p>
-            加入于 {formatTime(activeUser.createdAt)} ·{" "}
-            {activeUser.submittedWorks} 件可管理的已提交作品
-          </p>
-        </section>
-      ) : null}
-      {tab === "users" ? (
-        <CommunityUsers
-          disabled={bulkGate}
-          reload={userReload}
-          onBusy={bulkBusy}
-          onPending={setBulkPending}
-          onOpen={(user) => {
-            setActiveUser(user);
-            setTab("works");
-            setQuery({ page: 1, search: "" });
-            setSearch("");
-          }}
-          onRecommend={(user) =>
-            execute(
-              "recommend-user",
-              {
-                id: user.id,
-                enabled: !user.recommended,
-                expectedVersion: user.recommendationVersion,
-              },
-              user.recommended ? "取消推荐用户" : "推荐用户",
-            )
+      <div className={styles.layout} data-panel-open={selectedWork !== null}>
+        <section
+          aria-label={
+            tab === "users"
+              ? "网站用户列表"
+              : tab === "featured"
+                ? "推荐列表"
+                : "作品列表"
           }
-        />
-      ) : null}
-      {notice ? (
-        <div className={styles.notice} role="status">
-          {notice}
-          {retry ? (
-            <>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void run(retry)}
-              >
-                重试同一操作
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => {
-                  setRetry(null);
-                  setNotice(null);
-                  void load();
-                }}
-              >
-                放弃并刷新
-              </button>
-            </>
-          ) : null}
-        </div>
-      ) : null}
-      {tab !== "users" ? (
-        <form
-          className={styles.filters}
-          onSubmit={(e) => {
-            e.preventDefault();
-            setQuery({ page: 1, search: search.trim() });
-          }}
         >
-          <label>
-            搜索{tab === "works" ? "作品、作者或作品 ID" : "推荐标题"}
-            <input
-              maxLength={200}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </label>
-          <button
-            className={styles.actionButton}
-            type="submit"
-            disabled={loading}
-          >
-            搜索
-          </button>
-          <button
-            className={styles.actionButton}
-            type="button"
-            disabled={loading}
-            onClick={() => void load()}
-          >
-            刷新当前页
-          </button>
-        </form>
-      ) : null}
-      {error ? (
-        <p className={styles.notice} role="alert">
-          {error}
-          <button type="button" disabled={loading} onClick={() => void load()}>
-            重试读取
-          </button>
-        </p>
-      ) : null}
-      {loading ? <p role="status">读取中…</p> : null}
-      {tab === "works" && works ? (
-        <>
-          <ModerationReasonInput
-            label="作品处置理由（必填）"
-            value={reasonDraft}
-            onChange={setReasonDraft}
-            disabled={disabled}
-          />
-          <BulkActions
-            key={activeUser?.id ?? "all-works"}
-            view="works"
-            count={selectedIds.size}
-            disabled={bulkGate}
-            skipped={skipped}
-            onBusy={bulkBusy}
-            onPending={setBulkPending}
-            onComplete={load}
-            choices={[
-              { value: "feature", label: "批量推荐" },
-              { value: "unfeature", label: "批量取消推荐" },
-              {
-                value: "hidden",
-                label: "批量隐藏",
-                confirm: workBulkConfirmText.hidden,
-                requiresReason: true,
-              },
-              {
-                value: "removed",
-                label: "批量移除",
-                confirm: workBulkConfirmText.removed,
-                requiresReason: true,
-              },
-            ]}
-            prepare={(action) => {
-              const plan = planWorkOperations(
-                action as WorkBulkAction,
-                works.items,
-                selectedIds,
-              );
-              setSkipped(plan.skipped);
-              return plan.operations;
-            }}
-          />
-          <div className={styles.tableWrap}>
-            <table className={styles.table}>
-              <thead>
-                <tr>
-                  <th>
-                    <input
-                      type="checkbox"
-                      aria-label="选择本页所有作品"
-                      disabled={
-                        disabled || !works.items.some((w) => !w.authorDeleted)
-                      }
-                      checked={
-                        works.items.some((w) => !w.authorDeleted) &&
-                        works.items
-                          .filter((w) => !w.authorDeleted)
-                          .every((w) => selectedIds.has(w.id))
-                      }
-                      onChange={(e) =>
-                        setSelectedIds(
-                          new Set(
-                            e.target.checked
-                              ? works.items
-                                  .filter((w) => !w.authorDeleted)
-                                  .map((w) => w.id)
-                              : [],
-                          ),
-                        )
-                      }
-                    />
-                  </th>
-                  <th>作品</th>
-                  <th>作者</th>
-                  <th>状态</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {works.items.map((item) => (
-                  <tr key={item.id}>
-                    <td>
-                      <input
-                        type="checkbox"
-                        aria-label={`选择作品：${workTitleOf(item)}`}
-                        disabled={disabled || item.authorDeleted}
-                        checked={selectedIds.has(item.id)}
-                        onChange={(e) =>
-                          setSelectedIds((old) => {
-                            const next = new Set(old);
-                            if (e.target.checked) next.add(item.id);
-                            else next.delete(item.id);
-                            return next;
-                          })
-                        }
-                      />
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className={styles.rowLink}
-                        onClick={(event) =>
-                          void openWork(item.id, event.currentTarget, item)
-                        }
-                      >
-                        {workTitleOf(item)}
-                      </button>
-                      {item.latestSubmission ? (
-                        <span className={styles.secondary}>
-                          最新公开提交 ·{" "}
-                          {
-                            submissionStateLabels[
-                              item.latestSubmission.disposition
-                            ]
-                          }
-                        </span>
-                      ) : null}
-                      <span className={styles.secondary}>{item.id}</span>
-                      <button
-                        type="button"
-                        className={styles.actionButton}
-                        onClick={(event) =>
-                          void openWork(item.id, event.currentTarget, item)
-                        }
-                      >
-                        查看详情与管理
-                      </button>
-                      <span className={styles.secondary}>
-                        {/* Null for a work never publicly exposed (self-only or
-                            still awaiting its first approval). */}
-                        {item.firstPublishedAt === null
-                          ? "尚未公开发布"
-                          : `首次发布 ${formatTime(item.firstPublishedAt)}`}
-                      </span>
-                    </td>
-                    <td>
-                      {item.authorName}
-                      <span className={styles.secondary}>
-                        {item.authorStatus === "suspended"
-                          ? "账号已停用"
-                          : item.authorId}
-                      </span>
-                    </td>
-                    <td>
-                      {item.authorDeleted ? "作者已删除" : labels[item.state]}
-                      <span className={styles.secondary}>
-                        {item.publiclyVisible
-                          ? "当前对外公开"
-                          : "当前不对外显示"}
-                      </span>
-                    </td>
-                    <td>{workActions(item)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {works.total === 0 ? <p>没有符合条件的作品。</p> : null}
-          <Pager
-            page={query.page}
-            total={works.total}
-            busy={loading || busy}
-            onPage={(page) => setQuery((q) => ({ ...q, page }))}
-          />
-        </>
-      ) : null}
-      {tab === "featured" ? (
-        <>
-          <div className={styles.tabs} aria-label="推荐筛选">
+          {!activeUser && authorFromURL && tab === "works" ? (
             <button
               type="button"
-              className={styles.tab}
-              aria-pressed={featuredFilter === "active"}
+              className={styles.rowLink}
               disabled={disabled}
-              onClick={() => {
-                setFeaturedFilter("active");
-                setQuery((q) => ({ ...q, page: 1 }));
-              }}
+              onClick={() => chooseTab("users")}
             >
-              当前推荐
+              <UiIcon name="back" size="sm" />
+              返回用户列表
             </button>
-            <button
-              type="button"
-              className={styles.tab}
-              aria-pressed={featuredFilter === "all"}
-              disabled={disabled}
-              onClick={() => {
-                setFeaturedFilter("all");
-                setQuery((q) => ({ ...q, page: 1 }));
-              }}
-            >
-              全部推荐设置
-            </button>
-          </div>
-          {featured ? (
-            <>
-              <form
-                className={styles.filters}
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const value =
-                    quantity.trim() === "" ? null : Number(quantity);
-                  if (
-                    value !== null &&
-                    (!Number.isSafeInteger(value) || value < 0)
-                  ) {
-                    setNotice("推荐数量须为非负整数；留空表示不限。");
-                    return;
-                  }
-                  execute(
-                    "set-featured-quantity",
-                    {
-                      enabledQuantity: value,
-                      expectedVersion: featured.settingsVersion,
-                    },
-                    "推荐数量",
-                  );
-                }}
+          ) : null}
+          {activeUser && tab === "works" ? (
+            <section className={styles.userDetail} aria-label="用户详情">
+              <button
+                type="button"
+                className={styles.rowLink}
+                disabled={disabled}
+                onClick={() => chooseTab("users")}
               >
-                <label>
-                  启用数量（留空不限，0 暂停推荐）
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={quantity}
-                    onChange={(e) => setQuantity(e.target.value)}
-                  />
-                </label>
-                <button
-                  type="submit"
-                  className={styles.actionButton}
-                  disabled={disabled}
-                >
-                  保存数量
-                </button>
-              </form>
-              <p className={styles.secondary}>
-                按顺序值从小到大排列，同值按内容身份稳定排序。不可用内容保留配置但不展示；恢复后重新参与推荐。正在浏览的列表保持原有顺序，刷新后使用新配置。
+                返回用户列表
+              </button>
+              <h2>{activeUser.displayName}</h2>
+              <p>
+                @{activeUser.handle} ·{" "}
+                {activeUser.status === "active" ? "正常" : "已停用"}
               </p>
+              <p>{activeUser.bio || "尚未填写简介"}</p>
+              <p>
+                加入于 {formatTime(activeUser.createdAt)} ·{" "}
+                {activeUser.submittedWorks} 件可管理的已提交作品
+              </p>
+            </section>
+          ) : null}
+          {tab === "users" ? (
+            <CommunityUsers
+              disabled={bulkGate}
+              reload={userReload}
+              locationQuery={query}
+              onQueryChange={(next) => {
+                setQuery(next);
+                updateURL({
+                  q: next.search || null,
+                  page: next.page === 1 ? null : String(next.page),
+                });
+              }}
+              onBusy={bulkBusy}
+              onPending={setBulkPending}
+              onOpen={(user) => {
+                setActiveUser(user);
+                setTab("works");
+                updateURL({
+                  tab: null,
+                  q: null,
+                  page: null,
+                  item: null,
+                  author: user.id,
+                  usersQ: query.search || null,
+                  usersPage: query.page === 1 ? null : String(query.page),
+                });
+                setQuery({ page: 1, search: "" });
+                setSearch("");
+              }}
+              onRecommend={(user) =>
+                execute(
+                  "recommend-user",
+                  {
+                    id: user.id,
+                    enabled: !user.recommended,
+                    expectedVersion: user.recommendationVersion,
+                  },
+                  user.recommended ? "取消推荐用户" : "推荐用户",
+                )
+              }
+            />
+          ) : null}
+          {notice ? (
+            <div className={styles.notice} role="status">
+              {notice}
+              {retry ? (
+                <>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void run(retry)}
+                  >
+                    重试同一操作
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      setRetry(null);
+                      setNotice(null);
+                      void load();
+                    }}
+                  >
+                    放弃并刷新
+                  </button>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+          {tab !== "users" ? (
+            <form
+              className={styles.filters}
+              onSubmit={(e) => {
+                e.preventDefault();
+                setQuery({ page: 1, search: search.trim() });
+                updateURL({ q: search.trim() || null, page: null });
+              }}
+            >
+              <label>
+                搜索{tab === "works" ? "作品、作者或作品 ID" : "推荐标题"}
+                <input
+                  maxLength={200}
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </label>
+              <button
+                className={styles.actionButton}
+                type="submit"
+                disabled={loading}
+              >
+                <UiIcon name="search" size="sm" />
+                <span>搜索</span>
+              </button>
+              <button
+                className={styles.actionButton}
+                type="button"
+                disabled={loading}
+                onClick={() => void load()}
+                aria-label="刷新当前页"
+                title="刷新当前页"
+              >
+                <UiIcon name="loading" size="sm" />
+              </button>
+            </form>
+          ) : null}
+          {error ? (
+            <p className={styles.notice} role="alert">
+              {error}
+              <button
+                type="button"
+                disabled={loading}
+                onClick={() => void load()}
+              >
+                重试读取
+              </button>
+            </p>
+          ) : null}
+          {loading ? <p role="status">读取中…</p> : null}
+          {tab === "works" && works ? (
+            <>
+              <ModerationReasonInput
+                label="作品处置理由（必填）"
+                value={reasonDraft}
+                onChange={setReasonDraft}
+                disabled={disabled}
+              />
+              <BulkActions
+                key={activeUser?.id ?? "all-works"}
+                view="works"
+                count={selectedIds.size}
+                disabled={bulkGate}
+                skipped={skipped}
+                onBusy={bulkBusy}
+                onPending={setBulkPending}
+                onComplete={load}
+                choices={[
+                  { value: "feature", label: "批量推荐" },
+                  { value: "unfeature", label: "批量取消推荐" },
+                  {
+                    value: "hidden",
+                    label: "批量隐藏",
+                    confirm: workBulkConfirmText.hidden,
+                    requiresReason: true,
+                  },
+                  {
+                    value: "removed",
+                    label: "批量移除",
+                    confirm: workBulkConfirmText.removed,
+                    requiresReason: true,
+                  },
+                ]}
+                prepare={(action) => {
+                  const plan = planWorkOperations(
+                    action as WorkBulkAction,
+                    works.items,
+                    selectedIds,
+                  );
+                  setSkipped(plan.skipped);
+                  return plan.operations;
+                }}
+              />
               <div className={styles.tableWrap}>
                 <table className={styles.table}>
                   <thead>
                     <tr>
-                      <th>内容</th>
-                      <th>展示资格</th>
-                      <th>排序与启用</th>
+                      <th>
+                        <input
+                          type="checkbox"
+                          aria-label="选择本页所有作品"
+                          disabled={
+                            disabled ||
+                            !works.items.some((w) => !w.authorDeleted)
+                          }
+                          checked={
+                            works.items.some((w) => !w.authorDeleted) &&
+                            works.items
+                              .filter((w) => !w.authorDeleted)
+                              .every((w) => selectedIds.has(w.id))
+                          }
+                          onChange={(e) =>
+                            setSelectedIds(
+                              new Set(
+                                e.target.checked
+                                  ? works.items
+                                      .filter((w) => !w.authorDeleted)
+                                      .map((w) => w.id)
+                                  : [],
+                              ),
+                            )
+                          }
+                        />
+                      </th>
+                      <th>作品</th>
+                      <th>作者</th>
+                      <th>状态</th>
+                      <th>操作</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {featured.items.map((item) => (
-                      <FeaturedRow
-                        onOpenWork={(id, opener) => void openWork(id, opener)}
-                        key={`${item.target.type}:${item.target.id}:${item.version}`}
-                        item={item}
-                        disabled={disabled}
-                        onSave={(position, enabled) =>
-                          execute(
-                            "set-featured",
-                            {
-                              target: item.target,
-                              position,
-                              enabled,
-                              expectedVersion: item.version,
-                            },
-                            "推荐设置",
-                          )
-                        }
-                      />
+                    {works.items.map((item) => (
+                      <tr key={item.id}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            aria-label={`选择作品：${workTitleOf(item)}`}
+                            disabled={disabled || item.authorDeleted}
+                            checked={selectedIds.has(item.id)}
+                            onChange={(e) =>
+                              setSelectedIds((old) => {
+                                const next = new Set(old);
+                                if (e.target.checked) next.add(item.id);
+                                else next.delete(item.id);
+                                return next;
+                              })
+                            }
+                          />
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            className={styles.rowLink}
+                            onClick={(event) =>
+                              void openWork(item.id, event.currentTarget, item)
+                            }
+                          >
+                            {workTitleOf(item)}
+                          </button>
+                          {item.latestSubmission ? (
+                            <span className={styles.secondary}>
+                              最新公开提交 ·{" "}
+                              {
+                                submissionStateLabels[
+                                  item.latestSubmission.disposition
+                                ]
+                              }
+                            </span>
+                          ) : null}
+                          <span className={styles.secondary}>
+                            {/* Null for a work never publicly exposed (self-only or
+                            still awaiting its first approval). */}
+                            {item.firstPublishedAt === null
+                              ? "尚未公开发布"
+                              : `首次发布 ${formatTime(item.firstPublishedAt)}`}
+                          </span>
+                        </td>
+                        <td>
+                          {item.authorName}
+                          {item.authorStatus === "suspended" ? (
+                            <span
+                              className={styles.chip}
+                              data-state="suspended"
+                            >
+                              账号已停用
+                            </span>
+                          ) : null}
+                        </td>
+                        <td>
+                          <span
+                            className={styles.chip}
+                            data-state={
+                              item.authorDeleted ? "removed" : item.state
+                            }
+                          >
+                            {item.authorDeleted
+                              ? "作者已删除"
+                              : labels[item.state]}
+                          </span>
+                          <span className={styles.secondary}>
+                            {item.publiclyVisible
+                              ? "当前对外公开"
+                              : "当前不对外显示"}
+                          </span>
+                        </td>
+                        <td>{workActions(item)}</td>
+                      </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-              {featured.total === 0 ? <p>尚无符合条件的推荐配置。</p> : null}
+              {works.total === 0 ? <p>没有符合条件的作品。</p> : null}
               <Pager
                 page={query.page}
-                total={featured.total}
+                total={works.total}
                 busy={loading || busy}
-                onPage={(page) => setQuery((q) => ({ ...q, page }))}
+                onPage={(page) => {
+                  setQuery((q) => ({ ...q, page }));
+                  updateURL({ page: page === 1 ? null : String(page) });
+                }}
               />
             </>
           ) : null}
-          <CatalogPicker
-            disabled={disabled}
-            onFeature={(id, title) => feature({ type: "catalog", id }, title)}
+          {tab === "featured" ? (
+            <>
+              <div className={styles.tabs} aria-label="推荐筛选">
+                <button
+                  type="button"
+                  className={styles.tab}
+                  aria-pressed={featuredFilter === "active"}
+                  disabled={disabled}
+                  onClick={() => {
+                    setFeaturedFilter("active");
+                    updateURL({ filter: null, page: null });
+                    setQuery((q) => ({ ...q, page: 1 }));
+                  }}
+                >
+                  当前推荐
+                </button>
+                <button
+                  type="button"
+                  className={styles.tab}
+                  aria-pressed={featuredFilter === "all"}
+                  disabled={disabled}
+                  onClick={() => {
+                    setFeaturedFilter("all");
+                    updateURL({ filter: "all", page: null });
+                    setQuery((q) => ({ ...q, page: 1 }));
+                  }}
+                >
+                  全部推荐设置
+                </button>
+              </div>
+              {featured ? (
+                <>
+                  <form
+                    className={styles.filters}
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const value =
+                        quantity.trim() === "" ? null : Number(quantity);
+                      if (
+                        value !== null &&
+                        (!Number.isSafeInteger(value) || value < 0)
+                      ) {
+                        setNotice("推荐数量须为非负整数；留空表示不限。");
+                        return;
+                      }
+                      execute(
+                        "set-featured-quantity",
+                        {
+                          enabledQuantity: value,
+                          expectedVersion: featured.settingsVersion,
+                        },
+                        "推荐数量",
+                      );
+                    }}
+                  >
+                    <label>
+                      启用数量（留空不限，0 暂停推荐）
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={quantity}
+                        onChange={(e) => setQuantity(e.target.value)}
+                      />
+                    </label>
+                    <button
+                      type="submit"
+                      className={styles.actionButton}
+                      disabled={disabled}
+                    >
+                      保存数量
+                    </button>
+                  </form>
+                  <p className={styles.secondary}>
+                    按顺序值从小到大排列，同值按内容身份稳定排序。不可用内容保留配置但不展示；恢复后重新参与推荐。正在浏览的列表保持原有顺序，刷新后使用新配置。
+                  </p>
+                  <div className={styles.tableWrap}>
+                    <table className={styles.table}>
+                      <thead>
+                        <tr>
+                          <th>内容</th>
+                          <th>展示资格</th>
+                          <th>排序与启用</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {featured.items.map((item) => (
+                          <FeaturedRow
+                            onOpenWork={(id, opener) =>
+                              void openWork(id, opener)
+                            }
+                            key={`${item.target.type}:${item.target.id}:${item.version}`}
+                            item={item}
+                            disabled={disabled}
+                            onSave={(position, enabled) =>
+                              execute(
+                                "set-featured",
+                                {
+                                  target: item.target,
+                                  position,
+                                  enabled,
+                                  expectedVersion: item.version,
+                                },
+                                "推荐设置",
+                              )
+                            }
+                          />
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {featured.total === 0 ? (
+                    <p>尚无符合条件的推荐配置。</p>
+                  ) : null}
+                  <Pager
+                    page={query.page}
+                    total={featured.total}
+                    busy={loading || busy}
+                    onPage={(page) => {
+                      setQuery((q) => ({ ...q, page }));
+                      updateURL({ page: page === 1 ? null : String(page) });
+                    }}
+                  />
+                </>
+              ) : null}
+              <CatalogPicker
+                disabled={disabled}
+                onFeature={(id, title) =>
+                  feature({ type: "catalog", id }, title)
+                }
+              />
+              <p>
+                用户作品可在「用户作品」页加入推荐；已经加入的内容请在推荐列表中编辑。
+              </p>
+            </>
+          ) : null}
+        </section>
+        {selectedWork === null ? null : (
+          <WorkDetailPanel
+            key={selectedWork.id}
+            item={selectedWork}
+            actions={workActions(selectedWork)}
+            onClose={() => {
+              detailRequest.current++;
+              restoreDetailFocus.current = true;
+              setSelectedWork(null);
+              updateURL({ item: null });
+            }}
           />
-          <p>
-            用户作品可在「用户作品」页加入推荐；已经加入的内容请在推荐列表中编辑。
-          </p>
-        </>
-      ) : null}
-      {selectedWork === null ? null : (
-        <WorkDetailPanel
-          key={selectedWork.id}
-          item={selectedWork}
-          actions={workActions(selectedWork)}
-          onClose={() => {
-            detailRequest.current++;
-            setSelectedWork(null);
-            detailOpener.current?.focus();
-          }}
-        />
-      )}
+        )}
+      </div>
       <ConfirmationModal
         heading="确认作品管理状态变更"
         modalSlug="community-work-confirm"
@@ -1078,11 +1223,16 @@ const WorkDetailPanel = ({
       data-work-management-detail=""
     >
       <div className={styles.panelHeader}>
-        <h2>作品详情与管理</h2>
+        <h2>{workTitleOf(item)}</h2>
         <button type="button" className={styles.actionButton} onClick={onClose}>
           返回列表
         </button>
       </div>
+      <details>
+        <summary>详细信息</summary>
+        <p>作品编号：{item.id}</p>
+        <p>作者编号：{item.authorId}</p>
+      </details>
       <p>
         {item.publiclyVisible ? "当前对外公开" : "当前不对外显示"} · 管理状态：
         {labels[item.state]}

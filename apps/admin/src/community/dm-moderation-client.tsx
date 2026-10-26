@@ -1,5 +1,7 @@
 "use client";
 
+import { workspacePageLabel } from "../workspace/routes";
+
 import { useState } from "react";
 import { SetStepNav } from "@payloadcms/ui";
 
@@ -80,14 +82,21 @@ export const DmModerationClient = () => {
     });
 
   return (
-    <div className={styles.layout} data-community-dm-moderation="">
+    <div className={styles.workspace} data-community-dm-moderation="">
       <SetStepNav
         nav={[
-          { label: "私信处理", url: "/community-moderation/direct-messages" },
+          { label: "审核", url: "/admin/community-moderation" },
+          {
+            label: workspacePageLabel(
+              "/admin/community-moderation/direct-messages",
+            ),
+          },
         ]}
       />
       <header className={styles.header}>
-        <h1>私信处理</h1>
+        <h1 className={styles.title}>
+          {workspacePageLabel("/admin/community-moderation/direct-messages")}
+        </h1>
         <p className={styles.lead}>
           仅在明确指定一段对话并写明目的时读取；每次读取与移除都会记录（不含内容）。
           不提供私信浏览、搜索或导出；自动化账号与代理无法使用。
@@ -98,7 +107,10 @@ export const DmModerationClient = () => {
           {notice}
         </p>
       )}
-      <section className={styles.panel} aria-labelledby="dm-select-heading">
+      <section
+        className={`${styles.panel} ${styles.agentPanel}`}
+        aria-labelledby="dm-select-heading"
+      >
         <h2 id="dm-select-heading" className={styles.sectionTitle}>
           指定对话
         </h2>
@@ -157,7 +169,7 @@ export const DmModerationClient = () => {
       </section>
       {conversation && (
         <section
-          className={styles.panel}
+          className={`${styles.panel} ${styles.agentPanel}`}
           aria-labelledby="dm-conversation-heading"
           data-dm-moderation-conversation={conversation.id}
         >

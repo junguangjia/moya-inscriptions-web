@@ -161,12 +161,12 @@ type MediaAccess = {
 export function createMediaCollection(options: MediaAccess): CollectionConfig {
   return {
     slug: "media",
+    labels: { singular: "图片素材", plural: "图片素材" },
     admin: {
       useAsTitle: "alt",
       group: "内容",
-      defaultColumns: ["alt", "mimeType", "width", "height", "orderConfidence"],
-      description:
-        "Original media. Replacement and deletion are disabled; use a new MediaId for new bytes.",
+      defaultColumns: ["alt", "orderConfidence", "updatedAt"],
+      description: "保存原始图片。需要更换图片时，请上传一张新图。",
     },
     disableDuplicate: true,
     disableBulkDelete: true,
@@ -194,18 +194,53 @@ export function createMediaCollection(options: MediaAccess): CollectionConfig {
     },
     fields: [
       {
-        name: "mediaId",
-        type: "text",
-        defaultValue: () => `media-${randomUUID()}`,
-        admin: { readOnly: true, hidden: true },
-        required: true,
-        unique: true,
-        index: true,
+        type: "collapsible",
+        label: "图片详细信息",
+        admin: { initCollapsed: true },
+        fields: [
+          {
+            name: "mediaId",
+            type: "text",
+            label: "图片编号",
+            defaultValue: () => `media-${randomUUID()}`,
+            admin: { readOnly: true },
+            required: true,
+            unique: true,
+            index: true,
+          },
+          {
+            name: "origin",
+            type: "select",
+            label: "图片来源",
+            required: true,
+            defaultValue: "upload",
+            options: [
+              { label: "上传原图", value: "upload" },
+              { label: "已有原图", value: "existing" },
+            ],
+          },
+          {
+            name: "objectKey",
+            type: "text",
+            label: "存储对象键",
+            maxLength: 2048,
+            required: true,
+            unique: true,
+            admin: { readOnly: true },
+          },
+          {
+            name: "sha256",
+            type: "text",
+            label: "文件校验值",
+            required: true,
+            admin: { readOnly: true },
+          },
+        ],
       },
       {
         name: "catalogId",
         type: "text",
-        label: "所属目录",
+        label: "所属资料",
         required: true,
         index: true,
         admin: {
@@ -215,27 +250,15 @@ export function createMediaCollection(options: MediaAccess): CollectionConfig {
         },
       },
       {
-        name: "origin",
-        type: "select",
-        required: true,
-        defaultValue: "upload",
-        options: ["upload", "existing"],
-      },
-      {
-        name: "objectKey",
+        name: "alt",
         type: "text",
-        maxLength: 2048,
+        label: "图片说明",
+        admin: {
+          components: { Cell: "/src/media/MediaTitleCell#MediaTitleCell" },
+        },
         required: true,
-        unique: true,
-        admin: { readOnly: true, hidden: true },
+        maxLength: 2000,
       },
-      {
-        name: "sha256",
-        type: "text",
-        required: true,
-        admin: { readOnly: true, hidden: true },
-      },
-      { name: "alt", type: "text", required: true, maxLength: 2000 },
       {
         name: "rights",
         type: "textarea",
@@ -251,7 +274,11 @@ export function createMediaCollection(options: MediaAccess): CollectionConfig {
       {
         name: "orderConfidence",
         type: "select",
-        options: ["HIGH", "LOW"],
+        label: "排序可信度",
+        options: [
+          { label: "高", value: "HIGH" },
+          { label: "低（顺序待核实）", value: "LOW" },
+        ],
         admin: {
           components: {
             Field:

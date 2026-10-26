@@ -1,6 +1,14 @@
 # Umami 私有分析工作台部署与验收包
 
-本期复用 Umami 原生网站、事件、省市地域、漏斗、留存和 Board。Payload 只提供 Owner 入口及受控反向代理，不另写图表系统。默认工作台直接进入省份、城市排行，不放世界地图；国家保留为筛选条件。此文档是待验收、待批准的部署包；文件存在、mock 通过或镜像构建成功都不代表生产部署或 Owner 界面验收完成。
+#330 r4 changes the presentation to a native Payload Owner page: summary, trend,
+a China province map including Taiwan, province/city rankings, and a simplified
+foreign-country list. Umami remains the existing collection and aggregation
+service; Admin reads its fixed APIs and does not run statistics SQL.
+Administrators use the existing CMS session, with no embedded application,
+second login, account/site picker, or dashboard editor. Legacy proxy URLs remain
+compatible but are no longer the primary interface. This is a development/review
+change; source files, synthetic tests and local images do not establish
+production deployment or Owner visual acceptance.
 
 ## 固定版本与运行边界
 
@@ -132,7 +140,20 @@ cache。漏斗是同一访客会话中的事件顺序；默认没有强制相同
 中文原生工作台固定 `zh-CN`，同步加载词典，不受旧浏览器语言或 URL
 locale 覆盖；日期、图例、漏斗、筛选标签与事件名称均使用中文显示。原始事件名和筛选键不变，保留协议/品牌/用户内容原值。中文省市和事件搜索反查原始键，候选最多 5 个，与原生选择器上限一致。省份指标查询在现有语句里增加固定 CASE 表达式。筛选候选值用当前窗口内活动事件的 EXISTS 判断活跃访客，避免只按首次出现时间漏掉回访者；仍是按需一次查询、最多 10 条候选，无额外数据库往返。站点/日期索引仍适用，但地域尾列未保证可直接下推索引，需上线后测量，不能据此承诺零开销。
 
-## Owner 私有原生 UI 代理
+## Native Admin reports and legacy proxy
+
+The native `/api/analytics/report` GET endpoint checks the existing Owner role
+before any upstream access. It accepts only validated report resources, dates,
+geography, search and pagination. Website and service identity are fixed on the
+server; browser URLs, site/Board IDs and authentication headers are not report
+inputs. Responses contain only validated aggregate read models from
+`@moya/contracts/admin-analytics`, with private/no-store caching and no upstream
+tokens, cookies, redirects or raw error bodies. Native readiness does not depend
+on `UMAMI_BOARD_ID`. Collection, IP retention, exclusions, database schema and
+permissions remain unchanged.
+
+The following reverse-proxy details apply to retained legacy bookmarks, not the
+new primary Admin interface.
 
 Admin 运行配置只持有 `UMAMI_ORIGIN`、`UMAMI_WEBSITE_ID`、`UMAMI_BOARD_ID`、专用
 `UMAMI_VIEWER_USERNAME/PASSWORD`。所有工作台 HTML、RSC、静态资源和 API 都经过现有 Owner 权限检查。代理丢弃客户端 Umami
@@ -150,7 +171,7 @@ reports 接口无需开放。允许 GET/HEAD 与固定 auth
 verify 之外的写接口均拒绝。公网同时拒绝 send/batch/script/replay/heatmap、share、login、账号管理及配置写接口。采集仅由 Backend
 worker 直连 loopback 固定 `/admin/analytics-workspace/api/batch`。
 
-同源 iframe 已受原生 CSP `frame-ancestors 'self'`
+仅旧兼容入口的同源 iframe 已受原生 CSP `frame-ancestors 'self'`
 支持。只读团队身份不会拥有管理员菜单，但原生 Settings/Logout 和部分未使用功能入口仍可能出现；容器外层应说明只读访问并处理无效导航，不能将空页面声称为已配置功能。实际 Owner 入口、匿名 401/403、路径遍历/编码、页面内部导航和权限失败都须本机浏览器验收。
 
 依据：[原生 auth login](https://github.com/umami-software/umami/blob/ec0ff50388c264ed8ce46f00967e92f7e71476ae/src/app/api/auth/login/route.ts)、[原生 Board API](https://github.com/umami-software/umami/blob/ec0ff50388c264ed8ce46f00967e92f7e71476ae/src/app/api/boards/route.ts)、[原生漏斗 API](https://github.com/umami-software/umami/blob/ec0ff50388c264ed8ce46f00967e92f7e71476ae/src/app/api/websites/%5BwebsiteId%5D/funnels/route.ts)。

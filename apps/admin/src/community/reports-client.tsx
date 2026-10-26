@@ -1,5 +1,7 @@
 "use client";
 
+import { workspacePageLabel } from "../workspace/routes";
+
 import { SetStepNav } from "@payloadcms/ui";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -106,6 +108,15 @@ const recordValue = (value: unknown): Record<string, unknown> | null =>
     ? (value as Record<string, unknown>)
     : null;
 
+interface ReportDraft {
+  readonly reason: string;
+  readonly action: OperatorReportDecisionRequest["action"];
+  readonly review: OperatorReportReviewRequest["outcome"];
+  readonly forwardText: string;
+  readonly forwardKind: OperatorReportForwardRequest["kind"];
+  readonly redacted: boolean;
+}
+
 /** Target text is the Backend snapshot, never a direct community database read. */
 const ReportContext = ({ report }: { readonly report: OperatorReport }) => {
   const snapshot = report.snapshot;
@@ -159,7 +170,7 @@ const ReportContext = ({ report }: { readonly report: OperatorReport }) => {
         </Link>
       )}
       <details>
-        <summary>查看 Backend 留存的对象快照</summary>
+        <summary>原始记录</summary>
         <pre className={styles.reportSnapshot}>
           {JSON.stringify(snapshot, null, 2)}
         </pre>
@@ -173,6 +184,8 @@ export const ReportDetail = ({
   busy,
   onMutation,
   onClose,
+  draft,
+  onDraftChange,
 }: {
   readonly report: OperatorReport;
   readonly busy: boolean;
@@ -185,32 +198,38 @@ export const ReportDetail = ({
       | OperatorReportForwardRequest,
   ) => Promise<void>;
   readonly onClose: () => void;
+  readonly draft?: ReportDraft | undefined;
+  readonly onDraftChange?: (draft: ReportDraft) => void;
 }) => {
   const externalEditorial = externalEditorialReport(report);
   const platformResponse = externalEditorial && report.kind === "rights_notice";
   const hasStatement = report.materials.some(
     (material) => material.kind === "statement",
   );
-  const [reason, setReason] = useState("");
+  const [reason, setReason] = useState(draft?.reason ?? "");
   const [action, setAction] = useState<OperatorReportDecisionRequest["action"]>(
-    report.allowedActions[0] ?? "retain",
+    draft && report.allowedActions.includes(draft.action)
+      ? draft.action
+      : (report.allowedActions[0] ?? "retain"),
   );
-  const [review, setReview] =
-    useState<OperatorReportReviewRequest["outcome"]>("uphold");
+  const [review, setReview] = useState<OperatorReportReviewRequest["outcome"]>(
+    draft?.review ?? "uphold",
+  );
   const [prepared, setPrepared] = useState<
     "decision" | "review" | "forward" | null
   >(null);
-  const [forwardText, setForwardText] = useState("");
+  const [forwardText, setForwardText] = useState(draft?.forwardText ?? "");
   const [forwardKind, setForwardKind] = useState<
     OperatorReportForwardRequest["kind"]
   >(
-    platformResponse
-      ? "result"
-      : report.affectedUserId !== null
-        ? "notice"
-        : hasStatement
-          ? "statement"
-          : "notice",
+    draft?.forwardKind ??
+      (platformResponse
+        ? "result"
+        : report.affectedUserId !== null
+          ? "notice"
+          : hasStatement
+            ? "statement"
+            : "notice"),
   );
   const forwardAllowed =
     forwardKind === "notice"
@@ -218,7 +237,25 @@ export const ReportDetail = ({
       : forwardKind === "statement"
         ? hasStatement
         : platformResponse;
-  const [redacted, setRedacted] = useState(false);
+  const [redacted, setRedacted] = useState(draft?.redacted ?? false);
+  useEffect(() => {
+    onDraftChange?.({
+      reason,
+      action,
+      review,
+      forwardText,
+      forwardKind,
+      redacted,
+    });
+  }, [
+    reason,
+    action,
+    review,
+    forwardText,
+    forwardKind,
+    redacted,
+    onDraftChange,
+  ]);
   const activeDecision =
     report.decision !== null && report.decision.reversedAt === null;
   const pendingAppeal = report.appeal?.status === "pending";
@@ -249,13 +286,18 @@ export const ReportDetail = ({
       aria-label="举报案件详情"
       className={`${styles.panel} ${styles.reportPanel}`}
       data-report-detail={report.id}
+      tabIndex={-1}
     >
       <div className={styles.panelHeader}>
-        <h2>案件 {report.id}</h2>
+        <h2>案件详情</h2>
         <button className={styles.rowLink} onClick={onClose} type="button">
-          关闭详情
+          <span aria-hidden="true">← </span>返回列表
         </button>
       </div>
+      <details className={styles.secondary}>
+        <summary>案件编号</summary>
+        <span className={styles.mono}>{report.id}</span>
+      </details>
       <div className={styles.summaryLine}>
         <strong>{statusLabels[report.status]}</strong>
         {report.urgent ? (
@@ -267,8 +309,7 @@ export const ReportDetail = ({
       </div>
       {report.notificationFailures > 0 ? (
         <p className={styles.notice} data-tone="error" role="alert">
-          {report.notificationFailures} 条通知发送失败，待 Backend
-          重试；案件决定仍有效。
+          {report.notificationFailures} 条通知发送失败，待重试；案件决定已保存。
         </p>
       ) : null}
       <p>
@@ -752,8 +793,22 @@ export const CommunityReportsClient = ({
   const [error, setError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<string | null>(null);
+  // Drafts belong to the case, not to a fetched version or a mounted panel.
+  const [drafts, setDrafts] = useState<Record<string, ReportDraft>>({});
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const [requiresReload, setRequiresReload] = useState(false);
+  const mutationLock = useRef(false);
+  const returnFocus = useRef<HTMLElement | null>(null);
+  const detailRegion = useRef<HTMLDivElement | null>(null);
   const sequence = useRef(0);
   const detailSequence = useRef(0);
+  const rememberDraft = useCallback(
+    (draft: ReportDraft) => {
+      if (detail !== null)
+        setDrafts((current) => ({ ...current, [detail.id]: draft }));
+    },
+    [detail],
+  );
   const navigate = (patch: Partial<typeof query>) => {
     const next = { ...query, ...patch };
     const values = new URLSearchParams();
@@ -800,7 +855,11 @@ export const CommunityReportsClient = ({
       const result = await call<OperatorReport>("read-report", {
         id: query.id,
       });
-      if (current === detailSequence.current) setDetail(result);
+      if (current === detailSequence.current) {
+        setDetail(result);
+        setRequiresReload(false);
+        setMutationError(null);
+      }
     } catch (failure) {
       if (current === detailSequence.current)
         setDetailError(describeFailure(failure).text);
@@ -820,11 +879,16 @@ export const CommunityReportsClient = ({
       detailSequence.current += 1;
     };
   }, [loadDetail]);
+  useEffect(() => {
+    if (query.id !== "") detailRegion.current?.focus();
+    else if (returnFocus.current?.isConnected) returnFocus.current.focus();
+  }, [query.id]);
   const mutate = async (
     name: string,
     command: Parameters<Parameters<typeof ReportDetail>[0]["onMutation"]>[1],
   ) => {
-    if (detail === null || busy) return;
+    if (detail === null || mutationLock.current || requiresReload) return;
+    mutationLock.current = true;
     const current = detailSequence.current;
     setBusy(true);
     setDetailError(null);
@@ -835,21 +899,33 @@ export const CommunityReportsClient = ({
         ...command,
       });
       if (current !== detailSequence.current) return;
+      if (name !== "set-report-metadata") {
+        setDrafts((drafts) => {
+          const next = { ...drafts };
+          delete next[detail.id];
+          return next;
+        });
+      }
       setDetail(result);
-      setReceipt("Backend 已保存操作及通知任务。通知送达状态以案件显示为准。");
+      setReceipt("操作已保存。通知送达情况见案件状态。");
       await load();
     } catch (failure) {
       if (current === detailSequence.current) {
-        setDetail(null);
-        setDetailError(
-          `${describeFailure(failure).text}请先重新读取案件，核对最新结果。`,
+        setRequiresReload(true);
+        setMutationError(
+          `${describeFailure(failure).text}已保留填写内容。请重新读取案件，核对结果后再次确认。`,
         );
       }
     } finally {
+      mutationLock.current = false;
       setBusy(false);
     }
   };
-  const title = appealsOnly ? "申诉与操作历史" : "用户举报";
+  const title = workspacePageLabel(
+    appealsOnly
+      ? "/admin/community-moderation/appeals"
+      : "/admin/community-moderation/reports",
+  );
   return (
     <div
       className={styles.workspace}
@@ -857,7 +933,7 @@ export const CommunityReportsClient = ({
     >
       <SetStepNav
         nav={[
-          { label: "社区", url: "/admin/community-moderation" },
+          { label: "审核", url: "/admin/community-moderation" },
           { label: title },
         ]}
       />
@@ -871,12 +947,6 @@ export const CommunityReportsClient = ({
             {TIME_ZONE_NOTE}。
           </p>
         </div>
-        <nav aria-label="社区处理入口" className={styles.summaryLine}>
-          <Link href="/admin/community-moderation">待审核</Link>
-          <Link href="/admin/community-moderation/reports">用户举报</Link>
-          <Link href="/admin/community-moderation/appeals">申诉与操作历史</Link>
-          <Link href="/admin/community-moderation/history">社区操作历史</Link>
-        </nav>
       </header>
       <div className={styles.filters}>
         {appealsOnly ? null : (
@@ -925,8 +995,10 @@ export const CommunityReportsClient = ({
           disabled={loading || busy}
           onClick={() => void load()}
           type="button"
+          aria-label="刷新列表"
+          title="刷新列表"
         >
-          刷新列表
+          <span aria-hidden="true">↻</span>
         </button>
       </div>
       {receipt === null ? null : (
@@ -971,10 +1043,15 @@ export const CommunityReportsClient = ({
                         <button
                           className={styles.rowLink}
                           disabled={busy}
-                          onClick={() => navigate({ id: report.id })}
+                          onClick={(event) => {
+                            returnFocus.current = event.currentTarget;
+                            navigate({ id: report.id });
+                          }}
                           type="button"
                         >
-                          {report.id}
+                          {textValue(report.snapshot.title) ??
+                            textValue(report.snapshot.displayName) ??
+                            targetLabels[report.target.type]}
                         </button>
                         <time
                           className={styles.secondary}
@@ -1021,8 +1098,10 @@ export const CommunityReportsClient = ({
                 disabled={loading || busy || query.page <= 1}
                 onClick={() => navigate({ page: query.page - 1 })}
                 type="button"
+                aria-label="上一页"
+                title="上一页"
               >
-                上一页
+                <span aria-hidden="true">←</span>
               </button>
               <button
                 className={styles.rowLink}
@@ -1031,39 +1110,75 @@ export const CommunityReportsClient = ({
                 }
                 onClick={() => navigate({ page: query.page + 1 })}
                 type="button"
+                aria-label="下一页"
+                title="下一页"
               >
-                下一页
+                <span aria-hidden="true">→</span>
               </button>
             </div>
           )}
         </section>
-        {query.id === "" ? null : detailLoading ? (
-          <p className={styles.state} role="status">
-            正在读取案件详情…
-          </p>
-        ) : detailError !== null ? (
-          <div>
-            <p className={styles.notice} data-tone="error" role="alert">
-              {detailError}
-            </p>
+        <div
+          className={styles.detailRegion}
+          ref={detailRegion}
+          tabIndex={-1}
+          aria-label="案件详情"
+          hidden={query.id === ""}
+        >
+          {query.id !== "" && (detail === null || detailLoading) ? (
             <button
-              className={styles.actionButton}
-              disabled={busy}
-              onClick={() => void loadDetail()}
+              className={styles.rowLink}
               type="button"
+              onClick={() => navigate({ id: "" })}
             >
-              重新读取案件
+              <span aria-hidden="true">← </span>返回列表
             </button>
-          </div>
-        ) : detail === null ? null : (
-          <ReportDetail
-            busy={busy}
-            key={`${detail.id}:${detail.version}`}
-            onClose={() => navigate({ id: "" })}
-            onMutation={mutate}
-            report={detail}
-          />
-        )}
+          ) : null}
+          {query.id === "" ? null : detailLoading ? (
+            <p className={styles.state} role="status">
+              正在读取案件详情…
+            </p>
+          ) : detailError !== null ? (
+            <div>
+              <p className={styles.notice} data-tone="error" role="alert">
+                {detailError}
+              </p>
+              <button
+                className={styles.actionButton}
+                disabled={busy}
+                onClick={() => void loadDetail()}
+                type="button"
+              >
+                重新读取案件
+              </button>
+            </div>
+          ) : detail === null ? null : (
+            <>
+              {mutationError === null ? null : (
+                <div className={styles.notice} data-tone="error" role="alert">
+                  <p>{mutationError}</p>
+                  <button
+                    className={styles.actionButton}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void loadDetail()}
+                  >
+                    重新读取案件
+                  </button>
+                </div>
+              )}
+              <ReportDetail
+                busy={busy || requiresReload}
+                key={`${detail.id}:${detail.version}`}
+                draft={drafts[detail.id]}
+                onDraftChange={rememberDraft}
+                onClose={() => navigate({ id: "" })}
+                onMutation={mutate}
+                report={detail}
+              />
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

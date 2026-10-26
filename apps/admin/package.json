@@ -22,6 +22,7 @@
     "@moya/catalog-postgres": "workspace:*",
     "@moya/community-postgres": "workspace:*",
     "@moya/contracts": "workspace:*",
+    "@moya/design-tokens": "workspace:*",
     "@moya/ui": "workspace:*",
     "@payloadcms/db-postgres": "3.88.0",
     "@payloadcms/next": "3.88.0",
@@ -93,6 +94,17 @@
     "./analytics-client": "./src/analytics/client.tsx",
     "./analytics-config": "./src/analytics/config.ts",
     "./upload-session-gc": "./src/operations/upload-session-gc.ts",
-    "./upload-session-gc-postgres": "./src/operations/upload-session-gc-postgres.ts"
+    "./upload-session-gc-postgres": "./src/operations/upload-session-gc-postgres.ts",
+    "./workspace-navigation": "./src/workspace/Navigation.tsx",
+    "./workspace-routes": "./src/workspace/routes.ts",
+    "./community-content-client": "./src/community/content-client.tsx",
+    "./community-users-client": "./src/community/users-client.tsx",
+    "./community-reports-client": "./src/community/reports-client.tsx",
+    "./owner-workflow-client": "./src/owner-workflow/client.tsx",
+    "./media-snapshot-picker": "./src/media/MediaSnapshotPicker.tsx",
+    "./workspace-navigation-guard": "./src/workspace/use-navigation-guard.ts",
+    "./login-intro": "./src/branding/LoginIntro.tsx",
+    "./login.css": "./src/branding/login.css",
+    "./analytics-native": "./src/analytics/native.tsx"
   }
 }

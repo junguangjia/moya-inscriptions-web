@@ -198,6 +198,12 @@ export const editorialMcp = () => {
     userCollection: "users",
     overrideApiKeyCollection: (collection) => ({
       ...collection,
+      labels: { singular: "自动化密钥", plural: "自动化密钥" },
+      admin: {
+        ...collection.admin,
+        group: "设置",
+        description: "管理自动化工具的访问密钥与操作权限。",
+      },
       access: {
         create: ({ req }) => isOwner(req),
         read: ({ req }) => isOwner(req),

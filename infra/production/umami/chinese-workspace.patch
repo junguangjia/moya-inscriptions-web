@@ -1,136 +1,61 @@
 --- a/public/intl/messages/zh-CN.json
 +++ b/public/intl/messages/zh-CN.json
-@@ -33,7 +33,7 @@
-     "boards": "看板",
-     "board-type": "板型",
-     "bounce-rate": "跳出率",
+@@ -36 +36 @@
 -    "breakdown": "故障",
 +    "breakdown": "分项分析",
-     "browser": "浏览器",
-     "browsers": "浏览器",
-     "campaign": "推广活动",
-@@ -44,12 +44,12 @@
-     "channel": "渠道",
-     "channels": "渠道",
-     "chart": "图表",
+@@ -47,2 +47,2 @@
 -    "cities": "市/县",
 -    "city": "市/县",
 +    "cities": "城市",
 +    "city": "城市",
-     "clear-all": "清除全部",
+@@ -50,3 +50,3 @@
 -    "cls": "CLS",
 -    "cohort": "队列",
 -    "cohorts": "队列",
 +    "cls": "累计布局偏移",
 +    "cohort": "同期用户群",
 +    "cohorts": "同期用户群",
-     "compare": "比较",
-     "compare-dates": "比较日期",
-     "confirm": "确认",
-@@ -118,12 +118,12 @@
-     "event-data": "事件数据",
-     "event-properties": "事件数据",
-     "event-name": "事件名称",
+@@ -121 +121 @@
 -    "events": "行为类别",
 +    "events": "事件",
-     "exclude-bounce": "排除跳出",
-     "exists": "存在",
-     "exit": "退出 URL",
-     "false": "否",
+@@ -126 +126 @@
 -    "fcp": "FCP",
 +    "fcp": "首次内容绘制",
-     "field": "字段",
-     "fields": "字段",
-     "filter": "筛选器",
-@@ -155,7 +155,7 @@
-     "insight": "洞察",
-     "insights": "见解",
-     "insights-description": "通过使用筛选器和划分时间段来更深入地研究数据。",
+@@ -158 +158 @@
 -    "inp": "INP",
 +    "inp": "交互响应延迟",
-     "invalid-url": "无效URL",
-     "is": "等于",
-     "is-false": "否",
-@@ -176,7 +176,7 @@
-     "last-hours": "最近 {x} 小时",
-     "last-months": "最近 {x} 个月",
-     "last-seen": "最后出现",
+@@ -179 +179 @@
 -    "lcp": "LCP",
 +    "lcp": "最大内容绘制",
-     "leave": "离开",
-     "leave-team": "离开团队",
-     "less-than": "少于",
-@@ -185,7 +185,7 @@
-     "links": "链接",
-     "location": "位置",
-     "login": "登录",
+@@ -188 +188 @@
 -    "llm": "LLM",
 +    "llm": "大语言模型",
-     "logout": "退出",
-     "manage": "管理",
-     "manager": "管理者",
-@@ -260,14 +260,14 @@
-     "referrers": "来源域名",
-     "refresh": "刷新",
-     "regenerate": "重新生成",
+@@ -263,2 +263,2 @@
 -    "region": "州/省",
 -    "regions": "州/省",
 +    "region": "省份",
 +    "regions": "省份",
-     "remaining": "剩余",
-     "remove": "移除",
-     "remove-member": "移除成员",
-     "play": "播放",
-     "replay": "回放",
+@@ -270 +270 @@
 -    "replay-id": "Replay ID",
 +    "replay-id": "回放标识",
-     "recorder-code": "记录器代码",
-     "replay-enabled": "回放已启用",
-     "replays": "回放",
-@@ -309,7 +309,7 @@
-     "share": "分享",
-     "share-url": "共享链接",
-     "single-day": "单日",
+@@ -312 +312 @@
 -    "slug": "Slug",
 +    "slug": "短链接标识",
-     "sms": "短信",
-     "source": "来源",
-     "sources": "来源",
-@@ -352,13 +352,13 @@
-     "transfer": "转移",
-     "transfer-website": "转移网站",
-     "true": "是",
+@@ -355 +355 @@
 -    "ttfb": "TTFB",
 +    "ttfb": "首字节响应时间",
-     "type": "类型",
-     "unique": "独立",
-     "unique-events": "独立事件",
-     "unique-visitors": "独立访客",
+@@ -360,2 +360,2 @@
 -    "aov": "AOV",
 -    "arpu": "ARPU",
 +    "aov": "平均订单金额",
 +    "arpu": "每用户平均收入",
-     "uniqueCustomers": "独特客户",
-     "customers": "客户",
-     "orders": "订单",
-@@ -367,11 +367,11 @@
-     "untitled": "未命名",
-     "upgrade": "升级",
-     "update": "更新",
+@@ -370 +370 @@
 -    "url": "URL",
 +    "url": "网址",
-     "user": "用户",
-     "username": "用户名",
-     "users": "用户",
+@@ -374 +374 @@
 -    "utm": "UTM",
 +    "utm": "推广参数",
-     "utm-campaign": "UTM 推广活动",
-     "utm-content": "UTM 内容",
-     "utm-description": "通过 UTM 参数追踪您的广告活动。",
-@@ -422,7 +422,16 @@
-     "two-factor-reset": "重置2FA",
-     "two-factor-global-active-tooltip": "全局 2FA 已启用",
-     "two-factor-verify": "验证",
+@@ -425 +425,10 @@
 -    "two-factor-login": "双因素身份验证"
 +    "two-factor-login": "双因素身份验证",
 +    "add-note": "添加备注",
@@ -142,116 +67,250 @@
 +    "copy": "复制",
 +    "authorize": "授权",
 +    "deny": "拒绝"
-   },
-   "message": {
-     "action-confirmation": "请在下方输入框中输入 {confirmation} 以确认操作。",
-@@ -507,6 +516,9 @@
-     "two-factor-error-no-pending-setup": "未找到待处理的双因素身份验证设置。",
-     "two-factor-locked-message": "失败的尝试太多了。请在 {time} 处重试。",
-     "two-factor-active-description": "您的帐户受到双因素身份验证的保护。每次登录都需要来自身份验证器应用程序的代码。",
+@@ -510 +519,4 @@
 -    "two-factor-error-not-configured": "由于服务器缺少有效的 TWO_FACTOR_ENCRYPTION_KEY，双重身份验证不可用。请联系管理员获取帮助。"
 +    "two-factor-error-not-configured": "由于服务器缺少有效的 TWO_FACTOR_ENCRYPTION_KEY，双重身份验证不可用。请联系管理员获取帮助。",
 +    "max-length": "最多 {n} 个字符",
 +    "api-key-created": "请立即复制接口密钥，关闭后将无法再次查看。",
 +    "no-api-keys": "你尚未创建接口密钥。"
-   }
- }
 --- a/src/app/(main)/App.tsx
 +++ b/src/app/(main)/App.tsx
-@@ -41,7 +41,7 @@
-   }, [teamId, teamError, router]);
- 
-   if (isLoading || !config || (teamId && isTeamLoading)) {
+@@ -44 +44 @@
 -    return <Loading placement="absolute" />;
 +    return <Loading aria-label="加载中" placement="absolute" />;
-   }
- 
-   if (error) {
 --- a/src/app/(main)/boards/BoardCloneButton.tsx
 +++ b/src/app/(main)/boards/BoardCloneButton.tsx
-@@ -20,9 +20,9 @@
-   return (
-     <DialogButton
-       icon={<Copy />}
+@@ -23,3 +23,3 @@
 -      label={showLabel ? 'Clone' : undefined}
 -      title="Clone board"
 -      aria-label="Clone"
 +      label={showLabel ? '复制' : undefined}
 +      title="复制看板"
 +      aria-label="复制看板"
-       variant={showLabel ? undefined : 'quiet'}
-       width="600px"
-     >
 --- a/src/app/(main)/boards/BoardCloneForm.tsx
 +++ b/src/app/(main)/boards/BoardCloneForm.tsx
-@@ -156,7 +156,7 @@
-                   {t(labels.cancel)}
-                 </Button>
-               )}
+@@ -159 +159 @@
 -              <FormSubmitButton isDisabled={isPending}>Clone</FormSubmitButton>
 +              <FormSubmitButton isDisabled={isPending}>复制</FormSubmitButton>
-             </Row>
-           </>
-         );
+--- a/src/app/(main)/boards/BoardEntityBadge.tsx
++++ b/src/app/(main)/boards/BoardEntityBadge.tsx
+@@ -16,2 +16,9 @@
+-    <Row padding borderRadius="full" backgroundColor="surface" border gap="2">
+-      <Icon>
++    <Row
++      padding
++      borderRadius="full"
++      backgroundColor="surface"
++      border
++      gap="2"
++      style={{ minWidth: 0, maxWidth: 'min(100%, 20rem)', flexShrink: 1 }}
++    >
++      <Icon style={{ flexShrink: 0 }}>
+@@ -20 +27,3 @@
+-      <Text size="sm">{name}</Text>
++      <Text size="sm" truncate title={name} style={{ minWidth: 0, whiteSpace: 'nowrap' }}>
++        {name}
++      </Text>
 --- a/src/app/(main)/boards/BoardProvider.tsx
 +++ b/src/app/(main)/boards/BoardProvider.tsx
-@@ -142,7 +142,7 @@
-   }, [mutateAsync, toast, t, labels.untitled, messages.saved, touch, router, renderUrl]);
- 
-   if (boardId && isFetching && isLoading) {
+@@ -145 +145 @@
 -    return <Loading placement="absolute" />;
 +    return <Loading aria-label="加载中" placement="absolute" />;
-   }
- 
-   return (
 --- a/src/app/(main)/boards/[boardId]/BoardComponentRenderer.tsx
 +++ b/src/app/(main)/boards/[boardId]/BoardComponentRenderer.tsx
-@@ -19,7 +19,7 @@
-   if (!definition) {
-     return (
-       <Column alignItems="center" justifyContent="center" width="100%" height="100%">
+@@ -22 +22 @@
 -        <Text color="muted">Unknown component: {config.type}</Text>
 +        <Text color="muted">未知组件： {config.type}</Text>
-       </Column>
-     );
-   }
-@@ -30,7 +30,7 @@
-   if (!websiteId && definition.requiresWebsite !== false) {
-     return (
-       <Column alignItems="center" justifyContent="center" width="100%" height="100%">
+@@ -33 +33 @@
 -        <Text color="muted">Select a website</Text>
 +        <Text color="muted">请选择网站</Text>
-       </Column>
-     );
-   }
 --- a/src/app/(main)/boards/[boardId]/BoardViewColumn.tsx
 +++ b/src/app/(main)/boards/[boardId]/BoardViewColumn.tsx
-@@ -48,7 +48,7 @@
-         <Column width="100%" flexGrow={1} style={{ minHeight: 0 }}>
-           {!isLoading &&
-             (isUnavailable ? (
+@@ -51 +51 @@
 -              <Empty message="Selected item is no longer available." />
 +              <Empty message="所选项目已不可用。" />
-             ) : (
-               <BoardComponentRenderer
-                 config={component}
+--- /dev/null
++++ b/src/app/(main)/boards/[boardId]/BoardViewHeader.test.tsx
+@@ -0,0 +1,113 @@
++import { cleanup, render, screen } from '@testing-library/react';
++import type { ReactNode } from 'react';
++import { afterEach, beforeEach, expect, test, vi } from 'vitest';
++
++const state = vi.hoisted(() => ({
++  board: {
++    id: 'synthetic-board',
++    name: '',
++    description: '',
++    type: 'website',
++    parameters: { websiteId: 'synthetic-website' },
++  },
++  websiteName: '合成数据 · 中国省级访问与内容行为示例网站',
++  renderUrl: vi.fn((url: string) => `/teams/synthetic${url}`),
++}));
++vi.mock('@/components/common/LinkButton', () => ({
++  LinkButton: ({ href, children }: { href: string; children: ReactNode }) => (
++    <a href={href}>{children}</a>
++  ),
++}));
++vi.mock('@/components/common/Favicon', () => ({ Favicon: () => <span>网站</span> }));
++vi.mock('@/components/hooks', () => ({
++  useBoard: () => ({ board: state.board }),
++  useNavigation: () => ({ renderUrl: state.renderUrl }),
++  useMessages: () => ({ t: (value: string) => value, labels: { design: '设计', edit: '编辑' } }),
++}));
++vi.mock('@/components/icons', () => ({
++  Edit: () => null,
++  LayoutDashboard: () => null,
++  Grid2x2: () => null,
++  Link: () => null,
++}));
++vi.mock('../BoardCloneButton', () => ({
++  BoardCloneButton: ({ boardId, showLabel }: any) => (
++    <button data-board-id={boardId}>{showLabel ? '复制' : ''}</button>
++  ),
++}));
++vi.mock('../useBoardEntityBadgeProps', () => ({
++  useBoardEntityBadgeProps: () => ({
++    type: 'website',
++    name: state.websiteName,
++    domain: 'synthetic.example',
++  }),
++}));
++
++import { BoardViewHeader } from './BoardViewHeader';
++import { PageHeader } from '@/components/common/PageHeader';
++
++const legacyDescription =
++  'Umami 原生中国省级地图、省市排行与内容行为看板；IP 仅表示近似网络出口，本人、测试与开发活动在采集前排除。';
++beforeEach(() => {
++  state.board.name = 'ArtVenn: 中国省市与内容行为';
++  state.board.description = legacyDescription;
++  state.renderUrl.mockClear();
++});
++afterEach(cleanup);
++
++test('long Board title, website badge and actions can wrap without character-stacked badge text', () => {
++  const { container } = render(<BoardViewHeader />);
++  const header = container.querySelector('[data-page-header]');
++  expect(header).toHaveStyle({ display: 'flex', flexWrap: 'wrap' });
++  expect(header?.firstElementChild).toHaveStyle({ minWidth: '0', maxWidth: '100%' });
++  expect(screen.getByRole('heading')).toHaveStyle({ overflowWrap: 'anywhere' });
++  const actions = screen.getByRole('group', { name: '看板操作' });
++  expect(actions).toHaveStyle({
++    flexWrap: 'wrap',
++    minWidth: '0',
++    maxWidth: '100%',
++    whiteSpace: 'nowrap',
++  });
++  const badge = screen.getByTitle(state.websiteName);
++  expect(badge).toHaveStyle({ whiteSpace: 'nowrap', minWidth: '0' });
++  expect(badge.parentElement).toHaveStyle({ maxWidth: 'min(100%, 20rem)', minWidth: '0' });
++  expect(screen.getByRole('link', { name: '设计' })).toHaveAttribute(
++    'href',
++    '/teams/synthetic/boards/synthetic-board/design',
++  );
++  expect(screen.getByRole('link', { name: '编辑' })).toHaveAttribute(
++    'href',
++    '/teams/synthetic/boards/synthetic-board/edit',
++  );
++  expect(state.renderUrl).toHaveBeenCalledWith('/boards/synthetic-board/design', false);
++  expect(screen.getByRole('button', { name: '复制' })).toHaveAttribute(
++    'data-board-id',
++    'synthetic-board',
++  );
++  expect(screen.getByText('查看省市分布、访问趋势和内容互动。IP 位置仅供参考。')).toBeDefined();
++  expect(state.board.description).toBe(legacyDescription);
++});
++
++test('existing visibility flags still hide actions and the website badge', () => {
++  render(<BoardViewHeader showActions={false} showEntityBadge={false} />);
++  expect(screen.queryByRole('link')).toBeNull();
++  expect(screen.queryByRole('button')).toBeNull();
++  expect(screen.queryByTitle(state.websiteName)).toBeNull();
++});
++
++test('custom Board descriptions are kept as supplied', () => {
++  state.board.description = '自定义业务说明';
++  const view = render(<BoardViewHeader />);
++  expect(screen.getByText('自定义业务说明')).toBeDefined();
++  state.board.name = '自定义看板';
++  state.board.description = legacyDescription;
++  view.rerender(<BoardViewHeader />);
++  expect(screen.getByText(legacyDescription)).toBeDefined();
++});
++
++test('other native PageHeaders retain their existing grid layout by default', () => {
++  const { container } = render(<PageHeader title="其他页面" />);
++  expect(container.querySelector('[data-page-header]')).toHaveClass('grid');
++  expect(container.querySelector('[data-page-header]')?.getAttribute('style')).toBeNull();
++  expect(container.querySelector('style')?.textContent).toContain('grid-template-columns: 1fr 1fr');
++});
+--- a/src/app/(main)/boards/[boardId]/BoardViewHeader.tsx
++++ b/src/app/(main)/boards/[boardId]/BoardViewHeader.tsx
+@@ -23,0 +24,6 @@
++  const description =
++    board?.name === 'ArtVenn: 中国省市与内容行为' &&
++    board?.description ===
++      'Umami 原生中国省级地图、省市排行与内容行为看板；IP 仅表示近似网络出口，本人、测试与开发活动在采集前排除。'
++      ? '查看省市分布、访问趋势和内容互动。IP 位置仅供参考。'
++      : board?.description;
+@@ -26,2 +32,8 @@
+-    <PageHeader title={board?.name} description={board?.description}>
+-      <Row alignItems="center" gap>
++    <PageHeader title={board?.name} description={description} wrapActions>
++      <Row
++        alignItems="center"
++        gap
++        role="group"
++        aria-label="看板操作"
++        style={{ flexWrap: 'wrap', minWidth: 0, maxWidth: '100%', whiteSpace: 'nowrap' }}
++      >
+@@ -30,4 +42,4 @@
+-            <>
+-              <LinkButton href={renderUrl(`/boards/${board.id}/design`, false)}>
+-                <IconLabel icon={<LayoutDashboard />}>{t(labels.design)}</IconLabel>
+-              </LinkButton>
++          <>
++            <LinkButton href={renderUrl(`/boards/${board.id}/design`, false)}>
++              <IconLabel icon={<LayoutDashboard />}>{t(labels.design)}</IconLabel>
++            </LinkButton>
+--- a/src/app/(main)/boards/boardComponentRegistry.tsx
++++ b/src/app/(main)/boards/boardComponentRegistry.tsx
+@@ -95,10 +95 @@
+-  [
+-    'referrer',
+-    'channel',
+-    'browser',
+-    'os',
+-    'device',
+-    'country',
+-    'region',
+-    'city',
+-  ].includes(value),
++  ['referrer', 'channel', 'browser', 'os', 'device', 'country', 'region', 'city'].includes(value),
+@@ -110,0 +102,3 @@
++  { label: '34', value: '34' },
++  { label: '50', value: '50' },
++  { label: '100', value: '100' },
+@@ -361,2 +355,2 @@
+-    name: 'World map',
+-    description: 'Geographic distribution of visitors',
++    name: '中国省级地图',
++    description: '中国省级访问分布与简明境外国家排行',
+@@ -409 +403 @@
+-const definitionMap = new Map(componentDefinitions.map(def => [def.type, def]));
++const definitionMap = new Map(componentDefinitions.map((def) => [def.type, def]));
+@@ -420 +414 @@
+-  return componentDefinitions.filter(def => def.category === category);
++  return componentDefinitions.filter((def) => def.category === category);
 --- a/src/app/(main)/dashboard/DashboardProvider.tsx
 +++ b/src/app/(main)/dashboard/DashboardProvider.tsx
-@@ -100,7 +100,7 @@
-   }, [board, labels.dashboard, messages.saved, mutateAsync, t, toast, touch]);
- 
-   if (isFetching && isLoading) {
+@@ -103 +103 @@
 -    return <Loading placement="absolute" />;
 +    return <Loading aria-label="加载中" placement="absolute" />;
-   }
- 
-   return (
 --- a/src/app/(main)/settings/preferences/LanguageSetting.tsx
 +++ b/src/app/(main)/settings/preferences/LanguageSetting.tsx
-@@ -8,14 +8,7 @@
-   const [search, setSearch] = useState('');
-   const { t, labels } = useMessages();
-   const { locale, saveLocale } = useLocale();
+@@ -11,8 +11 @@
 -  const items = search
 -    ? Object.keys(languages).filter(n => {
 -        return (
@@ -261,684 +320,543 @@
 -      })
 -    : Object.keys(languages);
 +  const items = ['zh-CN'].filter(value => !search || languages[value].label.includes(search));
- 
-   const handleReset = () => saveLocale(DEFAULT_LOCALE);
- 
 --- a/src/app/(main)/teams/TeamProvider.tsx
 +++ b/src/app/(main)/teams/TeamProvider.tsx
-@@ -10,7 +10,7 @@
-   const { data: team, isLoading, isFetching } = useTeamQuery(teamId);
- 
-   if (isFetching && isLoading) {
+@@ -13 +13 @@
 -    return <Loading placement="absolute" />;
 +    return <Loading aria-label="加载中" placement="absolute" />;
-   }
- 
-   if (!team) {
 --- a/src/app/(main)/websites/WebsiteProvider.tsx
 +++ b/src/app/(main)/websites/WebsiteProvider.tsx
-@@ -16,7 +16,7 @@
-   const { data: website, isFetching, isLoading } = useWebsiteQuery(websiteId);
- 
-   if (isFetching && isLoading) {
+@@ -19 +19 @@
 -    return <Loading placement="absolute" />;
 +    return <Loading aria-label="加载中" placement="absolute" />;
-   }
- 
-   if (!website) {
 --- a/src/app/(main)/websites/[websiteId]/(reports)/funnels/BoardFunnel.tsx
 +++ b/src/app/(main)/websites/[websiteId]/(reports)/funnels/BoardFunnel.tsx
-@@ -24,13 +24,13 @@
-       <EmptyPlaceholder
-         {...(isPreview
-           ? {
+@@ -27,2 +27,2 @@
 -              title: 'Select a funnel',
 -              description: 'Choose a saved funnel to preview.',
 +              title: '请选择漏斗',
 +              description: '选择已保存的漏斗以预览。',
-             }
-           : {
-               icon: <Link2Off />,
+@@ -32,2 +32,2 @@
 -              title: 'Reconnect funnel',
 -              description: 'Choose a funnel for this website.',
 +              title: '重新关联漏斗',
 +              description: '为此网站选择漏斗。',
-             })}
-       />
-     );
-@@ -39,8 +39,8 @@
-   if (data && (data.type !== 'funnel' || data.websiteId !== websiteId)) {
-     return (
-       <EmptyPlaceholder
+@@ -42,2 +42,2 @@
 -        title="Funnel unavailable"
 -        description="This saved funnel is no longer available for the selected website."
 +        title="漏斗不可用"
 +        description="此漏斗已不适用于所选网站。"
-       />
-     );
-   }
-@@ -57,7 +57,7 @@
-           allowEdit={false}
-         />
-       ) : (
+@@ -60 +60 @@
 -        <Text color="muted">Funnel unavailable</Text>
 +        <Text color="muted">漏斗不可用</Text>
-       )}
-     </LoadingPanel>
-   );
 --- a/src/app/(main)/websites/[websiteId]/(reports)/funnels/Funnel.tsx
 +++ b/src/app/(main)/websites/[websiteId]/(reports)/funnels/Funnel.tsx
-@@ -1,3 +1,4 @@
+@@ -0,0 +1 @@
 +import { getChineseEventName } from '@/lib/artvenn-labels';
- import { Box, Column, Grid, Icon, ProgressBar, Row, Text } from '@umami/react-zen';
- import { LoadingPanel } from '@/components/common/LoadingPanel';
- import { useFunnelQuery, useMessages, useNavigation, useOperatorLabels } from '@/components/hooks';
-@@ -100,7 +101,7 @@
-                     <Column gap="1">
-                       <Row alignItems="center" gap>
-                         <Icon>{type === 'path' ? <File /> : <Lightning />}</Icon>
+@@ -103 +104 @@
 -                        <Text>{value}</Text>
 +                        <Text>{isPage ? value : getChineseEventName(value)}</Text>
-                       </Row>
-                       {filters?.map((f, i) => (
-                         <Row key={i} gap="1" style={{ paddingLeft: 28 }}>
 --- a/src/app/(main)/websites/[websiteId]/(reports)/goals/BoardGoal.tsx
 +++ b/src/app/(main)/websites/[websiteId]/(reports)/goals/BoardGoal.tsx
-@@ -25,13 +25,13 @@
-       <EmptyPlaceholder
-         {...(isPreview
-           ? {
+@@ -28,2 +28,2 @@
 -              title: 'Select a goal',
 -              description: 'Choose a saved goal to preview.',
 +              title: '请选择目标',
 +              description: '选择已保存的目标以预览。',
-             }
-           : {
-               icon: <Link2Off />,
+@@ -33,2 +33,2 @@
 -              title: 'Reconnect goal',
 -              description: 'Choose a goal for this website.',
 +              title: '重新关联目标',
 +              description: '为此网站选择目标。',
-             })}
-       />
-     );
-@@ -40,8 +40,8 @@
-   if (data && (data.type !== 'goal' || data.websiteId !== websiteId)) {
-     return (
-       <EmptyPlaceholder
+@@ -43,2 +43,2 @@
 -        title="Goal unavailable"
 -        description="This saved goal is no longer available for the selected website."
 +        title="目标不可用"
 +        description="此目标已不适用于所选网站。"
-       />
-     );
-   }
-@@ -60,7 +60,7 @@
-           allowEdit={false}
-         />
-       ) : (
+@@ -63 +63 @@
 -        <Text color="muted">Goal unavailable</Text>
 +        <Text color="muted">目标不可用</Text>
-       )}
-     </LoadingPanel>
-   );
 --- a/src/app/(main)/websites/[websiteId]/(reports)/goals/Goal.tsx
 +++ b/src/app/(main)/websites/[websiteId]/(reports)/goals/Goal.tsx
-@@ -1,3 +1,4 @@
+@@ -0,0 +1 @@
 +import { getChineseEventName } from '@/lib/artvenn-labels';
- import { Column, Grid, Icon, ProgressBar, Row, Text } from '@umami/react-zen';
- import { LoadingPanel } from '@/components/common/LoadingPanel';
- import { useGoalQuery, useMessages, useNavigation } from '@/components/hooks';
-@@ -80,7 +81,7 @@
-         <Row alignItems="center" justifyContent="space-between" gap>
-           <Row alignItems="center" gap>
-             <Icon>{parameters.type === 'path' ? <File /> : <Lightning />}</Icon>
+@@ -83 +84 @@
 -            <Text>{parameters.value}</Text>
 +            <Text>{isPage ? parameters.value : getChineseEventName(parameters.value)}</Text>
-           </Row>
-           <Row alignItems="center" gap>
-             <Icon>
 --- a/src/app/(main)/websites/[websiteId]/(reports)/heatmaps/Heatmap.tsx
 +++ b/src/app/(main)/websites/[websiteId]/(reports)/heatmaps/Heatmap.tsx
-@@ -143,7 +143,7 @@
-                 Selected page
-               </Text>
-               <Button variant="outline" onPress={() => setIsPagePickerOpen(true)}>
+@@ -146 +146 @@
 -                <IconLabel icon={<ListCheck />} label="Pages" />
 +                <IconLabel icon={<ListCheck />} label="页面" />
-               </Button>
-             </Row>
-             {selectedPage && (
-@@ -189,7 +189,7 @@
-               placement="fullscreen"
-             >
-               <Dialog
+@@ -192 +192 @@
 -                title="Pages"
 +                title="页面"
-                 style={{
-                   width: '100%',
-                   height: '100%',
-@@ -276,9 +276,9 @@
- 
-   return (
-     <Column className={styles.pageList} gap="1">
+@@ -279 +279 @@
 -      {showHeading && <Heading size="lg">Pages</Heading>}
 +      {showHeading && <Heading size="lg">页面</Heading>}
-       <Column className={styles.pageListItems} gap="2">
+@@ -281 +281 @@
 -        {pages.length === 0 && hasSearch && <Text color="muted">No matching pages</Text>}
 +        {pages.length === 0 && hasSearch && <Text color="muted">没有匹配的页面</Text>}
-         {pages.map(page => (
-           <button
-             key={page.urlPath}
-@@ -575,7 +575,7 @@
-         Screen width:
-       </Text>
-       <Select
+@@ -578 +578 @@
 -        aria-label="Screen width"
 +        aria-label="屏幕宽度"
-         value={value}
-         onChange={nextValue => onChange(Number(nextValue))}
-         maxHeight={420}
-@@ -1057,7 +1057,7 @@
- function CanvasLoading() {
-   return (
-     <div className={styles.canvasLoading}>
+@@ -1060 +1060 @@
 -      <Loading icon="dots" placement="center" />
 +      <Loading aria-label="加载中" icon="dots" placement="center" />
-     </div>
-   );
- }
-@@ -1065,7 +1065,7 @@
- function EmptyState({ message }: { message?: string } = {}) {
-   return (
-     <Column alignItems="center" justifyContent="center" minHeight="360px" gap>
+@@ -1068 +1068 @@
 -      {!message && <Heading size="lg">Select a page</Heading>}
 +      {!message && <Heading size="lg">请选择页面</Heading>}
-       <Text color="muted">{message ?? 'Choose a page from the list to view its heatmap.'}</Text>
-     </Column>
-   );
 --- a/src/app/(main)/websites/[websiteId]/(reports)/heatmaps/HeatmapsPage.tsx
 +++ b/src/app/(main)/websites/[websiteId]/(reports)/heatmaps/HeatmapsPage.tsx
-@@ -28,7 +28,7 @@
-   ];
- 
-   if (isLoading) {
+@@ -31 +31 @@
 -    return <Loading placement="absolute" />;
 +    return <Loading aria-label="加载中" placement="absolute" />;
-   }
- 
-   if (cloudMode && !hasFeature('replays')) {
-@@ -70,7 +70,7 @@
-                   <SearchField
-                     value={search}
-                     onSearch={setSearch}
+@@ -73 +73 @@
 -                    placeholder="Search"
 +                    placeholder="搜索"
-                     className="w-full max-w-md"
-                   />
-                 </Row>
-@@ -87,7 +87,7 @@
-                 <SearchField
-                   value={search}
-                   onSearch={setSearch}
+@@ -90 +90 @@
 -                  placeholder="Search"
 +                  placeholder="搜索"
-                   className="w-full max-w-md"
-                 />
-                 <FilterButtons
 --- a/src/app/(main)/websites/[websiteId]/(reports)/performance/Performance.tsx
 +++ b/src/app/(main)/websites/[websiteId]/(reports)/performance/Performance.tsx
-@@ -150,7 +150,7 @@
-     <Column gap>
-       <Grid columns="280px" gap>
-         <Select
+@@ -153 +153 @@
 -          label="Percentile"
 +          label="百分位数"
-           value={selectedPercentile}
-           onChange={value => setSelectedPercentile(value as 'p50' | 'p75' | 'p95')}
-         >
 --- a/src/app/(main)/websites/[websiteId]/(reports)/retention/Retention.tsx
 +++ b/src/app/(main)/websites/[websiteId]/(reports)/retention/Retention.tsx
-@@ -77,7 +77,7 @@
-                 {days.map(n => (
-                   <Column key={n}>
-                     <Text weight="bold" align="center" wrap="nowrap">
+@@ -80 +80 @@
 -                      {t(labels.day)} {n}
 +                      第 {n} 天
-                     </Text>
-                   </Column>
-                 ))}
 --- a/src/app/(main)/websites/[websiteId]/(reports)/revenue/RevenueMetricsBar.tsx
 +++ b/src/app/(main)/websites/[websiteId]/(reports)/revenue/RevenueMetricsBar.tsx
-@@ -35,7 +35,7 @@
-       label: t(labels.aov),
-       tooltip: (
-         <>
+@@ -38 +38 @@
 -          <div>Average Order Value</div>
 +          <div>平均订单金额</div>
-           <div>(Total Revenue / Orders)</div>
-         </>
-       ),
-@@ -47,7 +47,7 @@
-       label: t(labels.arpu),
-       tooltip: (
-         <>
+@@ -50 +50 @@
 -          <div>Average Revenue Per User</div>
 +          <div>每用户平均收入</div>
-           <div>(Total Revenue / All Sessions)</div>
-         </>
-       ),
 --- a/src/app/(main)/websites/[websiteId]/events/EventProperties.tsx
 +++ b/src/app/(main)/websites/[websiteId]/events/EventProperties.tsx
-@@ -1,4 +1,5 @@
- 'use client';
+@@ -1,0 +2 @@
 +import { getChineseEventName } from '@/lib/artvenn-labels';
- import { Column, Grid, Label, ListItem, Row, Select } from '@umami/react-zen';
- import { useEffect, useMemo, useState } from 'react';
- import { ComboBox } from '@/components/common/ComboBox';
-@@ -68,7 +69,7 @@
- 
-     const normalizedSearch = eventSearch.toLowerCase();
- 
+@@ -71 +72 @@
 -    return eventNames.filter(name => name.toLowerCase().includes(normalizedSearch));
 +    return eventNames.filter(name => name.toLowerCase().includes(normalizedSearch) || getChineseEventName(name).includes(normalizedSearch));
-   }, [eventNames, eventSearch]);
- 
-   const handleEventChange = (value: string) => {
-@@ -123,7 +124,7 @@
-                 >
-                   {filteredEventNames.map(name => (
-                     <ListItem key={name} id={name}>
+@@ -126 +127 @@
 -                      {name}
 +                      {getChineseEventName(name)}
-                     </ListItem>
-                   ))}
-                 </Select>
 --- a/src/app/(main)/websites/[websiteId]/events/EventsTable.tsx
 +++ b/src/app/(main)/websites/[websiteId]/events/EventsTable.tsx
-@@ -1,3 +1,4 @@
+@@ -0,0 +1 @@
 +import { getChineseEventName } from '@/lib/artvenn-labels';
- import {
-   Button,
-   DataColumn,
-@@ -55,10 +56,10 @@
-                 <Text
-                   weight="bold"
-                   style={{ maxWidth: '300px' }}
+@@ -46 +47 @@
+-            <Row alignItems="center" gap="2" flexWrap="nowrap" style={{ minWidth: 0 }}>
++            <Row alignItems="center" gap="2" style={{ minWidth: 0, flexWrap: 'nowrap' }}>
+@@ -54 +55 @@
+-              <Row alignItems="center" gap flexWrap="nowrap" style={{ minWidth: 0 }}>
++              <Row alignItems="center" gap style={{ minWidth: 0, flexWrap: 'nowrap' }}>
+@@ -58 +59 @@
 -                  title={row.eventName || row.urlPath}
 +                  title={row.eventName ? getChineseEventName(row.eventName) : row.urlPath}
-                   truncate
-                 >
+@@ -61 +62,3 @@
 -                  {row.eventName || renderLink(row.urlPath, row.hostname)}
-+                  {row.eventName ? getChineseEventName(row.eventName) : renderLink(row.urlPath, row.hostname)}
-                 </Text>
-                 {row.hasData > 0 && <PropertiesButton websiteId={row.websiteId} eventId={row.id} />}
-               </Row>
-@@ -78,7 +79,7 @@
-       <DataColumn id="location" label={t(labels.location)}>
-         {(row: any) => (
-           <TypeIcon type="country" value={row.country}>
++                  {row.eventName
++                    ? getChineseEventName(row.eventName)
++                    : renderLink(row.urlPath, row.hostname)}
+@@ -81 +84 @@
 -            {row.city ? `${row.city}, ` : ''} {formatValue(row.country, 'country')}
 +            {row.city ? formatValue(row.city, 'city', row) : formatValue(row.country, 'country')}
-           </TypeIcon>
-         )}
-       </DataColumn>
+@@ -106 +109 @@
+-const PropertiesButton = props => {
++const PropertiesButton = (props) => {
 --- a/src/app/(main)/websites/[websiteId]/realtime/RealtimeLog.tsx
 +++ b/src/app/(main)/websites/[websiteId]/realtime/RealtimeLog.tsx
-@@ -1,3 +1,4 @@
+@@ -0,0 +1 @@
 +import { getChineseEventName } from '@/lib/artvenn-labels';
- import { Column, Heading, Row, SearchField, Text } from '@umami/react-zen';
- import { useMemo, useState } from 'react';
- import { List, type RowComponentProps } from 'react-window';
-@@ -83,7 +84,7 @@
- 
-     if (__type === TYPE_EVENT) {
-       return t.rich(messages.eventLog, {
+@@ -86 +87 @@
 -        event: eventName || t(labels.unknown),
 +        event: eventName ? getChineseEventName(eventName) : t(labels.unknown),
-         url: urlPath,
-         b: chunks => <b>{chunks}</b>,
-         a: chunks => (
-@@ -153,6 +154,7 @@
-       logs = logs.filter(({ eventName, urlPath, browser, os, country, device }) => {
-         return [
-           eventName,
+@@ -155,0 +157 @@
 +          getChineseEventName(eventName),
-           urlPath,
-           os,
-           formatValue(browser, 'browser'),
 --- a/src/app/(main)/websites/[websiteId]/replays/ReplaysPage.tsx
 +++ b/src/app/(main)/websites/[websiteId]/replays/ReplaysPage.tsx
-@@ -26,7 +26,7 @@
-   };
- 
-   if (isLoading) {
+@@ -29 +29 @@
 -    return <Loading placement="absolute" />;
 +    return <Loading aria-label="加载中" placement="absolute" />;
-   }
- 
-   if (cloudMode && !hasFeature('replays')) {
 --- a/src/app/(main)/websites/[websiteId]/session-data/SessionDataPivotTable.tsx
 +++ b/src/app/(main)/websites/[websiteId]/session-data/SessionDataPivotTable.tsx
-@@ -101,7 +101,7 @@
-           {(row: any) => renderTruncatedText(row[key] ?? '')}
-         </DataColumn>
-       ))}
+@@ -104 +104 @@
 -      <DataColumn id="distinctId" label="Distinct ID" width="220px">
 +      <DataColumn id="distinctId" label="用户标识" width="220px">
-         {(row: any) => renderTruncatedText(row.distinctId || '')}
-       </DataColumn>
-       <DataColumn id="createdAt" label={t(labels.created)} width="180px">
 --- a/src/app/(main)/websites/[websiteId]/sessions/SessionActivity.tsx
 +++ b/src/app/(main)/websites/[websiteId]/sessions/SessionActivity.tsx
-@@ -1,3 +1,4 @@
+@@ -0,0 +1 @@
 +import { getChineseEventName } from '@/lib/artvenn-labels';
- import {
-   Button,
-   Column,
-@@ -75,7 +76,7 @@
-                     {eventName ? t(labels.triggeredEvent) : t(labels.viewedPage)}
-                   </Text>
-                   <Text weight="bold" style={{ maxWidth: isMobile ? '400px' : null }} truncate>
+@@ -78 +79 @@
 -                    {eventName || renderLink(urlPath, hostname)}
 +                    {eventName ? getChineseEventName(eventName) : renderLink(urlPath, hostname)}
-                   </Text>
-                   {hasData > 0 && <PropertiesButton websiteId={websiteId} eventId={eventId} />}
-                 </Row>
 --- a/src/app/(main)/websites/[websiteId]/sessions/SessionInfo.tsx
 +++ b/src/app/(main)/websites/[websiteId]/sessions/SessionInfo.tsx
-@@ -13,7 +13,7 @@
-   const { getRegionName } = useRegionNames(locale);
-   const distinctId =
-     data?.distinctIds?.length > 1
+@@ -16 +16 @@
 -      ? `${data.distinctIds.length} linked IDs`
 +      ? `${data.distinctIds.length} 个关联标识`
-       : data?.distinctId?.trim();
-   const stitchedSessionCount = data?.stitchedSessionCount;
- 
-@@ -40,7 +40,7 @@
-       </Info>
- 
-       <Info label={t(labels.city)} icon={<Landmark />}>
+@@ -43 +43 @@
 -        {data?.city}
 +        {formatValue(data?.city, 'city', data)}
-       </Info>
- 
-       <Info label={t(labels.browser)} icon={<TypeIcon type="browser" value={data?.browser} />}>
-@@ -59,7 +59,7 @@
-       </Info>
- 
-       {distinctId && stitchedSessionCount > 1 && (
+@@ -62 +62 @@
 -        <Info label="Linked sessions" icon={<Network />}>
 +        <Info label="关联会话" icon={<Network />}>
-           {stitchedSessionCount}
-         </Info>
-       )}
+--- /dev/null
++++ b/src/app/api/websites/[websiteId]/metrics/artvenn-display.test.ts
+@@ -0,0 +1,109 @@
++import { beforeEach, expect, test, vi } from 'vitest';
++
++const runtime = vi.hoisted(() => ({
++  session: [] as Record<string, unknown>[],
++  event: [] as Record<string, unknown>[],
++  page: [] as Record<string, unknown>[],
++  getSessionMetrics: vi.fn(),
++  getSessionExpandedMetrics: vi.fn(),
++}));
++vi.mock('@/lib/db', () => ({ isRelationalOnly: () => true }));
++vi.mock('@/lib/request', () => ({
++  parseRequest: async (request: Request, schema: { parse: (value: unknown) => unknown }) => ({
++    query: schema.parse(Object.fromEntries(new URL(request.url).searchParams)),
++    auth: {},
++  }),
++  getQueryFilters: async (query: Record<string, unknown>) => ({ ...query }),
++}));
++vi.mock('@/permissions', () => ({ canViewWebsiteSection: async () => true }));
++vi.mock('@/queries/sql', () => ({
++  getSessionMetrics: runtime.getSessionMetrics,
++  getSessionExpandedMetrics: runtime.getSessionExpandedMetrics,
++  getEventMetrics: async () => runtime.event,
++  getEventExpandedMetrics: async () => runtime.event,
++  getPageviewMetrics: async () => runtime.page,
++  getPageviewExpandedMetrics: async () => runtime.page,
++  getChannelMetrics: async () => [],
++  getChannelExpandedMetrics: async () => [],
++}));
++import { GET as metrics } from './route';
++import { GET as expanded } from './expanded/route';
++
++beforeEach(() => {
++  runtime.session = [];
++  runtime.event = [];
++  runtime.page = [];
++  runtime.getSessionMetrics.mockReset().mockImplementation(async () => runtime.session);
++  runtime.getSessionExpandedMetrics.mockReset().mockImplementation(async () => runtime.session);
++});
++const request = (type: string, search = '') =>
++  new Request(
++    `http://localhost/api/websites/synthetic/metrics?startAt=1&endAt=2&type=${type}${search}`,
++  );
++const context = { params: Promise.resolve({ websiteId: 'synthetic' }) };
++
++test.each([
++  ['metrics', metrics, 'x'],
++  ['expanded', expanded, 'name'],
++] as const)(
++  '%s adds optional Chinese city/province names while preserving raw keys and counts',
++  async (_label, handler, key) => {
++    runtime.session = [
++      {
++        [key]: 'Beijing',
++        country: 'CN',
++        region: 'CN-BJ',
++        y: 7,
++        visitors: 7,
++        visits: 8,
++        pageviews: 10,
++        bounces: 2,
++        totaltime: 30,
++      },
++      { [key]: 'UnmappedSyntheticTown', country: 'US', region: null, y: 3, visitors: 3 },
++    ];
++    const before = JSON.stringify(runtime.session);
++    const response = await handler(request('city'), context);
++    expect(response.status).toBe(200);
++    expect(await response.json()).toEqual([
++      { ...runtime.session[0], displayName: '北京' },
++      runtime.session[1],
++    ]);
++    expect(JSON.stringify(runtime.session)).toBe(before);
++    runtime.session = [{ [key]: 'CN-TW', country: 'CN', y: 4, visitors: 4 }];
++    expect(await (await handler(request('region'), context)).json()).toEqual([
++      { ...runtime.session[0], displayName: '台湾省' },
++    ]);
++  },
++);
++
++test.each([
++  ['metrics', metrics, 'x'],
++  ['expanded', expanded, 'name'],
++] as const)(
++  '%s uses known existing event names without replacing event keys/counts',
++  async (_label, handler, key) => {
++    runtime.event = [
++      { [key]: 'favorite', y: 2, visitors: 2 },
++      { [key]: 'synthetic_custom', y: 1, visitors: 1 },
++    ];
++    expect(await (await handler(request('event'), context)).json()).toEqual([
++      { ...runtime.event[0], displayName: '收藏' },
++      runtime.event[1],
++    ]);
++  },
++);
++
++test('real title metrics stay raw and expanded city search keeps its existing AND filter', async () => {
++  runtime.page = [{ x: '合成资料页面', y: 5 }];
++  expect(await (await metrics(request('title'), context)).json()).toEqual(runtime.page);
++  await expanded(
++    request('city', '&city=eq.Shanghai&country=eq.CN&search=%E5%8C%97%E4%BA%AC'),
++    context,
++  );
++  expect(runtime.getSessionExpandedMetrics).toHaveBeenCalledWith(
++    'synthetic',
++    expect.anything(),
++    expect.objectContaining({ city: 'eq.Shanghai', country: 'eq.CN', search: '北京' }),
++  );
++});
+--- a/src/app/api/websites/[websiteId]/metrics/expanded/route.ts
++++ b/src/app/api/websites/[websiteId]/metrics/expanded/route.ts
+@@ -0,0 +1,2 @@
++import { isRelationalOnly } from '@/lib/db';
++import { getMetricDisplayName } from '@/lib/artvenn-geography';
+@@ -41 +43 @@
+-  if (search) {
++  if (search && (!['city', 'region'].includes(type) || !isRelationalOnly())) {
+@@ -48 +50,6 @@
+-    return json(data);
++    return json(
++      data.map(row => {
++        const displayName = getMetricDisplayName(type, row, 'name');
++        return displayName ? { ...row, displayName } : row;
++      }),
++    );
+@@ -54 +61,7 @@
+-      return json(await getEventExpandedMetrics(websiteId, { type, limit, offset }, filters));
++      const data = await getEventExpandedMetrics(websiteId, { type, limit, offset }, filters);
++      return json(
++        data.map(row => {
++          const displayName = getMetricDisplayName(type, row, 'name');
++          return displayName ? { ...row, displayName } : row;
++        }),
++      );
+--- a/src/app/api/websites/[websiteId]/metrics/route.ts
++++ b/src/app/api/websites/[websiteId]/metrics/route.ts
+@@ -1,0 +2 @@
++import { getMetricDisplayName } from '@/lib/artvenn-geography';
+@@ -58 +59,6 @@
+-    return json(data);
++    return json(
++      data.map(row => {
++        const displayName = getMetricDisplayName(type, row, 'x');
++        return displayName ? { ...row, displayName } : row;
++      }),
++    );
+@@ -64 +70,7 @@
+-      return json(await getEventMetrics(websiteId, { type, limit, offset }, filters));
++      const data = await getEventMetrics(websiteId, { type, limit, offset }, filters);
++      return json(
++        data.map(row => {
++          const displayName = getMetricDisplayName(type, row, 'x');
++          return displayName ? { ...row, displayName } : row;
++        }),
++      );
 --- a/src/app/layout.tsx
 +++ b/src/app/layout.tsx
-@@ -23,7 +23,7 @@
-   }
- 
-   return (
+@@ -26 +26 @@
 -    <html lang="en" className={`${inter.className} ${inter.variable}`}>
 +    <html lang="zh-CN" className={`${inter.className} ${inter.variable}`}>
-       <head>
-         <link rel="icon" href="/favicon.ico" />
-         <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 --- a/src/components/charts/BarChart.tsx
 +++ b/src/components/charts/BarChart.tsx
-@@ -1,3 +1,4 @@
+@@ -0,0 +1 @@
 +import { getChineseEventName } from '@/lib/artvenn-labels';
- import { useTheme } from '@umami/react-zen';
- import { memo, useCallback, useMemo, useState } from 'react';
- import { Chart, type ChartProps } from '@/components/charts/Chart';
-@@ -128,7 +129,7 @@
-             color: labelColors?.[0]?.borderColor || labelColors?.[0]?.backgroundColor,
-             value: currency
-               ? formatLongCurrency(dataPoints[0].raw.y, currency)
+@@ -131 +132 @@
 -              : `${formatLongNumber(dataPoints[0].raw.y)} ${dataPoints[0].dataset.label}`,
 +              : `${formatLongNumber(dataPoints[0].raw.y)} ${getChineseEventName(dataPoints[0].dataset.label)}`,
-           }
-         : null;
- 
 --- a/src/components/charts/BubbleChart.tsx
 +++ b/src/components/charts/BubbleChart.tsx
-@@ -1,3 +1,4 @@
+@@ -0,0 +1 @@
 +import { getChineseEventName } from '@/lib/artvenn-labels';
- import { useState } from 'react';
- import { Chart, type ChartProps } from '@/components/charts/Chart';
- import { ChartTooltip } from '@/components/charts/ChartTooltip';
-@@ -16,7 +17,7 @@
-       opacity
-         ? {
-             color: labelColors?.[0]?.backgroundColor,
+@@ -19 +20 @@
 -            value: `${title}: ${dataPoints[0].raw}`,
 +            value: `${getChineseEventName(String(title))}：${dataPoints[0].raw}`,
-           }
-         : null,
-     );
 --- a/src/components/charts/DistributionBarChart.tsx
 +++ b/src/components/charts/DistributionBarChart.tsx
-@@ -1,4 +1,5 @@
- 'use client';
+@@ -1,0 +2 @@
 +import { getChineseEventName } from '@/lib/artvenn-labels';
- import { useTheme } from '@umami/react-zen';
- import { memo, useCallback, useMemo, useState } from 'react';
- import { Chart } from '@/components/charts/Chart';
-@@ -100,7 +101,7 @@
-             maxRotation: horizontal ? undefined : 0,
-             callback: horizontal
-               ? (tickValue: string | number) => renderNumberLabels(String(tickValue))
+@@ -103 +104 @@
 -              : (tickValue: string | number) => chartData.labels?.[Number(tickValue)] || '',
 +              : (tickValue: string | number) => getChineseEventName(chartData.labels?.[Number(tickValue)] || ''),
-           },
-         },
-         y: {
-@@ -118,7 +119,7 @@
-           ticks: {
-             color: colors.chart.text,
-             callback: horizontal
+@@ -121 +122 @@
 -              ? (tickValue: string | number) => chartData.labels?.[Number(tickValue)] || ''
 +              ? (tickValue: string | number) => getChineseEventName(chartData.labels?.[Number(tickValue)] || '')
-               : (tickValue: string | number) => renderNumberLabels(String(tickValue)),
-           },
-         },
-@@ -133,7 +134,7 @@
-       const point = dataPoints?.[0];
-       const nextTooltip = opacity
-         ? {
+@@ -136 +137 @@
 -            title: (point?.label ?? '').toString(),
 +            title: getChineseEventName((point?.label ?? '').toString()),
-             color: labelColors?.[0]?.backgroundColor,
-             value: `${formatLongNumber(
-               Number(
-@@ -141,7 +142,7 @@
-                   ? (point?.raw?.x ?? point?.raw ?? 0)
-                   : (point?.raw?.y ?? point?.raw ?? 0),
-               ),
+@@ -144 +145 @@
 -            )}${point?.dataset?.label ? ` ${point.dataset.label}` : ''}`,
 +            )}${point?.dataset?.label ? ` ${getChineseEventName(point.dataset.label)}` : ''}`,
-           }
-         : null;
- 
 --- a/src/components/charts/PieChart.tsx
 +++ b/src/components/charts/PieChart.tsx
-@@ -1,3 +1,4 @@
+@@ -0,0 +1 @@
 +import { getChineseEventName } from '@/lib/artvenn-labels';
- import { useState } from 'react';
- import { Chart, type ChartProps } from '@/components/charts/Chart';
- import { ChartTooltip } from '@/components/charts/ChartTooltip';
-@@ -16,7 +17,7 @@
-       opacity
-         ? {
-             color: labelColors?.[0]?.backgroundColor,
+@@ -19 +20 @@
 -            value: `${title}: ${dataPoints[0].raw}`,
 +            value: `${getChineseEventName(String(title))}：${dataPoints[0].raw}`,
-           }
-         : null,
-     );
 --- a/src/components/common/ErrorBoundary.tsx
 +++ b/src/components/common/ErrorBoundary.tsx
-@@ -11,7 +11,7 @@
- export function ErrorBoundary({ children }: { children: ReactNode }) {
-   const { t, messages } = useMessages();
- 
+@@ -14 +14 @@
 -  const fallbackRender = ({ error, resetErrorBoundary }) => {
 +  const fallbackRender = ({ resetErrorBoundary }) => {
-     return (
-       <Column
-         role="alert"
-@@ -23,9 +23,7 @@
-         alignItems="center"
-       >
-         <h1>{t(messages.error)}</h1>
+@@ -26,3 +26 @@
 -        <h3>{error.message}</h3>
 -        <pre>{error.stack}</pre>
 -        <Button onClick={resetErrorBoundary}>OK</Button>
 +        <Button onClick={resetErrorBoundary}>确定</Button>
-       </Column>
-     );
-   };
+--- a/src/components/common/FilterLink.tsx
++++ b/src/components/common/FilterLink.tsx
+@@ -12,0 +13 @@
++  filterParams?: Record<string, string | undefined>;
+@@ -15 +16,8 @@
+-export function FilterLink({ type, value, label, externalUrl, icon }: FilterLinkProps) {
++export function FilterLink({
++  type,
++  value,
++  label,
++  externalUrl,
++  icon,
++  filterParams,
++}: FilterLinkProps) {
+@@ -31 +39,3 @@
+-      {!value && <Text weight={active && selected ? 'bold' : undefined}>({label || t(labels.unknown)})</Text>}
++      {!value && (
++        <Text weight={active && selected ? 'bold' : undefined}>({label || t(labels.unknown)})</Text>
++      )}
+@@ -34 +44 @@
+-          <Link href={updateParams({ [type]: `eq.${value}` })} replace>
++          <Link href={updateParams({ ...filterParams, [type]: `eq.${value}` })} replace>
 --- a/src/components/common/FilterRecord.tsx
 +++ b/src/components/common/FilterRecord.tsx
-@@ -113,7 +113,7 @@
-               renderValue={values =>
-                 values.length > 0 ? values.map(v => formatValue(v, type)).join(', ') : undefined
-               }
+@@ -116 +116 @@
 -              renderEmptyState={() => (isLoading ? <Loading icon="dots" /> : <Empty />)}
 +              renderEmptyState={() => (isLoading ? <Loading aria-label="加载中" icon="dots" /> : <Empty />)}
-               allowSearch
-             >
-               {items.map(({ value }) => (
 --- a/src/components/common/LoadingPanel.tsx
 +++ b/src/components/common/LoadingPanel.tsx
-@@ -33,7 +33,7 @@
-   if (isLoading || isFetching) {
-     return (
-       <Column position="relative" height="100%" width="100%" {...props}>
+@@ -36 +36 @@
 -        <Loading icon={loadingIcon} placement={loadingPlacement} />
 +        <Loading aria-label="加载中" icon={loadingIcon} placement={loadingPlacement} />
-       </Column>
-     );
-   }
 --- a/src/components/common/MultiSelect.tsx
 +++ b/src/components/common/MultiSelect.tsx
-@@ -34,7 +34,7 @@
-   onChange,
-   searchValue,
-   onSearch,
+@@ -37 +37 @@
 -  placeholder = 'Select an item',
 +  placeholder = '请选择项目',
-   allowSearch,
-   renderEmptyState,
-   renderValue,
-@@ -74,6 +74,8 @@
-       >
-         {allowSearch && (
-           <SearchField
+@@ -76,0 +77,2 @@
 +            placeholder="搜索"
 +            aria-label="搜索"
-             value={searchValue}
-             onSearch={onSearch}
-             autoFocus
 --- a/src/components/common/PageBody.tsx
 +++ b/src/components/common/PageBody.tsx
-@@ -28,7 +28,7 @@
-   }
- 
-   if (isLoading) {
+@@ -31 +31 @@
 -    return <Loading placement="absolute" />;
 +    return <Loading aria-label="加载中" placement="absolute" />;
-   }
- 
-   return (
+--- a/src/components/common/PageHeader.tsx
++++ b/src/components/common/PageHeader.tsx
+@@ -10,0 +11 @@
++  wrapActions = false,
+@@ -18,0 +20 @@
++  wrapActions?: boolean;
+@@ -29,0 +32,3 @@
++      gap={wrapActions ? '4' : undefined}
++      style={wrapActions ? { display: 'flex', flexWrap: 'wrap', alignItems: 'center' } : undefined}
++      data-page-header
+@@ -31 +36,4 @@
+-      <Column gap="2">
++      <Column
++        gap="2"
++        style={wrapActions ? { flex: '1 1 26rem', minWidth: 0, maxWidth: '100%' } : undefined}
++      >
+@@ -44 +52,8 @@
+-            title && <Heading size={{ base: 'lg', md: '2xl', lg: '3xl' }}>{title}</Heading>
++            title && (
++              <Heading
++                size={{ base: 'lg', md: '2xl', lg: '3xl' }}
++                style={wrapActions ? { overflowWrap: 'anywhere', minWidth: 0 } : undefined}
++              >
++                {title}
++              </Heading>
++            )
+@@ -53 +68,9 @@
+-      <Row justifyContent="flex-end" alignItems="center">
++      <Row
++        justifyContent="flex-end"
++        alignItems="center"
++        style={
++          wrapActions
++            ? { flex: '0 1 auto', minWidth: 0, maxWidth: '100%', flexWrap: 'wrap' }
++            : undefined
++        }
++      >
 --- a/src/components/common/TypeIcon.tsx
 +++ b/src/components/common/TypeIcon.tsx
-@@ -10,7 +10,9 @@
-   value: string;
-   children?: ReactNode;
- }) {
+@@ -13 +13,3 @@
 -  const iconValue = type === 'browser' && value === 'browser' ? 'unknown' : value;
 +  const iconValue = type === 'country' && value === 'TW'
 +    ? 'CN'
 +    : type === 'browser' && value === 'browser' ? 'unknown' : value;
- 
-   return (
-     <Row gap="3" alignItems="center">
 --- a/src/components/hooks/queries/useWebsiteExpandedMetricsQuery.ts
 +++ b/src/components/hooks/queries/useWebsiteExpandedMetricsQuery.ts
-@@ -1,3 +1,7 @@
+@@ -0,0 +1 @@
 +import { CHINESE_EVENT_NAMES } from '@/lib/artvenn-labels';
-+import { getChineseCityMatches } from '@/lib/artvenn-geography';
-+import { useLocale } from '../useLocale';
-+import { useRegionNames } from '../useRegionNames';
- import { keepPreviousData } from '@tanstack/react-query';
- import type { ReactQueryOptions } from '@/lib/types';
- import { useApi } from '../useApi';
-@@ -21,6 +25,19 @@
-   const { get, useQuery } = useApi();
-   const { startAt, endAt } = useDateParameters();
-   const filters = useFilterParameters();
-+  const { locale } = useLocale();
-+  const { regionNames } = useRegionNames(locale);
+@@ -18 +19 @@
+-  params: { type: string; limit?: number; search?: string },
++  params: { type: string; limit?: number; offset?: number; search?: string; country?: string },
+@@ -23,0 +25,17 @@
 +  const search = params.search || '';
-+  const matches = /[\u3400-\u9fff]/u.test(search)
-+    ? params.type === 'city'
-+      ? getChineseCityMatches(search)
-+      : Object.entries(params.type === 'region' ? regionNames : params.type === 'event' ? CHINESE_EVENT_NAMES : {})
++  const matches =
++    /[\u3400-\u9fff]/u.test(search) && params.type === 'event'
++      ? Object.entries(CHINESE_EVENT_NAMES)
 +          .filter(([, label]) => label.includes(search))
 +          .map(([value]) => value)
-+    : [];
-+  const requestParams = matches.length
-+    ? { ...filters, ...params, search: undefined, [params.type]: `eq.${matches.slice(0, 5).join(',')}` }
-+    : { ...filters, ...params };
- 
-   return useQuery<WebsiteExpandedMetricsData>({
-     queryKey: [
-@@ -37,8 +54,7 @@
-       get(`/websites/${websiteId}/metrics/expanded`, {
-         startAt,
-         endAt,
++      : [];
++  const geographic = params.type === 'city' || params.type === 'region';
++  const requestParams =
++    !geographic && matches.length
++      ? {
++          ...filters,
++          ...params,
++          search: undefined,
++          [params.type]: `eq.${matches.slice(0, 5).join(',')}`,
++        }
++      : { ...filters, ...params };
+@@ -40,2 +58 @@
 -        ...filters,
 -        ...params,
 +        ...requestParams,
-       }),
-     enabled: !!websiteId,
-     placeholderData: keepPreviousData,
 --- a/src/components/hooks/queries/useWebsiteValuesQuery.ts
 +++ b/src/components/hooks/queries/useWebsiteValuesQuery.ts
-@@ -1,3 +1,5 @@
+@@ -0,0 +1,2 @@
 +import { CHINESE_EVENT_NAMES } from '@/lib/artvenn-labels';
 +import { getChineseCityMatches } from '@/lib/artvenn-geography';
- import { useCountryNames } from '@/components/hooks/useCountryNames';
- import { useRegionNames } from '@/components/hooks/useRegionNames';
- import { useApi } from '../useApi';
-@@ -24,10 +26,12 @@
-   const names = {
-     country: countryNames,
-     region: regionNames,
+@@ -26,0 +29 @@
 +    event: CHINESE_EVENT_NAMES,
-   };
- 
-   const getSearch = (type: string, value: string) => {
-     if (value) {
+@@ -30,0 +34 @@
 +      if (type === 'city') return getChineseCityMatches(value).slice(0, 5).join(',') || value;
-       const values = names[type];
- 
-       if (values) {
 --- a/src/components/hooks/useCountryNames.ts
 +++ b/src/components/hooks/useCountryNames.ts
-@@ -1,32 +1,7 @@
+@@ -1,3 +1 @@
 -import { useEffect, useState } from 'react';
 -import { httpGet } from '@/lib/fetch';
 -import enUS from '../../../public/intl/country/en-US.json';
 +import zhCN from '../../../public/intl/country/zh-CN.json';
- 
+@@ -5,3 +3 @@
 -const countryNames = {
 -  'en-US': enUS,
 -};
 +const countryNames: Record<string, string> = { ...zhCN, TW: '中国台湾' };
- 
+@@ -9,23 +5,2 @@
 -export function useCountryNames(locale: string) {
 -  const [list, setList] = useState(countryNames[locale] || enUS);
 -
@@ -964,140 +882,81 @@
 -  return { countryNames: list };
 +export function useCountryNames(_locale: string) {
 +  return { countryNames };
- }
 --- a/src/components/hooks/useFormat.test.ts
 +++ b/src/components/hooks/useFormat.test.ts
-@@ -2,16 +2,16 @@
- import { beforeEach, describe, expect, test, vi } from 'vitest';
- 
- const countryNames: Record<string, string> = {
+@@ -5,2 +5,3 @@
 -  US: 'United States',
 -  GB: 'United Kingdom',
++  CN: '中国',
 +  US: '美国',
 +  GB: '英国',
- };
- const languageNames: Record<string, string> = {
+@@ -9 +10 @@
 -  en: 'English',
 +  en: '英语',
- };
- const labels: Record<string, string> = {
+@@ -12,3 +13,3 @@
 -  unknown: 'Unknown',
 -  mobile: 'Mobile',
 -  desktop: 'Desktop',
 +  unknown: '未知',
 +  mobile: '移动设备',
 +  desktop: '桌面设备',
- };
- 
- vi.mock('./useMessages', () => ({
-@@ -22,7 +22,7 @@
- }));
- 
- vi.mock('./useLocale', () => ({
+@@ -25 +26 @@
 -  useLocale: () => ({ locale: 'en-US' }),
 +  useLocale: () => ({ locale: 'zh-CN' }),
- }));
- 
- vi.mock('./useCountryNames', () => ({
-@@ -31,6 +31,12 @@
- 
- vi.mock('./useLanguageNames', () => ({
-   useLanguageNames: () => ({ languageNames }),
-+}));
+@@ -34,0 +36,11 @@
 +
-+vi.mock('@/lib/artvenn-geography', () => ({
-+  getChineseRegionName: (value: string) => ({ 'US-CA': '加利福尼亚州', 'CN-TW': '台湾省' })[value],
-+  getChineseCityName: (value: string, country?: string) =>
-+    country === 'US' && value === 'Portland' ? '波特兰' : undefined,
- }));
- 
- import { useFormat } from './useFormat';
-@@ -73,36 +79,36 @@
-   describe('formatDevice', () => {
-     test('translates a known device label', () => {
-       const { formatDevice } = setup();
++vi.mock('@/lib/artvenn-geography', async () => {
++  const { municipalityCityName } = await import('@/lib/artvenn-china-map');
++  return {
++    getChineseRegionName: (value: string) =>
++      ({ 'US-CA': '加利福尼亚州', 'CN-TW': '台湾省' })[value],
++    getChineseCityName: (value: string, country?: string, region?: string) =>
++      municipalityCityName(value, country, region) ??
++      (country === 'US' && value === 'Portland' ? '波特兰' : undefined),
++  };
++});
+@@ -76 +88 @@
 -      expect(formatDevice('mobile')).toBe('Mobile');
 +      expect(formatDevice('mobile')).toBe('移动设备');
-     });
- 
-     test('falls back to the unknown label for missing devices', () => {
-       const { formatDevice } = setup();
+@@ -81 +93 @@
 -      expect(formatDevice('foo')).toBe('Unknown');
 +      expect(formatDevice('foo')).toBe('未知');
-     });
-   });
- 
-   describe('formatCountry', () => {
-     test('maps a known country code', () => {
-       const { formatCountry } = setup();
+@@ -88 +100 @@
 -      expect(formatCountry('US')).toBe('United States');
 +      expect(formatCountry('US')).toBe('美国');
-     });
- 
-     test('returns the original value when unknown', () => {
-       const { formatCountry } = setup();
+@@ -93 +105 @@
 -      expect(formatCountry('ZZ')).toBe('ZZ');
 +      expect(formatCountry('ZZ')).toBe('未知');
-     });
-   });
- 
-   describe('formatRegion', () => {
+@@ -98 +110 @@
 -    test('formats a known region as "Region, Country"', () => {
 +    test('uses the Chinese region display name without changing the lookup key', () => {
-       const { formatRegion } = setup();
+@@ -100 +112 @@
 -      expect(formatRegion('US-CA')).toBe('California, United States');
 +      expect(formatRegion('US-CA')).toBe('加利福尼亚州');
-     });
- 
+@@ -103 +115 @@
 -    test('returns the original value for an unknown region', () => {
 +    test('marks an unknown translated region explicitly', () => {
-       const { formatRegion } = setup();
+@@ -105 +117 @@
 -      expect(formatRegion('ZZ-99')).toBe('ZZ-99');
 +      expect(formatRegion('ZZ-99')).toBe('暂无中文名称');
-     });
- 
-     test('handles undefined without throwing', () => {
-@@ -114,30 +120,30 @@
-   describe('formatCity', () => {
-     test('appends the country name when known', () => {
-       const { formatCity } = setup();
+@@ -117 +129 @@
 -      expect(formatCity('Portland', 'US')).toBe('Portland, United States');
 +      expect(formatCity('Portland', 'US')).toBe('波特兰，美国');
-     });
- 
-     test('returns just the city when the country is unknown', () => {
-       const { formatCity } = setup();
+@@ -122 +134 @@
 -      expect(formatCity('Portland', 'ZZ')).toBe('Portland');
 +      expect(formatCity('Portland', 'ZZ')).toBe('暂无中文名称');
-     });
- 
-     test('returns just the city when no country is provided', () => {
-       const { formatCity } = setup();
+@@ -127 +139 @@
 -      expect(formatCity('Portland')).toBe('Portland');
 +      expect(formatCity('Portland')).toBe('暂无中文名称');
-     });
-   });
- 
-   describe('formatLanguage', () => {
-     test('maps the base language subtag', () => {
-       const { formatLanguage } = setup();
+@@ -134,2 +146,2 @@
 -      expect(formatLanguage('en-US')).toBe('English');
 -      expect(formatLanguage('en')).toBe('English');
 +      expect(formatLanguage('en-US')).toBe('英语');
 +      expect(formatLanguage('en')).toBe('英语');
-     });
- 
-     test('returns the original value when unknown', () => {
-       const { formatLanguage } = setup();
+@@ -140 +152 @@
 -      expect(formatLanguage('xx-YY')).toBe('xx-YY');
 +      expect(formatLanguage('xx-YY')).toBe('未知');
-     });
-   });
- 
-@@ -146,15 +152,17 @@
-       const { formatValue } = setup();
-       expect(formatValue('Mac OS', 'os')).toBe('macOS');
-       expect(formatValue('chrome', 'browser')).toBe('Chrome');
+@@ -149,4 +161,6 @@
 -      expect(formatValue('mobile', 'device')).toBe('Mobile');
 -      expect(formatValue('US', 'country')).toBe('United States');
 -      expect(formatValue('US-CA', 'region')).toBe('California, United States');
@@ -1108,74 +967,60 @@
 +      expect(formatValue('en-US', 'language')).toBe('英语');
 +      expect(formatValue('favorite', 'event')).toBe('收藏');
 +      expect(formatValue('CN-TW', 'region')).toBe('台湾省');
-     });
- 
-     test('passes the country from data through for city', () => {
-       const { formatValue } = setup();
+@@ -157 +171 @@
 -      expect(formatValue('Portland', 'city', { country: 'US' })).toBe('Portland, United States');
 +      expect(formatValue('Portland', 'city', { country: 'US' })).toBe('波特兰，美国');
-     });
- 
-     test('returns the raw string for unknown types', () => {
+@@ -170,0 +185,8 @@
++
++test('city formatting passes confirmed region context and keeps unsupported aliases unknown', () => {
++  const { formatValue } = setup();
++  expect(formatValue('Beijing', 'city', { country: 'CN', region: 'CN-BJ' })).toBe('北京，中国');
++  expect(formatValue('Beijing', 'city', { country: 'CN', region: 'CN-HE' })).toBe(
++    '暂无中文名称，中国',
++  );
++});
 --- a/src/components/hooks/useFormat.ts
 +++ b/src/components/hooks/useFormat.ts
-@@ -1,5 +1,6 @@
- import { BROWSERS, OS_NAMES } from '@/lib/constants';
+@@ -2 +2,2 @@
 -import regions from '../../../public/iso-3166-2.json';
 +import { getChineseCityName, getChineseRegionName } from '@/lib/artvenn-geography';
 +import { getChineseEventName } from '@/lib/artvenn-labels';
- import { useCountryNames } from './useCountryNames';
- import { useLanguageNames } from './useLanguageNames';
- import { useLocale } from './useLocale';
-@@ -24,20 +25,21 @@
-   };
- 
-   const formatCountry = (value: string): string => {
+@@ -27 +28 @@
 -    return countryNames[value] || value;
 +    return countryNames[value] || t(labels.unknown);
-   };
- 
-   const formatRegion = (value?: string): string => {
+@@ -31,2 +32 @@
 -    const [country] = value?.split('-') || [];
 -    return regions[value] ? `${regions[value]}, ${countryNames[country]}` : value;
 +    return value ? getChineseRegionName(value) || '暂无中文名称' : value;
-   };
- 
-   const formatCity = (value: string, country?: string): string => {
+@@ -35,2 +35,4 @@
+-  const formatCity = (value: string, country?: string): string => {
 -    return countryNames[country] ? `${value}, ${countryNames[country]}` : value;
++  const formatCity = (value: string, country?: string, region?: string): string => {
 +    if (!value) return value;
-+    const city = getChineseCityName(value, country) || '暂无中文名称';
++    const city = getChineseCityName(value, country, region) || '暂无中文名称';
 +    return countryNames[country] ? `${city}，${countryNames[country]}` : city;
-   };
- 
-   const formatLanguage = (value: string): string => {
+@@ -40 +42 @@
 -    return languageNames[value?.split('-')[0]] || value;
 +    return languageNames[value?.split('-')[0]] || t(labels.unknown);
-   };
- 
-   const formatValue = (value: string, type: string, data?: Record<string, any>): string => {
-@@ -56,6 +58,8 @@
-         return formatCity(value, data?.country);
-       case 'language':
-         return formatLanguage(value);
+@@ -56 +58 @@
+-        return formatCity(value, data?.country);
++        return formatCity(value, data?.country, data?.region);
+@@ -58,0 +61,2 @@
 +      case 'event':
 +        return getChineseEventName(value);
-       default:
-         return typeof value === 'string' ? value : undefined;
-     }
 --- a/src/components/hooks/useLanguageNames.ts
 +++ b/src/components/hooks/useLanguageNames.ts
-@@ -1,32 +1,7 @@
+@@ -1,3 +1 @@
 -import { useEffect, useState } from 'react';
 -import { httpGet } from '@/lib/fetch';
 -import enUS from '../../../public/intl/language/en-US.json';
 +import zhCN from '../../../public/intl/language/zh-CN.json';
- 
+@@ -5,3 +3 @@
 -const languageNames = {
 -  'en-US': enUS,
 -};
 +const languageNames: Record<string, string> = zhCN;
- 
+@@ -9,23 +5,2 @@
 -export function useLanguageNames(locale) {
 -  const [list, setList] = useState(languageNames[locale] || enUS);
 -
@@ -1201,10 +1046,9 @@
 -  return { languageNames: list };
 +export function useLanguageNames(_locale: string) {
 +  return { languageNames };
- }
 --- a/src/components/hooks/useLocale.ts
 +++ b/src/components/hooks/useLocale.ts
-@@ -1,63 +1,23 @@
+@@ -1,8 +1,2 @@
 -import { useEffect } from 'react';
 -import { LOCALE_CONFIG } from '@/lib/constants';
 -import { httpGet } from '@/lib/fetch';
@@ -1215,7 +1059,7 @@
 -import { useForceUpdate } from './useForceUpdate';
 +import { getDateLocale } from '@/lib/lang';
 +import zhCN from '../../../public/intl/messages/zh-CN.json';
- 
+@@ -10,5 +4,12 @@
 -const messages = {
 -  'en-US': enUS,
 -};
@@ -1233,8 +1077,7 @@
 +  'create-api-key': createApiKeyLabel,
 +} } };
 +const dateLocale = getDateLocale(locale);
- 
- export function useLocale() {
+@@ -17,9 +18,2 @@
 -  const locale = useApp(selector);
 -  const forceUpdate = useForceUpdate();
 -  const dir = getTextDirection(locale);
@@ -1246,8 +1089,7 @@
 -    messages[locale] = data;
 +  async function saveLocale(_value: string) {
 +    // Preserve the native preferences API; this workspace has one language.
-   }
- 
+@@ -28,35 +22 @@
 -  async function saveLocale(value: string) {
 -    if (!messages[value]) {
 -      await loadMessages(value);
@@ -1284,25 +1126,18 @@
 -
 -  return { locale, saveLocale, messages, dir, dateLocale };
 +  return { locale, saveLocale, messages, dir: 'ltr', dateLocale };
- }
 --- a/src/components/hooks/useMessages.ts
 +++ b/src/components/hooks/useMessages.ts
-@@ -18,7 +18,7 @@
- 
-     const code = (error as ApiError)?.code;
- 
+@@ -21 +21 @@
 -    return code ? getMessage(code) : error?.message || 'Unknown error';
 +    return code ? getMessage(code) : error?.message || '未知错误';
-   };
- 
-   return { t, messages, labels, getMessage, getErrorMessage };
 --- a/src/components/hooks/useRegionNames.ts
 +++ b/src/components/hooks/useRegionNames.ts
-@@ -1,22 +1,22 @@
+@@ -0,0 +1 @@
 +import { getChineseRegionName } from '@/lib/artvenn-geography';
- import regions from '../../../public/iso-3166-2.json';
+@@ -2 +2,0 @@
 -import { useCountryNames } from './useCountryNames';
- 
+@@ -4,2 +4,7 @@
 -export function useRegionNames(locale: string) {
 -  const { countryNames } = useCountryNames(locale);
 +// Search and filter keys stay intact; only the displayed names are translated.
@@ -1312,9 +1147,9 @@
 +    getChineseRegionName(key) || '暂无中文名称',
 +  ]),
 +);
- 
+@@ -6,0 +12 @@
 +export function useRegionNames(_locale: string) {
-   const getRegionName = (regionCode: string, countryCode?: string) => {
+@@ -8,11 +14,5 @@
 -    if (!countryCode) {
 -      return regions[regionCode];
 -    }
@@ -1331,260 +1166,1662 @@
 +      ? regionCode
 +      : `${countryCode}-${regionCode}`;
 +    return getChineseRegionName(region) || '暂无中文名称';
-   };
- 
+@@ -21 +21 @@
 -  return { regionNames: regions, getRegionName };
 +  return { regionNames, getRegionName };
- }
+--- a/src/components/input/DownloadButton.tsx
++++ b/src/components/input/DownloadButton.tsx
+@@ -8,0 +9,2 @@
++  'aria-label': ariaLabel,
++  title,
+@@ -12,0 +15,2 @@
++  'aria-label'?: string;
++  title?: string;
+@@ -22 +26,7 @@
+-      <Button variant="quiet" onClick={handleClick} isDisabled={!data || data.length === 0}>
++      <Button
++        variant="quiet"
++        onClick={handleClick}
++        isDisabled={!data || data.length === 0}
++        aria-label={ariaLabel}
++        title={title}
++      >
 --- a/src/components/input/LookupField.tsx
 +++ b/src/components/input/LookupField.tsx
-@@ -55,7 +55,7 @@
- 
-   return (
-     <ComboBox
+@@ -58 +58 @@
 -      aria-label="LookupField"
 +      aria-label="查找"
-       {...props}
-       items={options}
-       inputValue={value}
-@@ -66,7 +66,7 @@
-       }}
-       renderEmptyState={() =>
-         isLoading ? (
+@@ -69 +69 @@
 -          <Loading placement="center" icon="dots" />
 +          <Loading aria-label="加载中" placement="center" icon="dots" />
-         ) : (
-           <Empty message={t(messages.noResultsFound)} />
-         )
 --- a/src/components/input/MenuButton.tsx
 +++ b/src/components/input/MenuButton.tsx
-@@ -30,7 +30,7 @@
-         </Icon>
-       </Button>
-       <Popover side="bottom" align="start">
+@@ -33 +33 @@
 -        <Menu aria-label="menu" style={{ minWidth: '140px' }}>
 +        <Menu aria-label="菜单" style={{ minWidth: '140px' }}>
-           {Children.map(children, child => {
-             if (!isValidElement(child)) {
-               return child;
 --- a/src/components/input/TeamsButton.tsx
 +++ b/src/components/input/TeamsButton.tsx
-@@ -87,7 +87,7 @@
-           <MenuSeparator />
-           <MenuItem id="manage-teams" onAction={() => handleNavigate(getUrl('/settings/teams'))}>
-             <Row alignItems="center" justifyContent="space-between" gap width="100%">
+@@ -90 +90 @@
 -              <Text align="center">Manage teams</Text>
 +              <Text align="center">管理团队</Text>
-               <Icon>
-                 <ArrowRight />
-               </Icon>
 --- a/src/components/input/UserButton.tsx
 +++ b/src/components/input/UserButton.tsx
-@@ -72,7 +72,7 @@
-     onClose?.();
-   };
- 
+@@ -75 +75 @@
 -  const languageItems = Object.keys(languages).map(key => ({
 +  const languageItems = Object.keys(languages).filter(key => key === 'zh-CN').map(key => ({
-     value: key,
-     label: languages[key].label,
-   }));
-@@ -202,13 +202,13 @@
-                     <Icon>
-                       <Sun />
-                     </Icon>
+@@ -205 +205 @@
 -                    <Text weight={theme === 'light' ? 'bold' : undefined}>Light</Text>
 +                    <Text weight={theme === 'light' ? 'bold' : undefined}>浅色</Text>
-                   </MenuItem>
-                   <MenuItem id="dark" onAction={() => handleSelectTheme('dark')}>
-                     <Icon>
-                       <Moon />
-                     </Icon>
+@@ -211 +211 @@
 -                    <Text weight={theme === 'dark' ? 'bold' : undefined}>Dark</Text>
 +                    <Text weight={theme === 'dark' ? 'bold' : undefined}>深色</Text>
-                   </MenuItem>
-                 </Menu>
-               </Popover>
 --- a/src/components/input/WebsiteValueComboBox.tsx
 +++ b/src/components/input/WebsiteValueComboBox.tsx
-@@ -4,7 +4,7 @@
- import { Empty } from '@/components/common/Empty';
- import { useMessages, useWebsiteValuesQuery } from '@/components/hooks';
- 
+@@ -7 +7 @@
 -const DEFAULT_PLACEHOLDER = 'Select an item';
 +const DEFAULT_PLACEHOLDER = '请选择项目';
- 
- export interface WebsiteValueComboBoxProps
-   extends Omit<
-@@ -80,7 +80,7 @@
-         }}
-         renderEmptyState={() =>
-           primaryQuery.isLoading || additionalQuery.isLoading ? (
+@@ -83 +83 @@
 -            <Loading placement="center" icon="dots" />
 +            <Loading aria-label="加载中" placement="center" icon="dots" />
-           ) : (
-             <Empty message={t(messages.noResultsFound)} />
-           )
 --- a/src/components/metrics/DatePickerForm.tsx
 +++ b/src/components/metrics/DatePickerForm.tsx
-@@ -1,7 +1,7 @@
- import { Button, Calendar, Column, Row, ToggleGroup, ToggleGroupItem } from '@umami/react-zen';
- import { endOfDay, isAfter, isBefore, isSameDay, startOfDay } from 'date-fns';
- import { useState } from 'react';
+@@ -4 +4 @@
 -import { useMessages } from '@/components/hooks';
 +import { useLocale, useMessages } from '@/components/hooks';
- 
- const FILTER_DAY = 'filter-day';
- const FILTER_RANGE = 'filter-range';
-@@ -21,6 +21,7 @@
-   const [startDate, setStartDate] = useState(defaultStartDate || new Date());
-   const [endDate, setEndDate] = useState(defaultEndDate || new Date());
-   const { t, labels } = useMessages();
+@@ -23,0 +24 @@
 +  const { dateLocale } = useLocale();
- 
-   const disabled = selected.includes(FILTER_DAY)
-     ? isAfter(minDate, date) && isBefore(maxDate, date)
-@@ -44,17 +45,19 @@
-       </Row>
-       <Column>
-         {selected.includes(FILTER_DAY) && (
+@@ -47 +48 @@
 -          <Calendar value={date} minValue={minDate} maxValue={maxDate} onChange={setDate} />
 +          <Calendar locale={dateLocale} value={date} minValue={minDate} maxValue={maxDate} onChange={setDate} />
-         )}
-         {selected.includes(FILTER_RANGE) && (
-           <Row gap wrap="wrap" style={{ margin: '0 auto' }}>
-             <Calendar
+@@ -51,0 +53 @@
 +              locale={dateLocale}
-               value={startDate}
-               minValue={minDate}
-               maxValue={endDate}
-               onChange={setStartDate}
-             />
-             <Calendar
+@@ -57,0 +60 @@
 +              locale={dateLocale}
-               value={endDate}
-               minValue={startDate}
-               maxValue={maxDate}
 --- a/src/components/metrics/Legend.tsx
 +++ b/src/components/metrics/Legend.tsx
-@@ -1,3 +1,4 @@
+@@ -0,0 +1 @@
 +import { getChineseEventName } from '@/lib/artvenn-labels';
- import { Row, StatusLight, Text } from '@umami/react-zen';
- import type { LegendItem } from 'chart.js/auto';
- import { colord } from 'colord';
-@@ -28,7 +29,7 @@
-                 truncate={true}
-                 style={{ maxWidth: '300px' }}
-               >
+@@ -31 +32 @@
 -                {text}
 +                {getChineseEventName(text)}
-               </Text>
-             </StatusLight>
-           </Row>
+--- /dev/null
++++ b/src/components/metrics/MetricLabel.test.tsx
+@@ -0,0 +1,105 @@
++import { cleanup, fireEvent, render, screen } from '@testing-library/react';
++import type { ReactNode } from 'react';
++import { afterEach, beforeEach, expect, test, vi } from 'vitest';
++
++const state = vi.hoisted(() => ({
++  query: {} as Record<string, string>,
++  selected: null as URL | null,
++}));
++vi.mock('@umami/react-zen', () => {
++  const Div = ({ children }: { children: ReactNode }) => <div>{children}</div>;
++  return { Row: Div, Text: Div, Icon: Div };
++});
++vi.mock('@/components/hooks', () => ({
++  useFormat: () => ({ formatCity: (city: string) => city }),
++  useMessages: () => ({ t: (value: string) => value, labels: { unknown: '未知' } }),
++  useNavigation: () => ({
++    query: state.query,
++    updateParams: (params: Record<string, string | undefined>) => {
++      const query = { ...state.query, ...params };
++      const url = new URL('https://synthetic.example/boards/synthetic');
++      for (const [key, value] of Object.entries(query)) {
++        if (value !== undefined) url.searchParams.set(key, value);
++      }
++      return url.toString();
++    },
++  }),
++}));
++vi.mock('@/components/common/Link', () => ({
++  default: ({ href, children }: { href: string; children: ReactNode }) => (
++    <a
++      href={href}
++      onClick={event => {
++        event.preventDefault();
++        state.selected = new URL(href);
++      }}
++    >
++      {children}
++    </a>
++  ),
++}));
++vi.mock('@/components/common/Favicon', () => ({ Favicon: () => null }));
++vi.mock('@/components/common/TypeIcon', () => ({ TypeIcon: () => null }));
++vi.mock('@/components/icons', () => ({ ExternalLink: () => null }));
++
++import { MetricLabel } from './MetricLabel';
++
++beforeEach(() => {
++  state.query = { startAt: '1000', endAt: '9000', path: 'eq./synthetic', region: 'eq.CN-BJ' };
++  state.selected = null;
++});
++afterEach(cleanup);
++
++test('a native city click carries the row country and preserves the range and province scope', () => {
++  state.query.country1 = 'eq.US';
++  state.query.city1 = 'eq.OldCity';
++  render(<MetricLabel type="city" data={{ label: 'Beijing', country: 'CN', region: 'CN-BJ' }} />);
++  fireEvent.click(screen.getByRole('link', { name: 'Beijing' }));
++  const params = state.selected?.searchParams;
++  if (!params) throw new Error('CITY_LINK_NOT_SELECTED');
++  expect(Object.fromEntries(params)).toEqual({
++    startAt: '1000',
++    endAt: '9000',
++    path: 'eq./synthetic',
++    region: 'eq.CN-BJ',
++    country: 'eq.CN',
++    city: 'eq.Beijing',
++  });
++  const synthetic = [
++    { country: 'CN', region: 'CN-BJ', city: 'Beijing' },
++    { country: 'US', region: 'US-WA', city: 'Beijing' },
++  ];
++  const selected = synthetic.filter(row =>
++    ['country', 'region', 'city'].every(key => row[key] === params.get(key)?.slice(3)),
++  );
++  expect(selected).toEqual([synthetic[0]]);
++});
++
++test.each([
++  ['TW', 'CN-TW'],
++  ['HK', 'CN-HK'],
++  ['MO', 'CN-MO'],
++])('a raw %s city click uses its compatible province display context %s', (country, region) => {
++  render(<MetricLabel type="city" data={{ label: 'SyntheticCity', country }} />);
++  fireEvent.click(screen.getByRole('link', { name: 'SyntheticCity' }));
++  expect(state.selected?.searchParams.get('country')).toBe('eq.CN');
++  expect(state.selected?.searchParams.get('region')).toBe(`eq.${region}`);
++  expect(state.selected?.searchParams.get('path')).toBe('eq./synthetic');
++});
++
++test('a foreign namesake retains its own source country', () => {
++  state.query = { startAt: '1000', path: 'eq./synthetic' };
++  render(<MetricLabel type="city" data={{ label: 'Beijing', country: 'US' }} />);
++  fireEvent.click(screen.getByRole('link', { name: 'Beijing' }));
++  expect(state.selected?.searchParams.get('country')).toBe('eq.US');
++  expect(state.selected?.searchParams.get('region')).toBeNull();
++});
++
++test('a China-default Board city click without any global country or province excludes the foreign namesake', () => {
++  state.query = { startAt: '1000', endAt: '9000', path: 'eq./synthetic' };
++  render(<MetricLabel type="city" data={{ label: 'Beijing', country: 'CN', region: 'CN-BJ' }} />);
++  fireEvent.click(screen.getByRole('link', { name: 'Beijing' }));
++  expect(state.selected?.searchParams.get('country')).toBe('eq.CN');
++  expect(state.selected?.searchParams.get('city')).toBe('eq.Beijing');
++  expect(state.selected?.searchParams.get('region')).toBeNull();
++});
 --- a/src/components/metrics/MetricLabel.tsx
 +++ b/src/components/metrics/MetricLabel.tsx
-@@ -1,3 +1,4 @@
+@@ -0,0 +1,2 @@
 +import { getChineseEventName } from '@/lib/artvenn-labels';
- import { Row, Text } from '@umami/react-zen';
- import { Favicon } from '@/components/common/Favicon';
- import { FilterLink } from '@/components/common/FilterLink';
-@@ -100,7 +101,7 @@
-       icon={
-         country && (
-           <img
++import { cityFilterParameters } from '@/lib/artvenn-china-map';
+@@ -9,0 +12 @@
++  useNavigation,
+@@ -93 +96,2 @@
+-  const { label, country } = data;
++  const { query } = useNavigation();
++  const { label, country, region } = data;
+@@ -98,2 +102,3 @@
+-      value={label}
+-      label={formatCity(label, country)}
++      filterParams={cityFilterParameters(country, query)}
++      value={label}
++      label={formatCity(label, country, region)}
+@@ -103 +108 @@
 -            src={`${process.env.basePath || ''}/images/country/${country?.toLowerCase() || 'xx'}.png`}
 +            src={`${process.env.basePath || ''}/images/country/${(country === 'TW' ? 'CN' : country)?.toLowerCase() || 'xx'}.png`}
-             alt={country}
-           />
-         )
-@@ -224,5 +225,5 @@
- function DefaultMetricLabel({ type, data }: MetricLabelProps) {
-   const { label } = data;
- 
+@@ -152,6 +157,8 @@
+-      externalUrl={domain ? `${domain?.startsWith('http') ? domain : `https://${domain}`}${label}` : null}
+-    />
+-  );
+-}
+-
+-function FullPathMetricLabel({ data }: Pick<MetricLabelProps, "data">) {
++      externalUrl={
++        domain ? `${domain?.startsWith('http') ? domain : `https://${domain}`}${label}` : null
++      }
++    />
++  );
++}
++
++function FullPathMetricLabel({ data }: Pick<MetricLabelProps, 'data'>) {
+@@ -227,2 +234,8 @@
 -  return <FilterLink type={type} value={label} />;
 -}
-+  return <FilterLink type={type} value={label} label={type === 'event' ? getChineseEventName(label) : undefined} />;
++  return (
++    <FilterLink
++      type={type}
++      value={label}
++      label={type === 'event' ? getChineseEventName(label) : undefined}
++    />
++  );
 +}
+--- /dev/null
++++ b/src/components/metrics/MetricsExpandedTable.accessibility.test.tsx
+@@ -0,0 +1,55 @@
++import { cleanup, fireEvent, render, screen } from '@testing-library/react';
++import { afterEach, expect, test, vi } from 'vitest';
++
++// Keep real react-zen Button/SearchField/Tooltip and the real DownloadButton.
++vi.mock('@/components/hooks', () => ({
++  useMessages: () => ({
++    t: (value: string) => value,
++    labels: {
++      download: '下载',
++      visitors: '访客',
++      visits: '访问次数',
++      views: '浏览量',
++      bounceRate: '跳出率',
++      visitDuration: '访问时长',
++    },
++  }),
++  useNavigation: () => ({ query: {} }),
++  useDateParameters: () => ({ startAt: 1000, endAt: 9000 }),
++  useWebsiteExpandedMetricsQuery: () => ({ data: [], isLoading: false, isFetching: false }),
++}));
++vi.mock('@/components/common/LoadingPanel', () => ({
++  LoadingPanel: ({ children }: any) => children,
++}));
++vi.mock('@/components/common/OverlayScrollArea', () => ({
++  OverlayScrollArea: ({ children }: any) => children,
++}));
++vi.mock('@/components/metrics/MetricLabel', () => ({
++  MetricLabel: ({ data }: any) => <span>{data.label}</span>,
++}));
++vi.mock('@/components/icons', () => ({
++  X: () => <svg aria-hidden="true" />,
++  Download: () => <svg aria-hidden="true" />,
++}));
++
++import { MetricsExpandedTable } from './MetricsExpandedTable';
++afterEach(cleanup);
++
++test('expanded toolbar close and download have real accessible names and visible hover titles', () => {
++  const onClose = vi.fn();
++  render(<MetricsExpandedTable websiteId="synthetic-website" type="city" onClose={onClose} />);
++  const close = screen.getByRole('button', { name: '关闭' });
++  expect(close).toHaveAttribute('title', '关闭');
++  fireEvent.click(close);
++  expect(onClose).toHaveBeenCalledTimes(1);
++  const download = screen.getByRole('button', { name: '下载' });
++  expect(download).toHaveAttribute('title', '下载');
++  expect(download).toBeDisabled();
++  expect(screen.getByRole('searchbox', { name: '搜索' })).toBeDefined();
++});
++
++test('toolbar visibility flags and absent close handler retain their behavior', () => {
++  render(<MetricsExpandedTable websiteId="synthetic-website" type="city" allowDownload={false} />);
++  expect(screen.queryByRole('button', { name: '关闭' })).toBeNull();
++  expect(screen.queryByRole('button', { name: '下载' })).toBeNull();
++});
 --- a/src/components/metrics/MetricsExpandedTable.tsx
 +++ b/src/components/metrics/MetricsExpandedTable.tsx
-@@ -51,6 +51,8 @@
-       <Row alignItems="center" paddingBottom="3">
-         {allowSearch && (
-           <SearchField
+@@ -3 +3,6 @@
+-import { useMessages, useWebsiteExpandedMetricsQuery } from '@/components/hooks';
++import {
++  useDateParameters,
++  useMessages,
++  useNavigation,
++  useWebsiteExpandedMetricsQuery,
++} from '@/components/hooks';
+@@ -9,0 +15 @@
++import { GEOGRAPHY_PAGE_SIZE } from '@/lib/artvenn-china-map';
+@@ -37,0 +44,6 @@
++  const { query } = useNavigation();
++  const { startAt, endAt } = useDateParameters();
++  const geographic = type === 'city' || type === 'region';
++  const scope = JSON.stringify({ websiteId, type, params, query, startAt, endAt, search });
++  const [page, setPage] = useState({ scope, offset: 0 });
++  const offset = page.scope === scope ? page.offset : 0;
+@@ -44,0 +57 @@
++    ...(geographic ? { limit: GEOGRAPHY_PAGE_SIZE, offset } : {}),
+@@ -53,0 +67,2 @@
 +            placeholder="搜索"
 +            aria-label="搜索"
-             value={search}
-             onSearch={setSearch}
-             delay={300}
+@@ -62 +77,3 @@
+-          {allowDownload && <DownloadButton filename={type} data={data} />}
++          {allowDownload && (
++            <DownloadButton filename={type} data={data} aria-label="下载" title="下载" />
++          )}
+@@ -64 +81 @@
+-            <Button onPress={onClose} variant="quiet">
++            <Button onPress={onClose} variant="quiet" aria-label="关闭" title="关闭">
+@@ -77,0 +95,2 @@
++        minHeight="0"
++        flexGrow={1}
+@@ -139,0 +159,21 @@
++      {geographic && data && (
++        <Row justifyContent="space-between" alignItems="center" gap paddingTop="3">
++          <Button
++            variant="quiet"
++            isDisabled={isFetching || offset === 0}
++            onPress={() => setPage({ scope, offset: Math.max(0, offset - GEOGRAPHY_PAGE_SIZE) })}
++          >
++            上一页
++          </Button>
++          <span>
++            第 {Math.floor(offset / GEOGRAPHY_PAGE_SIZE) + 1} 页 · 每页最多 {GEOGRAPHY_PAGE_SIZE} 项
++          </span>
++          <Button
++            variant="quiet"
++            isDisabled={isFetching || data.length < GEOGRAPHY_PAGE_SIZE}
++            onPress={() => setPage({ scope, offset: offset + GEOGRAPHY_PAGE_SIZE })}
++          >
++            下一页
++          </Button>
++        </Row>
++      )}
+--- a/src/components/metrics/MetricsTable.tsx
++++ b/src/components/metrics/MetricsTable.tsx
+@@ -1 +1 @@
+-import { Grid, Row } from '@umami/react-zen';
++import { Column, Grid, Row } from '@umami/react-zen';
+@@ -4,0 +5,2 @@
++import { DialogButton } from '@/components/input/DialogButton';
++import { MetricsExpandedTable } from './MetricsExpandedTable';
+@@ -17,0 +20 @@
++  defaultCountry?: string;
+@@ -28,0 +32 @@
++  defaultCountry,
+@@ -34 +38,5 @@
+-  const { updateParams } = useNavigation();
++  const { updateParams, boardId, query } = useNavigation();
++  const requestParams = {
++    ...(defaultCountry && !query.country ? { country: `eq.${defaultCountry}` } : {}),
++    ...params,
++  };
+@@ -39 +47 @@
+-    ...params,
++    ...requestParams,
+@@ -85,3 +93,26 @@
+-            <LinkButton href={updateParams({ view: type })} variant="quiet">
+-              <IconLabel icon={<Maximize />}>{t(labels.more)}</IconLabel>
+-            </LinkButton>
++            {boardId ? (
++              <DialogButton
++                label={`展开与搜索${t(labels[type])}`}
++                title={t(labels[type])}
++                icon={<Maximize />}
++                variant="quiet"
++                width="min(1100px, calc(100vw - 32px))"
++                height="calc(100dvh - 80px)"
++              >
++                {({ close }) => (
++                  <Column height="100%" minHeight="0" overflow="hidden">
++                    <MetricsExpandedTable
++                      websiteId={websiteId}
++                      type={type}
++                      title={t(labels[type])}
++                      params={requestParams}
++                      onClose={close}
++                    />
++                  </Column>
++                )}
++              </DialogButton>
++            ) : (
++              <LinkButton href={updateParams({ view: type })} variant="quiet">
++                <IconLabel icon={<Maximize />}>{t(labels.more)}</IconLabel>
++              </LinkButton>
++            )}
+--- /dev/null
++++ b/src/components/metrics/WorldMap.geometry.test.tsx
+@@ -0,0 +1,115 @@
++import { readFile } from 'node:fs/promises';
++import { createRequire } from 'node:module';
++import { cleanup, render, waitFor } from '@testing-library/react';
++import type { ReactNode } from 'react';
++import { afterEach, expect, test, vi } from 'vitest';
++import { CHINA_MAP, prepareChinaMapGeometry, provinceForGeometry } from '@/lib/artvenn-china-map';
++
++// The map renderer and its D3 projection are real in this regression.
++vi.mock('@umami/react-zen', () => {
++  const Div = ({ children }: { children: ReactNode }) => <div>{children}</div>;
++  return {
++    Column: Div,
++    Row: Div,
++    Box: Div,
++    Text: Div,
++    FloatingTooltip: Div,
++    Button: ({ children, onPress }: any) => <button onClick={onPress}>{children}</button>,
++    useTheme: () => ({ theme: 'light' }),
++  };
++});
++vi.mock('@/components/common/LoadingPanel', () => ({
++  LoadingPanel: ({ children }: any) => children,
++}));
++vi.mock('@/components/common/Link', () => ({
++  default: ({ href, children }: any) => <a href={href}>{children}</a>,
++}));
++vi.mock('@/components/hooks', () => ({
++  useLocale: () => ({ locale: 'zh-CN' }),
++  useCountryNames: () => ({ countryNames: {} }),
++  useNavigation: () => ({
++    query: {},
++    router: { replace: vi.fn() },
++    updateParams: () => '/synthetic',
++  }),
++  useWebsiteMetricsQuery: (_id: string, params: Record<string, any>) => ({
++    data: params.type === 'region' ? [{ x: 'CN-BJ', y: 9 }] : [],
++    isLoading: false,
++    isFetching: false,
++  }),
++}));
++vi.mock('@/lib/colors', () => ({
++  getThemeColors: () => ({
++    colors: {
++      map: {
++        fillColor: '#eee',
++        baseColor: '#225588',
++        strokeColor: '#333',
++        hoverColor: '#447799',
++      },
++    },
++  }),
++}));
++import { WorldMap } from './WorldMap';
++
++const require = createRequire(import.meta.url);
++const { geoPath, geoMercator } = createRequire(require.resolve('react-simple-maps'))('d3-geo');
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
++
++test('the real map produces bounded province-shaped SVG fills, never the world-sized complement rectangle', async () => {
++  const original = JSON.parse(await readFile('public/maps/china-provinces.json', 'utf8'));
++  const before = JSON.stringify(original);
++  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => original }));
++  const { container } = render(<WorldMap websiteId="synthetic-website" />);
++  await waitFor(() => expect(container.querySelectorAll('path[data-province]')).toHaveLength(34));
++  const prepared = prepareChinaMapGeometry(original);
++  const path = geoPath(
++    geoMercator()
++      .translate([CHINA_MAP.width / 2, CHINA_MAP.height / 2])
++      .center(CHINA_MAP.center)
++      .scale(CHINA_MAP.scale),
++  );
++  let totalArea = 0;
++  for (const element of container.querySelectorAll('path[data-province]')) {
++    const feature = prepared.features.find(
++      (item: any) =>
++        provinceForGeometry(item.properties.adcode)?.[1] === element.getAttribute('data-province'),
++    );
++    const d = element.getAttribute('d') ?? '';
++    expect(d).toBe(path(feature));
++    // Mercator emits M/L/Z polygons. Check the actual SVG coordinates and signed
++    // fill area, rather than merely counting paths or distinct fill attributes.
++    expect(d).not.toMatch(/[ACHQSTV]/u);
++    let area = 0;
++    for (const ring of d.split('Z').filter(Boolean)) {
++      const values = (ring.match(/[-+]?(?:\d*\.\d+|\d+)(?:e[-+]?\d+)?/giu) ?? []).map(Number);
++      const points = Array.from({ length: values.length / 2 }, (_, i) => [
++        values[i * 2],
++        values[i * 2 + 1],
++      ]);
++      for (
++        let current = 0, previous = points.length - 1;
++        current < points.length;
++        previous = current++
++      ) {
++        const [x, y] = points[current];
++        expect(x).toBeGreaterThanOrEqual(29.99);
++        expect(x).toBeLessThanOrEqual(CHINA_MAP.width - 29.99);
++        expect(y).toBeGreaterThanOrEqual(29.99);
++        expect(y).toBeLessThanOrEqual(CHINA_MAP.height - 29.99);
++        area += points[previous][0] * y - x * points[previous][1];
++      }
++    }
++    area = Math.abs(area / 2);
++    expect(area).toBeCloseTo(path.area(feature), 6);
++    expect(area).toBeGreaterThan(0);
++    expect(area).toBeLessThan(CHINA_MAP.width * CHINA_MAP.height * 0.1);
++    totalArea += area;
++  }
++  expect(totalArea).toBeGreaterThan(50000);
++  expect(totalArea).toBeLessThan(CHINA_MAP.width * CHINA_MAP.height * 0.5);
++  expect(JSON.stringify(original)).toBe(before);
++});
+--- /dev/null
++++ b/src/components/metrics/WorldMap.test.tsx
+@@ -0,0 +1,156 @@
++import { cleanup, fireEvent, render, screen } from '@testing-library/react';
++import type { ReactNode } from 'react';
++import { afterEach, beforeEach, expect, test, vi } from 'vitest';
++
++const runtime = vi.hoisted(() => ({
++  query: {} as Record<string, string>,
++  replace: vi.fn(),
++  countries: Array.from({ length: 12 }, (_, index) => ({ x: `X${index}`, y: index + 3 })),
++}));
++vi.mock('@umami/react-zen', () => {
++  const Div = ({ children }: { children: ReactNode }) => <div>{children}</div>;
++  return {
++    Column: Div,
++    Row: Div,
++    Box: Div,
++    Text: Div,
++    FloatingTooltip: Div,
++    Button: ({ children, onPress }: any) => <button onClick={onPress}>{children}</button>,
++    useTheme: () => ({ theme: 'light' }),
++  };
++});
++vi.mock('react-simple-maps', () => ({
++  ComposableMap: ({ children }: any) => <div>{children}</div>,
++  Geographies: ({ geography, children }: any) =>
++    children({
++      geographies:
++        geography?.features.map((feature: any, index: number) => ({ ...feature, rsmKey: index })) ??
++        [],
++    }),
++  Geography: ({
++    children,
++    geography: _geometry,
++    fill: _fill,
++    stroke: _stroke,
++    strokeWidth: _width,
++    style: _style,
++    ...props
++  }: any) => <div {...props}>{children}</div>,
++}));
++vi.mock('@/components/common/LoadingPanel', () => ({
++  LoadingPanel: ({ children }: any) => children,
++}));
++vi.mock('@/components/common/Link', () => ({
++  default: ({ href, children }: any) => <a href={href}>{children}</a>,
++}));
++vi.mock('@/components/hooks', () => ({
++  useLocale: () => ({ locale: 'zh-CN' }),
++  useCountryNames: () => ({ countryNames: {} }),
++  useNavigation: () => ({
++    query: runtime.query,
++    router: { replace: runtime.replace },
++    updateParams: (params: Record<string, any>) => JSON.stringify({ ...runtime.query, ...params }),
++  }),
++  useWebsiteMetricsQuery: (websiteId: string, params: Record<string, any>) => ({
++    data: websiteId
++      ? params.type === 'region'
++        ? [{ x: 'CN-BJ', y: 9 }]
++        : runtime.countries
++      : undefined,
++    isLoading: false,
++    isFetching: false,
++  }),
++}));
++vi.mock('@/lib/colors', () => ({
++  getThemeColors: () => ({
++    colors: {
++      map: {
++        fillColor: '#eee',
++        baseColor: '#225588',
++        strokeColor: '#333',
++        hoverColor: '#447799',
++      },
++    },
++  }),
++}));
++
++import { WorldMap } from './WorldMap';
++
++beforeEach(() => {
++  runtime.replace.mockReset();
++  runtime.query = {};
++  vi.stubGlobal(
++    'fetch',
++    vi.fn().mockResolvedValue({
++      ok: true,
++      json: async () => ({
++        features: [
++          {
++            properties: { adcode: 110000 },
++            geometry: {
++              type: 'Polygon',
++              coordinates: [
++                [
++                  [115, 39],
++                  [116, 39],
++                  [116, 40],
++                  [115, 39],
++                ],
++              ],
++            },
++          },
++          {
++            properties: { adcode: 710000 },
++            geometry: {
++              type: 'Polygon',
++              coordinates: [
++                [
++                  [120, 23],
++                  [121, 23],
++                  [121, 24],
++                  [120, 23],
++                ],
++              ],
++            },
++          },
++        ],
++      }),
++    }),
++  );
++});
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
++
++test('realtime geography is static when no website query scope exists', async () => {
++  runtime.query = { region: 'eq.CN-BJ', country: 'eq.US' };
++  render(<WorldMap data={runtime.countries} />);
++  const province = await screen.findByRole('img', { name: /北京.*实时概览未提供省份统计/ });
++  const selector = screen.getByRole('combobox', { name: '选择省份' });
++  expect(selector).toBeDisabled();
++  expect(selector).toHaveValue('');
++  expect(screen.queryByRole('button', { name: '取消省份筛选' })).toBeNull();
++  fireEvent.click(province);
++  fireEvent.keyDown(province, { key: 'Enter' });
++  fireEvent.change(selector, { target: { value: 'CN-TW' } });
++  expect(runtime.replace).not.toHaveBeenCalled();
++  expect(screen.queryByText(/点击省份查看城市/)).toBeNull();
++  expect(screen.getAllByRole('link')).toHaveLength(1);
++  expect(screen.getByRole('link', { name: '标准地图参考' })).toBeDefined();
++  expect(screen.getByText('其余 2 个国家与地区')).toBeDefined();
++});
++
++test('a website-backed Board retains province and country filtering', async () => {
++  runtime.query = { startAt: '1000', path: 'eq./synthetic', country: 'eq.US' };
++  render(<WorldMap websiteId="synthetic-website" />);
++  const province = await screen.findByRole('button', { name: /北京.*9.*去重访客/ });
++  expect(screen.getByRole('combobox', { name: '选择省份' })).not.toBeDisabled();
++  fireEvent.click(province);
++  expect(JSON.parse(runtime.replace.mock.calls[0][0])).toEqual({
++    startAt: '1000',
++    path: 'eq./synthetic',
++    region: 'eq.CN-BJ',
++  });
++  expect(screen.getAllByRole('link')).toHaveLength(13);
++});
+--- a/src/components/metrics/WorldMap.tsx
++++ b/src/components/metrics/WorldMap.tsx
+@@ -1 +1,10 @@
+-import { Box, Column, type ColumnProps, FloatingTooltip, Text, useTheme } from '@umami/react-zen';
++import {
++  Box,
++  Button,
++  Column,
++  type ColumnProps,
++  FloatingTooltip,
++  Row,
++  Text,
++  useTheme,
++} from '@umami/react-zen';
+@@ -3,2 +12,4 @@
+-import { useMemo, useState } from 'react';
+-import { ComposableMap, Geographies, Geography, ZoomableGroup } from 'react-simple-maps';
++import { useEffect, useId, useMemo, useState } from 'react';
++import { ComposableMap, Geographies, Geography } from 'react-simple-maps';
++import { LoadingPanel } from '@/components/common/LoadingPanel';
++import Link from '@/components/common/Link';
+@@ -8 +19 @@
+-  useMessages,
++  useNavigation,
+@@ -12,2 +22,0 @@
+-import { ISO_COUNTRIES, MAP_FILE } from '@/lib/constants';
+-import { percentFilter } from '@/lib/filters';
+@@ -14,0 +24,11 @@
++import {
++  clearGeographyFilters,
++  CHINA_MAP,
++  CHINA_PROVINCES,
++  chinaCountry,
++  chinaProvinceKey,
++  provinceForGeometry,
++  provinceMetrics,
++  prepareChinaMapGeometry,
++  type GeographyMetric,
++} from '@/lib/artvenn-china-map';
+@@ -15,0 +36 @@
++/** Keep the native Board registry key compatible while preferring China geography. */
+@@ -18 +39 @@
+-  data?: any[];
++  data?: GeographyMetric[];
+@@ -22 +43,21 @@
+-  const [tooltip, setTooltipPopup] = useState();
++  const [tooltip, setTooltip] = useState<string | null>(null);
++  const [focused, setFocused] = useState<string>('CN-BJ');
++  const [mapFocused, setMapFocused] = useState(false);
++  const [geometry, setGeometry] = useState<any>(null);
++  const [geometryError, setGeometryError] = useState(false);
++  useEffect(() => {
++    const controller = new AbortController();
++    void fetch(`${process.env.basePath || ''}${CHINA_MAP.path}`, { signal: controller.signal })
++      .then(response => {
++        if (!response.ok) throw new Error('MAP_UNAVAILABLE');
++        return response.json();
++      })
++      .then(value => {
++        if (!controller.signal.aborted) setGeometry(prepareChinaMapGeometry(value));
++      })
++      .catch(() => {
++        if (!controller.signal.aborted) setGeometryError(true);
++      });
++    return () => controller.abort();
++  }, []);
++  const instance = useId().replace(/:/g, '');
+@@ -26 +66,0 @@
+-  const { t, labels } = useMessages();
+@@ -28,4 +68,7 @@
+-  const visitorsLabel = t(labels.visitors).toLocaleLowerCase(locale);
+-  const unknownLabel = t(labels.unknown);
+-
+-  const { data: mapData } = useWebsiteMetricsQuery(websiteId, {
++  const { query, router, updateParams } = useNavigation();
++  const regionsQuery = useWebsiteMetricsQuery(websiteId, {
++    type: 'region',
++    limit: 100,
++    country: query.country || 'eq.CN',
++  });
++  const countriesQuery = useWebsiteMetricsQuery(websiteId, {
+@@ -32,0 +76,2 @@
++    limit: 500,
++    ...clearGeographyFilters(query),
+@@ -34,4 +79,3 @@
+-
+-  const metrics = useMemo(
+-    () => (data || mapData ? percentFilter((data || mapData) as any[]) : []),
+-    [data, mapData],
++  const counts = useMemo(
++    () => provinceMetrics(regionsQuery.data as GeographyMetric[]),
++    [regionsQuery.data],
+@@ -39,9 +83,24 @@
+-
+-  const getFillColor = (code: string) => {
+-    if (code === 'AQ') return;
+-    const country = metrics?.find(({ x }) => x === code);
+-
+-    if (!country) {
+-      return colors.map.fillColor;
+-    }
+-
++  const maximum = Math.max(0, ...counts.values());
++  const selected = websiteId ? chinaProvinceKey(query.region?.replace(/^eq\./, '')) : undefined;
++  const foreign = ((data ?? countriesQuery.data ?? []) as GeographyMetric[]).filter(
++    row =>
++      typeof row.x === 'string' && !chinaCountry(row.x) && Number.isFinite(row.y) && row.y >= 0,
++  );
++  const setProvince = (key?: string) => {
++    if (!websiteId) return;
++    router.replace(
++      updateParams({
++        ...clearGeographyFilters(query),
++        region: key && selected !== key ? `eq.${key}` : undefined,
++        city: undefined,
++        country: undefined,
++      }),
++    );
++  };
++  const description = (key: string, name: string) => {
++    const count = counts.get(key);
++    return `${name}：${!websiteId ? '实时概览未提供省份统计' : count === undefined ? '暂无已解析访问' : `${formatLongNumber(count)} 个去重访客`}`;
++  };
++  const fill = (key: string) => {
++    const count = counts.get(key);
++    if (!count || !maximum) return colors.map.fillColor;
+@@ -49 +108 @@
+-      [theme === 'light' ? 'lighten' : 'darken'](0.4 * (1.0 - country.z / 100))
++      [theme === 'light' ? 'lighten' : 'darken'](0.38 * (1 - count / maximum))
+@@ -52,13 +111,6 @@
+-
+-  const getOpacity = (code: string) => {
+-    return code === 'AQ' ? 0 : 1;
+-  };
+-
+-  const handleHover = (code: string) => {
+-    if (code === 'AQ') return;
+-    const country = metrics?.find(({ x }) => x === code);
+-    setTooltipPopup(
+-      `${countryNames[code] || unknownLabel}: ${formatLongNumber(
+-        country?.y || 0,
+-      )} ${visitorsLabel}` as any,
+-    );
++  const moveFocus = (key: string, step: number) => {
++    const index = CHINA_PROVINCES.findIndex(([, value]) => value === key);
++    const next =
++      CHINA_PROVINCES[(index + step + CHINA_PROVINCES.length) % CHINA_PROVINCES.length][1];
++    setFocused(next);
++    document.getElementById(`${instance}-${next}`)?.focus();
+@@ -68,13 +120,74 @@
+-    <Column
+-      {...props}
+-      data-tip=""
+-      data-for="world-map-tooltip"
+-      style={{ margin: 'auto 0', overflow: 'hidden' }}
+-    >
+-      <ComposableMap projection="geoMercator">
+-        <ZoomableGroup zoom={0.8} minZoom={0.7} center={[0, 40]}>
+-          <Geographies geography={`${process.env.basePath || ''}${MAP_FILE}`}>
+-            {({ geographies }) => {
+-              return geographies.map(geo => {
+-                const code = ISO_COUNTRIES[geo.id];
+-
++    <Column {...props} gap="3" style={{ minWidth: 0 }} data-china-geography>
++      <Row gap="3" alignItems="center" style={{ flexWrap: 'wrap' }}>
++        <label htmlFor={`${instance}-province`}>省份</label>
++        <select
++          id={`${instance}-province`}
++          aria-label="选择省份"
++          disabled={!websiteId}
++          value={selected ?? ''}
++          onChange={event => setProvince(event.currentTarget.value || undefined)}
++          style={{
++            font: 'inherit',
++            color: 'inherit',
++            background: 'transparent',
++            border: `1px solid ${colors.map.strokeColor}`,
++            borderRadius: 6,
++            padding: '8px 12px',
++            maxWidth: '100%',
++          }}
++        >
++          <option value="">
++            {Object.keys(query).some(key => /^region\d*$/.test(key)) && !selected
++              ? '当前地域筛选'
++              : '全部省份'}
++          </option>
++          {CHINA_PROVINCES.map(([, key, name]) => (
++            <option key={key} value={key}>
++              {name}
++            </option>
++          ))}
++        </select>
++        {selected && (
++          <Button variant="quiet" onPress={() => setProvince()}>
++            取消省份筛选
++          </Button>
++        )}
++      </Row>
++      {websiteId && (
++        <Text color="muted">点击省份查看城市；色深表示已解析访客量，缺失位置不填入地图。</Text>
++      )}
++      {!websiteId && <Text color="muted">实时概览仅提供国家汇总；省份统计请在省市看板查看。</Text>}
++      <LoadingPanel
++        data={{ regions: regionsQuery.data }}
++        isEmpty={false}
++        error={regionsQuery.error || (geometryError ? new Error('MAP_UNAVAILABLE') : undefined)}
++        isLoading={regionsQuery.isLoading || (!geometry && !geometryError)}
++        isFetching={regionsQuery.isFetching}
++        minHeight="360px"
++      >
++        <ComposableMap
++          width={CHINA_MAP.width}
++          height={CHINA_MAP.height}
++          projection="geoMercator"
++          projectionConfig={{ center: CHINA_MAP.center, scale: CHINA_MAP.scale }}
++          role="group"
++          aria-label="中国省级访问分布"
++          style={{ width: '100%', height: 'auto', maxHeight: 580 }}
++        >
++          <Geographies geography={geometry}>
++            {({ geographies }) =>
++              geographies.map(geo => {
++                const province = provinceForGeometry(geo.properties.adcode);
++                if (!province)
++                  return (
++                    <Geography
++                      key={geo.rsmKey}
++                      geography={geo}
++                      aria-hidden="true"
++                      tabIndex={-1}
++                      fill="none"
++                      stroke={colors.map.strokeColor}
++                    />
++                  );
++                const [, key, name] = province;
++                const text = description(key, name);
+@@ -83,0 +197 @@
++                    id={`${instance}-${key}`}
+@@ -85,3 +199,33 @@
+-                    fill={getFillColor(code)}
+-                    stroke={colors.map.strokeColor}
+-                    opacity={getOpacity(code)}
++                    data-province={key}
++                    role={websiteId ? 'button' : 'img'}
++                    aria-label={text}
++                    aria-pressed={websiteId ? selected === key : undefined}
++                    tabIndex={websiteId && focused === key ? 0 : -1}
++                    fill={fill(key)}
++                    stroke="currentColor"
++                    strokeWidth={selected === key || (mapFocused && focused === key) ? 2.4 : 0.6}
++                    onMouseOver={() => setTooltip(text)}
++                    onMouseOut={() => setTooltip(null)}
++                    onFocus={() => {
++                      setFocused(key);
++                      setMapFocused(true);
++                      setTooltip(text);
++                    }}
++                    onBlur={() => {
++                      setMapFocused(false);
++                      setTooltip(null);
++                    }}
++                    onClick={websiteId ? () => setProvince(key) : undefined}
++                    onKeyDown={event => {
++                      if (!websiteId) return;
++                      if (event.key === 'Enter' || event.key === ' ') {
++                        event.preventDefault();
++                        setProvince(key);
++                      } else if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
++                        event.preventDefault();
++                        moveFocus(key, 1);
++                      } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
++                        event.preventDefault();
++                        moveFocus(key, -1);
++                      }
++                    }}
+@@ -90 +234 @@
+-                      hover: { outline: 'none', fill: colors.map.hoverColor },
++                      hover: { fill: colors.map.hoverColor },
+@@ -93,3 +237,3 @@
+-                    onMouseOver={() => handleHover(code)}
+-                    onMouseOut={() => setTooltipPopup(null)}
+-                  />
++                  >
++                    <title>{text}</title>
++                  </Geography>
+@@ -97,2 +241,2 @@
+-              });
+-            }}
++              })
++            }
+@@ -100,2 +244,5 @@
+-        </ZoomableGroup>
+-      </ComposableMap>
++        </ComposableMap>
++        {websiteId && counts.size === 0 && (
++          <Text role="status">当前范围暂无可归属省份的访问；缺失位置不推测补齐。</Text>
++        )}
++      </LoadingPanel>
+@@ -104,5 +251 @@
+-          <Box
+-            style={{ backgroundColor: 'rgba(0,0,0,0.8)', color: 'white' }}
+-            padding
+-            borderRadius="md"
+-          >
++          <Box padding borderRadius="md" style={{ background: 'rgba(0,0,0,0.85)', color: 'white' }}>
+@@ -112,0 +256,90 @@
++      <Text style={{ fontSize: 12 }} color="muted">
++        边界：DataV.GeoAtlas / AMap，2021.5，仅供学习交流。
++        <a
++          href="https://www.mfa.gov.cn/ziliao_674904/zgdt/202607/t20260722_11989560.shtml"
++          target="_blank"
++          rel="noreferrer"
++        >
++          标准地图参考
++        </a>
++        。
++      </Text>
++      <Column gap="2" aria-label="境外国家与地区">
++        <Text weight="bold">境外国家与地区</Text>
++        <Text color="muted">
++          {websiteId
++            ? '同一日期与其他筛选；省市条件不限制此国家切换列表。'
++            : '实时国家汇总；此处仅展示，不设置地域筛选。'}
++        </Text>
++        <LoadingPanel
++          data={data ?? countriesQuery.data}
++          isEmpty={false}
++          error={data ? undefined : countriesQuery.error}
++          isLoading={!data && countriesQuery.isLoading}
++          isFetching={!data && countriesQuery.isFetching}
++        >
++          {foreign.length === 0 ? (
++            <Text color="muted">当前范围暂无境外国家与地区记录。</Text>
++          ) : (
++            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
++              <thead>
++                <tr>
++                  <th style={{ textAlign: 'left' }}>国家 / 地区</th>
++                  <th style={{ textAlign: 'right' }}>去重访客</th>
++                </tr>
++              </thead>
++              <tbody>
++                {foreign.slice(0, 10).map(row => (
++                  <tr key={row.x}>
++                    <td>
++                      {websiteId ? (
++                        <Link
++                          href={updateParams({
++                            ...clearGeographyFilters(query),
++                            country: `eq.${row.x}`,
++                          })}
++                          replace
++                        >
++                          {countryNames[row.x] || row.x}
++                        </Link>
++                      ) : (
++                        <span>{countryNames[row.x] || row.x}</span>
++                      )}
++                    </td>
++                    <td style={{ textAlign: 'right' }}>{formatLongNumber(row.y)}</td>
++                  </tr>
++                ))}
++              </tbody>
++            </table>
++          )}
++          {foreign.length > 10 && (
++            <details>
++              <summary>其余 {foreign.length - 10} 个国家与地区</summary>
++              <table style={{ width: '100%' }}>
++                <tbody>
++                  {foreign.slice(10).map(row => (
++                    <tr key={row.x}>
++                      <td>
++                        {websiteId ? (
++                          <Link
++                            href={updateParams({
++                              ...clearGeographyFilters(query),
++                              country: `eq.${row.x}`,
++                            })}
++                            replace
++                          >
++                            {countryNames[row.x] || row.x}
++                          </Link>
++                        ) : (
++                          <span>{countryNames[row.x] || row.x}</span>
++                        )}
++                      </td>
++                      <td style={{ textAlign: 'right' }}>{formatLongNumber(row.y)}</td>
++                    </tr>
++                  ))}
++                </tbody>
++              </table>
++            </details>
++          )}
++        </LoadingPanel>
++      </Column>
+--- /dev/null
++++ b/src/components/metrics/artvenn-geography-lists.test.tsx
+@@ -0,0 +1,144 @@
++import { createElement, type ReactNode, useState } from 'react';
++import { cleanup, fireEvent, render, screen } from '@testing-library/react';
++import { afterEach, beforeEach, expect, test, vi } from 'vitest';
++const runtime = vi.hoisted(() => ({
++  query: {} as Record<string, string>,
++  requests: [] as any[],
++  rows: [] as any[],
++  expanded: [] as any[],
++}));
++vi.mock('@umami/react-zen', () => {
++  const Div = ({ children }: { children: ReactNode }) => <div>{children}</div>;
++  return {
++    Column: Div,
++    Row: Div,
++    Grid: Div,
++    Text: Div,
++    Button: ({ children, onPress, isDisabled }: any) => (
++      <button type="button" disabled={isDisabled} onClick={onPress}>
++        {children}
++      </button>
++    ),
++    Icon: Div,
++    SearchField: ({ value, onSearch }: any) => (
++      <input
++        aria-label="搜索"
++        value={value}
++        onChange={event => onSearch(event.currentTarget.value)}
++      />
++    ),
++    DataTable: ({ data }: any) => (
++      <ul>
++        {data.map((row: any) => (
++          <li key={row.label}>{row.label}</li>
++        ))}
++      </ul>
++    ),
++    DataColumn: () => null,
++  };
++});
++vi.mock('@/components/hooks', () => ({
++  useMessages: () => ({
++    t: (value: string) => value,
++    labels: { region: '省份', city: '城市', more: '更多' },
++  }),
++  useMobile: () => ({ isPhone: false }),
++  useNavigation: () => ({
++    boardId: 'synthetic-board',
++    query: runtime.query,
++    updateParams: () => '/synthetic',
++  }),
++  useDateParameters: () => ({ startAt: 1000, endAt: 9000 }),
++  useWebsiteMetricsQuery: (id: string, params: any) => {
++    runtime.requests.push({ id, params, expanded: false });
++    return { data: runtime.rows, isLoading: false, isFetching: false };
++  },
++  useWebsiteExpandedMetricsQuery: (id: string, params: any) => {
++    runtime.requests.push({ id, params, expanded: true });
++    const rows = runtime.expanded.filter(row => !params.search || row.name.includes(params.search));
++    return {
++      data: rows.slice(params.offset ?? 0, (params.offset ?? 0) + (params.limit ?? 500)),
++      isLoading: false,
++      isFetching: false,
++    };
++  },
++}));
++vi.mock('@/components/common/LoadingPanel', () => ({
++  LoadingPanel: ({ children }: any) => children,
++}));
++vi.mock('@/components/common/OverlayScrollArea', () => ({
++  OverlayScrollArea: ({ children }: any) => children,
++}));
++vi.mock('@/components/input/DownloadButton', () => ({ DownloadButton: () => null }));
++vi.mock('@/components/metrics/MetricLabel', () => ({
++  MetricLabel: ({ data }: any) => <span>{data.label}</span>,
++}));
++vi.mock('@/components/input/DialogButton', () => ({
++  DialogButton: ({ label, children }: any) => {
++    const [open, setOpen] = useState(false);
++    return (
++      <>
++        <button onClick={() => setOpen(true)}>{label}</button>
++        {open ? children({ close: () => setOpen(false) }) : null}
++      </>
++    );
++  },
++}));
++import { MetricsTable } from './MetricsTable';
++import { MetricsExpandedTable } from './MetricsExpandedTable';
++beforeEach(() => {
++  runtime.requests = [];
++  runtime.query = {};
++  runtime.rows = [];
++  runtime.expanded = [];
++});
++afterEach(cleanup);
++test('34 region rows reach the native table and a Board opens its actual expanded search view', () => {
++  runtime.rows = Array.from({ length: 34 }, (_, i) => ({
++    x: `synthetic-region-${i + 1}`,
++    y: i + 9,
++  }));
++  render(
++    <MetricsTable
++      websiteId="synthetic-website"
++      type="region"
++      limit={34}
++      showMore
++      defaultCountry="CN"
++      animate={false}
++    />,
++  );
++  expect(screen.getAllByText(/^synthetic-region-/)).toHaveLength(34);
++  expect(runtime.requests[0].params).toMatchObject({ type: 'region', limit: 34, country: 'eq.CN' });
++  fireEvent.click(screen.getByRole('button', { name: '展开与搜索省份' }));
++  expect(screen.getByRole('textbox', { name: '搜索' })).toBeDefined();
++  expect(runtime.requests.find(request => request.expanded).params).toMatchObject({
++    type: 'region',
++    limit: 100,
++    offset: 0,
++    country: 'eq.CN',
++  });
++});
++test('geography expansion pages beyond 100 and resets to the first page on search or filter changes', () => {
++  runtime.expanded = Array.from({ length: 137 }, (_, i) => ({
++    name: `synthetic-city-${i + 1}`,
++    visitors: i + 11,
++  }));
++  const view = render(
++    createElement(MetricsExpandedTable, { websiteId: 'synthetic-website', type: 'city' }),
++  );
++  expect(screen.getAllByRole('listitem')).toHaveLength(100);
++  fireEvent.click(screen.getByRole('button', { name: '下一页' }));
++  expect(screen.getAllByRole('listitem')).toHaveLength(37);
++  expect(runtime.requests.at(-1).params.offset).toBe(100);
++  fireEvent.change(screen.getByRole('textbox', { name: '搜索' }), {
++    target: { value: 'synthetic-city-137' },
++  });
++  expect(screen.getAllByRole('listitem')).toHaveLength(1);
++  expect(runtime.requests.at(-1).params.offset).toBe(0);
++  runtime.query = { region: 'eq.CN-HE' };
++  view.rerender(
++    createElement(MetricsExpandedTable, { websiteId: 'synthetic-website', type: 'city' }),
++  );
++  expect(runtime.requests.at(-1).params.offset).toBe(0);
++});
 --- a/src/components/property-data/PropertyDateChart.tsx
 +++ b/src/components/property-data/PropertyDateChart.tsx
-@@ -289,7 +289,7 @@
-       >
-         <MetricsBar padding="2">
-           <InsightCard
+@@ -292 +292 @@
 -            label="Top weekday"
 +            label="最常见星期"
-             value={topWeekday?.label ?? 'None'}
-             hint={
-               topWeekday
-@@ -298,7 +298,7 @@
-             }
-           />
-           <InsightCard
+@@ -301 +301 @@
 -            label="Top date"
 +            label="最常见日期"
-             value={topDateByDay ? formatDate(topDateByDay.date, 'PP', locale) : 'None'}
-             hint={
-               topDateByDay
-@@ -307,7 +307,7 @@
-             }
-           />
-           <InsightCard
+@@ -310 +310 @@
 -            label="Earliest date"
 +            label="最早日期"
-             value={minPropertyDate ? formatDate(minPropertyDate, 'PP', locale) : 'None'}
-             hint={
-               minPropertyDate
-@@ -316,7 +316,7 @@
-             }
-           />
-           <InsightCard
+@@ -319 +319 @@
 -            label="Latest date"
 +            label="最晚日期"
-             value={maxPropertyDate ? formatDate(maxPropertyDate, 'PP', locale) : 'None'}
-             hint={
-               maxPropertyDate
 --- a/src/components/property-data/PropertyFilterRecord.tsx
 +++ b/src/components/property-data/PropertyFilterRecord.tsx
-@@ -197,7 +197,7 @@
-               }}
-               renderEmptyState={() =>
-                 isLoading ? (
+@@ -200 +200 @@
 -                  <Loading placement="center" icon="dots" />
 +                  <Loading aria-label="加载中" placement="center" icon="dots" />
-                 ) : (
-                   <Empty message={t(messages.noResultsFound)} />
-                 )
-@@ -225,7 +225,7 @@
-               renderValue={vals => (vals.length > 0 ? vals.join(', ') : undefined)}
-               renderEmptyState={() =>
-                 isLoading ? (
+@@ -228 +228 @@
 -                  <Loading placement="center" icon="dots" />
 +                  <Loading aria-label="加载中" placement="center" icon="dots" />
-                 ) : (
-                   <Empty message={t(messages.noResultsFound)} />
-                 )
 --- a/src/components/property-data/PropertyNumericChart.tsx
 +++ b/src/components/property-data/PropertyNumericChart.tsx
-@@ -150,7 +150,7 @@
-             value={stats?.average ?? 0}
-             formatValue={formatLongNumber}
-           />
+@@ -153 +153 @@
 -          <MetricCard label="Median" value={stats?.median ?? 0} formatValue={formatLongNumber} />
 +          <MetricCard label="中位数" value={stats?.median ?? 0} formatValue={formatLongNumber} />
-           <MetricCard
-             label={t(labels.max)}
-             value={stats?.max ?? 0}
+--- /dev/null
++++ b/src/lib/artvenn-china-map.test.ts
+@@ -0,0 +1,194 @@
++import { describe, expect, test } from 'vitest';
++import { createRequire } from 'node:module';
++import { readFile } from 'node:fs/promises';
++import {
++  CHINA_MAP,
++  CHINA_PROVINCES,
++  chinaProvinceKey,
++  chinaSearchCountry,
++  municipalityCityName,
++  municipalitySearchTokens,
++  provinceForGeometry,
++  provinceMetrics,
++  prepareChinaMapGeometry,
++} from './artvenn-china-map';
++
++// Use the exact D3 implementation already owned by react-simple-maps.
++const require = createRequire(import.meta.url);
++const { geoArea, geoPath, geoMercator } = createRequire(require.resolve('react-simple-maps'))(
++  'd3-geo',
++);
++
++describe('China geography presentation', () => {
++  test('has 34 named provinces including Taiwan, Hong Kong and Macau; decoration is not a province', () => {
++    expect(CHINA_PROVINCES).toHaveLength(34);
++    expect(new Set(CHINA_PROVINCES.map(([, key]) => key)).size).toBe(34);
++    expect(provinceForGeometry(710000)?.[1]).toBe('CN-TW');
++    expect(provinceForGeometry(810000)?.[1]).toBe('CN-HK');
++    expect(provinceForGeometry(820000)?.[1]).toBe('CN-MO');
++    expect(provinceForGeometry('100000_JD')).toBeUndefined();
++    expect(CHINA_MAP.path).toContain(
++      '99adfeded5223848bbe37a0a12f8023e11ee12161c7800521c27db42fdeac275',
++    );
++  });
++  test('all source province keys remain accessible beyond two or twenty rows without making missing regions zero', () => {
++    const rows = CHINA_PROVINCES.map(([, x], index) => ({ x, y: index + 7 }));
++    const result = provinceMetrics(rows);
++    expect(result.size).toBe(34);
++    expect(result.get('CN-MO')).toBe(40);
++    expect(provinceMetrics([{ x: 'CN-HE', y: 17 }]).has('CN-SN')).toBe(false);
++    expect(provinceMetrics([{ x: 'CN-SN', y: 0 }]).get('CN-SN')).toBe(0);
++  });
++  test('display normalization does not mutate original raw country, region or counts', () => {
++    const rows = [
++      { x: 'TW-TPE', y: 7, country: 'TW' },
++      { x: 'HK', y: 3, country: 'HK' },
++      { x: 'MO-M', y: 2, country: 'MO' },
++    ];
++    const before = JSON.stringify(rows);
++    expect(provinceMetrics(rows)).toEqual(
++      new Map([
++        ['CN-TW', 7],
++        ['CN-HK', 3],
++        ['CN-MO', 2],
++      ]),
++    );
++    expect(JSON.stringify(rows)).toBe(before);
++    expect(chinaProvinceKey('US-CA')).toBeUndefined();
++    expect(
++      provinceMetrics([
++        { x: 'CN-HE', y: NaN },
++        { x: 'CN-SN', y: -1 },
++      ]).size,
++    ).toBe(0);
++  });
++  test('municipal Chinese aliases require the exact known country, region and source token', () => {
++    expect(municipalityCityName('Beijing', 'CN', 'CN-BJ')).toBe('北京');
++    expect(municipalityCityName('Tianjin', 'CN', 'CN-TJ')).toBe('天津');
++    expect(municipalityCityName('Shanghai', 'CN', 'CN-SH')).toBe('上海');
++    expect(municipalityCityName('Chongqing', 'CN', 'CN-CQ')).toBe('重庆');
++    for (const args of [
++      ['Beijing', 'US', 'CN-BJ'],
++      ['Beijing', 'CN', 'CN-HE'],
++      ['Beijing', 'CN'],
++      ['Peking', 'CN', 'CN-BJ'],
++    ])
++      expect(municipalityCityName(...(args as [string, string?, string?]))).toBeUndefined();
++    expect(municipalitySearchTokens('北京市', 'CN')).toContain('Beijing');
++    expect(municipalitySearchTokens('北京', 'US')).toEqual([]);
++    expect(chinaSearchCountry({ region: 'eq.CN-BJ' })).toBe('CN');
++    expect(chinaSearchCountry({ country: 'eq.US' })).toBeUndefined();
++  });
++});
++
++test('the complete unchanged geometry fits the map viewport, including Taiwan and southern decoration', async () => {
++  const { readFile } = await import('node:fs/promises');
++  const geometry = JSON.parse(await readFile('public/maps/china-provinces.json', 'utf8'));
++  const points: number[][] = [];
++  const walk = (coordinates: any) => {
++    if (typeof coordinates?.[0] === 'number') points.push(coordinates);
++    else coordinates.forEach(walk);
++  };
++  geometry.features.forEach((feature: any) => {
++    walk(feature.geometry.coordinates);
++  });
++  expect(
++    geometry.features.filter((feature: any) => provinceForGeometry(feature.properties.adcode)),
++  ).toHaveLength(34);
++  const mercator = (latitude: number) =>
++    Math.log(Math.tan(Math.PI / 4 + (latitude * Math.PI) / 360));
++  for (const [longitude, latitude] of points) {
++    const x =
++      (((longitude - CHINA_MAP.center[0]) * Math.PI) / 180) * CHINA_MAP.scale + CHINA_MAP.width / 2;
++    const y =
++      (mercator(CHINA_MAP.center[1]) - mercator(latitude)) * CHINA_MAP.scale + CHINA_MAP.height / 2;
++    expect(x).toBeGreaterThanOrEqual(29.99);
++    expect(x).toBeLessThanOrEqual(CHINA_MAP.width - 29.99);
++    expect(y).toBeGreaterThanOrEqual(29.99);
++    expect(y).toBeLessThanOrEqual(CHINA_MAP.height - 29.99);
++  }
++});
++
++test('real D3 renders local province polygons instead of whole-world complements', async () => {
++  const original = JSON.parse(await readFile('public/maps/china-provinces.json', 'utf8'));
++  const before = JSON.stringify(original);
++  // Reproduces the actual blue-rectangle defect, including multipolygon islands.
++  expect(original.features.every((feature: any) => geoArea(feature) > 2 * Math.PI)).toBe(true);
++  const prepared = prepareChinaMapGeometry(original);
++  const path = geoPath(
++    geoMercator()
++      .translate([CHINA_MAP.width / 2, CHINA_MAP.height / 2])
++      .center(CHINA_MAP.center)
++      .scale(CHINA_MAP.scale),
++  );
++  for (const feature of prepared.features) {
++    expect(geoArea(feature)).toBeGreaterThan(0);
++    expect(geoArea(feature)).toBeLessThan(0.05);
++    const [[left, top], [right, bottom]] = path.bounds(feature);
++    expect(left).toBeGreaterThanOrEqual(29.99);
++    expect(right).toBeLessThanOrEqual(CHINA_MAP.width - 29.99);
++    expect(top).toBeGreaterThanOrEqual(29.99);
++    expect(bottom).toBeLessThanOrEqual(CHINA_MAP.height - 29.99);
++    expect(path.area(feature)).toBeGreaterThan(0);
++    expect(path.area(feature)).toBeLessThan(CHINA_MAP.width * CHINA_MAP.height * 0.1);
++  }
++  const beijing = prepared.features.find((feature: any) => feature.properties.adcode === 110000);
++  const taiwan = prepared.features.find((feature: any) => feature.properties.adcode === 710000);
++  expect(path.area(beijing)).toBeCloseTo(210.525, 2);
++  expect(path.area(taiwan)).toBeCloseTo(343.133, 2);
++  expect(JSON.stringify(original)).toBe(before);
++  expect(prepareChinaMapGeometry(prepared)).toEqual(prepared);
++});
++
++test('each polygon exterior and hole is rewound independently; non-polygons are unchanged', () => {
++  const outer = [
++    [100, 20],
++    [104, 20],
++    [104, 24],
++    [100, 24],
++    [100, 20],
++  ];
++  const hole = [
++    [101, 21],
++    [101, 22],
++    [102, 22],
++    [102, 21],
++    [101, 21],
++  ];
++  const line = {
++    type: 'Feature',
++    geometry: {
++      type: 'LineString',
++      coordinates: [
++        [100, 20],
++        [104, 24],
++      ],
++    },
++  };
++  const original = {
++    type: 'FeatureCollection',
++    features: [
++      { type: 'Feature', geometry: { type: 'Polygon', coordinates: [outer, hole] } },
++      {
++        type: 'Feature',
++        geometry: {
++          type: 'MultiPolygon',
++          coordinates: [
++            [outer, hole],
++            [outer.slice().reverse(), hole.slice().reverse()],
++          ],
++        },
++      },
++      line,
++    ],
++  };
++  const before = JSON.stringify(original);
++  const prepared = prepareChinaMapGeometry(original);
++  const expected =
++    geoArea({ type: 'Polygon', coordinates: [outer.slice().reverse()] }) -
++    geoArea({ type: 'Polygon', coordinates: [hole] });
++  expect(geoArea(prepared.features[0])).toBeCloseTo(expected, 10);
++  expect(geoArea(prepared.features[1])).toBeCloseTo(expected * 2, 10);
++  expect(prepared.features[2]).toBe(line);
++  expect(JSON.stringify(original)).toBe(before);
++});
+--- /dev/null
++++ b/src/lib/artvenn-china-map.ts
+@@ -0,0 +1,165 @@
++/** Display-only metadata. Source geometry and persisted GeoIP keys stay unchanged. */
++export const CHINA_PROVINCES = [
++  [110000, 'CN-BJ', '北京市'],
++  [120000, 'CN-TJ', '天津市'],
++  [130000, 'CN-HE', '河北省'],
++  [140000, 'CN-SX', '山西省'],
++  [150000, 'CN-NM', '内蒙古自治区'],
++  [210000, 'CN-LN', '辽宁省'],
++  [220000, 'CN-JL', '吉林省'],
++  [230000, 'CN-HL', '黑龙江省'],
++  [310000, 'CN-SH', '上海市'],
++  [320000, 'CN-JS', '江苏省'],
++  [330000, 'CN-ZJ', '浙江省'],
++  [340000, 'CN-AH', '安徽省'],
++  [350000, 'CN-FJ', '福建省'],
++  [360000, 'CN-JX', '江西省'],
++  [370000, 'CN-SD', '山东省'],
++  [410000, 'CN-HA', '河南省'],
++  [420000, 'CN-HB', '湖北省'],
++  [430000, 'CN-HN', '湖南省'],
++  [440000, 'CN-GD', '广东省'],
++  [450000, 'CN-GX', '广西壮族自治区'],
++  [460000, 'CN-HI', '海南省'],
++  [500000, 'CN-CQ', '重庆市'],
++  [510000, 'CN-SC', '四川省'],
++  [520000, 'CN-GZ', '贵州省'],
++  [530000, 'CN-YN', '云南省'],
++  [540000, 'CN-XZ', '西藏自治区'],
++  [610000, 'CN-SN', '陕西省'],
++  [620000, 'CN-GS', '甘肃省'],
++  [630000, 'CN-QH', '青海省'],
++  [640000, 'CN-NX', '宁夏回族自治区'],
++  [650000, 'CN-XJ', '新疆维吾尔自治区'],
++  [710000, 'CN-TW', '台湾省'],
++  [810000, 'CN-HK', '香港特别行政区'],
++  [820000, 'CN-MO', '澳门特别行政区'],
++] as const;
++
++export const CHINA_MAP = {
++  path: '/maps/china-provinces.json?v=99adfeded5223848bbe37a0a12f8023e11ee12161c7800521c27db42fdeac275',
++  width: 800,
++  height: 640,
++  // Fitted to the entire unmodified source geometry, including its southern lines.
++  center: [104.2990125, 31.769817845138974] as [number, number],
++  scale: 551.356886295253,
++} as const;
++export const GEOGRAPHY_PAGE_SIZE = 100;
++export type GeographyMetric = { x: string; y: number; country?: string };
++export const chinaCountry = (country: string) => ['CN', 'TW', 'HK', 'MO'].includes(country);
++
++/**
++ * This fixed China asset uses counterclockwise exterior rings. D3's spherical
++ * renderer expects clockwise exteriors for these sub-hemisphere polygons.
++ * Rewind each exterior/hole independently, without changing the source asset.
++ * Its longitude bounds do not cross the antimeridian, so planar ring winding
++ * determines the required orientation here. Non-polygon geometry is untouched.
++ */
++export function prepareChinaMapGeometry(collection: any) {
++  const rewindPolygon = (rings: number[][][]) =>
++    rings.map((ring, index) => {
++      let area = 0;
++      for (
++        let current = 0, previous = ring.length - 1;
++        current < ring.length;
++        previous = current++
++      ) {
++        area += ring[previous][0] * ring[current][1] - ring[current][0] * ring[previous][1];
++      }
++      const reverse = index === 0 ? area > 0 : area < 0;
++      return reverse ? ring.slice().reverse() : ring;
++    });
++  return {
++    ...collection,
++    features: collection.features.map((feature: any) => {
++      const geometry = feature.geometry;
++      const coordinates =
++        geometry.type === 'Polygon'
++          ? rewindPolygon(geometry.coordinates)
++          : geometry.type === 'MultiPolygon'
++            ? geometry.coordinates.map(rewindPolygon)
++            : undefined;
++      return coordinates ? { ...feature, geometry: { ...geometry, coordinates } } : feature;
++    }),
++  };
++}
++
++export function chinaProvinceKey(value: unknown): string | undefined {
++  if (typeof value !== 'string') return undefined;
++  if (value === 'TW' || value.startsWith('TW-')) return 'CN-TW';
++  if (value === 'HK' || value.startsWith('HK-')) return 'CN-HK';
++  if (value === 'MO' || value.startsWith('MO-')) return 'CN-MO';
++  return CHINA_PROVINCES.some(([, key]) => key === value) ? value : undefined;
++}
++
++export function provinceForGeometry(adcode: unknown) {
++  return CHINA_PROVINCES.find(([code]) => String(code) === String(adcode));
++}
++
++export function provinceMetrics(rows: GeographyMetric[] = []): Map<string, number> {
++  const result = new Map<string, number>();
++  for (const row of rows) {
++    const key = chinaProvinceKey(row.x);
++    if (!key || !Number.isFinite(row.y) || row.y < 0) continue;
++    result.set(key, (result.get(key) ?? 0) + row.y);
++  }
++  return result;
++}
++
++const municipalities = [
++  ['CN-BJ', 'Beijing', '北京'],
++  ['CN-TJ', 'Tianjin', '天津'],
++  ['CN-SH', 'Shanghai', '上海'],
++  ['CN-CQ', 'Chongqing', '重庆'],
++] as const;
++
++/** An English token alone is not enough to override an ambiguous dictionary. */
++export function municipalityCityName(city: string, country?: string, region?: string) {
++  if (country !== 'CN') return undefined;
++  return municipalities.find(([key, sourceCity]) => key === region && sourceCity === city)?.[2];
++}
++
++export function chinaSearchCountry(filters: Record<string, unknown>): string | undefined {
++  if (typeof filters.country === 'string' && filters.country)
++    return filters.country === 'eq.CN' ? 'CN' : undefined;
++  const region = typeof filters.region === 'string' ? filters.region.replace(/^eq\./, '') : '';
++  return chinaProvinceKey(region) ? 'CN' : undefined;
++}
++
++export function municipalitySearchMatches(search: string) {
++  const query = search.normalize('NFKC').trim().replace(/市$/, '');
++  return query ? municipalities.filter(([, , name]) => name.includes(query)) : [];
++}
++
++export function municipalitySearchTokens(search: string, country?: string): string[] {
++  return country === 'CN' ? municipalitySearchMatches(search).map(([, token]) => token) : [];
++}
++
++export function clearGeographyFilters(query: Record<string, unknown>) {
++  return Object.fromEntries(
++    [
++      ...new Set([
++        'country',
++        'region',
++        'city',
++        ...Object.keys(query).filter(key => /^(country|region|city)\d*$/.test(key)),
++      ]),
++    ].map(key => [key, undefined]),
++  );
++}
++
++/** Keep a clicked native city bucket inside its source-country display scope. */
++export function cityFilterParameters(country: string | undefined, query: Record<string, string>) {
++  if (!country || !/^[A-Z]{2}$/.test(country)) return {};
++  const cleared = Object.fromEntries(
++    Object.keys(query)
++      .filter(key => /^(country|city)\d*$/.test(key))
++      .map(key => [key, undefined]),
++  );
++  const province = { TW: 'CN-TW', HK: 'CN-HK', MO: 'CN-MO' }[country];
++  return {
++    ...cleared,
++    country: `eq.${chinaCountry(country) ? 'CN' : country}`,
++    ...(province ? { region: `eq.${province}` } : {}),
++  };
++}
+--- /dev/null
++++ b/src/lib/artvenn-geography-search.ts
+@@ -0,0 +1,41 @@
++import { CHINA_PROVINCES, municipalitySearchMatches } from './artvenn-china-map';
++import { getChineseCityMatches, getChineseRegionName } from './artvenn-geography';
++import regions from '../../public/iso-3166-2.json';
++
++/** Search is an additional AND constraint, never a replacement for a selected city/region. */
++export function geographySearchSql(type: string, column: string, filters: Record<string, any>) {
++  const search = typeof filters.search === 'string' ? filters.search.trim() : '';
++  const params: Record<string, string> = {};
++  if (!search || !['city', 'region'].includes(type)) return { clause: '', params };
++  const translated = /\p{Script=Han}/u.test(search)
++    ? type === 'city'
++      ? getChineseCityMatches(search).filter(
++          (value) => !['Beijing', 'Tianjin', 'Shanghai', 'Chongqing'].includes(value),
++        )
++      : [...new Set([...Object.keys(regions), ...CHINA_PROVINCES.map(([, key]) => key)])].filter(
++          (key) => getChineseRegionName(key)?.includes(search),
++        )
++    : [];
++  params.artvennSearch = `%${search}%`;
++  const choices = [`lower(${column}) like lower({{artvennSearch}})`];
++  if (translated.length) {
++    const keys = translated.map((value, index) => {
++      const key = `artvennSearch${index}`;
++      params[key] = value;
++      return `{{${key}}}`;
++    });
++    choices.push(`${column} in (${keys.join(', ')})`);
++  }
++  if (type === 'city' && /\p{Script=Han}/u.test(search)) {
++    for (const [index, [region, token]] of municipalitySearchMatches(search).entries()) {
++      const prefix = `artvennMunicipality${index}`;
++      params[`${prefix}Country`] = 'CN';
++      params[`${prefix}Region`] = region;
++      params[`${prefix}City`] = token;
++      choices.push(
++        `(session.country = {{${prefix}Country}} and session.region = {{${prefix}Region}} and session.city = {{${prefix}City}})`,
++      );
++    }
++  }
++  return { clause: `and (${choices.join(' or ')})`, params };
++}
 --- /dev/null
 +++ b/src/lib/artvenn-geography-sql.ts
 @@ -0,0 +1,14 @@
@@ -1593,23 +2830,28 @@
 +  const prefix = table ? `${table}.` : '';
 +
 +  if (column === 'country') {
-+    return `(case when ${prefix}country = 'TW' then 'CN' else ${prefix}country end)`;
++    return `(case when ${prefix}country in ('TW', 'HK', 'MO') then 'CN' else ${prefix}country end)`;
 +  }
 +
 +  if (column === 'region') {
-+    return `(case when ${prefix}country = 'TW' then 'CN-TW' else ${prefix}region end)`;
++    return `(case when ${prefix}country = 'TW' then 'CN-TW' when ${prefix}country = 'HK' then 'CN-HK' when ${prefix}country = 'MO' then 'CN-MO' else ${prefix}region end)`;
 +  }
 +
 +  return `${prefix}${column}`;
 +}
 --- /dev/null
 +++ b/src/lib/artvenn-geography.test.ts
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,50 @@
 +import { expect, test } from 'vitest';
-+import { getChineseRegionName, getChineseCityName, getChineseCityMatches } from './artvenn-geography';
++import {
++  getChineseRegionName,
++  getChineseCityName,
++  getChineseCityMatches,
++} from './artvenn-geography';
 +
 +test('Taiwan source subdivisions and derived province share one Chinese label', () => {
-+  for (const key of ['CN-TW', 'TW-TPE', 'TW-TNN', 'TW-NWT']) expect(getChineseRegionName(key)).toBe('台湾省');
++  for (const key of ['CN-TW', 'TW-TPE', 'TW-TNN', 'TW-NWT'])
++    expect(getChineseRegionName(key)).toBe('台湾省');
 +  expect(getChineseRegionName('CN-ZJ')).toBe('浙江省');
 +  expect(getChineseRegionName('CN-GD')).toBe('广东省');
 +});
@@ -1632,9 +2874,29 @@
 +  expect(getChineseCityMatches('Hangzhou')).toEqual([]);
 +  expect(getChineseCityMatches('')).toEqual([]);
 +});
++
++test('known Beijing context repairs an omitted translation without guessing ambiguous places', () => {
++  expect(getChineseCityName('Beijing', 'CN', 'CN-BJ')).toBe('北京');
++  expect(getChineseCityName('Beijing', 'CN', 'CN-HE')).toBeUndefined();
++  expect(getChineseCityName('Beijing', 'CN')).toBeUndefined();
++  expect(getChineseCityMatches('北京市', 'CN')).toContain('Beijing');
++  expect(getChineseCityMatches('北京', 'US')).not.toContain('Beijing');
++});
++
++test('derived province context uses the reliable original Taiwan/Hong Kong/Macau city dictionary without changing raw keys', () => {
++  expect(getChineseCityName('Taipei', 'CN', 'CN-TW')).toBe(getChineseCityName('Taipei', 'TW'));
++  expect(getChineseCityName('Hong Kong', 'CN', 'CN-HK')).toBe(
++    getChineseCityName('Hong Kong', 'HK'),
++  );
++  expect(getChineseCityName('Macao', 'CN', 'CN-MO')).toBe(getChineseCityName('Macao', 'MO'));
++  expect(getChineseCityName('Macao', 'CN', 'CN-MO')).toBeDefined();
++  expect(getChineseCityName('Macao', 'CN', 'CN-HE')).toBeUndefined();
++});
 --- /dev/null
 +++ b/src/lib/artvenn-geography.ts
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,92 @@
++import { CHINESE_EVENT_NAMES } from './artvenn-labels';
++import { municipalityCityName, municipalitySearchTokens } from './artvenn-china-map';
 +import cities from '../data/geo-city.zh-CN.json';
 +import regions from '../data/geo-region.zh-CN.json';
 +import globalCities from '../data/geo-city-global.zh-CN.json';
@@ -1643,40 +2905,40 @@
 +const cityNames: Record<string, string> = cities;
 +const regionNames: Record<string, string> = regions;
 +const provinces: Record<string, string> = {
-+  "CN-BJ": "北京市",
-+  "CN-TJ": "天津市",
-+  "CN-HE": "河北省",
-+  "CN-SX": "山西省",
-+  "CN-NM": "内蒙古自治区",
-+  "CN-LN": "辽宁省",
-+  "CN-JL": "吉林省",
-+  "CN-HL": "黑龙江省",
-+  "CN-SH": "上海市",
-+  "CN-JS": "江苏省",
-+  "CN-ZJ": "浙江省",
-+  "CN-AH": "安徽省",
-+  "CN-FJ": "福建省",
-+  "CN-JX": "江西省",
-+  "CN-SD": "山东省",
-+  "CN-HA": "河南省",
-+  "CN-HB": "湖北省",
-+  "CN-HN": "湖南省",
-+  "CN-GD": "广东省",
-+  "CN-GX": "广西壮族自治区",
-+  "CN-HI": "海南省",
-+  "CN-CQ": "重庆市",
-+  "CN-SC": "四川省",
-+  "CN-GZ": "贵州省",
-+  "CN-YN": "云南省",
-+  "CN-XZ": "西藏自治区",
-+  "CN-SN": "陕西省",
-+  "CN-GS": "甘肃省",
-+  "CN-QH": "青海省",
-+  "CN-NX": "宁夏回族自治区",
-+  "CN-XJ": "新疆维吾尔自治区",
-+  "CN-HK": "香港特别行政区",
-+  "CN-MO": "澳门特别行政区",
-+  "CN-TW": "台湾省"
++  'CN-BJ': '北京市',
++  'CN-TJ': '天津市',
++  'CN-HE': '河北省',
++  'CN-SX': '山西省',
++  'CN-NM': '内蒙古自治区',
++  'CN-LN': '辽宁省',
++  'CN-JL': '吉林省',
++  'CN-HL': '黑龙江省',
++  'CN-SH': '上海市',
++  'CN-JS': '江苏省',
++  'CN-ZJ': '浙江省',
++  'CN-AH': '安徽省',
++  'CN-FJ': '福建省',
++  'CN-JX': '江西省',
++  'CN-SD': '山东省',
++  'CN-HA': '河南省',
++  'CN-HB': '湖北省',
++  'CN-HN': '湖南省',
++  'CN-GD': '广东省',
++  'CN-GX': '广西壮族自治区',
++  'CN-HI': '海南省',
++  'CN-CQ': '重庆市',
++  'CN-SC': '四川省',
++  'CN-GZ': '贵州省',
++  'CN-YN': '云南省',
++  'CN-XZ': '西藏自治区',
++  'CN-SN': '陕西省',
++  'CN-GS': '甘肃省',
++  'CN-QH': '青海省',
++  'CN-NX': '宁夏回族自治区',
++  'CN-XJ': '新疆维吾尔自治区',
++  'CN-HK': '香港特别行政区',
++  'CN-MO': '澳门特别行政区',
++  'CN-TW': '台湾省',
 +};
 +const globalCityNames: Record<string, string> = globalCities;
 +const cityEntries = Object.entries(cityNames);
@@ -1686,18 +2948,44 @@
 +  return provinces[region] || regionNames[region];
 +}
 +
-+export function getChineseCityName(city: string, country?: string): string | undefined {
++export function getChineseCityName(
++  city: string,
++  country?: string,
++  region?: string,
++): string | undefined {
 +  if (!city) return undefined;
-+  if (country) return cityNames[`${country}|${city}`];
++  const municipality = municipalityCityName(city, country, region);
++  if (municipality) return municipality;
++  const sourceCountries: Record<string, string> = { 'CN-TW': 'TW', 'CN-HK': 'HK', 'CN-MO': 'MO' };
++  const sourceCountry = country === 'CN' && region ? sourceCountries[region] || country : country;
++  if (sourceCountry) return cityNames[`${sourceCountry}|${city}`];
 +  return globalCityNames[city];
 +}
 +
-+export function getChineseCityMatches(search: string): string[] {
++export function getChineseCityMatches(search: string, country?: string): string[] {
 +  if (!search || !/\p{Script=Han}/u.test(search)) return [];
 +  const value = search.normalize('NFKC').trim();
 +  if (!value) return [];
-+  return [...new Set(cityEntries.filter(([, name]) => name.includes(value))
-+    .map(([key]) => key.slice(key.indexOf('|') + 1)))];
++  const native = cityEntries
++    .filter(([, name]) => name.includes(value))
++    .map(([key]) => key.slice(key.indexOf('|') + 1));
++  return [...new Set([...native, ...municipalitySearchTokens(value, country)])];
++}
++
++/** Optional presentation only: preserve all native metric keys and counts. */
++export function getMetricDisplayName(type: string, row: object, key: 'x' | 'name') {
++  const value = row as Record<string, unknown>;
++  const name = value[key];
++  if (typeof name !== 'string') return undefined;
++  if (type === 'event')
++    return Object.hasOwn(CHINESE_EVENT_NAMES, name) ? CHINESE_EVENT_NAMES[name] : undefined;
++  if (type === 'region') return getChineseRegionName(name);
++  if (type !== 'city') return undefined;
++  return getChineseCityName(
++    name,
++    typeof value.country === 'string' ? value.country : undefined,
++    typeof value.region === 'string' ? value.region : undefined,
++  );
 +}
 --- /dev/null
 +++ b/src/lib/artvenn-labels.test.ts
@@ -1748,33 +3036,18 @@
 +}
 --- a/src/lib/constants.ts
 +++ b/src/lib/constants.ts
-@@ -22,7 +22,7 @@
- export const LINKS_URL = `${globalThis?.location?.origin}/q`;
- export const PIXELS_URL = `${globalThis?.location?.origin}/p`;
- 
+@@ -25 +25 @@
 -export const DEFAULT_LOCALE = 'en-US';
 +export const DEFAULT_LOCALE = 'zh-CN';
- export const DEFAULT_THEME = 'light';
- export const DEFAULT_ANIMATION_DURATION = 300;
- export const DEFAULT_DATE_RANGE_VALUE = '24hour';
 --- a/src/lib/format.test.ts
 +++ b/src/lib/format.test.ts
-@@ -16,9 +16,9 @@
- });
- 
- test('formatShortTime', () => {
+@@ -19 +19 @@
 -  expect(format.formatShortTime(3600 + 60 + 1)).toBe('1m1s');
 +  expect(format.formatShortTime(3600 + 60 + 1)).toBe('1分1秒');
- 
+@@ -21 +21 @@
 -  expect(format.formatShortTime(3600 + 60 + 1, ['h', 'm', 's'])).toBe('1h1m1s');
 +  expect(format.formatShortTime(3600 + 60 + 1, ['h', 'm', 's'])).toBe('1小时1分1秒');
- });
- 
- test('formatNumber', () => {
-@@ -27,12 +27,12 @@
- });
- 
- test('formatLongNumber', () => {
+@@ -30,6 +30,6 @@
 -  expect(format.formatLongNumber(1000000000)).toBe('1.0b');
 -  expect(format.formatLongNumber(2500000000)).toBe('2.5b');
 -  expect(format.formatLongNumber(1200000)).toBe('1.2m');
@@ -1787,13 +3060,7 @@
 +  expect(format.formatLongNumber(575000)).toBe('57.5万');
 +  expect(format.formatLongNumber(10500)).toBe('1.1万');
 +  expect(format.formatLongNumber(1200)).toBe('1200');
- });
- 
- test('stringToColor', () => {
-@@ -50,3 +50,14 @@
-   expect(format.decodePunycodeDomain('example.com')).toBe('example.com');
-   expect(format.decodePunycodeDomain(undefined)).toBeUndefined();
- });
+@@ -52,0 +53,11 @@
 +
 +test('Chinese display handles zero, negatives and unit boundaries', () => {
 +  expect(format.formatShortTime(0)).toBe('0秒');
@@ -1807,12 +3074,9 @@
 +});
 --- a/src/lib/format.ts
 +++ b/src/lib/format.ts
-@@ -29,15 +29,16 @@
- export function formatShortTime(val: number, formats = ['m', 's'], space = '') {
-   const { days, hours, minutes, seconds, ms } = parseTime(val);
-   let t = '';
+@@ -31,0 +32 @@
 +  const units = { d: '天', h: '小时', m: '分', s: '秒', ms: '毫秒' };
- 
+@@ -33,5 +34,5 @@
 -  if (days > 0 && formats.indexOf('d') !== -1) t += `${days}d${space}`;
 -  if (hours > 0 && formats.indexOf('h') !== -1) t += `${hours}h${space}`;
 -  if (minutes > 0 && formats.indexOf('m') !== -1) t += `${minutes}m${space}`;
@@ -1823,17 +3087,10 @@
 +  if (minutes > 0 && formats.indexOf('m') !== -1) t += `${minutes}分${space}`;
 +  if (seconds > 0 && formats.indexOf('s') !== -1) t += `${seconds}秒${space}`;
 +  if (ms > 0 && formats.indexOf('ms') !== -1) t += `${ms}毫秒`;
- 
-   if (!t) {
+@@ -40 +41 @@
 -    return `0${formats[formats.length - 1]}`;
 +    return `0${units[formats[formats.length - 1]] || formats[formats.length - 1]}`;
-   }
- 
-   return t;
-@@ -49,23 +50,8 @@
- 
- export function formatLongNumber(value: number) {
-   const n = Number(value);
+@@ -52,17 +53,2 @@
 -
 -  if (n >= 1000000000) {
 -    return `${(n / 1000000000).toFixed(1)}b`;
@@ -1853,25 +3110,13 @@
 -
 +  if (Math.abs(n) >= 100000000) return `${(n / 100000000).toFixed(1).replace(/\.0$/, '')}亿`;
 +  if (Math.abs(n) >= 10000) return `${(n / 10000).toFixed(1).replace(/\.0$/, '')}万`;
-   return formatNumber(n);
- }
- 
-@@ -85,7 +71,7 @@
-   return color;
- }
- 
+@@ -88 +74 @@
 -export function formatCurrency(value: number, currency: string, locale = 'en-US') {
 +export function formatCurrency(value: number, currency: string, locale = 'zh-CN') {
-   let formattedValue: Intl.NumberFormat;
- 
-   try {
-@@ -104,19 +90,10 @@
-   return formattedValue.format(value);
- }
- 
+@@ -107 +93 @@
 -export function formatLongCurrency(value: number, currency: string, locale = 'en-US') {
 +export function formatLongCurrency(value: number, currency: string, locale = 'zh-CN') {
-   const n = Number(value);
+@@ -109,11 +95,2 @@
 -
 -  if (n >= 1000000000) {
 -    return `${formatCurrency(n / 1000000000, currency, locale)}b`;
@@ -1885,60 +3130,37 @@
 -
 +  if (Math.abs(n) >= 100000000) return `${formatCurrency(n / 100000000, currency, locale)}亿`;
 +  if (Math.abs(n) >= 10000) return `${formatCurrency(n / 10000, currency, locale)}万`;
-   return formatCurrency(n, currency, locale);
- }
- 
 --- a/src/lib/prisma.ts
 +++ b/src/lib/prisma.ts
-@@ -2,6 +2,7 @@
- import { readReplicas } from '@prisma/extension-read-replicas';
- import debug from 'debug';
- import { PrismaClient } from '@/generated/prisma/client';
+@@ -4,0 +5 @@
 +import { getArtVennGeographySql } from './artvenn-geography-sql';
- import { DATA_TYPE, DEFAULT_PAGE_SIZE, FILTER_COLUMNS, OPERATORS, SESSION_COLUMNS } from './constants';
- import { filtersObjectToArray } from './params';
- import type { Operator, PropertyFilter, QueryFilters, QueryOptions } from './types';
-@@ -147,20 +148,23 @@
-   }
- 
-   const table = SESSION_COLUMNS.includes(name) ? 'session' : 'website_event';
+@@ -149,0 +151,3 @@
 +  const expression = table === 'session'
 +    ? getArtVennGeographySql(column)
 +    : `${table}.${column}`;
- 
-   switch (operator) {
-     case OPERATORS.equals:
+@@ -153 +157 @@
 -      return `${table}.${column} = ANY(${value})`;
 +      return `${expression} = ANY(${value})`;
-     case OPERATORS.notEquals:
+@@ -155 +159 @@
 -      return `${table}.${column} != ALL(${value})`;
 +      return `${expression} != ALL(${value})`;
-     case OPERATORS.contains:
+@@ -157 +161 @@
 -      return `${table}.${column} ilike ${value}`;
 +      return `${expression} ilike ${value}`;
-     case OPERATORS.doesNotContain:
+@@ -159 +163 @@
 -      return `${table}.${column} not ilike ${value}`;
 +      return `${expression} not ilike ${value}`;
-     case OPERATORS.regex:
+@@ -161 +165 @@
 -      return `${table}.${column} ~* ${value}`;
 +      return `${expression} ~* ${value}`;
-     case OPERATORS.notRegex:
+@@ -163 +167 @@
 -      return `${table}.${column} !~* ${value}`;
 +      return `${expression} !~* ${value}`;
-     default:
-       return '';
-   }
 --- a/src/queries/sql/getValues.ts
 +++ b/src/queries/sql/getValues.ts
-@@ -1,3 +1,4 @@
+@@ -0,0 +1 @@
 +import { getArtVennGeographySql } from '@/lib/artvenn-geography-sql';
- import clickhouse from '@/lib/clickhouse';
- import { FILTER_COLUMNS, SESSION_COLUMNS } from '@/lib/constants';
- import { CLICKHOUSE, PRISMA, runQuery } from '@/lib/db';
-@@ -22,7 +23,13 @@
- async function relationalQuery(websiteId: string, column: string, filters: QueryFilters) {
-   const { rawQuery, getSearchSQL } = prisma;
-   const params = {};
+@@ -25 +26,7 @@
 -  const { startDate, endDate, search } = filters;
 +  const { startDate, endDate } = filters;
 +  // The selector still sends a stable province key, never a translated label.
@@ -1947,31 +3169,19 @@
 +    : filters.search;
 +  const sessionColumn = SESSION_DB_COLUMNS.has(column);
 +  const expression = sessionColumn ? getArtVennGeographySql(column, '') : column;
- 
-   let searchQuery = '';
-   let excludeDomain = '';
-@@ -42,21 +49,29 @@
- 
-           params[key] = value;
- 
+@@ -45 +52 @@
 -          return getSearchSQL(column, key).replace('and ', '');
 +          return getSearchSQL(expression, key).replace('and ', '');
-         })
-         .join(' OR ')})`;
-     } else {
+@@ -49 +56 @@
 -      searchQuery = getSearchSQL(column);
 +      searchQuery = getSearchSQL(expression);
-     }
-   }
- 
+@@ -53 +60 @@
 -  if (SESSION_DB_COLUMNS.has(column)) {
 +  if (sessionColumn) {
-     return rawQuery(
-       `
+@@ -56 +63 @@
 -      select ${column} as "value", count(*) as "count"
 +      select ${expression} as "value", count(*) as "count"
-       from session
-       where website_id = {{websiteId::uuid}}
+@@ -59 +66,9 @@
 -        and created_at between {{startDate}} and {{endDate}}
 +        and exists (
 +          select 1 from website_event active
@@ -1982,103 +3192,259 @@
 +        )
 +        and ${expression} is not null
 +        and ${expression} != ''
-         ${searchQuery}
-       group by 1
-       order by 2 desc
+--- /dev/null
++++ b/src/queries/sql/sessions/artvenn-geography-context.test.ts
+@@ -0,0 +1,182 @@
++import { DatabaseSync } from 'node:sqlite';
++import { afterEach, beforeEach, expect, test, vi } from 'vitest';
++
++const runtime = vi.hoisted(() => ({ rawQuery: vi.fn() }));
++vi.mock('@/lib/db', () => ({
++  PRISMA: 'prisma',
++  CLICKHOUSE: 'clickhouse',
++  runQuery: (queries: Record<string, () => unknown>) => queries.prisma(),
++}));
++vi.mock('@/lib/clickhouse', () => ({ default: {} }));
++vi.mock('@/lib/prisma', () => ({
++  default: {
++    rawQuery: runtime.rawQuery,
++    getTimestampDiffSQL: () => '0',
++    parseFilters: (filters: Record<string, any>) => {
++      const queryParams = {};
++      const clauses = ['city', 'country', 'region']
++        .filter(key => filters[key])
++        .map(key => {
++          queryParams[`selected${key}`] = String(filters[key]).replace(/^eq\./, '');
++          const column =
++            key === 'country'
++              ? "(case when session.country in ('TW','HK','MO') then 'CN' else session.country end)"
++              : key === 'region'
++                ? "(case when session.country = 'TW' then 'CN-TW' when session.country = 'HK' then 'CN-HK' when session.country = 'MO' then 'CN-MO' else session.region end)"
++                : 'session.city';
++          return `and ${column} = {{selected${key}}}`;
++        });
++      return {
++        filterQuery: clauses.join(' '),
++        joinSessionQuery: 'join session on session.session_id = website_event.session_id',
++        cohortQuery: '',
++        excludeBounceQuery: '',
++        queryParams,
++      };
++    },
++  },
++}));
++import { getSessionMetrics } from './getSessionMetrics';
++import { getSessionExpandedMetrics } from './getSessionExpandedMetrics';
++import { municipalityCityName, cityFilterParameters } from '@/lib/artvenn-china-map';
++
++let database: DatabaseSync;
++beforeEach(() => {
++  database = new DatabaseSync(':memory:');
++  database.exec(
++    'create table session(session_id text, country text, region text, city text); create table website_event(website_id text, session_id text, visit_id text, created_at text, event_type integer);',
++  );
++  runtime.rawQuery.mockImplementation((sql: string, params: Record<string, any>) => {
++    const values: string[] = [];
++    const bound = sql
++      .replaceAll('{{websiteId::uuid}}', "'synthetic-website'")
++      .replaceAll('{{startDate}}', "'2026-01-01'")
++      .replaceAll('{{endDate}}', "'2026-02-01'")
++      .replace(/\{\{([A-Za-z0-9_]+)(?:::[^}]+)?\}\}/g, (_, key) => {
++        values.push(params[key]);
++        return '?';
++      });
++    return database.prepare(bound).all(...values);
++  });
++});
++afterEach(() => database.close());
++const insert = (id: string, country: string, region: string | null, city: string) => {
++  database.prepare('insert into session values(?,?,?,?)').run(id, country, region, city);
++  database
++    .prepare('insert into website_event values(?,?,?,?,?)')
++    .run('synthetic-website', id, `${id}-visit`, '2026-01-07', 1);
++};
++const filters = { startDate: new Date('2026-01-01'), endDate: new Date('2026-02-01') };
++
++test('known municipal context supplies a Chinese alias while preserving the existing city/country visitor bucket', async () => {
++  insert('synthetic-a', 'CN', 'CN-BJ', 'Beijing');
++  insert('synthetic-b', 'CN', 'CN-BJ', 'Beijing');
++  const rows = await getSessionMetrics('synthetic-website', { type: 'city', limit: 100 }, filters);
++  expect(rows).toHaveLength(1);
++  expect(rows[0]).toMatchObject({ x: 'Beijing', y: 2, country: 'CN', region: 'CN-BJ' });
++  expect(municipalityCityName(rows[0].x, rows[0].country, rows[0].region)).toBe('北京');
++  const expanded = await getSessionExpandedMetrics(
++    'synthetic-website',
++    { type: 'city', limit: 100 },
++    filters,
++  );
++  expect(expanded[0]).toMatchObject({ name: 'Beijing', visitors: 2, region: 'CN-BJ' });
++});
++
++test.each(['CN-HE', null])(
++  'a mixed or missing region stays unassigned without splitting or relabeling the city bucket (%s)',
++  async region => {
++    insert('synthetic-a', 'CN', 'CN-BJ', 'Beijing');
++    insert('synthetic-b', 'CN', region, 'Beijing');
++    const rows = await getSessionMetrics(
++      'synthetic-website',
++      { type: 'city', limit: 100 },
++      filters,
++    );
++    expect(rows).toHaveLength(1);
++    expect(rows[0]).toMatchObject({ x: 'Beijing', y: 2, region: null });
++    expect(municipalityCityName(rows[0].x, rows[0].country, rows[0].region)).toBeUndefined();
++    const expanded = await getSessionExpandedMetrics(
++      'synthetic-website',
++      { type: 'city', limit: 100 },
++      filters,
++    );
++    expect(expanded[0]).toMatchObject({ name: 'Beijing', visitors: 2, region: null });
++  },
++);
++
++test('Taiwan, Hong Kong and Macau are display provinces; no raw geography field is rewritten', async () => {
++  insert('synthetic-tw', 'TW', 'TW-TPE', 'Taipei');
++  insert('synthetic-hk', 'HK', null, 'Hong Kong');
++  insert('synthetic-mo', 'MO', null, 'Macau');
++  const raw = database.prepare('select * from session order by session_id').all();
++  const rows = await getSessionMetrics(
++    'synthetic-website',
++    { type: 'region', limit: 100 },
++    filters,
++  );
++  expect(rows).toHaveLength(3);
++  expect(new Set(rows.map(row => row.x))).toEqual(new Set(['CN-TW', 'CN-HK', 'CN-MO']));
++  expect(rows.every(row => row.country === 'CN')).toBe(true);
++  const countries = await getSessionMetrics(
++    'synthetic-website',
++    { type: 'country', limit: 100 },
++    filters,
++  );
++  expect(countries).toEqual([{ x: 'CN', y: 3 }]);
++  expect(database.prepare('select * from session order by session_id').all()).toEqual(raw);
++});
++
++test('Chinese city search narrows the current date and selected city instead of replacing it', async () => {
++  insert('synthetic-a', 'CN', 'CN-BJ', 'Beijing');
++  insert('synthetic-b', 'CN', 'CN-GD', 'Guangzhou');
++  const found = await getSessionExpandedMetrics(
++    'synthetic-website',
++    { type: 'city', limit: 100 },
++    { ...filters, country: 'eq.CN', search: '北京' },
++  );
++  expect(found).toHaveLength(1);
++  expect(found[0]).toMatchObject({ name: 'Beijing', visitors: 1, region: 'CN-BJ' });
++  const excluded = await getSessionExpandedMetrics(
++    'synthetic-website',
++    { type: 'city', limit: 100 },
++    { ...filters, city: 'eq.Guangzhou', country: 'eq.CN', search: '北京' },
++  );
++  expect(excluded).toEqual([]);
++});
++
++test('municipal search without a country filter matches only the exact known place, never a foreign or different-region namesake', async () => {
++  insert('synthetic-capital', 'CN', 'CN-BJ', 'Beijing');
++  insert('synthetic-namesake', 'CN', 'CN-HE', 'Beijing');
++  insert('synthetic-foreign', 'US', 'US-WA', 'Beijing');
++  const rows = await getSessionExpandedMetrics(
++    'synthetic-website',
++    { type: 'city', limit: 100 },
++    { ...filters, search: '北京' },
++  );
++  expect(rows).toHaveLength(1);
++  expect(rows[0]).toMatchObject({ name: 'Beijing', visitors: 1, country: 'CN', region: 'CN-BJ' });
++});
++
++test('the selected city link country constrains the real metrics SELECT against a foreign namesake', async () => {
++  insert('synthetic-capital', 'CN', 'CN-BJ', 'Beijing');
++  insert('synthetic-foreign', 'US', 'US-WA', 'Beijing');
++  const before = database.prepare('select * from session order by session_id').all();
++  const selected = { ...filters, ...cityFilterParameters('CN', {}), city: 'eq.Beijing' };
++  const rows = await getSessionMetrics('synthetic-website', { type: 'city', limit: 100 }, selected);
++  expect(rows).toHaveLength(1);
++  expect(rows[0]).toMatchObject({ x: 'Beijing', y: 1, country: 'CN', region: 'CN-BJ' });
++  const expanded = await getSessionExpandedMetrics(
++    'synthetic-website',
++    { type: 'city', limit: 100 },
++    selected,
++  );
++  expect(expanded).toHaveLength(1);
++  expect(expanded[0]).toMatchObject({
++    name: 'Beijing',
++    visitors: 1,
++    country: 'CN',
++    region: 'CN-BJ',
++  });
++  expect(database.prepare('select * from session order by session_id').all()).toEqual(before);
++});
 --- a/src/queries/sql/sessions/getSessionExpandedMetrics.ts
 +++ b/src/queries/sql/sessions/getSessionExpandedMetrics.ts
-@@ -1,3 +1,4 @@
+@@ -0,0 +1,2 @@
++import { geographySearchSql } from '@/lib/artvenn-geography-search';
 +import { getArtVennGeographySql } from '@/lib/artvenn-geography-sql';
- import clickhouse from '@/lib/clickhouse';
- import {
-   EVENT_TYPE,
-@@ -54,6 +55,12 @@
-     );
-   const needsBounceEvents = filters.excludeBounce !== true;
-   const includeCountry = column === 'city' || column === 'region';
+@@ -2,5 +4 @@
+-import {
+-  EVENT_TYPE,
+-  FILTER_COLUMNS,
+-  SESSION_COLUMNS,
+-} from '@/lib/constants';
++import { EVENT_TYPE, FILTER_COLUMNS, SESSION_COLUMNS } from '@/lib/constants';
+@@ -56,0 +55,6 @@
 +  // City keys retain their source country for unambiguous Chinese labels.
 +  const countryColumn = type === 'region' ? getArtVennGeographySql('country') : 'country';
 +
 +  if (column === 'country' || column === 'region') {
 +    column = getArtVennGeographySql(column);
 +  }
- 
-   if (type === 'language') {
-     column = `lower(left(${type}, 2))`;
-@@ -87,7 +94,7 @@
-     from (
-       select
-         ${column} as "name",
+@@ -60,0 +65 @@
++  const geographySearch = geographySearchSql(type, column, filters);
+@@ -81,0 +87 @@
++      ${type === 'city' ? `case when count(distinct coalesce(t.region, '')) = 1 then min(t.region) else null end as region,` : ''}
+@@ -90 +96,2 @@
 -        ${includeCountry ? 'country,' : ''}
 +        ${includeCountry ? `${countryColumn} as country,` : ''}
-         website_event.session_id,
-         website_event.visit_id,
-         count(*) as "c",
-@@ -102,7 +109,7 @@
-         and website_event.event_type NOT IN (2, 5)
-         ${filterQuery}
-       group by name, website_event.session_id, website_event.visit_id
++        ${type === 'city' ? 'min(session.region) as region,' : ''}
+@@ -103,0 +111 @@
++        ${geographySearch.clause}
+@@ -105 +113 @@
 -      ${includeCountry ? ', country' : ''}
 +      ${includeCountry ? `, ${countryColumn}` : ''}
-     ) as t
-     ${visitEventsJoin}
-     where name != ''
+@@ -111 +119 @@
+-    order by visitors desc, visits desc
++    order by visitors desc, visits desc, name${includeCountry ? ', country' : ''}
+@@ -115 +123 @@
+-    { ...queryParams, ...parameters },
++    { ...queryParams, ...parameters, ...geographySearch.params },
 --- a/src/queries/sql/sessions/getSessionMetrics.ts
 +++ b/src/queries/sql/sessions/getSessionMetrics.ts
-@@ -1,3 +1,4 @@
+@@ -0,0 +1 @@
 +import { getArtVennGeographySql } from '@/lib/artvenn-geography-sql';
- import clickhouse from '@/lib/clickhouse';
- import { EVENT_COLUMNS, FILTER_COLUMNS, SESSION_COLUMNS } from '@/lib/constants';
- import { CLICKHOUSE, PRISMA, runQuery } from '@/lib/db';
-@@ -40,6 +41,12 @@
-       },
-     );
-   const includeCountry = column === 'city' || column === 'region';
+@@ -42,0 +44,6 @@
 +  // City keys retain their source country for unambiguous Chinese labels.
 +  const countryColumn = type === 'region' ? getArtVennGeographySql('country') : 'country';
 +
 +  if (column === 'country' || column === 'region') {
 +    column = getArtVennGeographySql(column);
 +  }
- 
-   if (type === 'language') {
-     column = `lower(left(${type}, 2))`;
-@@ -50,7 +57,7 @@
-     select 
-       ${column} x,
-       count(distinct website_event.session_id) y
+@@ -53 +60,2 @@
 -      ${includeCountry ? ', country' : ''}
 +      ${includeCountry ? `, ${countryColumn} as country` : ''}
-     from website_event
-     ${cohortQuery}
-     ${excludeBounceQuery}
++      ${type === 'city' ? `, case when count(distinct coalesce(session.region, '')) = 1 then min(session.region) else null end as region` : ''}
+@@ -65 +73 @@
+-    order by 2 desc
++    order by 2 desc, 1${includeCountry ? ', 3' : ''}
+@@ -94 +102 @@
+-  if (EVENT_COLUMNS.some(item => Object.keys(filters).includes(item))) {
++  if (EVENT_COLUMNS.some((item) => Object.keys(filters).includes(item))) {
 --- a/src/store/app.ts
 +++ b/src/store/app.ts
-@@ -4,7 +4,6 @@
-   DEFAULT_DATE_RANGE_VALUE,
-   DEFAULT_LOCALE,
-   DEFAULT_THEME,
+@@ -7 +6,0 @@
 -  LOCALE_CONFIG,
-   THEME_CONFIG,
-   TIMEZONE_CONFIG,
- } from '@/lib/constants';
-@@ -12,7 +11,7 @@
- import { getItem } from '@/lib/storage';
- 
- const initialState = {
+@@ -15 +14 @@
 -  locale: getItem(LOCALE_CONFIG) || process.env.defaultLocale || DEFAULT_LOCALE,
 +  locale: DEFAULT_LOCALE,
-   theme: getItem(THEME_CONFIG) || DEFAULT_THEME,
-   timezone: getItem(TIMEZONE_CONFIG) || getTimezone(),
-   dateRangeValue: getItem(DATE_RANGE_CONFIG) || DEFAULT_DATE_RANGE_VALUE,
-@@ -28,8 +27,8 @@
-   store.setState({ timezone });
- }
- 
+@@ -31,2 +30,2 @@
 -export function setLocale(locale: string) {
 -  store.setState({ locale });
 +export function setLocale(_locale: string) {
 +  store.setState({ locale: DEFAULT_LOCALE });
- }
- 
- export function setShareData(share: object | null, shareToken: { token?: string } | null) {

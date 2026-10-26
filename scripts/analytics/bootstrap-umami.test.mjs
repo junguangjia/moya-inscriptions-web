@@ -165,6 +165,10 @@ test("native website, team-view-only membership, saved funnel and Board bootstra
   });
   assert.equal(first.status, "CONFIGURED");
   assert.equal(first.retention, "NATIVE_READ_VERIFIED");
+  assert.equal(
+    state.boards[0].description,
+    "查看省市分布、访问趋势和内容互动。IP 位置仅供参考。",
+  );
   assert.equal(state.users[0].role, "view-only");
   assert.equal(state.memberships[0].role, "team-view-only");
   assert.deepEqual(
@@ -177,10 +181,12 @@ test("native website, team-view-only membership, saved funnel and Board bootstra
   );
   assert.equal(
     components.some((component) => component.type === "WorldMap"),
-    false,
+    true,
   );
-  assert.equal(rows[1].id, "regions");
-  const regions = rows[1].columns.map((column) => column.component);
+  assert.equal(rows[1].id, "china-geography");
+  assert.equal(rows[1].columns[0].component.type, "WorldMap");
+  assert.equal(rows[2].id, "regions");
+  const regions = rows[2].columns.map((column) => column.component);
   assert.deepEqual(
     regions.map((component) => component.props.type),
     ["region", "city"],
@@ -190,6 +196,14 @@ test("native website, team-view-only membership, saved funnel and Board bootstra
   );
   assert.equal(regions[0].title, "省份 / 地区");
   assert.equal(regions[1].title, "城市");
+  assert.equal(regions[0].props.limit, 34);
+  assert.equal(regions[1].props.limit, 50);
+  assert.ok(
+    regions.every(
+      (component) =>
+        component.props.showMore && component.props.defaultCountry === "CN",
+    ),
+  );
   const serialized = JSON.stringify(first);
   for (const forbidden of [
     "password",
@@ -204,11 +218,14 @@ test("native website, team-view-only membership, saved funnel and Board bootstra
     steps: state.funnels[0].parameters.steps,
     window: 60,
   };
+  const existingDescription = "Existing administrator description";
+  state.boards[0].description = existingDescription;
   const second = await bootstrapUmami(environment, "synthetic", {
     execute: true,
     fetchImpl,
   });
   assert.deepEqual(second, first);
+  assert.equal(state.boards[0].description, existingDescription);
   assert.equal(
     state.calls
       .slice(previousCalls)

@@ -1,5 +1,7 @@
 "use client";
 
+import { workspacePageLabel } from "../workspace/routes";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -108,6 +110,9 @@ const chipState = (state: WorkSubmissionQueueState): string =>
 
 const StateChip = ({ state }: { readonly state: WorkSubmissionQueueState }) => (
   <span className={styles.chip} data-state={chipState(state)}>
+    <span aria-hidden="true">
+      {state === "pending" ? "◷" : state === "approved" ? "✓" : "−"}
+    </span>{" "}
     {submissionStateLabels[state]}
   </span>
 );
@@ -147,6 +152,7 @@ export const WorkSubmissionsQueueClient = () => {
   const listSequence = useRef(0);
   const detailSequence = useRef(0);
   const panel = useRef<HTMLElement | null>(null);
+  const returnFocus = useRef<HTMLElement | null>(null);
   // The latest URL state: a reload after a decision lists and details what is
   // on screen now, never the tab, page or item the decision started from.
   const queryRef = useRef(query);
@@ -156,6 +162,13 @@ export const WorkSubmissionsQueueClient = () => {
 
   const navigate = useCallback(
     (patch: Partial<Query>, mode: "replace" | "push" = "replace") => {
+      const active = document.activeElement;
+      if (
+        patch.item &&
+        active instanceof HTMLElement &&
+        active.closest("[data-work-submission-list]")
+      )
+        returnFocus.current = active;
       const href = `${pathname}${writeQuery({ ...query, ...patch })}`;
       if (mode === "push") router.push(href, { scroll: false });
       else router.replace(href, { scroll: false });
@@ -222,7 +235,10 @@ export const WorkSubmissionsQueueClient = () => {
   }, [query.item, loadDetail]);
 
   useEffect(() => {
-    if (query.item === null) return;
+    if (query.item === null) {
+      if (returnFocus.current?.isConnected) returnFocus.current.focus();
+      return;
+    }
     // Below the two-column width the panel follows the whole list.
     panel.current?.focus();
     panel.current?.scrollIntoView({ block: "start" });
@@ -349,16 +365,22 @@ export const WorkSubmissionsQueueClient = () => {
     <div className={styles.workspace}>
       <SetStepNav
         nav={[
-          { label: "社区", url: "/admin/community-moderation" },
-          { label: "作品提交审核" },
+          { label: "审核", url: "/admin/community-moderation" },
+          {
+            label: workspacePageLabel(
+              "/admin/community-moderation/work-submissions",
+            ),
+          },
         ]}
       />
       <header className={styles.header}>
         <div>
-          <h1 className={styles.title}>作品提交审核</h1>
+          <h1 className={styles.title}>
+            {workspacePageLabel("/admin/community-moderation/work-submissions")}
+          </h1>
           <p className={styles.lead}>
-            只包含作者明确提交并请求公开的不可变版本；自动保存的草稿和仅自己可见的提交不会出现在这里。
-            {TIME_ZONE_NOTE}。<Link href="/admin">返回工作台</Link>
+            审核作者提交的公开版本；草稿和私密作品不会进入队列。
+            {TIME_ZONE_NOTE}。
           </p>
         </div>
         <div className={styles.summaryLine} data-work-policy-summary="">
@@ -368,7 +390,6 @@ export const WorkSubmissionsQueueClient = () => {
               {settings === null ? "读取中…" : policyLabels[settings.policy]}
             </strong>
           </span>
-          <Link href="/admin/community-moderation/settings">发布设置</Link>
         </div>
       </header>
 
@@ -378,12 +399,6 @@ export const WorkSubmissionsQueueClient = () => {
         </p>
       ) : null}
 
-      <ModerationReasonInput
-        label="作品审核理由（必填）"
-        value={reasonDraft}
-        onChange={setReasonDraft}
-        disabled={busy || retry !== null}
-      />
       <div aria-label="提交状态" className={styles.tabs} role="tablist">
         {states.map((state) => (
           <button
@@ -396,6 +411,9 @@ export const WorkSubmissionsQueueClient = () => {
             role="tab"
             type="button"
           >
+            <span aria-hidden="true">
+              {state === "pending" ? "◷" : state === "approved" ? "✓" : "−"}
+            </span>{" "}
             {submissionStateLabels[state]}
             {query.state === state && page !== null ? (
               <span className={styles.count}>{page.total}</span>
@@ -434,6 +452,13 @@ export const WorkSubmissionsQueueClient = () => {
           )}
         </p>
       )}
+
+      <ModerationReasonInput
+        label="作品审核理由（必填）"
+        value={reasonDraft}
+        onChange={setReasonDraft}
+        disabled={busy || retry !== null}
+      />
 
       <div
         className={styles.layout}
@@ -568,16 +593,20 @@ export const WorkSubmissionsQueueClient = () => {
                   disabled={page.page <= 1 || loading}
                   onClick={() => navigate({ page: query.page - 1 })}
                   type="button"
+                  aria-label="上一页"
+                  title="上一页"
                 >
-                  上一页
+                  <span aria-hidden="true">←</span>
                 </button>
                 <button
                   className={styles.actionButton}
                   disabled={page.page >= page.totalPages || loading}
                   onClick={() => navigate({ page: query.page + 1 })}
                   type="button"
+                  aria-label="下一页"
+                  title="下一页"
                 >
-                  下一页
+                  <span aria-hidden="true">→</span>
                 </button>
               </div>
             </div>
@@ -599,7 +628,7 @@ export const WorkSubmissionsQueueClient = () => {
                 onClick={() => navigate({ item: null })}
                 type="button"
               >
-                关闭
+                <span aria-hidden="true">← </span>返回列表
               </button>
             </div>
             {detail === null || detail.state === "loading" ? (

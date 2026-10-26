@@ -1,3 +1,4 @@
+import { workspacePageLabel } from "../workspace/routes";
 /**
  * Exact-revision Owner approval for Articles: the same rule as the Catalog
  * batch approval (`editorial-approvals`), kept as its own collection so the
@@ -84,7 +85,14 @@ export const editableArticle = async (
 
 export const EditorialArticleApprovals: CollectionConfig = {
   slug: "editorial-article-approvals",
-  labels: { singular: "文章批次发布批准", plural: "文章批次发布批准" },
+  labels: {
+    singular: workspacePageLabel(
+      "/admin/collections/editorial-article-approvals",
+    ),
+    plural: workspacePageLabel(
+      "/admin/collections/editorial-article-approvals",
+    ),
+  },
   admin: {
     useAsTitle: "label",
     group: "系统与自动化",
@@ -128,6 +136,7 @@ export const EditorialArticleApprovals: CollectionConfig = {
     {
       name: "items",
       type: "array",
+      labels: { singular: "文章版本", plural: "文章版本" },
       minRows: 1,
       maxRows: 100,
       required: true,
