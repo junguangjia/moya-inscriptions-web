@@ -109,6 +109,7 @@ export const CommunityContentClient = () => {
     }
   }, [selectedWork]);
   const detailRequest = useRef(0);
+  const detailController = useRef<AbortController | null>(null);
   const [activeUser, setActiveUser] = useState<OperatorUser | null>(null);
   const activeAuthorId = authorFromURL ?? activeUser?.id;
   const [authorError, setAuthorError] = useState<string | null>(null);
@@ -133,6 +134,7 @@ export const CommunityContentClient = () => {
   const [busy, setBusy] = useState(false);
   const commandLock = useRef(false);
   const request = useRef(0);
+  const readController = useRef<AbortController | null>(null);
   const [retry, setRetry] = useState<Operation | null>(null);
   // Selected-item commands whose outcome is still unknown; they keep their
   // request identity inside BulkActions, so navigation waits for them.
@@ -210,17 +212,30 @@ export const CommunityContentClient = () => {
   const settingsVersion = useRef<number | null>(null);
   const load = useCallback(async () => {
     const epoch = ++request.current;
+    readController.current?.abort();
+    const controller = new AbortController();
+    readController.current = controller;
+    // The user list owns its read effect. Refreshing it here as well caused
+    // every query/page change to start a second request.
+    if (tab === "users") {
+      setError(null);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     setSelectedIds(new Set());
-    setUserReload((n) => n + 1);
     try {
       if (tab === "works") {
-        const result = await call<OperatorWorkPage>("read-works", {
-          ...query,
-          ...(activeAuthorId ? { authorId: activeAuthorId } : {}),
-          pageSize: PAGE_SIZE,
-        });
+        const result = await call<OperatorWorkPage>(
+          "read-works",
+          {
+            ...query,
+            ...(activeAuthorId ? { authorId: activeAuthorId } : {}),
+            pageSize: PAGE_SIZE,
+          },
+          controller.signal,
+        );
         if (epoch === request.current) {
           setWorks(result);
           setSelectedWork((current) =>
@@ -231,11 +246,15 @@ export const CommunityContentClient = () => {
           );
         }
       } else if (tab === "featured") {
-        const result = await call<FeaturedPage>("read-featured", {
-          ...query,
-          filter: featuredFilter,
-          pageSize: PAGE_SIZE,
-        });
+        const result = await call<FeaturedPage>(
+          "read-featured",
+          {
+            ...query,
+            filter: featuredFilter,
+            pageSize: PAGE_SIZE,
+          },
+          controller.signal,
+        );
         if (epoch === request.current) {
           setFeatured(result);
           if (settingsVersion.current !== result.settingsVersion) {
@@ -249,7 +268,8 @@ export const CommunityContentClient = () => {
         }
       }
     } catch (e) {
-      if (epoch === request.current) setError(describeFailure(e).text);
+      if (epoch === request.current && !controller.signal.aborted)
+        setError(describeFailure(e).text);
     } finally {
       if (epoch === request.current) setLoading(false);
     }
@@ -258,7 +278,9 @@ export const CommunityContentClient = () => {
     void load();
     return () => {
       request.current++;
+      readController.current?.abort();
       detailRequest.current++;
+      detailController.current?.abort();
     };
   }, [load]);
   const run = async (op: Operation) => {
@@ -266,6 +288,7 @@ export const CommunityContentClient = () => {
     commandLock.current = true;
     setBusy(true);
     setNotice(null);
+    let confirmed = false;
     try {
       const result = await call(op.name, op.input);
       if (op.name === "moderate-work") {
@@ -292,7 +315,7 @@ export const CommunityContentClient = () => {
       }
       setRetry(null);
       setNotice(`${op.label}已保存。`);
-      await load();
+      confirmed = true;
     } catch (e) {
       // Only an answer that never arrived may be re-sent with the same
       // identity; a refusal, conflict or missing subject is final.
@@ -306,6 +329,12 @@ export const CommunityContentClient = () => {
     } finally {
       commandLock.current = false;
       setBusy(false);
+    }
+    // Only writes whose response is still unknown hold navigation. A confirmed
+    // result can refresh in the background, and that read is safe to cancel.
+    if (confirmed) {
+      if (op.name === "recommend-user") setUserReload((n) => n + 1);
+      void load();
     }
   };
   const execute = (
@@ -327,6 +356,7 @@ export const CommunityContentClient = () => {
   const chooseTab = (next: Tab) => {
     if (busy || retry !== null || bulkPending > 0) return;
     detailRequest.current++;
+    detailController.current?.abort();
     setSelectedWork(null);
     setActiveUser(null);
     setSelectedIds(new Set());
@@ -374,17 +404,24 @@ export const CommunityContentClient = () => {
     syncLocation = true,
   ) => {
     const sequence = ++detailRequest.current;
+    detailController.current?.abort();
+    const controller = new AbortController();
+    detailController.current = controller;
     detailOpener.current = opener;
     setSelectedWork(null);
     try {
       const item =
         known ??
         (
-          await call<OperatorWorkPage>("read-works", {
-            page: 1,
-            pageSize: 20,
-            search: id,
-          })
+          await call<OperatorWorkPage>(
+            "read-works",
+            {
+              page: 1,
+              pageSize: 20,
+              search: id,
+            },
+            controller.signal,
+          )
         ).items.find((work) => work.id === id);
       if (sequence !== detailRequest.current) return;
       if (!item) {
@@ -680,12 +717,14 @@ export const CommunityContentClient = () => {
           {loading ? <p role="status">读取中…</p> : null}
           {tab === "works" && works ? (
             <>
-              <ModerationReasonInput
-                label="作品处置理由（必填）"
-                value={reasonDraft}
-                onChange={setReasonDraft}
-                disabled={disabled}
-              />
+              {selectedIds.size === 0 && (
+                <ModerationReasonInput
+                  label="作品处置理由（必填）"
+                  value={reasonDraft}
+                  onChange={setReasonDraft}
+                  disabled={disabled}
+                />
+              )}
               <BulkActions
                 key={activeUser?.id ?? "all-works"}
                 view="works"
@@ -995,6 +1034,7 @@ export const CommunityContentClient = () => {
             actions={workActions(selectedWork)}
             onClose={() => {
               detailRequest.current++;
+              detailController.current?.abort();
               restoreDetailFocus.current = true;
               setSelectedWork(null);
               updateURL({ item: null });

@@ -126,11 +126,15 @@ describe("canonical content workspace URLs", () => {
     navigate("q=碑&page=2");
     render(createElement(CommunityContentClient));
     await waitFor(() =>
-      expect(runtime.call).toHaveBeenCalledWith("read-works", {
-        page: 2,
-        search: "碑",
-        pageSize: 20,
-      }),
+      expect(runtime.call).toHaveBeenCalledWith(
+        "read-works",
+        {
+          page: 2,
+          search: "碑",
+          pageSize: 20,
+        },
+        expect.any(AbortSignal),
+      ),
     );
     expect(
       (screen.getByRole("textbox", { name: /搜索作品/ }) as HTMLInputElement)
@@ -143,11 +147,15 @@ describe("canonical content workspace URLs", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "下一页" }));
     await waitFor(() =>
-      expect(runtime.call).toHaveBeenCalledWith("read-works", {
-        page: 3,
-        search: "碑",
-        pageSize: 20,
-      }),
+      expect(runtime.call).toHaveBeenCalledWith(
+        "read-works",
+        {
+          page: 3,
+          search: "碑",
+          pageSize: 20,
+        },
+        expect.any(AbortSignal),
+      ),
     );
     const params = new URLSearchParams(window.location.search);
     expect(params.get("q")).toBe("碑");
@@ -158,24 +166,32 @@ describe("canonical content workspace URLs", () => {
     navigate("tab=featured&q=旧&page=2");
     render(createElement(CommunityContentClient));
     await waitFor(() =>
-      expect(runtime.call).toHaveBeenCalledWith("read-featured", {
-        page: 2,
-        search: "旧",
-        filter: "active",
-        pageSize: 20,
-      }),
+      expect(runtime.call).toHaveBeenCalledWith(
+        "read-featured",
+        {
+          page: 2,
+          search: "旧",
+          filter: "active",
+          pageSize: 20,
+        },
+        expect.any(AbortSignal),
+      ),
     );
     fireEvent.change(screen.getByRole("textbox", { name: "搜索推荐标题" }), {
       target: { value: "新碑" },
     });
     fireEvent.click(screen.getByRole("button", { name: "搜索" }));
     await waitFor(() =>
-      expect(runtime.call).toHaveBeenCalledWith("read-featured", {
-        page: 1,
-        search: "新碑",
-        filter: "active",
-        pageSize: 20,
-      }),
+      expect(runtime.call).toHaveBeenCalledWith(
+        "read-featured",
+        {
+          page: 1,
+          search: "新碑",
+          filter: "active",
+          pageSize: 20,
+        },
+        expect.any(AbortSignal),
+      ),
     );
     const params = new URLSearchParams(window.location.search);
     expect(params.get("tab")).toBe("featured");
@@ -187,21 +203,29 @@ describe("canonical content workspace URLs", () => {
     navigate("q=原&page=2");
     const view = render(createElement(CommunityContentClient));
     await waitFor(() =>
-      expect(runtime.call).toHaveBeenCalledWith("read-works", {
-        page: 2,
-        search: "原",
-        pageSize: 20,
-      }),
+      expect(runtime.call).toHaveBeenCalledWith(
+        "read-works",
+        {
+          page: 2,
+          search: "原",
+          pageSize: 20,
+        },
+        expect.any(AbortSignal),
+      ),
     );
     navigate("tab=featured&q=新&page=3&filter=all");
     view.rerender(createElement(CommunityContentClient));
     await waitFor(() =>
-      expect(runtime.call).toHaveBeenCalledWith("read-featured", {
-        page: 3,
-        search: "新",
-        filter: "all",
-        pageSize: 20,
-      }),
+      expect(runtime.call).toHaveBeenCalledWith(
+        "read-featured",
+        {
+          page: 3,
+          search: "新",
+          filter: "all",
+          pageSize: 20,
+        },
+        expect.any(AbortSignal),
+      ),
     );
     expect(
       screen.getByRole("heading", { level: 1, name: "推荐" }),
@@ -247,11 +271,15 @@ describe("canonical content workspace URLs", () => {
     expect(
       screen.getByRole("heading", { level: 2, name: "合成作品" }),
     ).toBeTruthy();
-    expect(runtime.call).toHaveBeenCalledWith("read-works", {
-      page: 1,
-      pageSize: 20,
-      search: item.id,
-    });
+    expect(runtime.call).toHaveBeenCalledWith(
+      "read-works",
+      {
+        page: 1,
+        pageSize: 20,
+        search: item.id,
+      },
+      expect.any(AbortSignal),
+    );
     fireEvent.click(screen.getByRole("button", { name: "返回列表" }));
     expect(screen.queryByRole("region", { name: "作品详情与管理" })).toBeNull();
     const params = new URLSearchParams(window.location.search);
@@ -346,12 +374,16 @@ describe("canonical content workspace URLs", () => {
     await waitFor(() => expect(open.hasAttribute("disabled")).toBe(false));
     fireEvent.click(open);
     await waitFor(() =>
-      expect(runtime.call).toHaveBeenCalledWith("read-works", {
-        page: 1,
-        search: "",
-        authorId: user.id,
-        pageSize: 20,
-      }),
+      expect(runtime.call).toHaveBeenCalledWith(
+        "read-works",
+        {
+          page: 1,
+          search: "",
+          authorId: user.id,
+          pageSize: 20,
+        },
+        expect.any(AbortSignal),
+      ),
     );
     const worksURL = new URLSearchParams(window.location.search);
     expect(worksURL.get("author")).toBe(user.id);
@@ -391,12 +423,16 @@ describe("canonical content workspace URLs", () => {
     navigate(`author=${author}&q=碑&page=2&usersQ=书&usersPage=3`);
     render(createElement(CommunityContentClient));
     await waitFor(() =>
-      expect(runtime.call).toHaveBeenCalledWith("read-works", {
-        page: 2,
-        search: "碑",
-        authorId: author,
-        pageSize: 20,
-      }),
+      expect(runtime.call).toHaveBeenCalledWith(
+        "read-works",
+        {
+          page: 2,
+          search: "碑",
+          authorId: author,
+          pageSize: 20,
+        },
+        expect.any(AbortSignal),
+      ),
     );
     expect(
       screen.getByRole("heading", { level: 1, name: "用户作品" }),
@@ -433,12 +469,16 @@ describe("canonical content workspace URLs", () => {
       { userId: author.id, page: 1, pageSize: 1, search: "" },
       expect.any(AbortSignal),
     );
-    expect(runtime.call).toHaveBeenCalledWith("read-works", {
-      authorId: author.id,
-      page: 2,
-      pageSize: 20,
-      search: "碑",
-    });
+    expect(runtime.call).toHaveBeenCalledWith(
+      "read-works",
+      {
+        authorId: author.id,
+        page: 2,
+        pageSize: 20,
+        search: "碑",
+      },
+      expect.any(AbortSignal),
+    );
     expect(new URLSearchParams(window.location.search).get("usersPage")).toBe(
       "3",
     );
@@ -616,12 +656,16 @@ describe("pending command navigation protection", () => {
         ).toBeTruthy(),
       );
       await waitFor(() =>
-        expect(runtime.call).toHaveBeenCalledWith("read-featured", {
-          page: 2,
-          search: "目标",
-          filter: "active",
-          pageSize: 20,
-        }),
+        expect(runtime.call).toHaveBeenCalledWith(
+          "read-featured",
+          {
+            page: 2,
+            search: "目标",
+            filter: "active",
+            pageSize: 20,
+          },
+          expect.any(AbortSignal),
+        ),
       );
       expect(
         runtime.call.mock.calls.filter(([name]) => name === "read-featured"),
@@ -669,5 +713,109 @@ describe("pending command navigation protection", () => {
     const readyUnload = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(readyUnload);
     expect(readyUnload.defaultPrevented).toBe(false);
+  });
+});
+
+describe("lightweight content reads", () => {
+  it("reads users once per query and once for an explicit refresh", async () => {
+    navigate("tab=users");
+    const view = render(createElement(CommunityContentClient));
+    await waitFor(() =>
+      expect(
+        runtime.call.mock.calls.filter(([name]) => name === "read-users"),
+      ).toHaveLength(1),
+    );
+    await act(async () => {});
+    expect(
+      runtime.call.mock.calls.filter(([name]) => name === "read-users"),
+    ).toHaveLength(1);
+    navigate("tab=users&q=新&page=2");
+    view.rerender(createElement(CommunityContentClient));
+    await waitFor(() =>
+      expect(
+        runtime.call.mock.calls.filter(([name]) => name === "read-users"),
+      ).toHaveLength(2),
+    );
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("button", { name: "刷新用户" })
+          .hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "刷新用户" }));
+    await waitFor(() =>
+      expect(
+        runtime.call.mock.calls.filter(([name]) => name === "read-users"),
+      ).toHaveLength(3),
+    );
+  });
+
+  it("cancels the old search and ignores a late response", async () => {
+    let finish!: (value: unknown) => void;
+    const previous = new Promise((resolve) => {
+      finish = resolve;
+    });
+    runtime.call.mockImplementation((name, input) =>
+      name === "read-works" && input.search === ""
+        ? previous
+        : Promise.resolve({ items: [], total: 7, page: 1, pageSize: 20 }),
+    );
+    const view = render(createElement(CommunityContentClient));
+    await waitFor(() => expect(runtime.call).toHaveBeenCalledOnce());
+    const signal = runtime.call.mock.calls[0]![2] as AbortSignal;
+    navigate("q=新");
+    view.rerender(createElement(CommunityContentClient));
+    await screen.findByText(/共 7 项/);
+    expect(signal.aborted).toBe(true);
+    await act(async () =>
+      finish({ items: [], total: 999, page: 1, pageSize: 20 }),
+    );
+    expect(screen.queryByText(/共 999 项/)).toBeNull();
+    expect(screen.getByText(/共 7 项/)).toBeTruthy();
+  });
+
+  it("releases navigation after a confirmed write while its refresh is still pending", async () => {
+    const user = {
+      id: `user-${"a".repeat(32)}`,
+      handle: "synthetic",
+      displayName: "合成用户",
+      bio: "",
+      status: "active",
+      createdAt: "2026-10-01T00:00:00Z",
+      submittedWorks: 0,
+      recommended: false,
+      recommendationVersion: 1,
+    };
+    let confirm!: (value: unknown) => void;
+    const write = new Promise((resolve) => {
+      confirm = resolve;
+    });
+    let reads = 0;
+    runtime.call.mockImplementation((name) =>
+      name === "recommend-user"
+        ? write
+        : ++reads === 1
+          ? Promise.resolve({ items: [user], total: 1, page: 1, pageSize: 20 })
+          : new Promise(() => {}),
+    );
+    navigate("tab=users");
+    render(createElement(CommunityContentClient));
+    const recommend = await screen.findByRole("button", { name: "推荐用户" });
+    await waitFor(() => expect(recommend.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(recommend);
+    const link = document.createElement("a");
+    link.href = "/admin/collections/catalogs";
+    const click = vi.fn((event: MouseEvent) => event.preventDefault());
+    link.addEventListener("click", click);
+    document.body.append(link);
+    fireEvent.click(link);
+    expect(click).not.toHaveBeenCalled();
+    await act(async () => confirm({ version: 2 }));
+    await waitFor(() => expect(reads).toBe(2));
+    fireEvent.click(link);
+    expect(click).toHaveBeenCalledOnce();
+    expect(recommend.hasAttribute("disabled")).toBe(true);
+    link.remove();
   });
 });

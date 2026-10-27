@@ -22,7 +22,7 @@ const paths = await vi.hoisted(async () => {
 });
 vi.mock(paths.ui, () => ({ SetStepNav: () => null }));
 vi.mock(paths.templates, () => ({ DefaultTemplate: () => null }));
-import { ReportDetail } from "admin/community-views";
+import { ReportDetail } from "admin/community-reports-client";
 
 const fixture = (patch: Partial<OperatorReport> = {}): OperatorReport => ({
   id: "report-synthetic",

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import {
   catalogExpectedRenditions,
   createCatalogPublishedRenditions,
+  selectCatalogThumbnail,
 } from "@moya/backend-production/internal/catalog-delivery";
 import {
   closePostgresPool,
@@ -168,4 +169,24 @@ describe("Admin publish gate facts on PostgreSQL", () => {
     );
     expect((await read(sources(live))).media[0]!.complete).toBe(false);
   });
+});
+
+it("reads only an exact ready small private thumbnail, without a public generation", async () => {
+  const input = await liveSource(() => false);
+  const small = await selectCatalogThumbnail(pool, input);
+  expect(small).toMatchObject({ contentType: "image/webp", byteSize: 2048 });
+  expect(
+    await selectCatalogThumbnail(pool, { ...input, sourceSha256: hex(32) }),
+  ).toBeNull();
+  expect(
+    await selectCatalogThumbnail(pool, {
+      ...input,
+      objectKey: input.objectKey + "x",
+    }),
+  ).toBeNull();
+  await pool.query(
+    "UPDATE community.catalog_media_assets SET state='failed', failure_code='synthetic_unavailable' WHERE media_id=$1",
+    [input.mediaId],
+  );
+  expect(await selectCatalogThumbnail(pool, input)).toBeNull();
 });

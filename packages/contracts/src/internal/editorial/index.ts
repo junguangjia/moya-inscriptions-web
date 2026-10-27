@@ -131,3 +131,6 @@ export type {
   EditorialMediaIngestVerifyRequest,
   EditorialMediaIngestVerifyResult,
 } from "./ingest.js";
+
+export { catalogThumbnailRequestSchema } from "./catalog-delivery.js";
+export type { CatalogThumbnailRequest } from "./catalog-delivery.js";

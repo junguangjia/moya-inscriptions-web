@@ -540,7 +540,7 @@ describe("current repository truth and local configuration", () => {
     ]);
 
     expect(webLayout).toContain('title: "由于艺"');
-    expect(adminConfig).toContain('titleSuffix: "— 由艺管理端"');
+    expect(adminConfig).toContain('titleSuffix: "— 由于艺管理端"');
     expect(adminTsconfig.compilerOptions).toMatchObject({
       paths: { "@payload-config": ["./payload.config.ts"] },
     });

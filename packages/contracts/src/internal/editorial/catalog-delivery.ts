@@ -321,3 +321,13 @@ export const catalogRenderBacklogAnswerSchema = z
 export type CatalogRenderBacklogAnswer = z.output<
   typeof catalogRenderBacklogAnswerSchema
 >;
+
+/** Owner preview of one existing immutable Catalog source, never a storage locator. */
+export const catalogThumbnailRequestSchema = z.strictObject({
+  mediaId: editorialMediaSchema.shape.mediaId,
+  objectKey: editorialMediaSchema.shape.objectKey,
+  sourceSha256: digest,
+});
+export type CatalogThumbnailRequest = z.infer<
+  typeof catalogThumbnailRequestSchema
+>;

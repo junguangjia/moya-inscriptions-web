@@ -360,3 +360,64 @@ describe("Umami server-side session client", () => {
     },
   );
 });
+
+describe("analytics static asset reuse", () => {
+  it.each([
+    "/_next/static/chunks/0mqay9f16jzy9.js",
+    "/_next/static/css/08a4277ce80f892d.css",
+  ])("privately caches only build addressed assets: %s", async (path) => {
+    const request = vi.fn(async (_path: string, init: RequestInit) => {
+      expect(new Headers(init.headers).get("if-none-match")).toBe(
+        '"synthetic-build-etag"',
+      );
+      return new Response("synthetic asset", {
+        headers: {
+          "content-type": path.endsWith(".js")
+            ? "application/javascript"
+            : "text/css",
+          etag: '"synthetic-build-etag"',
+        },
+      });
+    });
+    const proxy = createAnalyticsProxy({
+      isOwner: async () => true,
+      upstream: { request, origin: () => new URL(environment.UMAMI_ORIGIN) },
+    });
+    const result = await proxy(
+      new Request(url(path), {
+        headers: { "if-none-match": '"synthetic-build-etag"' },
+      }),
+    );
+    expect(result.headers.get("cache-control")).toBe(
+      "private, max-age=31536000, immutable",
+    );
+    expect(result.headers.get("etag")).toBe('"synthetic-build-etag"');
+    expect(result.headers.get("vary")).toContain("Cookie");
+  });
+  it.each([
+    "/api/config",
+    "/websites/synthetic",
+    "/_next/static/app.js",
+    "/maps/china-provinces.json",
+  ])("keeps %s private and fresh", async (path) => {
+    const request = vi.fn(async (_path: string, init: RequestInit) => {
+      expect(new Headers(init.headers).has("if-none-match")).toBe(false);
+      return new Response("synthetic", {
+        headers: { etag: '"synthetic-etag"' },
+      });
+    });
+    const proxy = createAnalyticsProxy({
+      isOwner: async () => true,
+      upstream: { request, origin: () => new URL(environment.UMAMI_ORIGIN) },
+    });
+    expect(
+      (
+        await proxy(
+          new Request(url(path), {
+            headers: { "if-none-match": '"synthetic-etag"' },
+          }),
+        )
+      ).headers.get("cache-control"),
+    ).toBe("private, no-store");
+  });
+});

@@ -21,7 +21,7 @@ const read = async (relative) => {
 };
 const theme = await read("packages/design-tokens/src/theme.css");
 const navigation = {
-  brandLabel: "由艺",
+  brandLabel: "由于艺",
   caption: "管理后台",
   homeHref: "/admin",
   brandAssetHref: "/admin/brand.svg",

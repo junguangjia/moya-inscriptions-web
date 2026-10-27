@@ -82,7 +82,9 @@ export const createUmamiUpstream = (
           headers,
           cache: "no-store",
           redirect: "manual",
-          signal: AbortSignal.timeout(15_000),
+          signal: init.signal
+            ? AbortSignal.any([init.signal, AbortSignal.timeout(15_000)])
+            : AbortSignal.timeout(15_000),
         });
       };
       let response = await perform();

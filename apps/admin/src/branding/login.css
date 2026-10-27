@@ -86,7 +86,7 @@
     :is(.reset-password, .template-minimal:has(.reset-password__wrap))
   )
   .template-minimal__wrap::before {
-  content: "由艺 · 管理后台";
+  content: "由于艺 · 管理后台";
   display: block;
   margin-block-end: var(--yoyi-space-7);
   color: var(--yoyi-color-text-secondary);

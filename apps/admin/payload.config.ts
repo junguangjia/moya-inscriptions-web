@@ -23,6 +23,7 @@ import { communityEndpoints } from "./src/community/endpoints";
 import { analyticsEndpoints } from "./src/analytics/endpoints";
 import { editorialMcp } from "./src/mcp";
 import { createCatalogIngestEndpoints } from "./src/media/catalog-ingest";
+import { createCatalogThumbnailEndpoint } from "./src/media/thumbnail-endpoint";
 import { createMediaCollection } from "./src/media/collection";
 import { createResumableMediaEndpoints } from "./src/media/resumable-upload";
 import { createEditorialStoragePlugin } from "./src/media/storage";
@@ -58,7 +59,7 @@ export default buildConfig({
       importMapFile: path.resolve(dirname, "app/(payload)/admin/importMap.ts"),
     },
     meta: {
-      titleSuffix: "— 由艺管理端",
+      titleSuffix: "— 由于艺管理端",
       icons: {
         icon: [
           { url: "/admin/brand.svg", type: "image/svg+xml", sizes: "any" },
@@ -312,6 +313,7 @@ export default buildConfig({
           ),
         })
       : []),
+    createCatalogThumbnailEndpoint(),
     ...communityEndpoints,
     ...analyticsEndpoints,
     // Empty unless the connection surface is composed at all; the gate is the

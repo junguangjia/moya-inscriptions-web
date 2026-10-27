@@ -160,16 +160,16 @@ export const coverPreview = (
   if (item === undefined) return null;
   const coverKey = submissionVariantKey(submission, item, "cover");
   const preview: SubmissionPreview | null =
-    coverKey !== null && item.variants.includes("cover")
-      ? { variant: "cover", editKey: coverKey, outline: false }
-      : item.variants.includes("display")
-        ? {
-            variant: "display",
-            editKey: item.editKey,
-            outline: croppedCover(submission, item),
-          }
-        : coverKey !== null && item.variants.includes("thumb")
-          ? { variant: "thumb", editKey: coverKey, outline: false }
+    coverKey !== null && item.variants.includes("thumb")
+      ? { variant: "thumb", editKey: coverKey, outline: false }
+      : coverKey !== null && item.variants.includes("cover")
+        ? { variant: "cover", editKey: coverKey, outline: false }
+        : item.variants.includes("display")
+          ? {
+              variant: "display",
+              editKey: item.editKey,
+              outline: croppedCover(submission, item),
+            }
           : null;
   return { item, chosen, preview };
 };

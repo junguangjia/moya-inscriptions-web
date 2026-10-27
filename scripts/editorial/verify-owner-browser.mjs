@@ -166,6 +166,33 @@ async function main() {
           ].includes(summary?.nativeWithdrawalCode)
             ? summary.nativeWithdrawalCode
             : undefined,
+          mediaCaptionKinds: Array.isArray(summary?.mediaCaptionKinds)
+            ? summary.mediaCaptionKinds
+                .filter((value) =>
+                  ["uploaded", "empty", "other"].includes(value),
+                )
+                .slice(0, 20)
+            : undefined,
+          mediaCheck: [
+            "picker-count",
+            "placeholder-count",
+            "unavailable-message",
+            "unavailable-identity",
+          ].includes(summary?.mediaCheck)
+            ? summary.mediaCheck
+            : undefined,
+          thumbnailFailureCount:
+            Number.isSafeInteger(summary?.thumbnailFailureCount) &&
+            summary.thumbnailFailureCount >= 0 &&
+            summary.thumbnailFailureCount <= 100
+              ? summary.thumbnailFailureCount
+              : undefined,
+          receivedCount:
+            Number.isSafeInteger(summary?.receivedCount) &&
+            summary.receivedCount >= 0 &&
+            summary.receivedCount <= 100
+              ? summary.receivedCount
+              : undefined,
           failureKind: ["AssertionError", "TimeoutError", "Error"].includes(
             summary?.category,
           )

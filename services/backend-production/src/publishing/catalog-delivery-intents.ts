@@ -4,7 +4,10 @@ import {
   asCatalogQueryUnavailableError,
   parsePostgresConfig,
 } from "@moya/catalog-postgres";
-import type { BackendApplicationOptions } from "@moya/backend-runtime";
+import type {
+  BackendApplicationOptions,
+  readBoundedArticleThumbnail,
+} from "@moya/backend-runtime";
 
 import {
   MAX_OUTPUT_EDGE,
@@ -1428,3 +1431,46 @@ export const createCatalogRenderBacklog =
     const { countedAt, ...backlog } = await readCatalogRenderBacklog(app);
     return { ...backlog, countedAt: countedAt?.toISOString() ?? null };
   };
+
+/** Indexed private preview: one existing ready rendition, no public eligibility or fallback. */
+export const catalogThumbnailSql = `
+  SELECT b.storage_key, b.byte_size, b.sha256
+  FROM community.catalog_media_assets a
+  JOIN community.media_renditions r ON r.catalog_asset_id=a.id
+    AND r.role='thumb' AND r.edit_key='base' AND r.state='ready'
+    AND r.content_type='image/webp'
+  JOIN community.media_blobs b ON b.id=r.blob_id AND b.state='committed'
+    AND b.purpose='catalog_derivative' AND b.content_type='image/webp'
+  WHERE a.media_id=$1 AND a.source_object_key=$2
+    AND a.source_sha256=$3 AND a.master_sha256=$3 AND a.state='ready'
+    AND GREATEST(r.width,r.height)<=480 AND b.byte_size BETWEEN 1 AND 524288
+  LIMIT 1
+`;
+export const selectCatalogThumbnail = async (
+  pool: Pick<CatalogPool, "query">,
+  input: Parameters<
+    NonNullable<BackendApplicationOptions["catalogThumbnail"]>
+  >[0],
+): Promise<
+  Awaited<ReturnType<Parameters<typeof readBoundedArticleThumbnail>[1]>>
+> => {
+  const row = (
+    await pool.query<{
+      storage_key: string;
+      byte_size: string | number;
+      sha256: string;
+    }>(catalogThumbnailSql, [
+      input.mediaId,
+      input.objectKey,
+      input.sourceSha256,
+    ])
+  ).rows[0];
+  return row
+    ? {
+        storageKey: row.storage_key,
+        contentType: "image/webp",
+        byteSize: Number(row.byte_size),
+        sha256: row.sha256,
+      }
+    : null;
+};

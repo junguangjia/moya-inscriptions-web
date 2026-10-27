@@ -103,6 +103,10 @@ server {
     # Preserve native RSC/hash inputs before Payload's separate Next server
     # normalizes them; the Owner-gated proxy restores this fixed header set.
     location ^~ /admin/analytics-workspace {
+        # Fetch decodes upstream compression; include native assets alongside HTML.
+        gzip on;
+        gzip_types application/javascript text/javascript text/css image/svg+xml;
+        gzip_vary on;
         proxy_set_header Host catalog.example.invalid;
         proxy_set_header X-Forwarded-Host catalog.example.invalid;
         proxy_set_header X-Forwarded-Proto https;

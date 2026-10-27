@@ -31,6 +31,8 @@ const runtime = await vi.hoisted(async () => {
     excludeDevice: vi.fn(),
     theme: "light",
     mobile: false,
+    animate: false,
+    getPreference: vi.fn(),
   };
 });
 
@@ -62,11 +64,11 @@ vi.mock(runtime.ui, () => ({
     hydrated: true,
     navOpen: true,
     navRef: { current: null },
-    shouldAnimate: false,
+    shouldAnimate: runtime.animate,
     setNavOpen: runtime.setNavOpen,
   }),
   useTheme: () => ({ theme: runtime.theme, setTheme: runtime.setTheme }),
-  usePreferences: () => ({ getPreference: async () => undefined }),
+  usePreferences: () => ({ getPreference: runtime.getPreference }),
   Logout: () => createElement("button", {}, "退出登录"),
   NavToggler: ({ children }: { children: ReactNode }) =>
     createElement("button", {}, children),
@@ -127,6 +129,8 @@ beforeEach(() => {
   runtime.user = { collection: "users", role: "owner" };
   runtime.theme = "light";
   runtime.mobile = false;
+  runtime.animate = false;
+  runtime.getPreference.mockReset().mockResolvedValue(undefined);
   runtime.setNavOpen.mockReset();
   runtime.setTheme.mockReset();
   runtime.excludeDevice.mockReset();
@@ -135,7 +139,10 @@ beforeEach(() => {
   })) as unknown as typeof window.matchMedia;
   HTMLElement.prototype.scrollIntoView = vi.fn();
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 describe("flat Admin workspace navigation", () => {
   it("renders exactly eight distinct primary destinations and no legacy accordion groups", () => {
@@ -298,4 +305,15 @@ describe("canonical workspace ownership", () => {
       ),
     ).toBeNull();
   });
+});
+
+it("opens desktop navigation after a bounded preference wait even when Payload starts animation", async () => {
+  vi.useFakeTimers();
+  runtime.getPreference.mockReturnValue(new Promise(() => {}));
+  const view = render(createElement(WorkspaceNavigation));
+  await vi.advanceTimersByTimeAsync(100);
+  runtime.animate = true;
+  view.rerender(createElement(WorkspaceNavigation));
+  await vi.advanceTimersByTimeAsync(650);
+  expect(runtime.setNavOpen).toHaveBeenCalledWith(true);
 });

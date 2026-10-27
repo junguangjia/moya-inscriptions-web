@@ -10,6 +10,11 @@ const privateHeaders = {
 const failure = (status: number, message: string) =>
   new Response(message, { status, headers: privateHeaders });
 
+// Only build-addressed files may be reused by this browser. Never cache native
+// documents, RSC, configuration, geography data or private API responses.
+const hashedAsset =
+  /^\/_next\/static\/(?:chunks|css|media)\/(?:[A-Za-z0-9_()[\].@-]+\/)*(?:[A-Za-z0-9_()[\].@-]*[.-])?(?:[a-f0-9]{8,}|[a-z0-9_-]{12,})(?:\.[a-z0-9]+){1,2}$/u;
+
 const id = "[0-9a-f-]{36}";
 const teamDetail = new RegExp(`^/api/teams/${id}$`, "iu");
 const teamWebsites = new RegExp(`^/api/teams/${id}/websites$`, "iu");
@@ -121,6 +126,16 @@ export const createAnalyticsProxy =
       return failure(404, "此入口仅提供分析报表；请在现有后台管理账号。");
 
     const headers = new Headers();
+    const staticAsset =
+      hashedAsset.test(suffix) &&
+      !request.headers.has("rsc") &&
+      !request.headers.has("x-moya-umami-rsc");
+    if (staticAsset) {
+      for (const name of ["if-none-match", "if-modified-since"]) {
+        const value = request.headers.get(name);
+        if (value) headers.set(name, value);
+      }
+    }
     for (const name of [
       "accept",
       "accept-language",
@@ -152,6 +167,7 @@ export const createAnalyticsProxy =
       const response = await upstream.request(upstreamPath, {
         method: request.method,
         headers,
+        signal: request.signal,
         // Native bootstrap needs POST verify; never relay credentials or bodies.
         ...(request.method === "POST" ? { body: "{}" } : {}),
       });
@@ -212,6 +228,20 @@ export const createAnalyticsProxy =
         );
       }
       const outgoing = new Headers(privateHeaders);
+      if (
+        staticAsset &&
+        [200, 304].includes(response.status) &&
+        !response.headers.has("location") &&
+        !/text\/(?:html|x-component)/iu.test(
+          response.headers.get("content-type") ?? "",
+        )
+      ) {
+        outgoing.set("cache-control", "private, max-age=31536000, immutable");
+        for (const name of ["etag", "last-modified"]) {
+          const value = response.headers.get(name);
+          if (value) outgoing.set(name, value);
+        }
+      }
       for (const name of [
         "content-type",
         "content-security-policy",

@@ -1300,13 +1300,13 @@ describe("Work publishing view rules", () => {
     // The card cover: its own cover derivative under the cover key, no outline.
     expect(
       coverPreview({ ...cropped, items: [cover, other] })?.preview,
-    ).toEqual({ variant: "cover", editKey: coverKey, outline: false });
+    ).toEqual({ variant: "thumb", editKey: coverKey, outline: false });
     expect(
       coverPreview({
         ...cropped,
         items: [{ ...cover, variants: ["thumb", "display"] }],
       })?.preview,
-    ).toEqual({ variant: "display", editKey: "base", outline: true });
+    ).toEqual({ variant: "thumb", editKey: coverKey, outline: false });
     expect(
       coverPreview({ ...cropped, items: [{ ...cover, variants: ["thumb"] }] })
         ?.preview,
@@ -1323,7 +1323,7 @@ describe("Work publishing view rules", () => {
     expect(itemPreviewVariant(uncropped, plain, "tile")).toBe("thumb");
     expect(coverPreview({ ...uncropped, items: [plain] })).toMatchObject({
       chosen: true,
-      preview: { variant: "cover", editKey: "base", outline: false },
+      preview: { variant: "thumb", editKey: "base", outline: false },
     });
     // No chosen cover: the card uses the first item.
     expect(

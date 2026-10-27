@@ -429,3 +429,11 @@ export const openCommunityOperatorEvidence: OperatorMediaCall = (
     OPERATOR_EVIDENCE_TYPES,
     OPERATOR_EVIDENCE_MAXIMUM_BYTES,
   );
+
+/** The same bounded private relay, restricted to existing small Catalog WebP. */
+export const openCatalogOperatorThumbnail: OperatorMediaCall = (
+  path,
+  _range,
+  signal,
+) =>
+  openOperatorBinary(path, null, signal, new Set(["image/webp"]), 512 * 1024);

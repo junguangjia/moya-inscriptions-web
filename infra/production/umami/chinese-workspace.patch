@@ -1261,7 +1261,7 @@
 +        href={archiveNavigation.homeHref}
 +        className={styles.brand}
 +        onClick={onNavigate}
-+        aria-label="由艺管理后台工作台"
++        aria-label={`${archiveNavigation.brandLabel}管理后台工作台`}
 +      >
 +        <span
 +          className={styles.brandMark}
@@ -1740,12 +1740,12 @@
 +    return <Loading aria-label="加载中" placement="absolute" />;
 --- a/src/app/(main)/layout.tsx
 +++ b/src/app/(main)/layout.tsx
-@@ -0,0 +1 @@
-+import { archiveAdminMode } from '@/lib/archive-admin';
+@@ -2,0 +3 @@
++import { archiveAdminMode, archiveNavigation } from '@/lib/archive-admin';
 @@ -15,2 +16,2 @@
 -    template: '%s | Umami',
 -    default: 'Umami',
-+    template: archiveAdminMode ? '%s | 由艺管理后台' : '%s | Umami',
++    template: archiveAdminMode ? `%s | ${archiveNavigation.brandLabel}管理后台` : '%s | Umami',
 +    default: archiveAdminMode ? '访问分析' : 'Umami',
 --- a/src/app/(main)/settings/preferences/LanguageSetting.tsx
 +++ b/src/app/(main)/settings/preferences/LanguageSetting.tsx
@@ -1764,11 +1764,174 @@
 @@ -13 +13 @@
 -    return <Loading placement="absolute" />;
 +    return <Loading aria-label="加载中" placement="absolute" />;
+--- /dev/null
++++ b/src/app/(main)/websites/WebsiteProvider.archive.test.tsx
+@@ -0,0 +1,135 @@
++import { cleanup, fireEvent, render, screen } from '@testing-library/react';
++import { useContext } from 'react';
++import { afterEach, beforeEach, expect, test, vi } from 'vitest';
++
++const runtime = vi.hoisted(() => ({
++  private: true,
++  data: undefined as { id: string; name: string } | undefined,
++  isLoading: false,
++  isFetching: false,
++  error: undefined as unknown,
++  refetch: vi.fn(),
++  contentRender: vi.fn(),
++}));
++vi.mock('@/lib/archive-admin', () => ({
++  get archiveAdminMode() {
++    return runtime.private;
++  },
++}));
++vi.mock('@/components/hooks/queries/useWebsiteQuery', () => ({
++  useWebsiteQuery: () => ({
++    data: runtime.data,
++    isLoading: runtime.isLoading,
++    isFetching: runtime.isFetching,
++    error: runtime.error,
++    refetch: runtime.refetch,
++  }),
++}));
++
++import { WebsiteContext, WebsiteProvider } from './WebsiteProvider';
++
++function Content() {
++  const website = useContext(WebsiteContext);
++  runtime.contentRender();
++  return <div>统计站点：{website?.id}</div>;
++}
++
++beforeEach(() => {
++  runtime.private = true;
++  runtime.data = undefined;
++  runtime.isLoading = false;
++  runtime.isFetching = false;
++  runtime.error = undefined;
++  runtime.refetch.mockReset().mockResolvedValue(undefined);
++  runtime.contentRender.mockClear();
++});
++afterEach(cleanup);
++
++test('a private metadata failure shows an honest retryable state instead of blank content', () => {
++  runtime.error = new Error('synthetic-site-read-failure');
++  render(
++    <WebsiteProvider websiteId="synthetic-current-site">
++      <Content />
++    </WebsiteProvider>,
++  );
++  expect(screen.getByRole('alert')).toHaveTextContent('无法读取统计站点，请重试。');
++  expect(runtime.contentRender).not.toHaveBeenCalled();
++  fireEvent.click(screen.getByRole('button', { name: '重试' }));
++  expect(runtime.refetch).toHaveBeenCalledTimes(1);
++});
++
++test('a private missing metadata result also offers recovery without inventing a website', () => {
++  render(
++    <WebsiteProvider websiteId="synthetic-current-site">
++      <Content />
++    </WebsiteProvider>,
++  );
++  expect(screen.getByRole('alert')).toBeDefined();
++  expect(runtime.contentRender).not.toHaveBeenCalled();
++});
++
++test('a placeholder from another website is never provided during loading or after failure', () => {
++  runtime.data = { id: 'synthetic-old-site', name: '合成旧站点' };
++  runtime.isFetching = true;
++  const result = render(
++    <WebsiteProvider websiteId="synthetic-new-site">
++      <Content />
++    </WebsiteProvider>,
++  );
++  expect(screen.getByLabelText('加载中')).toBeDefined();
++  expect(runtime.contentRender).not.toHaveBeenCalled();
++  runtime.isFetching = false;
++  runtime.error = new Error('synthetic-new-site-failure');
++  result.rerender(
++    <WebsiteProvider websiteId="synthetic-new-site">
++      <Content />
++    </WebsiteProvider>,
++  );
++  expect(screen.getByRole('alert')).toBeDefined();
++  expect(runtime.contentRender).not.toHaveBeenCalled();
++  expect(screen.queryByText(/synthetic-old-site/)).toBeNull();
++  runtime.error = undefined;
++  runtime.data = { id: 'synthetic-new-site', name: '合成新站点' };
++  result.rerender(
++    <WebsiteProvider websiteId="synthetic-new-site">
++      <Content />
++    </WebsiteProvider>,
++  );
++  expect(screen.getByText('统计站点：synthetic-new-site')).toBeDefined();
++});
++
++test('private cached metadata errors remain visible and retry cannot be double-clicked while fetching', () => {
++  runtime.data = { id: 'synthetic-current-site', name: '合成站点' };
++  runtime.error = new Error('synthetic-background-site-failure');
++  runtime.isFetching = true;
++  render(
++    <WebsiteProvider websiteId="synthetic-current-site">
++      <Content />
++    </WebsiteProvider>,
++  );
++  expect(screen.getByRole('alert')).toHaveAttribute('aria-busy', 'true');
++  const retry = screen.getByRole('button', { name: '重试' });
++  expect(retry).toBeDisabled();
++  fireEvent.click(retry);
++  expect(runtime.refetch).not.toHaveBeenCalled();
++});
++
++test('the original non-archive provider flow remains unchanged', () => {
++  runtime.private = false;
++  runtime.error = new Error('synthetic-native-failure');
++  const result = render(
++    <WebsiteProvider websiteId="synthetic-current-site">
++      <Content />
++    </WebsiteProvider>,
++  );
++  expect(result.container).toBeEmptyDOMElement();
++  expect(screen.queryByRole('button', { name: '重试' })).toBeNull();
++  runtime.error = undefined;
++  runtime.data = { id: 'synthetic-current-site', name: '合成站点' };
++  result.rerender(
++    <WebsiteProvider websiteId="synthetic-current-site">
++      <Content />
++    </WebsiteProvider>,
++  );
++  expect(screen.getByText('统计站点：synthetic-current-site')).toBeDefined();
++});
 --- a/src/app/(main)/websites/WebsiteProvider.tsx
 +++ b/src/app/(main)/websites/WebsiteProvider.tsx
-@@ -19 +19 @@
+@@ -2 +2 @@
+-import { Loading } from '@umami/react-zen';
++import { Button, Column, Loading, Text } from '@umami/react-zen';
+@@ -5,0 +6 @@
++import { archiveAdminMode } from '@/lib/archive-admin';
+@@ -16 +17 @@
+-  const { data: website, isFetching, isLoading } = useWebsiteQuery(websiteId);
++  const { data: website, isFetching, isLoading, error, refetch } = useWebsiteQuery(websiteId);
+@@ -19 +20,18 @@
 -    return <Loading placement="absolute" />;
 +    return <Loading aria-label="加载中" placement="absolute" />;
++  }
++
++  const matchesWebsite =
++    typeof website?.id === 'string' && website.id.toLowerCase() === websiteId.toLowerCase();
++  if (archiveAdminMode && (error || !matchesWebsite)) {
++    if (isFetching && !error) {
++      return <Loading aria-label="加载中" placement="absolute" />;
++    }
++
++    return (
++      <Column role="alert" gap="3" padding="6" aria-busy={!!isFetching}>
++        <Text>无法读取统计站点，请重试。</Text>
++        <Button variant="outline" onPress={() => void refetch()} isDisabled={isFetching}>
++          重试
++        </Button>
++      </Column>
++    );
 --- a/src/app/(main)/websites/[websiteId]/(reports)/attribution/AttributionPage.tsx
 +++ b/src/app/(main)/websites/[websiteId]/(reports)/attribution/AttributionPage.tsx
 @@ -3 +2,0 @@
@@ -2324,7 +2487,7 @@
 +}
 --- /dev/null
 +++ b/src/app/(main)/websites/[websiteId]/ArchiveAnalysis.test.tsx
-@@ -0,0 +1,176 @@
+@@ -0,0 +1,193 @@
 +import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 +import { afterEach, expect, test, vi } from 'vitest';
 +
@@ -2332,6 +2495,7 @@
 +  path: '/websites/synthetic-site',
 +  query: {} as Record<string, string>,
 +  push: vi.fn(),
++  loaded: [] as string[],
 +}));
 +vi.mock('@/components/hooks', () => ({
 +  useMessages: () => ({ t: (value: string) => value, labels: {} }),
@@ -2355,20 +2519,28 @@
 +  };
 +});
 +vi.mock('./WebsiteExpandedView', () => ({ WebsiteExpandedView: () => <div data-test="more" /> }));
-+vi.mock('./sessions/SessionModal', () => ({ SessionModal: () => <div data-test="session" /> }));
-+vi.mock('./replays/ReplayModal', () => ({ ReplayModal: () => <div data-test="replay" /> }));
-+vi.mock('./WebsitePage', () => ({
-+  WebsitePage: () => <div data-test="overview">original-overview</div>,
-+}));
++vi.mock('./sessions/SessionModal', async () => {
++  runtime.loaded.push('session');
++  return { SessionModal: () => <div data-test="session" /> };
++});
++vi.mock('./replays/ReplayModal', async () => {
++  runtime.loaded.push('replay');
++  return { ReplayModal: () => <div data-test="replay" /> };
++});
++vi.mock('./WebsitePage', async () => {
++  runtime.loaded.push('overview');
++  return { WebsitePage: () => <div data-test="overview">original-overview</div> };
++});
 +vi.mock('./compare/ComparePage', () => ({
 +  ComparePage: () => <div data-test="compare">original-compare</div>,
 +}));
 +vi.mock('./(reports)/performance/PerformancePage', () => ({
 +  PerformancePage: () => <div data-test="performance">original-performance</div>,
 +}));
-+vi.mock('./(reports)/breakdown/BreakdownPage', () => ({
-+  BreakdownPage: () => <div data-test="breakdown">original-breakdown</div>,
-+}));
++vi.mock('./(reports)/breakdown/BreakdownPage', async () => {
++  runtime.loaded.push('breakdown');
++  return { BreakdownPage: () => <div data-test="breakdown">original-breakdown</div> };
++});
 +vi.mock('./sessions/SessionsPage', () => ({
 +  SessionsPage: () => <div data-test="sessions">original-sessions</div>,
 +}));
@@ -2425,14 +2597,22 @@
 +    <div>original deep detail</div>
 +  </ArchiveAnalysis>
 +);
-+test('five flat group links compose original small leaves and mount only the requested heavy tool', () => {
++test('the first overview loads its leaf without closed heavy tools or detail modal modules', async () => {
++  render(view());
++  expect(await screen.findByTestId('overview')).toBeDefined();
++  expect(runtime.loaded).toContain('overview');
++  expect(runtime.loaded).not.toContain('breakdown');
++  expect(runtime.loaded).not.toContain('session');
++  expect(runtime.loaded).not.toContain('replay');
++});
++test('five flat group links compose original small leaves and mount only the requested heavy tool', async () => {
 +  runtime.path = '/websites/synthetic-site/performance';
 +  render(view());
 +  const nav = screen.getByRole('navigation', { name: '分析板块' });
 +  expect(within(nav).getAllByRole('link')).toHaveLength(5);
 +  expect(screen.getByRole('link', { name: '访问概况' })).toHaveAttribute('aria-current', 'page');
-+  expect(screen.getByTestId('overview')).toBeDefined();
-+  expect(screen.getByTestId('performance')).toBeDefined();
++  expect(await screen.findByTestId('overview')).toBeDefined();
++  expect(await screen.findByTestId('performance')).toBeDefined();
 +  expect(screen.queryByTestId('compare')).toBeNull();
 +  expect(screen.queryByTestId('breakdown')).toBeNull();
 +  expect(screen.getAllByTestId('controls')).toHaveLength(1);
@@ -2441,26 +2621,26 @@
 +    scroll: false,
 +  });
 +});
-+test('legacy comparison dimension does not open More, while explicit More action remains available', () => {
++test('legacy comparison dimension does not open More, while explicit More action remains available', async () => {
 +  runtime.path = '/websites/synthetic-site/compare';
 +  runtime.query = { view: 'country' };
 +  const rendered = render(view());
-+  expect(screen.getByTestId('compare')).toBeDefined();
++  expect(await screen.findByTestId('compare')).toBeDefined();
 +  expect(screen.queryByTestId('more')).toBeNull();
 +  runtime.query = { view: 'city', analysisMore: '1' };
 +  rendered.rerender(view());
-+  expect(screen.getByTestId('more')).toBeDefined();
++  expect(await screen.findByTestId('more')).toBeDefined();
 +});
-+test('small saved goals and funnels share the group; changing deep report selects its section', () => {
++test('small saved goals and funnels share the group; changing deep report selects its section', async () => {
 +  runtime.path = '/websites/synthetic-site/journeys';
 +  const rendered = render(view());
-+  expect(screen.getByTestId('goals')).toBeDefined();
-+  expect(screen.getByTestId('funnel')).toBeDefined();
-+  expect(screen.getByTestId('journeys')).toBeDefined();
++  expect(await screen.findByTestId('goals')).toBeDefined();
++  expect(await screen.findByTestId('funnel')).toBeDefined();
++  expect(await screen.findByTestId('journeys')).toBeDefined();
 +  expect(screen.queryByTestId('retention')).toBeNull();
 +  runtime.path = '/websites/synthetic-site/retention';
 +  rendered.rerender(view());
-+  expect(screen.getByTestId('retention')).toBeDefined();
++  expect(await screen.findByTestId('retention')).toBeDefined();
 +  expect(screen.queryByTestId('journeys')).toBeNull();
 +  runtime.path = '/websites/synthetic-site/sessions/synthetic-id';
 +  rendered.rerender(view());
@@ -2468,7 +2648,7 @@
 +  expect(screen.queryByRole('navigation', { name: '分析板块' })).toBeNull();
 +});
 +
-+test('continuous Sessions to realtime and back restores each list state without altering history filters', () => {
++test('continuous Sessions to realtime and back restores each list state without altering history filters', async () => {
 +  runtime.path = '/websites/synthetic-site/sessions';
 +  runtime.query = { page: '4', search: 'reader', country: 'eq.CN', startAt: '1000', endAt: '9000' };
 +  const rendered = render(view());
@@ -2488,23 +2668,24 @@
 +  expect(back.searchParams.get('startAt')).toBe('1000');
 +});
 +
-+test('interaction common controls keep event-property context while the heatmap section is open', () => {
++test('interaction common controls keep event-property context while the heatmap section is open', async () => {
 +  runtime.path = '/websites/synthetic-site/heatmaps';
 +  runtime.query = { epf0: '1.eq.syntheticColor.red', country: 'eq.CN' };
 +  render(view());
 +  expect(screen.getByTestId('controls')).toHaveAttribute('data-leaf', 'events');
-+  expect(screen.getByTestId('events')).toBeDefined();
-+  expect(screen.getByTestId('heatmaps')).toBeDefined();
++  expect(await screen.findByTestId('events')).toBeDefined();
++  expect(await screen.findByTestId('heatmaps')).toBeDefined();
 +});
-+test('default overview omits the redundant large title below its already selected group', () => {
++test('default overview omits the redundant large title below its already selected group', async () => {
 +  render(view());
 +  expect(screen.queryByRole('heading', { name: '访问总览' })).toBeNull();
 +  expect(screen.getByRole('link', { name: '访问概况' })).toHaveAttribute('aria-current', 'page');
 +});
 --- /dev/null
 +++ b/src/app/(main)/websites/[websiteId]/ArchiveAnalysis.tsx
-@@ -0,0 +1,255 @@
+@@ -0,0 +1,321 @@
 +'use client';
++import dynamic from 'next/dynamic';
 +import { type ReactNode, useEffect, useRef, useState } from 'react';
 +import { Panel } from '@/components/common/Panel';
 +import { useNavigation } from '@/components/hooks';
@@ -2518,29 +2699,94 @@
 +  CAPABILITY_LABELS,
 +  capabilityPath,
 +} from '@/lib/archive-analysis';
-+import { AttributionPage } from './(reports)/attribution/AttributionPage';
-+import { BreakdownPage } from './(reports)/breakdown/BreakdownPage';
-+import { FunnelsPage } from './(reports)/funnels/FunnelsPage';
-+import { GoalsPage } from './(reports)/goals/GoalsPage';
-+import { HeatmapsPage } from './(reports)/heatmaps/HeatmapsPage';
-+import { JourneysPage } from './(reports)/journeys/JourneysPage';
-+import { PerformancePage } from './(reports)/performance/PerformancePage';
-+import { RetentionPage } from './(reports)/retention/RetentionPage';
-+import { RevenuePage } from './(reports)/revenue/RevenuePage';
-+import { UTMPage } from './(reports)/utm/UTMPage';
 +import styles from './ArchiveAnalysis.module.css';
-+import { CohortsPage } from './cohorts/CohortsPage';
-+import { ComparePage } from './compare/ComparePage';
-+import { EventsPage } from './events/EventsPage';
-+import { RealtimePage } from './realtime/RealtimePage';
-+import { ReplayModal } from './replays/ReplayModal';
-+import { ReplaysPage } from './replays/ReplaysPage';
-+import { SegmentsPage } from './segments/SegmentsPage';
-+import { SessionModal } from './sessions/SessionModal';
-+import { SessionsPage } from './sessions/SessionsPage';
 +import { WebsiteControls } from './WebsiteControls';
-+import { WebsiteExpandedView } from './WebsiteExpandedView';
-+import { WebsitePage } from './WebsitePage';
++
++function AnalysisModuleLoading() {
++  return <p role="status">正在打开分析…</p>;
++}
++
++const AttributionPage = dynamic(
++  () => import('./(reports)/attribution/AttributionPage').then(module => module.AttributionPage),
++  { loading: AnalysisModuleLoading },
++);
++const BreakdownPage = dynamic(
++  () => import('./(reports)/breakdown/BreakdownPage').then(module => module.BreakdownPage),
++  { loading: AnalysisModuleLoading },
++);
++const FunnelsPage = dynamic(
++  () => import('./(reports)/funnels/FunnelsPage').then(module => module.FunnelsPage),
++  { loading: AnalysisModuleLoading },
++);
++const GoalsPage = dynamic(
++  () => import('./(reports)/goals/GoalsPage').then(module => module.GoalsPage),
++  { loading: AnalysisModuleLoading },
++);
++const HeatmapsPage = dynamic(
++  () => import('./(reports)/heatmaps/HeatmapsPage').then(module => module.HeatmapsPage),
++  { loading: AnalysisModuleLoading },
++);
++const JourneysPage = dynamic(
++  () => import('./(reports)/journeys/JourneysPage').then(module => module.JourneysPage),
++  { loading: AnalysisModuleLoading },
++);
++const PerformancePage = dynamic(
++  () => import('./(reports)/performance/PerformancePage').then(module => module.PerformancePage),
++  { loading: AnalysisModuleLoading },
++);
++const RetentionPage = dynamic(
++  () => import('./(reports)/retention/RetentionPage').then(module => module.RetentionPage),
++  { loading: AnalysisModuleLoading },
++);
++const RevenuePage = dynamic(
++  () => import('./(reports)/revenue/RevenuePage').then(module => module.RevenuePage),
++  { loading: AnalysisModuleLoading },
++);
++const UTMPage = dynamic(() => import('./(reports)/utm/UTMPage').then(module => module.UTMPage), {
++  loading: AnalysisModuleLoading,
++});
++const CohortsPage = dynamic(
++  () => import('./cohorts/CohortsPage').then(module => module.CohortsPage),
++  { loading: AnalysisModuleLoading },
++);
++const ComparePage = dynamic(
++  () => import('./compare/ComparePage').then(module => module.ComparePage),
++  { loading: AnalysisModuleLoading },
++);
++const EventsPage = dynamic(() => import('./events/EventsPage').then(module => module.EventsPage), {
++  loading: AnalysisModuleLoading,
++});
++const RealtimePage = dynamic(
++  () => import('./realtime/RealtimePage').then(module => module.RealtimePage),
++  { loading: AnalysisModuleLoading },
++);
++const ReplayModal = dynamic(
++  () => import('./replays/ReplayModal').then(module => module.ReplayModal),
++  { loading: AnalysisModuleLoading },
++);
++const ReplaysPage = dynamic(
++  () => import('./replays/ReplaysPage').then(module => module.ReplaysPage),
++  { loading: AnalysisModuleLoading },
++);
++const SegmentsPage = dynamic(
++  () => import('./segments/SegmentsPage').then(module => module.SegmentsPage),
++  { loading: AnalysisModuleLoading },
++);
++const SessionModal = dynamic(
++  () => import('./sessions/SessionModal').then(module => module.SessionModal),
++  { loading: AnalysisModuleLoading },
++);
++const SessionsPage = dynamic(
++  () => import('./sessions/SessionsPage').then(module => module.SessionsPage),
++  { loading: AnalysisModuleLoading },
++);
++const WebsiteExpandedView = dynamic(
++  () => import('./WebsiteExpandedView').then(module => module.WebsiteExpandedView),
++  { loading: AnalysisModuleLoading },
++);
++const WebsitePage = dynamic(() => import('./WebsitePage').then(module => module.WebsitePage), {
++  loading: AnalysisModuleLoading,
++});
 +
 +const LEAVES = {
 +  overview: WebsitePage,
@@ -2736,8 +2982,8 @@
 +        {content}
 +      </div>
 +      <ArchiveAnalysisContext.Provider value={{ ...commonScope, leaf: capability }}>
-+        <SessionModal websiteId={websiteId} />
-+        <ReplayModal websiteId={websiteId} />
++        {query.session && <SessionModal websiteId={websiteId} />}
++        {query.replay && <ReplayModal websiteId={websiteId} />}
 +        {showMore && (
 +          <Panel data-analysis-more id="analysis-details">
 +            <h2 id="analysis-details-title" tabIndex={-1}>
@@ -2949,6 +3195,21 @@
 @@ -29,0 +32,2 @@
 +
 +  if (display?.embedded) return null;
+--- a/src/app/(main)/websites/[websiteId]/WebsiteChart.tsx
++++ b/src/app/(main)/websites/[websiteId]/WebsiteChart.tsx
+@@ -40 +40 @@
+-  const { data, isLoading, isFetching, error } = useWebsitePageviewsQuery({
++  const { data, isLoading, isFetching, error, refetch } = useWebsitePageviewsQuery({
+@@ -136 +136,8 @@
+-    <LoadingPanel data={data} isFetching={isFetching} isLoading={isLoading} error={error}>
++    <LoadingPanel
++      data={data}
++      isFetching={isFetching}
++      isLoading={isLoading}
++      error={error}
++      retainDataOnRefresh
++      onRetry={() => void refetch()}
++    >
 --- a/src/app/(main)/websites/[websiteId]/WebsiteControls.tsx
 +++ b/src/app/(main)/websites/[websiteId]/WebsiteControls.tsx
 @@ -2,0 +3 @@
@@ -3633,6 +3894,14 @@
 +          )}
 +          {modal}
 +        </Column>
+--- a/src/app/(main)/websites/[websiteId]/WebsiteMetricsBar.tsx
++++ b/src/app/(main)/websites/[websiteId]/WebsiteMetricsBar.tsx
+@@ -18 +18 @@
+-  const { data, isLoading, isFetching, error } = useWebsiteStatsQuery({
++  const { data, isLoading, isFetching, error, refetch } = useWebsiteStatsQuery({
+@@ -71,0 +72,2 @@
++      retainDataOnRefresh
++      onRetry={() => void refetch()}
 --- /dev/null
 +++ b/src/app/(main)/websites/[websiteId]/WebsitePage.composed.test.tsx
 @@ -0,0 +1,66 @@
@@ -4069,7 +4338,7 @@
 --- a/src/app/(main)/websites/[websiteId]/layout.tsx
 +++ b/src/app/(main)/websites/[websiteId]/layout.tsx
 @@ -2,0 +3 @@
-+import { archiveAdminMode } from '@/lib/archive-admin';
++import { archiveAdminMode, archiveNavigation } from '@/lib/archive-admin';
 @@ -22 +23 @@
 -    <WebsiteLayout websiteId={websiteId}>
 +    <WebsiteLayout websiteId={websiteId} modal={modal}>
@@ -4078,7 +4347,7 @@
 @@ -31,2 +31,2 @@
 -    template: '%s | Umami',
 -    default: 'Websites | Umami',
-+    template: archiveAdminMode ? '%s | 由艺管理后台' : '%s | Umami',
++    template: archiveAdminMode ? `%s | ${archiveNavigation.brandLabel}管理后台` : '%s | Umami',
 +    default: archiveAdminMode ? '访问分析' : 'Websites | Umami',
 --- a/src/app/(main)/websites/[websiteId]/realtime/RealtimeLog.tsx
 +++ b/src/app/(main)/websites/[websiteId]/realtime/RealtimeLog.tsx
@@ -4137,16 +4406,20 @@
 +  if (display?.embedded) return null;
 --- a/src/app/Providers.tsx
 +++ b/src/app/Providers.tsx
-@@ -5 +5,2 @@
+@@ -5 +5 @@
 -import { useEffect } from 'react';
 +import { useEffect, useState } from 'react';
+@@ -7,2 +7,2 @@
+-import { useLocale } from '@/components/hooks';
+-import 'chartjs-adapter-date-fns';
++import { useLocale } from '@/components/hooks/useLocale';
 +import { archiveAdminMode, resolveArchiveTheme } from '@/lib/archive-admin';
-@@ -35,0 +37,4 @@
+@@ -35,0 +36,4 @@
 +  const [theme, setTheme] = useState<'light' | 'dark' | undefined>();
 +  useEffect(() => {
 +    if (archiveAdminMode) setTheme(resolveArchiveTheme());
 +  }, []);
-@@ -37 +42 @@
+@@ -37 +41 @@
 -    <ZenProvider>
 +    <ZenProvider theme={theme}>
 --- /dev/null
@@ -4380,41 +4653,119 @@
 @@ -54,2 +64,2 @@
 -      template: '%s | Umami',
 -      default: 'Umami',
-+      template: archiveAdminMode ? '%s | 由艺管理后台' : '%s | Umami',
++      template: archiveAdminMode ? `%s | ${archiveNavigation.brandLabel}管理后台` : '%s | Umami',
 +      default: archiveAdminMode ? '访问分析' : 'Umami',
 --- a/src/components/charts/BarChart.tsx
 +++ b/src/components/charts/BarChart.tsx
-@@ -0,0 +1 @@
+@@ -3 +2,0 @@
+-import { Chart, type ChartProps } from '@/components/charts/Chart';
+@@ -4,0 +4 @@
++import { Chart, type ChartProps } from '@/components/charts/DeferredChart';
+@@ -5,0 +6 @@
 +import { getChineseEventName } from '@/lib/artvenn-labels';
 @@ -131 +132 @@
 -              : `${formatLongNumber(dataPoints[0].raw.y)} ${dataPoints[0].dataset.label}`,
 +              : `${formatLongNumber(dataPoints[0].raw.y)} ${getChineseEventName(dataPoints[0].dataset.label)}`,
 --- a/src/components/charts/BubbleChart.tsx
 +++ b/src/components/charts/BubbleChart.tsx
-@@ -0,0 +1 @@
+@@ -2 +1,0 @@
+-import { Chart, type ChartProps } from '@/components/charts/Chart';
+@@ -3,0 +3,2 @@
++import { Chart, type ChartProps } from '@/components/charts/DeferredChart';
 +import { getChineseEventName } from '@/lib/artvenn-labels';
 @@ -19 +20 @@
 -            value: `${title}: ${dataPoints[0].raw}`,
 +            value: `${getChineseEventName(String(title))}：${dataPoints[0].raw}`,
+--- a/src/components/charts/Chart.tsx
++++ b/src/components/charts/Chart.tsx
+@@ -0,0 +1 @@
++import 'chartjs-adapter-date-fns';
+--- /dev/null
++++ b/src/components/charts/DeferredChart.test.tsx
+@@ -0,0 +1,42 @@
++import { cleanup, fireEvent, render, screen } from '@testing-library/react';
++import { afterEach, expect, test, vi } from 'vitest';
++
++const state = vi.hoisted(() => ({ loaded: false, props: undefined as any }));
++vi.mock('./Chart', () => {
++  state.loaded = true;
++  return {
++    Chart: (props: any) => {
++      state.props = props;
++      return (
++        <button type="button" onClick={() => props.onAnnotationMoreClick?.(props.annotations)}>
++          原图表与注释
++        </button>
++      );
++    },
++  };
++});
++
++import { Chart } from './DeferredChart';
++
++afterEach(cleanup);
++test('native chart code loads on demand and receives unchanged datasets, legend and annotation behavior', async () => {
++  expect(state.loaded).toBe(false);
++  const data = { datasets: [{ label: 'synthetic-series', data: [{ x: '2026-10-27', y: 3 }] }] };
++  const annotations = [{ id: 'synthetic-annotation', date: new Date('2026-10-27T00:00:00Z') }];
++  const onMore = vi.fn();
++  render(
++    <Chart
++      chartData={data}
++      annotations={annotations as any}
++      onAnnotationMoreClick={onMore}
++      type="bar"
++    />,
++  );
++  const control = await screen.findByRole('button', { name: '原图表与注释' });
++  expect(state.loaded).toBe(true);
++  expect(state.props.chartData).toBe(data);
++  expect(state.props.annotations).toBe(annotations);
++  expect(state.props.type).toBe('bar');
++  fireEvent.click(control);
++  expect(onMore).toHaveBeenCalledWith(annotations);
++});
+--- /dev/null
++++ b/src/components/charts/DeferredChart.tsx
+@@ -0,0 +1,11 @@
++'use client';
++import dynamic from 'next/dynamic';
++import type { ChartProps } from './Chart';
++
++export type { ChartProps } from './Chart';
++
++/** The native renderer, legend and annotations load only when a chart is shown. */
++export const Chart = dynamic<ChartProps>(() => import('./Chart').then(module => module.Chart), {
++  ssr: false,
++  loading: () => <p role="status">正在打开图表…</p>,
++});
 --- a/src/components/charts/DistributionBarChart.tsx
 +++ b/src/components/charts/DistributionBarChart.tsx
-@@ -1,0 +2 @@
+@@ -4 +3,0 @@
+-import { Chart } from '@/components/charts/Chart';
+@@ -5,0 +5,2 @@
++import { Chart } from '@/components/charts/DeferredChart';
 +import { getChineseEventName } from '@/lib/artvenn-labels';
-@@ -103 +104 @@
+@@ -103 +104,2 @@
 -              : (tickValue: string | number) => chartData.labels?.[Number(tickValue)] || '',
-+              : (tickValue: string | number) => getChineseEventName(chartData.labels?.[Number(tickValue)] || ''),
-@@ -121 +122 @@
++              : (tickValue: string | number) =>
++                  getChineseEventName(chartData.labels?.[Number(tickValue)] || ''),
+@@ -121 +123,2 @@
 -              ? (tickValue: string | number) => chartData.labels?.[Number(tickValue)] || ''
-+              ? (tickValue: string | number) => getChineseEventName(chartData.labels?.[Number(tickValue)] || '')
-@@ -136 +137 @@
++              ? (tickValue: string | number) =>
++                  getChineseEventName(chartData.labels?.[Number(tickValue)] || '')
+@@ -136 +139 @@
 -            title: (point?.label ?? '').toString(),
 +            title: getChineseEventName((point?.label ?? '').toString()),
-@@ -144 +145 @@
+@@ -144 +147 @@
 -            )}${point?.dataset?.label ? ` ${point.dataset.label}` : ''}`,
 +            )}${point?.dataset?.label ? ` ${getChineseEventName(point.dataset.label)}` : ''}`,
 --- a/src/components/charts/PieChart.tsx
 +++ b/src/components/charts/PieChart.tsx
-@@ -0,0 +1 @@
+@@ -2 +1,0 @@
+-import { Chart, type ChartProps } from '@/components/charts/Chart';
+@@ -3,0 +3,2 @@
++import { Chart, type ChartProps } from '@/components/charts/DeferredChart';
 +import { getChineseEventName } from '@/lib/artvenn-labels';
 @@ -19 +20 @@
 -            value: `${title}: ${dataPoints[0].raw}`,
@@ -4525,16 +4876,118 @@
 +          style={
 +            isMobile ? { width: '100%', justifyContent: 'flex-start' } : { marginLeft: 'auto' }
 +          }
+--- /dev/null
++++ b/src/components/common/ErrorBoundary.archive.test.tsx
+@@ -0,0 +1,93 @@
++import { cleanup, fireEvent, render, screen } from '@testing-library/react';
++import { lazy, Suspense } from 'react';
++import { afterEach, beforeEach, expect, test, vi } from 'vitest';
++
++const runtime = vi.hoisted(() => ({ private: true }));
++vi.mock('@/lib/archive-admin', () => ({
++  get archiveAdminMode() {
++    return runtime.private;
++  },
++}));
++vi.mock('@/components/hooks/useMessages', () => ({
++  useMessages: () => ({ t: (value: string) => value, messages: { error: '加载失败' } }),
++}));
++
++import { ErrorBoundary } from './ErrorBoundary';
++
++beforeEach(() => {
++  runtime.private = true;
++  vi.spyOn(console, 'error').mockImplementation(() => {});
++});
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++  vi.restoreAllMocks();
++  window.history.replaceState({}, '', '/');
++});
++
++test('a cached rejected lazy chunk offers a full reload at the unchanged analysis URL', async () => {
++  const url =
++    '/admin/analytics-workspace/websites/synthetic-site/retention?date=30day&retentionMonth=2026-09&country=eq.CN';
++  window.history.replaceState({}, '', url);
++  const loader = vi.fn().mockRejectedValue(new Error('synthetic-chunk-load-failure'));
++  const FailedChunk = lazy(loader);
++  render(
++    <ErrorBoundary>
++      <Suspense fallback={<p>加载模块</p>}>
++        <FailedChunk />
++      </Suspense>
++    </ErrorBoundary>,
++  );
++  const reloadControl = await screen.findByRole('button', { name: '重新加载页面' });
++  expect(loader).toHaveBeenCalledTimes(1);
++  expect(screen.queryByRole('button', { name: '确定' })).toBeNull();
++  const location = window.location;
++  const reload = vi.fn(() => {
++    expect(location.pathname + location.search).toBe(url);
++  });
++  const originalWindow = window;
++  vi.stubGlobal(
++    'window',
++    new Proxy(originalWindow, {
++      get(target, key) {
++        return key === 'location' ? { reload } : Reflect.get(target, key, target);
++      },
++    }),
++  );
++  fireEvent.click(reloadControl);
++  vi.unstubAllGlobals();
++  expect(reload).toHaveBeenCalledTimes(1);
++  expect(loader).toHaveBeenCalledTimes(1);
++  expect(window.location.pathname + window.location.search).toBe(url);
++
++  // A document reload creates a new module instance, instead of resetting the cached rejection.
++  cleanup();
++  const RecoveredChunk = lazy(async () => ({ default: () => <div>完整分析已恢复</div> }));
++  render(
++    <ErrorBoundary>
++      <Suspense fallback={<p>加载模块</p>}>
++        <RecoveredChunk />
++      </Suspense>
++    </ErrorBoundary>,
++  );
++  expect(await screen.findByText('完整分析已恢复')).toBeDefined();
++});
++
++test('the non-archive boundary retains its original reset behavior', async () => {
++  runtime.private = false;
++  let failed = true;
++  function Content() {
++    if (failed) throw new Error('synthetic-render-failure');
++    return <div>原界面已恢复</div>;
++  }
++  render(
++    <ErrorBoundary>
++      <Content />
++    </ErrorBoundary>,
++  );
++  const resetControl = await screen.findByRole('button', { name: '确定' });
++  expect(screen.queryByRole('button', { name: '重新加载页面' })).toBeNull();
++  failed = false;
++  fireEvent.click(resetControl);
++  expect(await screen.findByText('原界面已恢复')).toBeDefined();
++});
 --- a/src/components/common/ErrorBoundary.tsx
 +++ b/src/components/common/ErrorBoundary.tsx
-@@ -14 +14 @@
+@@ -4 +4,2 @@
+-import { useMessages } from '@/components/hooks';
++import { useMessages } from '@/components/hooks/useMessages';
++import { archiveAdminMode } from '@/lib/archive-admin';
+@@ -14 +15 @@
 -  const fallbackRender = ({ error, resetErrorBoundary }) => {
 +  const fallbackRender = ({ resetErrorBoundary }) => {
-@@ -26,3 +26 @@
+@@ -26,3 +27,3 @@
 -        <h3>{error.message}</h3>
 -        <pre>{error.stack}</pre>
 -        <Button onClick={resetErrorBoundary}>OK</Button>
-+        <Button onClick={resetErrorBoundary}>确定</Button>
++        <Button onClick={archiveAdminMode ? () => window.location.reload() : resetErrorBoundary}>
++          {archiveAdminMode ? '重新加载页面' : '确定'}
++        </Button>
 --- a/src/components/common/FilterLink.tsx
 +++ b/src/components/common/FilterLink.tsx
 @@ -12,0 +13 @@
@@ -4562,11 +5015,224 @@
 @@ -116 +116 @@
 -              renderEmptyState={() => (isLoading ? <Loading icon="dots" /> : <Empty />)}
 +              renderEmptyState={() => (isLoading ? <Loading aria-label="加载中" icon="dots" /> : <Empty />)}
+--- /dev/null
++++ b/src/components/common/LoadingPanel.refresh.test.tsx
+@@ -0,0 +1,166 @@
++import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
++import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
++import { useState } from 'react';
++import { afterEach, beforeEach, expect, test, vi } from 'vitest';
++
++const runtime = vi.hoisted(() => ({ request: vi.fn() }));
++vi.mock('@/components/hooks', () => ({
++  useMessages: () => ({
++    t: (message: string) => message,
++    messages: { noDataAvailable: '暂无数据', error: '加载失败' },
++  }),
++}));
++
++import { LoadingPanel } from './LoadingPanel';
++
++const clients: QueryClient[] = [];
++
++function ChartContent({ value }: { value: number }) {
++  const [note, setNote] = useState('');
++  return (
++    <>
++      <output data-test="value">{value}</output>
++      <input
++        aria-label="图表本地选项"
++        value={note}
++        onChange={event => setNote(event.target.value)}
++      />
++    </>
++  );
++}
++
++function QueryPanel({ scope }: { scope: string }) {
++  // Match the summary/chart behavior: no keepPreviousData across query keys.
++  const result = useQuery<{ value: number }>({
++    queryKey: ['synthetic-refresh', scope],
++    queryFn: () => runtime.request(scope),
++  });
++  return (
++    <>
++      <button type="button" onClick={() => void result.refetch()}>
++        后台刷新
++      </button>
++      <LoadingPanel
++        retainDataOnRefresh
++        data={result.data}
++        isLoading={result.isLoading}
++        isFetching={result.isFetching}
++        error={result.error}
++        onRetry={() => void result.refetch()}
++      >
++        {result.data && <ChartContent value={result.data.value} />}
++      </LoadingPanel>
++    </>
++  );
++}
++
++function Fixture({ client, scope = 'current' }: { client: QueryClient; scope?: string }) {
++  return (
++    <QueryClientProvider client={client}>
++      <QueryPanel scope={scope} />
++    </QueryClientProvider>
++  );
++}
++
++function client() {
++  const value = new QueryClient({
++    defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } },
++  });
++  clients.push(value);
++  return value;
++}
++
++beforeEach(() => runtime.request.mockReset());
++afterEach(() => {
++  cleanup();
++  for (const value of clients.splice(0)) value.clear();
++});
++
++test('same-key background refresh preserves the real cached content node and local input', async () => {
++  let resolveRefresh: ((value: { value: number }) => void) | undefined;
++  const refresh = new Promise<{ value: number }>(resolve => {
++    resolveRefresh = resolve;
++  });
++  runtime.request.mockResolvedValueOnce({ value: 7 }).mockReturnValueOnce(refresh);
++  render(<Fixture client={client()} />);
++  await screen.findByTestId('value');
++  const input = screen.getByRole('textbox', { name: '图表本地选项' });
++  fireEvent.change(input, { target: { value: '保留图表选项' } });
++  fireEvent.click(screen.getByRole('button', { name: '后台刷新' }));
++  const updating = await screen.findByText('正在更新，当前显示上次成功的数据。');
++  expect(updating).toHaveTextContent('正在更新，当前显示上次成功的数据。');
++  expect(updating.closest('[aria-busy="true"]')).not.toBeNull();
++  expect(screen.getByTestId('value')).toHaveTextContent('7');
++  expect(screen.getByRole('textbox', { name: '图表本地选项' })).toBe(input);
++  expect(input).toHaveValue('保留图表选项');
++  expect(screen.queryByLabelText('加载中')).toBeNull();
++  await act(async () => resolveRefresh?.({ value: 9 }));
++  await waitFor(() => expect(screen.getByTestId('value')).toHaveTextContent('9'));
++  expect(screen.getByRole('textbox', { name: '图表本地选项' })).toBe(input);
++  expect(input).toHaveValue('保留图表选项');
++  expect(screen.queryByText('正在更新，当前显示上次成功的数据。')).toBeNull();
++});
++
++test('a failed background refresh labels retained data as stale and retries the same query', async () => {
++  runtime.request
++    .mockResolvedValueOnce({ value: 7 })
++    .mockRejectedValueOnce(new Error('synthetic-refresh-failure'))
++    .mockResolvedValueOnce({ value: 9 });
++  render(<Fixture client={client()} />);
++  await screen.findByTestId('value');
++  const input = screen.getByRole('textbox', { name: '图表本地选项' });
++  fireEvent.click(screen.getByRole('button', { name: '后台刷新' }));
++  expect(await screen.findByRole('alert')).toHaveTextContent('更新失败，当前显示上次成功的数据。');
++  expect(screen.getByTestId('value')).toHaveTextContent('7');
++  expect(screen.getByRole('textbox', { name: '图表本地选项' })).toBe(input);
++  fireEvent.click(screen.getByRole('button', { name: '重试' }));
++  await waitFor(() => expect(screen.getByTestId('value')).toHaveTextContent('9'));
++  expect(screen.queryByRole('alert')).toBeNull();
++  expect(runtime.request.mock.calls.map(([scope]) => scope)).toEqual([
++    'current',
++    'current',
++    'current',
++  ]);
++});
++
++test('a new query scope has no previous-data placeholder and keeps the cold loading state', async () => {
++  runtime.request
++    .mockResolvedValueOnce({ value: 7 })
++    .mockReturnValueOnce(new Promise(() => undefined));
++  const queryClient = client();
++  const result = render(<Fixture client={queryClient} scope="old-range" />);
++  await screen.findByTestId('value');
++  result.rerender(<Fixture client={queryClient} scope="new-range" />);
++  expect(await screen.findByLabelText('加载中')).toBeDefined();
++  expect(screen.queryByTestId('value')).toBeNull();
++  expect(screen.queryByRole('textbox', { name: '图表本地选项' })).toBeNull();
++  expect(screen.queryByText(/上次成功的数据/)).toBeNull();
++});
++
++test('a cold request failure has a real retry action without fabricated prior data', async () => {
++  runtime.request
++    .mockRejectedValueOnce(new Error('synthetic-cold-load-failure'))
++    .mockResolvedValueOnce({ value: 9 });
++  render(<Fixture client={client()} />);
++  expect(await screen.findByText('加载失败')).toBeDefined();
++  expect(screen.queryByTestId('value')).toBeNull();
++  expect(screen.queryByText(/上次成功的数据/)).toBeNull();
++  fireEvent.click(screen.getByRole('button', { name: '重试' }));
++  await waitFor(() => expect(screen.getByTestId('value')).toHaveTextContent('9'));
++});
++
++test('callers without the opt-in retain their original fetching behavior', () => {
++  const result = render(
++    <LoadingPanel data={{ value: 7 }}>
++      <span>原内容</span>
++    </LoadingPanel>,
++  );
++  expect(screen.getByText('原内容')).toBeDefined();
++  result.rerender(
++    <LoadingPanel data={{ value: 7 }} isFetching>
++      <span>原内容</span>
++    </LoadingPanel>,
++  );
++  expect(screen.getByLabelText('加载中')).toBeDefined();
++  expect(screen.queryByText('原内容')).toBeNull();
++});
 --- a/src/components/common/LoadingPanel.tsx
 +++ b/src/components/common/LoadingPanel.tsx
-@@ -36 +36 @@
+@@ -1 +1 @@
+-import { Column, type ColumnProps, Loading } from '@umami/react-zen';
++import { Button, Column, type ColumnProps, Loading, Row, Text } from '@umami/react-zen';
+@@ -11,0 +12,2 @@
++  retainDataOnRefresh?: boolean;
++  onRetry?: () => void;
+@@ -23,0 +26,2 @@
++  retainDataOnRefresh = false,
++  onRetry,
+@@ -31,0 +36,23 @@
++  if (retainDataOnRefresh && data !== undefined && data !== null) {
++    return (
++      <Column gap="3" aria-busy={!!(isLoading || isFetching)} {...props}>
++        {isFetching && (
++          <Text key="updating" role="status" color="muted">
++            正在更新，当前显示上次成功的数据。
++          </Text>
++        )}
++        {error && !isFetching && (
++          <Row key="error" role="alert" alignItems="center" gap="3" wrap="wrap">
++            <Text>更新失败，当前显示上次成功的数据。</Text>
++            {onRetry && (
++              <Button variant="outline" size="sm" onPress={onRetry}>
++                重试
++              </Button>
++            )}
++          </Row>
++        )}
++        <div key="content">{empty ? renderEmpty() : children}</div>
++      </Column>
++    );
++  }
++
+@@ -36 +63 @@
 -        <Loading icon={loadingIcon} placement={loadingPlacement} />
 +        <Loading aria-label="加载中" icon={loadingIcon} placement={loadingPlacement} />
+@@ -42,0 +70,10 @@
++    if (onRetry) {
++      return (
++        <Column gap="3">
++          <ErrorMessage />
++          <Button variant="outline" onPress={onRetry}>
++            重试
++          </Button>
++        </Column>
++      );
++    }
 --- a/src/components/common/MultiSelect.tsx
 +++ b/src/components/common/MultiSelect.tsx
 @@ -37 +37 @@
@@ -7362,7 +8028,7 @@
 +export const archiveNavigation = navigation;
 +export const archiveAssets = {
 +  theme: '62c0496afbbd07112fce0fe8127a640665d33fe9468a2500930651bc27341478',
-+  navigation: 'ff1f9d243b15fb124103483cf14145a029c0c919fa68b26a9c9d12a46f09339c',
++  navigation: 'b656a4921010d3bccc13a429d293875ab88cdef168b25530505dc83631724eae',
 +  icons: '8d39d4a06bb7d863d2b954454b1d8e414e1d8a642245716f2e4343854b48f863',
 +} as const;
 +export const archiveIconsHref = `${process.env.basePath || ''}/archive-icons.svg?v=${archiveAssets.icons}`;

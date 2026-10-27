@@ -1,6 +1,7 @@
 import { handleReportingOperatorRequest } from "./reporting-handler.js";
 import type { CommunityReportingService } from "@moya/api";
 import { timingSafeEqual } from "node:crypto";
+import type { readBoundedArticleThumbnail } from "./article-runtime-read.js";
 
 import {
   requireHumanModerationReason,
@@ -17,6 +18,8 @@ import {
 } from "@moya/contracts/schemas";
 import {
   catalogRecipePolicySchema,
+  catalogThumbnailRequestSchema,
+  type CatalogThumbnailRequest,
   catalogDeliveryReadinessRequestSchema,
   catalogDeliveryReadinessSchema,
   catalogPublishedRenditionsRequestSchema,
@@ -57,6 +60,11 @@ import type {
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 export interface OperatorRouteDependencies {
+  readonly catalogThumbnail?:
+    | ((
+        input: CatalogThumbnailRequest,
+      ) => ReturnType<typeof readBoundedArticleThumbnail>)
+    | undefined;
   readonly reportingService?: CommunityReportingService | undefined;
   readonly catalogDeliveryReadiness?:
     | ((intentId: string) => Promise<CatalogDeliveryReadiness | null>)
@@ -213,6 +221,7 @@ export const handleOperatorRequest = async (
     moderationService,
     reportingService,
     catalogRecipePolicy,
+    catalogThumbnail,
     catalogDeliveryReadiness,
     catalogPublishedRenditions,
     catalogRenderBacklog,
@@ -235,6 +244,32 @@ export const handleOperatorRequest = async (
   const methodNotAllowed = () =>
     sendOperatorError(response, 405, "METHOD_NOT_ALLOWED");
   try {
+    if (pathname === "/internal/community/catalog-delivery/thumbnail") {
+      if (method !== "GET") return methodNotAllowed();
+      if (!catalogThumbnail)
+        return sendOperatorError(
+          response,
+          503,
+          "CATALOG_DELIVERY_NOT_CONFIGURED",
+        );
+      const input = catalogThumbnailRequestSchema.safeParse(
+        collectTransportQuery(
+          new URL(request.url ?? "/", "http://request.invalid").searchParams,
+        ),
+      );
+      if (!input.success)
+        return sendOperatorError(response, 400, "INVALID_INPUT");
+      const result = await catalogThumbnail(input.data);
+      response.writeHead(200, {
+        "Content-Type": result.mimeType,
+        "Content-Length": result.bytes.byteLength,
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Cross-Origin-Resource-Policy": "same-origin",
+      });
+      response.end(result.bytes);
+      return;
+    }
     if (
       feedbackService !== undefined &&
       pathname === "/internal/community/feedback"

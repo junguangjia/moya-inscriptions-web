@@ -344,7 +344,7 @@ export const academicViewFromSpecial = (
     category: special.category,
     title: special.title,
     subtitle: special.subtitle,
-    byline: "由艺编辑室",
+    byline: "由于艺编辑室",
     meta: `${special.issue} · 研究札记 · 约 8 分钟`,
     intro: special.intro,
     chapters: chapters.map((chapter, index) => ({
@@ -371,7 +371,7 @@ export const academicViewFromSpecial = (
             : [],
     })),
     citation: [
-      `由艺编辑室：《${special.title}——${special.subtitle}》，由艺学术专题，${special.issue}，前端示例版。`,
+      `由于艺编辑室：《${special.title}——${special.subtitle}》，由于艺学术专题，${special.issue}，前端示例版。`,
       "本文为阅读体验示例，未作为正式学术文献发表。引用具体论述时，请核对原始材料与正式出版来源。",
     ],
   };

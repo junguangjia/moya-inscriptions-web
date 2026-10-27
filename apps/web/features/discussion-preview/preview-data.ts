@@ -7,7 +7,7 @@ const baseArticles = [
     summary:
       "从远处看山势，到近处读字口，访碑不只是在现场认出一段文字。光线、石质与周围的环境，也参与了我们对一方题刻的理解。",
     section: "田野观察",
-    author: "由艺编辑室",
+    author: "由于艺编辑室",
     time: "今天",
     image: `${demo}valley-wall.svg`,
     imageAlt: "山谷石壁示意图",
