@@ -1726,8 +1726,11 @@ export const relayServerCommunityAuth = async (
         forwardedToken === undefined ||
         (upstream.status === 401 &&
           (await communitySessionRefused(base, forwardedToken)));
+      // Once this browser is signed out of the account, its saved copies of
+      // that account go too (a copy the Backend still accepts would otherwise
+      // be switchable after the page leaves); unconfirmed ones stay held.
       const released =
-        upstream.ok && signingOut !== null
+        signedOut && signingOut !== null
           ? await releaseSavedSessionsOf(accounts, request, signingOut)
           : {};
       return new Response(null, {

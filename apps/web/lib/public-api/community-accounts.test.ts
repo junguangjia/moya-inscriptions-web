@@ -658,6 +658,23 @@ describe("signing the current account out", () => {
     },
   );
 
+  it("also signs out the saved copies when the current session had already ended", async () => {
+    currentWithCopy();
+    // The current session is gone on the Backend (sign-out and `me` refuse
+    // it); the saved copy of the same account still works.
+    backend.sessions.delete(tokenA2);
+    const signedOut = await browser.auth(
+      "sign-out",
+      {},
+      { "x-author-account": A.id },
+    );
+    expect(signedOut.status).toBe(204);
+    expect(browser.active()).toBeUndefined();
+    expect(backend.sessions.has(tokenA)).toBe(false);
+    expect(backend.sessions.get(tokenB)).toEqual(B);
+    expect(browser.saved()).toEqual([B.id]);
+  });
+
   it("leaves the saved sessions alone when the sign-out is refused as another account's", async () => {
     currentWithCopy();
     const before = new Map(browser.jar);
