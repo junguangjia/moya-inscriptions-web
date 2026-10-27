@@ -110,16 +110,21 @@ active cookie a new seven-day lifetime.
 - Without the header, sign-in behaves as before, except that the saved sessions
   of the account signing in are signed out and let go in the same answer, so a
   later 退出登录 leaves nothing of that account switchable.
-- 退出登录 (`POST /api/community/auth/sign-out`) keeps the pre-switching
-  single-account behavior: the relay clears `yoyi-session` after any Backend
-  answer except the approved fence, 409 `AUTH_ACCOUNT_MISMATCH` (another tab
-  made a different account current), and a request that never reached the
-  Backend changes nothing. On a confirmed sign-out it also signs out this
-  browser's saved sessions of the same account (named by the page's assertion,
-  or else by `/v1/me` before the sign-out; a browser holding no saved session
-  needs neither); confirmed ones are let go and an unconfirmed one stays, then
-  listed under that account where 移除 ends it. Other accounts stay listed
-  either way.
+- 退出登录 (`POST /api/community/auth/sign-out`): the relay clears
+  `yoyi-session` only once the session has really ended, that is after a
+  confirmed sign-out (2xx) or when the Backend no longer accepts the session
+  (sign-out 401 and `/v1/me` 401). Any other answer (unavailable, an error, the
+  approved fence 409 `AUTH_ACCOUNT_MISMATCH`, a refused assertion) keeps the
+  session and its cookie, and the page's existing 退出未能确认，请重试 is then
+  true: the retry can still end it. Before account switching the relay cleared
+  the cookie after any delivered answer, which could leave a live session the
+  browser could no longer end; this behavior change awaits the Owner's
+  confirmation at device acceptance. On a confirmed sign-out it also signs out
+  this browser's saved sessions of the same account (named by the page's
+  assertion, or else by `/v1/me` before the sign-out; a browser holding no saved
+  session needs neither); confirmed ones are let go and an unconfirmed one
+  stays, then listed under that account where 移除 ends it. Other accounts stay
+  listed either way.
 - The browser runs every request that rewrites these cookies (switch, remove,
   sign out all, the add-account steps, an ordinary sign-in and sign-out) under
   one exclusive Web Lock across its tabs, so two answers never write cookies

@@ -1244,6 +1244,8 @@ describe("Sign-out and appeal relay account fences", () => {
   const normal = "N".repeat(43);
   const appeal = "P".repeat(43);
   const account = `user-${"1".repeat(32)}`;
+  // What `me` answers while the session still works (synthetic).
+  const profile = { id: account, handle: "signed-in", displayName: "当前账户" };
   const post = (suffix: string, headers: Record<string, string> = {}) =>
     relayServerCommunityAuth(
       new Request(`http://127.0.0.1:3410/api/community/auth/${suffix}`, {
@@ -1315,8 +1317,8 @@ describe("Sign-out and appeal relay account fences", () => {
     expect(upstream).toHaveBeenCalledOnce();
   });
 
-  // As before account switching, any other answer leaves this browser signed
-  // out, without asking `me` whether the session still works.
+  // The current session leaves this browser only once it has really ended:
+  // any other answer keeps it, so 退出登录 can be retried.
   it.each([
     [
       503,
@@ -1324,34 +1326,60 @@ describe("Sign-out and appeal relay account fences", () => {
         error: { code: "SERVICE_UNAVAILABLE", message: "AUTH_NOT_CONFIGURED" },
       },
     ],
+    [500, { error: { code: "INTERNAL_ERROR", message: "Internal error" } }],
     [409, { error: { code: "CONFLICT", message: "AUTH_RATE_LIMITED" } }],
     [
       401,
       { error: { code: "UNAUTHENTICATED", message: "AUTH_ACCOUNT_SUSPENDED" } },
     ],
-    [
-      401,
-      { error: { code: "UNAUTHENTICATED", message: "AUTH_UNAUTHENTICATED" } },
-    ],
   ])(
-    "clears the session when the Backend answers sign-out with %s",
+    "keeps the session when the Backend answers sign-out with %s and the session still works",
     async (status, body) => {
       vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
-      const upstream = vi
-        .fn<typeof fetch>()
-        .mockResolvedValue(Response.json(body, { status }));
+      const upstream = vi.fn<typeof fetch>(async (input) =>
+        new URL(String(input)).pathname === "/v1/me"
+          ? Response.json(profile)
+          : Response.json(body, { status }),
+      );
       vi.stubGlobal("fetch", upstream);
       for (const headers of [{ "x-author-account": account }, {}]) {
-        upstream.mockClear();
         const response = await post("sign-out", headers);
         expect(response.status).toBe(status);
-        expect(response.headers.getSetCookie()).toEqual([
-          expect.stringMatching(/^yoyi-session=; .*Max-Age=0/u),
-        ]);
-        expect(upstream).toHaveBeenCalledOnce();
+        expect(response.headers.get("set-cookie")).toBeNull();
       }
     },
   );
+
+  it("clears the session once the Backend no longer accepts it", async () => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    const upstream = vi.fn<typeof fetch>(async (input) =>
+      new URL(String(input)).pathname === "/v1/me"
+        ? Response.json(
+            {
+              error: {
+                code: "UNAUTHENTICATED",
+                message: "Authentication required",
+              },
+            },
+            { status: 401 },
+          )
+        : Response.json(
+            {
+              error: {
+                code: "UNAUTHENTICATED",
+                message: "AUTH_UNAUTHENTICATED",
+              },
+            },
+            { status: 401 },
+          ),
+    );
+    vi.stubGlobal("fetch", upstream);
+    const response = await post("sign-out");
+    expect(response.status).toBe(401);
+    expect(response.headers.getSetCookie()).toEqual([
+      expect.stringMatching(/^yoyi-session=; .*Max-Age=0/u),
+    ]);
+  });
 
   it("keeps the session when the sign-out never reached the Backend", async () => {
     vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");

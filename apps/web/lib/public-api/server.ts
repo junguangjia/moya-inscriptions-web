@@ -1526,19 +1526,6 @@ const challengePurposeOf = (body: string | undefined): unknown => {
   }
 };
 
-/** The Backend's refusal of a sign-out for an account that is not current. */
-const accountMismatchReason = "AUTH_ACCOUNT_MISMATCH";
-
-const apiErrorMessageOf = (body: unknown): unknown =>
-  typeof body === "object" &&
-  body !== null &&
-  "error" in body &&
-  typeof body.error === "object" &&
-  body.error !== null &&
-  "message" in body.error
-    ? body.error.message
-    : undefined;
-
 const grantedUserOf = (profile: unknown): string | null =>
   typeof profile === "object" &&
   profile !== null &&
@@ -1727,18 +1714,18 @@ export const relayServerCommunityAuth = async (
         },
       });
     if (suffix === "sign-out") {
-      // As before account switching, any answer leaves this browser signed out
-      // of its current account, except the approved fence: another tab made a
-      // different account current (409 AUTH_ACCOUNT_MISMATCH), whose session
-      // stays. Other held accounts stay listed either way.
-      const mismatch =
-        upstream.status === 409 &&
-        (await upstream.json().then(
-          (value: unknown) =>
-            apiErrorMessageOf(value) === accountMismatchReason,
-          () => false,
-        ));
+      // The browser lets its current session go only once the Backend has
+      // ended it, or no longer accepts it at all (`me` refuses it too). Any
+      // other answer (unavailable, a mismatch with the account another tab
+      // made current, a refused assertion) leaves the session and its cookie
+      // in place, so 退出登录 can be retried and never leaves a live session
+      // this browser can no longer end. Other held accounts stay listed.
       await upstream.body?.cancel().catch(() => undefined);
+      const signedOut =
+        upstream.ok ||
+        forwardedToken === undefined ||
+        (upstream.status === 401 &&
+          (await communitySessionRefused(base, forwardedToken)));
       const released =
         upstream.ok && signingOut !== null
           ? await releaseSavedSessionsOf(accounts, request, signingOut)
@@ -1746,9 +1733,9 @@ export const relayServerCommunityAuth = async (
       return new Response(null, {
         status: upstream.status,
         headers: appendSessionCookies(new Headers(headers), {
-          ...(mismatch
-            ? {}
-            : { active: serializeClearedCommunitySessionCookie(secure) }),
+          ...(signedOut
+            ? { active: serializeClearedCommunitySessionCookie(secure) }
+            : {}),
           ...released,
         }),
       });

@@ -672,8 +672,9 @@ describe("signing the current account out", () => {
     expect(backend.sessions.get(tokenA)).toEqual(A);
   });
 
-  it("signs this browser out on an unconfirmed answer as before, keeping every saved session", async () => {
+  it("keeps the current session and every saved session on an unconfirmed answer, so 退出登录 can be retried", async () => {
     currentWithCopy();
+    const active = browser.active();
     backend.signOutFails.add(tokenA2);
     const failed = await browser.auth(
       "sign-out",
@@ -681,7 +682,7 @@ describe("signing the current account out", () => {
       { "x-author-account": A.id },
     );
     expect(failed.status).toBe(503);
-    expect(browser.active()).toBeUndefined();
+    expect(browser.active()).toBe(active);
     expect(browser.saved()).toEqual([B.id, A.id]);
     expect(backend.sessions.get(tokenA)).toEqual(A);
   });
