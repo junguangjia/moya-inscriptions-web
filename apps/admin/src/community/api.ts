@@ -65,19 +65,18 @@ export class OperatorFailure extends Error {
 
 const messages: Record<string, string> = {
   COMMUNITY_OWNER_ONLY: "此操作仅限 Owner。",
-  OPERATOR_NOT_CONFIGURED: "尚未配置社区后端连接，请先设置后再操作。",
-  OPERATOR_UNAUTHORIZED: "社区操作凭据无效，请重新配置后端连接。",
+  OPERATOR_NOT_CONFIGURED: "社区服务尚未连接，请联系网站负责人。",
+  OPERATOR_UNAUTHORIZED: "社区服务连接已失效，请联系网站负责人。",
   AGENT_FORBIDDEN: "该代理主体未启用或不具备所需权限范围。",
-  OPERATOR_UNREACHABLE: "无法连接社区后端。",
+  OPERATOR_UNREACHABLE: "暂时无法连接社区服务。",
   OPERATOR_UNAVAILABLE: "社区数据暂时不可用。",
   COMMAND_INVALID: "请求参数无效，未执行任何操作。",
   JSON_BODY_REQUIRED: "请求格式无效，未执行任何操作。",
   NOT_FOUND: "目标已不存在。",
   STATE_CONFLICT: "该项状态已变化（可能已被处理），本次操作未执行。",
-  OPERATOR_RESPONSE_INVALID:
-    "社区后端返回的数据与约定不符，未显示也未执行后续操作。",
+  OPERATOR_RESPONSE_INVALID: "收到的数据暂时无法使用，请稍后刷新。",
   RANGE_NOT_SATISFIABLE: "请求的媒体片段不存在。",
-  OPERATION_FAILED: "操作未完成，内容不会被自动修改。",
+  OPERATION_FAILED: "暂时无法确认操作结果。",
 };
 
 /** What the Owner can do next; never a stack trace, SQL or secret. */
@@ -85,15 +84,15 @@ const hints: Record<string, string> = {
   STATE_CONFLICT: "请刷新当前列表后再决定。",
   NOT_FOUND: "请刷新当前列表。",
   OPERATOR_UNAVAILABLE: "稍后可直接重试。",
-  OPERATOR_UNREACHABLE: "请确认后端已启动，然后重试。",
+  OPERATOR_UNREACHABLE: "请稍后重试；仍无法连接时请联系网站负责人。",
   OPERATOR_NOT_CONFIGURED: "配置完成后刷新页面。",
   OPERATOR_UNAUTHORIZED: "配置完成后刷新页面。",
   AGENT_FORBIDDEN: "请在代理操作视图中检查主体状态与权限范围。",
   COMMAND_INVALID: "请刷新页面后重试。",
   JSON_BODY_REQUIRED: "请刷新页面后重试。",
-  OPERATOR_RESPONSE_INVALID: "请确认前后端版本一致后刷新页面。",
+  OPERATOR_RESPONSE_INVALID: "请刷新页面；仍有问题时请联系网站负责人。",
   RANGE_NOT_SATISFIABLE: "请刷新页面。",
-  OPERATION_FAILED: "可重试一次；若仍失败请刷新页面。",
+  OPERATION_FAILED: "请按页面提示核对结果。",
 };
 
 export const failureMessage = (code: string): string =>
@@ -189,7 +188,7 @@ export const outcomeUnknown = (error: unknown): boolean => {
 export const describeFinalFailure = (error: unknown): string => {
   const { code, text } = describeFailure(error);
   return code === "OPERATION_FAILED"
-    ? "后端拒绝了该请求，未执行任何操作。请刷新页面后重新检查。"
+    ? "操作未完成，请检查输入并刷新当前状态后再决定。"
     : text;
 };
 

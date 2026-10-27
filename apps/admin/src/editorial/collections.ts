@@ -1,3 +1,4 @@
+import { workspacePageLabel } from "../workspace/routes";
 import type { CollectionConfig } from "payload";
 
 import { canEditCatalog, isAutomation, isOwner } from "./access";
@@ -16,10 +17,13 @@ export const relationshipID = (value: unknown): number | string | undefined => {
 
 export const EditorialApprovals: CollectionConfig = {
   slug: "editorial-approvals",
-  labels: { singular: "批次发布批准", plural: "批次发布批准" },
+  labels: {
+    singular: workspacePageLabel("/admin/collections/editorial-approvals"),
+    plural: workspacePageLabel("/admin/collections/editorial-approvals"),
+  },
   admin: {
     useAsTitle: "label",
-    group: "系统与自动化",
+    group: "操作记录",
     description:
       "批准所选版本。内容变动后该项需重新批准；可撤销尚未执行的批准。",
     defaultColumns: ["label", "automationUser", "status", "approvedAt"],
@@ -52,7 +56,10 @@ export const EditorialApprovals: CollectionConfig = {
     {
       name: "status",
       type: "select",
-      options: ["active", "revoked"],
+      options: [
+        { label: "有效", value: "active" },
+        { label: "已撤销", value: "revoked" },
+      ],
       defaultValue: "active",
       required: true,
       label: "批准状态",
@@ -60,17 +67,18 @@ export const EditorialApprovals: CollectionConfig = {
     {
       name: "items",
       type: "array",
+      labels: { singular: "资料版本", plural: "资料版本" },
       minRows: 1,
       maxRows: 100,
       required: true,
-      label: "精确版本清单",
+      label: "获准发布的资料版本",
       fields: [
         {
           name: "catalog",
           type: "relationship",
           relationTo: "catalogs",
           required: true,
-          label: "目录记录",
+          label: "资料",
         },
         {
           name: "revision",
@@ -194,12 +202,15 @@ export const EditorialApprovals: CollectionConfig = {
 
 export const EditorialReceipts: CollectionConfig = {
   slug: "editorial-receipts",
-  labels: { singular: "批处理回执", plural: "批处理回执" },
+  labels: {
+    singular: workspacePageLabel("/admin/collections/editorial-receipts"),
+    plural: workspacePageLabel("/admin/collections/editorial-receipts"),
+  },
   admin: {
     useAsTitle: "deduplicationKey",
-    group: "系统与自动化",
-    description: "每项执行结果；成功项重放不会重复创建内容或版本。",
-    defaultColumns: ["operation", "catalog", "revision", "status", "createdAt"],
+    group: "操作记录",
+    description: "查看自动化操作的执行结果。",
+    defaultColumns: ["operation", "catalog", "status", "createdAt"],
   },
   access: {
     create: ({ req }) => isLedgerRequest(req),
@@ -211,35 +222,62 @@ export const EditorialReceipts: CollectionConfig = {
   },
   fields: [
     {
-      name: "deduplicationKey",
-      type: "text",
-      required: true,
-      unique: true,
-      index: true,
-    },
-    { name: "requestFingerprint", type: "text", required: true },
-    {
       name: "actor",
       type: "relationship",
+      label: "执行账号",
       relationTo: "users",
       required: true,
     },
     {
       name: "operation",
       type: "select",
-      options: ["save-draft", "publish-approved"],
+      label: "操作",
+      options: [
+        { label: "保存草稿", value: "save-draft" },
+        { label: "发布已批准内容", value: "publish-approved" },
+      ],
       required: true,
     },
     {
       name: "status",
       type: "select",
-      options: ["completed", "rejected"],
+      label: "执行结果",
+      options: [
+        { label: "已完成", value: "completed" },
+        { label: "未通过", value: "rejected" },
+      ],
       required: true,
     },
-    { name: "catalog", type: "relationship", relationTo: "catalogs" },
-    { name: "revision", type: "number" },
-    { name: "fingerprint", type: "text" },
-    { name: "errorCode", type: "text" },
+    {
+      name: "catalog",
+      type: "relationship",
+      relationTo: "catalogs",
+      label: "资料",
+    },
+    { name: "errorCode", type: "text", label: "错误代码" },
+    {
+      type: "collapsible",
+      label: "执行详细信息",
+      admin: { initCollapsed: true },
+      fields: [
+        {
+          name: "deduplicationKey",
+          type: "text",
+          label: "操作编号",
+          required: true,
+          unique: true,
+          index: true,
+        },
+        {
+          name: "requestFingerprint",
+          type: "text",
+          label: "请求校验值",
+          required: true,
+        },
+        { name: "revision", type: "number", label: "版本号" },
+        { name: "fingerprint", type: "text", label: "内容校验值" },
+      ],
+    },
   ],
   hooks: {
     beforeValidate: [

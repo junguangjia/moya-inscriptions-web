@@ -101,7 +101,9 @@ const Shell = ({
   return (
     <DefaultTemplate {...props} req={req} visibleEntities={visibleEntities}>
       {stepNav}
-      {isOwner(req) ? children : <p role="alert">此工作区仅限 Owner。</p>}
+      <div className="archive-view">
+        {isOwner(req) ? children : <p role="alert">此工作区仅限 Owner。</p>}
+      </div>
     </DefaultTemplate>
   );
 };

@@ -15,6 +15,8 @@ export const CommunityUsers = ({
   onRecommend,
   onBusy,
   onPending,
+  locationQuery,
+  onQueryChange,
 }: {
   disabled: boolean;
   reload: number;
@@ -23,9 +25,27 @@ export const CommunityUsers = ({
   onBusy: (busy: boolean) => void;
   /** How many selected-user commands still await confirmation; the owner gates navigation on it. */
   onPending?: (count: number) => void;
+  locationQuery?: { page: number; search: string };
+  onQueryChange?: (query: { page: number; search: string }) => void;
 }) => {
-  const [query, setQuery] = useState({ page: 1, search: "" });
-  const [search, setSearch] = useState("");
+  const [localQuery, setLocalQuery] = useState({ page: 1, search: "" });
+  const query = locationQuery ?? localQuery;
+  const setQuery = (
+    next:
+      | typeof query
+      | ((query: { page: number; search: string }) => {
+          page: number;
+          search: string;
+        }),
+  ) => {
+    const value = typeof next === "function" ? next(query) : next;
+    if (onQueryChange) onQueryChange(value);
+    else setLocalQuery(value);
+  };
+  const [search, setSearch] = useState(query.search);
+  useEffect(() => {
+    setSearch(query.search);
+  }, [query.search]);
   const [data, setData] = useState<OperatorUserPage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -216,15 +236,18 @@ export const CommunityUsers = ({
       {data?.total === 0 ? <p>没有符合条件的用户。</p> : null}
       <div className={styles.pager}>
         <span>
-          共 {data?.total ?? 0} 位用户 · 第 {query.page} 页
+          共 {data?.total ?? "—"} 位用户 · 第{" "}
+          {data?.total === 0 ? 0 : query.page} 页
         </span>
         <div className={styles.actions}>
           <button
             type="button"
             disabled={disabled || loading || query.page === 1}
             onClick={() => setQuery((q) => ({ ...q, page: q.page - 1 }))}
+            aria-label="上一页"
+            title="上一页"
           >
-            上一页
+            <span aria-hidden="true">←</span>
           </button>
           <button
             type="button"
@@ -232,8 +255,10 @@ export const CommunityUsers = ({
               disabled || loading || query.page * 20 >= (data?.total ?? 0)
             }
             onClick={() => setQuery((q) => ({ ...q, page: q.page + 1 }))}
+            aria-label="下一页"
+            title="下一页"
           >
-            下一页
+            <span aria-hidden="true">→</span>
           </button>
         </div>
       </div>

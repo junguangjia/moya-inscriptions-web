@@ -15,6 +15,38 @@ const fixtureToken = "synthetic-session-for-fixture-only";
 const syntheticAuthorization1 = `Bearer ${"REPLACE_ME_SYNTHETIC_311782FA2ED2"}`;
 
 describe("private native analytics workspace", () => {
+  it.each(["links", "pixels"])(
+    "preserves existing team %s analysis pages and list reads without opening writes or management",
+    async (kind) => {
+      const team = "10000000-0000-4000-8000-000000000001";
+      const request = vi.fn(async () => Response.json({ data: [], count: 0 }));
+      const proxy = createAnalyticsProxy({
+        isOwner: async () => true,
+        upstream: { request, origin: () => new URL(environment.UMAMI_ORIGIN) },
+      });
+      expect(
+        (await proxy(new Request(url(`/teams/${team}/${kind}`)))).status,
+      ).toBe(200);
+      expect(
+        (await proxy(new Request(url(`/api/teams/${team}/${kind}`)))).status,
+      ).toBe(200);
+      const reads = request.mock.calls.length;
+      expect(
+        (
+          await proxy(
+            new Request(url(`/api/teams/${team}/${kind}`), { method: "POST" }),
+          )
+        ).status,
+      ).toBe(405);
+      expect(
+        (await proxy(new Request(url(`/api/teams/${team}/users`)))).status,
+      ).toBe(404);
+      expect(
+        (await proxy(new Request(url(`/teams/${team}/api/auth/login`)))).status,
+      ).toBe(404);
+      expect(request).toHaveBeenCalledTimes(reads);
+    },
+  );
   it.each([
     "/_next/static/app.js",
     "/api/config",

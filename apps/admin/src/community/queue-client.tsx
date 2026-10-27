@@ -1,5 +1,7 @@
 "use client";
 
+import { workspacePageLabel } from "../workspace/routes";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -136,6 +138,9 @@ const copyText = async (text: string): Promise<boolean> => {
 
 const StateChip = ({ state }: { readonly state: CommentModerationState }) => (
   <span className={styles.chip} data-state={state}>
+    <span aria-hidden="true">
+      {state === "pending" ? "◷" : state === "visible" ? "✓" : "−"}
+    </span>{" "}
     {moderationLabels[state]}
   </span>
 );
@@ -210,6 +215,7 @@ export const CommunityQueueClient = ({
   // The item currently open, readable from callbacks created before it changed.
   const openItemRef = useRef<string | null>(null);
   const panel = useRef<HTMLElement | null>(null);
+  const returnFocus = useRef<HTMLElement | null>(null);
   // The open 更多 menu floats over the viewport so the table's scroll box never clips it.
   const [menuAnchor, setMenuAnchor] = useState<{
     key: string;
@@ -283,7 +289,10 @@ export const CommunityQueueClient = ({
   }, []);
 
   useEffect(() => {
-    if (query.item === null) return;
+    if (query.item === null) {
+      if (returnFocus.current?.isConnected) returnFocus.current.focus();
+      return;
+    }
     // Below the two-column width the panel follows the whole list.
     panel.current?.focus();
     panel.current?.scrollIntoView({ block: "start" });
@@ -517,7 +526,12 @@ export const CommunityQueueClient = ({
   const allOnPageSelected =
     items.length > 0 && items.every((item) => selected.has(item.id));
 
-  const openItem = (id: string) => navigate({ item: id }, "push");
+  const openItem = (id: string) => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.closest("[data-queue-list]"))
+      returnFocus.current = active;
+    navigate({ item: id }, "push");
+  };
   const closeItem = () => navigate({ item: null }, "replace");
 
   const deleteContent = async (
@@ -715,16 +729,17 @@ export const CommunityQueueClient = ({
     <div className={styles.workspace}>
       <SetStepNav
         nav={[
-          { label: "社区", url: "/admin/community-moderation" },
-          { label: "评论审核队列" },
+          { label: "审核", url: "/admin/community-moderation" },
+          { label: workspacePageLabel("/admin/community-moderation") },
         ]}
       />
       <header className={styles.header}>
         <div>
-          <h1 className={styles.title}>评论审核队列</h1>
+          <h1 className={styles.title}>
+            {workspacePageLabel("/admin/community-moderation")}
+          </h1>
           <p className={styles.lead}>
-            队列同时包含根评论与回复，按提交时间排序；{TIME_ZONE_NOTE}。
-            <Link href="/admin">返回工作台</Link>
+            评论和回复，按提交时间排序；{TIME_ZONE_NOTE}。
           </p>
         </div>
         <div className={styles.summaryLine} data-policy-summary="">
@@ -734,18 +749,9 @@ export const CommunityQueueClient = ({
               {policy === null ? "读取中…" : policyLabels[policy.policy]}
             </strong>
           </span>
-          <Link href="/admin/community-moderation/settings">发布设置</Link>
-          <Link href="/admin/community-moderation/reports">用户举报</Link>
-          <Link href="/admin/community-moderation/appeals">申诉与操作历史</Link>
         </div>
       </header>
 
-      <ModerationReasonInput
-        label="评论与账号处置理由（必填）"
-        value={reasonDraft}
-        onChange={setReasonDraft}
-        disabled={bulkBusy || busyIds.size > 0}
-      />
       <div aria-label="审核状态" className={styles.tabs} role="tablist">
         {statuses.map((status) => (
           <button
@@ -784,47 +790,62 @@ export const CommunityQueueClient = ({
             value={searchDraft}
           />
         </label>
-        <label>
-          类型
-          <select
-            onChange={(event) =>
-              navigate({ kind: event.currentTarget.value as Kind, page: 1 })
-            }
-            value={query.kind}
-          >
-            <option value="all">根评论与回复</option>
-            <option value="comment">仅根评论</option>
-            <option value="reply">仅回复</option>
-          </select>
-        </label>
-        <label>
-          资料
-          <select
-            onChange={(event) =>
-              navigate({ catalog: event.currentTarget.value, page: 1 })
-            }
-            value={query.catalog}
-          >
-            <option value="">全部资料</option>
-            {catalogOptions.map(([id, title]) => (
-              <option key={id} value={id}>
-                {title}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          审阅顺序
-          <select
-            onChange={(event) =>
-              navigate({ order: event.currentTarget.value as Order, page: 1 })
-            }
-            value={query.order}
-          >
-            <option value="newest">最新优先</option>
-            <option value="oldest">最早优先</option>
-          </select>
-        </label>
+        <details
+          className={styles.filterDisclosure}
+          open={
+            query.kind !== "all" ||
+            query.catalog !== "" ||
+            query.order !== "newest"
+          }
+        >
+          <summary>筛选与排序</summary>
+          <div className={styles.filters}>
+            <label>
+              类型
+              <select
+                onChange={(event) =>
+                  navigate({ kind: event.currentTarget.value as Kind, page: 1 })
+                }
+                value={query.kind}
+              >
+                <option value="all">根评论与回复</option>
+                <option value="comment">仅根评论</option>
+                <option value="reply">仅回复</option>
+              </select>
+            </label>
+            <label>
+              资料
+              <select
+                onChange={(event) =>
+                  navigate({ catalog: event.currentTarget.value, page: 1 })
+                }
+                value={query.catalog}
+              >
+                <option value="">全部资料</option>
+                {catalogOptions.map(([id, title]) => (
+                  <option key={id} value={id}>
+                    {title}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              审阅顺序
+              <select
+                onChange={(event) =>
+                  navigate({
+                    order: event.currentTarget.value as Order,
+                    page: 1,
+                  })
+                }
+                value={query.order}
+              >
+                <option value="newest">最新优先</option>
+                <option value="oldest">最早优先</option>
+              </select>
+            </label>
+          </div>
+        </details>
         <button className={styles.actionButton} type="submit">
           搜索
         </button>
@@ -842,6 +863,13 @@ export const CommunityQueueClient = ({
           </button>
         )}
       </form>
+
+      <ModerationReasonInput
+        label="评论与账号处置理由（必填）"
+        value={reasonDraft}
+        onChange={setReasonDraft}
+        disabled={bulkBusy || busyIds.size > 0}
+      />
 
       {receipt === null ? null : (
         <p
@@ -1087,16 +1115,20 @@ export const CommunityQueueClient = ({
                   disabled={page.page <= 1 || loading}
                   onClick={() => navigate({ page: query.page - 1 })}
                   type="button"
+                  aria-label="上一页"
+                  title="上一页"
                 >
-                  上一页
+                  <span aria-hidden="true">←</span>
                 </button>
                 <button
                   className={styles.actionButton}
                   disabled={page.page >= page.totalPages || loading}
                   onClick={() => navigate({ page: query.page + 1 })}
                   type="button"
+                  aria-label="下一页"
+                  title="下一页"
                 >
-                  下一页
+                  <span aria-hidden="true">→</span>
                 </button>
                 <label>
                   <span className={styles.srOnly}>每页条数</span>
@@ -1133,7 +1165,7 @@ export const CommunityQueueClient = ({
                 onClick={closeItem}
                 type="button"
               >
-                关闭
+                <span aria-hidden="true">← </span>返回列表
               </button>
             </div>
             {detail === null || detail.state === "loading" ? (

@@ -1,7 +1,8 @@
 "use client";
 
+import { workspacePageLabel } from "../workspace/routes";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ConfirmationModal, SetStepNav, useModal } from "@payloadcms/ui";
 
@@ -212,17 +213,18 @@ export const PublishingJobsClient = () => {
     <div className={styles.workspace}>
       <SetStepNav
         nav={[
-          { label: "社区", url: "/admin/community-moderation" },
-          { label: "发布任务" },
+          { label: "发布工具", url: "/admin/editorial-workflow" },
+          { label: "发布进度" },
         ]}
       />
       <header className={styles.header}>
         <div>
-          <h1 className={styles.title}>发布任务</h1>
+          <h1 className={styles.title}>
+            {workspacePageLabel("/admin/community-moderation/publishing-jobs")}
+          </h1>
           <p className={styles.lead}>
-            媒体处理与清理任务的执行结果，只显示任务类型、对象
-            ID、次数、错误代码与时间，不含作品内容；
-            {TIME_ZONE_NOTE}。<Link href="/admin">返回工作台</Link>
+            查看图片处理、清理进度与失败原因；
+            {TIME_ZONE_NOTE}。
           </p>
         </div>
       </header>
@@ -270,8 +272,10 @@ export const PublishingJobsClient = () => {
           disabled={loading}
           onClick={() => void load()}
           type="button"
+          aria-label="刷新"
+          title="刷新"
         >
-          刷新
+          <span aria-hidden="true">↻</span>
         </button>
       </div>
 
@@ -308,12 +312,12 @@ export const PublishingJobsClient = () => {
 
       <section
         aria-busy={loading}
-        aria-label="发布任务"
+        aria-label="发布进度"
         data-publishing-job-list=""
       >
         {loadError !== null ? (
           <p className={styles.state} role="alert">
-            无法读取发布任务：{loadError}{" "}
+            无法读取发布进度：{loadError}{" "}
             <button
               className={styles.rowLink}
               onClick={() => void load()}
@@ -459,16 +463,20 @@ export const PublishingJobsClient = () => {
                 disabled={page.page <= 1 || loading}
                 onClick={() => navigate({ page: query.page - 1 })}
                 type="button"
+                aria-label="上一页"
+                title="上一页"
               >
-                上一页
+                <span aria-hidden="true">←</span>
               </button>
               <button
                 className={styles.actionButton}
                 disabled={page.page >= page.totalPages || loading}
                 onClick={() => navigate({ page: query.page + 1 })}
                 type="button"
+                aria-label="下一页"
+                title="下一页"
               >
-                下一页
+                <span aria-hidden="true">→</span>
               </button>
             </div>
           </div>

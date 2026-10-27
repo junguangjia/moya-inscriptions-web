@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { createElement } from "react";
 import type { ReactNode } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AdminViewServerProps } from "payload";
 import type {
@@ -174,7 +174,10 @@ describe("deleted accounts in Admin", () => {
     });
     render(createElement(CommunityContentView, props));
     expect(await screen.findByText("账号已注销")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "用户管理" }));
+    // The users list is its own view, chosen through the address.
+    cleanup();
+    runtime.params = new URLSearchParams("tab=users");
+    render(createElement(CommunityContentView, props));
     await screen.findByText("不可推荐");
     expect(screen.getAllByText("已注销")).toHaveLength(2);
     expect(screen.getByText("正常")).toBeTruthy();

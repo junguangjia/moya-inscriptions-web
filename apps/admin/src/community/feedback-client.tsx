@@ -1,7 +1,8 @@
 "use client";
 
+import { workspacePageLabel } from "../workspace/routes";
+
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { SetStepNav } from "@payloadcms/ui";
 
 import { TIME_ZONE_NOTE, call, describeFailure, formatTime } from "./api";
@@ -49,16 +50,17 @@ export const CommunityFeedbackClient = () => {
     <div className={styles.workspace}>
       <SetStepNav
         nav={[
-          { label: "社区", url: "/admin/community-moderation" },
-          { label: "用户反馈" },
+          { label: "审核", url: "/admin/community-moderation" },
+          { label: workspacePageLabel("/admin/community-moderation/feedback") },
         ]}
       />
       <header className={styles.header}>
         <div>
-          <h1 className={styles.title}>用户反馈</h1>
+          <h1 className={styles.title}>
+            {workspacePageLabel("/admin/community-moderation/feedback")}
+          </h1>
           <p className={styles.lead}>
             用户从设置提交的反馈与建议，最新在前；{TIME_ZONE_NOTE}。
-            <Link href="/admin">返回工作台</Link>
           </p>
         </div>
         <button
@@ -69,8 +71,10 @@ export const CommunityFeedbackClient = () => {
             setRefresh((value) => value + 1);
           }}
           type="button"
+          aria-label="刷新反馈"
+          title="刷新反馈"
         >
-          刷新反馈
+          <span aria-hidden="true">↻</span>
         </button>
       </header>
 
@@ -149,16 +153,20 @@ export const CommunityFeedbackClient = () => {
                 disabled={page.page <= 1 || loading}
                 onClick={() => setPageNumber((value) => value - 1)}
                 type="button"
+                aria-label="上一页"
+                title="上一页"
               >
-                上一页
+                <span aria-hidden="true">←</span>
               </button>
               <button
                 className={styles.actionButton}
                 disabled={page.page >= totalPages || loading}
                 onClick={() => setPageNumber((value) => value + 1)}
                 type="button"
+                aria-label="下一页"
+                title="下一页"
               >
-                下一页
+                <span aria-hidden="true">→</span>
               </button>
             </div>
           </div>

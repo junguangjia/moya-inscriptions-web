@@ -1,5 +1,7 @@
 "use client";
 
+import { workspacePageLabel } from "../workspace/routes";
+
 import { useCallback, useEffect, useState } from "react";
 import { SetStepNav } from "@payloadcms/ui";
 
@@ -85,12 +87,17 @@ export const ThreadsClient = () => {
     );
 
   return (
-    <div className={styles.layout} data-community-threads="">
+    <div className={styles.workspace} data-community-threads="">
       <SetStepNav
-        nav={[{ label: "话题管理", url: "/community-moderation/threads" }]}
+        nav={[
+          { label: "内容", url: "/admin/collections/catalogs" },
+          { label: workspacePageLabel("/admin/community-moderation/threads") },
+        ]}
       />
       <header className={styles.header}>
-        <h1>话题管理</h1>
+        <h1 className={styles.title}>
+          {workspacePageLabel("/admin/community-moderation/threads")}
+        </h1>
         <p className={styles.lead}>
           话题由运营创建；用户以作品的形式参与。隐藏话题只移除该分组，不改变其中作品的可见性。
         </p>
@@ -101,7 +108,7 @@ export const ThreadsClient = () => {
         </p>
       )}
       <section
-        className={styles.panel}
+        className={`${styles.panel} ${styles.agentPanel}`}
         aria-labelledby="threads-create-heading"
       >
         <h2 id="threads-create-heading" className={styles.sectionTitle}>
@@ -168,7 +175,10 @@ export const ThreadsClient = () => {
           </div>
         </form>
       </section>
-      <section className={styles.panel} aria-labelledby="threads-list-heading">
+      <section
+        className={`${styles.panel} ${styles.agentPanel}`}
+        aria-labelledby="threads-list-heading"
+      >
         <h2 id="threads-list-heading" className={styles.sectionTitle}>
           全部话题{page ? `（${page.total}）` : ""}
         </h2>

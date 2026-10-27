@@ -8,7 +8,7 @@
   /* Payload's own horizontal gutter, so this view lines up with every other
      Admin page instead of sitting flush against the viewport edge. Captured
      at 1440px before this was added, where the title started at x=0. */
-  padding: 0 var(--gutter-h, 24px) 32px;
+  padding: 0;
   color: var(--theme-elevation-900, #1a1a1a);
 }
 
@@ -33,7 +33,7 @@
 .lead {
   margin: 0;
   max-width: 62ch;
-  color: #5c5c5c;
+  color: var(--yoyi-color-text-secondary);
   font-size: 13px;
   line-height: 1.6;
 }
@@ -53,30 +53,38 @@
 
 .badge[data-tone="neutral"] {
   background: var(--theme-elevation-50, #f6f6f6);
-  color: #444;
+  color: var(--yoyi-color-text-secondary);
 }
 
 .badge[data-tone="active"] {
-  border-color: #1a1a1a;
-  background: #1a1a1a;
-  color: #fff;
+  border-color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-text-primary);
+  color: var(--yoyi-color-text-inverse);
 }
 
 .badge[data-tone="pending"] {
-  border-color: #b4801a;
-  background: #fdf6e7;
-  color: #7a5310;
+  border-color: var(--yoyi-color-warning);
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-warning) 10%,
+    var(--yoyi-color-background-surface)
+  );
+  color: var(--yoyi-color-warning);
 }
 
 .badge[data-tone="attention"] {
-  border-color: #a33;
-  background: #fdeeee;
-  color: #8a2b2b;
+  border-color: var(--yoyi-color-error);
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-error) 10%,
+    var(--yoyi-color-background-surface)
+  );
+  color: var(--yoyi-color-error);
 }
 
 .badge[data-tone="muted"] {
   background: transparent;
-  color: #767676;
+  color: var(--yoyi-color-text-tertiary);
 }
 
 .section {
@@ -100,7 +108,7 @@
 
 .sectionNote {
   margin: 0;
-  color: #5c5c5c;
+  color: var(--yoyi-color-text-secondary);
   font-size: 12px;
   line-height: 1.6;
 }
@@ -151,7 +159,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 2px 16px;
-  color: #5c5c5c;
+  color: var(--yoyi-color-text-secondary);
   font-size: 12px;
   line-height: 1.7;
 }
@@ -159,7 +167,7 @@
 /* Said only when a connection needs something from the reader. */
 .cardHint {
   margin: 2px 0 0;
-  color: #7a5310;
+  color: var(--yoyi-color-warning);
   font-size: 12px;
   line-height: 1.6;
 }
@@ -197,9 +205,9 @@
 }
 
 .buttonPrimary {
-  border-color: #1a1a1a;
-  background: #1a1a1a;
-  color: #fff;
+  border-color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-text-primary);
+  color: var(--yoyi-color-text-inverse);
 }
 
 .buttonPrimary:hover:not(:disabled) {
@@ -224,18 +232,22 @@
      label instead of growing. */
   border-color: #e3c9c9;
   background: transparent;
-  color: #8a2b2b;
+  color: var(--yoyi-color-error);
 }
 
 .buttonQuietDanger:hover:not(:disabled) {
-  border-color: #a33;
-  background: #fdeeee;
+  border-color: var(--yoyi-color-error);
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-error) 10%,
+    var(--yoyi-color-background-surface)
+  );
 }
 
 .buttonDanger {
-  border-color: #8a2b2b;
-  background: #8a2b2b;
-  color: #fff;
+  border-color: var(--yoyi-color-error);
+  background: var(--yoyi-color-error);
+  color: var(--yoyi-color-text-inverse);
 }
 
 .buttonDanger:hover:not(:disabled) {
@@ -247,18 +259,22 @@
   border: 1px dashed var(--theme-elevation-200, #ddd);
   border-radius: 8px;
   padding: 20px 16px;
-  color: #5c5c5c;
+  color: var(--yoyi-color-text-secondary);
   font-size: 13px;
   text-align: center;
 }
 
 .notice {
   margin: 0;
-  border: 1px solid #a33;
+  border: 1px solid var(--yoyi-color-error);
   border-radius: 6px;
   padding: 10px 12px;
-  background: #fdeeee;
-  color: #8a2b2b;
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-error) 10%,
+    var(--yoyi-color-background-surface)
+  );
+  color: var(--yoyi-color-error);
   font-size: 13px;
 }
 
@@ -288,7 +304,7 @@
 
 .presetNote {
   margin: 0;
-  color: #5c5c5c;
+  color: var(--yoyi-color-text-secondary);
   font-size: 12px;
   line-height: 1.6;
   min-height: 2.4em;
@@ -323,7 +339,7 @@
 
 /* What to do about a state the page cannot offer a button for. */
 .presetHint {
-  color: #5c5c5c;
+  color: var(--yoyi-color-text-secondary);
   font-size: 12px;
   line-height: 1.6;
 }
@@ -331,7 +347,7 @@
 /* Belongs to the grid above it, not to the page's section rhythm. */
 .presetGridNote {
   margin: -4px 0 0;
-  color: #5c5c5c;
+  color: var(--yoyi-color-text-secondary);
   font-size: 12px;
   line-height: 1.6;
 }
@@ -374,7 +390,7 @@
 }
 
 .detailList dt {
-  color: #5c5c5c;
+  color: var(--yoyi-color-text-secondary);
   font-size: 12px;
   line-height: 1.8;
 }
@@ -403,7 +419,7 @@
   border-radius: 4px;
   padding: 1px 8px;
   background: #fff;
-  color: #444;
+  color: var(--yoyi-color-text-secondary);
   font-size: 11px;
   line-height: 1.8;
   cursor: pointer;
@@ -446,7 +462,7 @@
 
 .dialogText {
   margin: 0;
-  color: #444;
+  color: var(--yoyi-color-text-secondary);
   font-size: 13px;
   line-height: 1.7;
 }

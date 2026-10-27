@@ -6,9 +6,12 @@ import { parseEnv } from "node:util";
 export const UMAMI_VERSION = "3.4.0";
 export const UMAMI_SOURCE_COMMIT = "ec0ff50388c264ed8ce46f00967e92f7e71476ae";
 export const UMAMI_WORKSPACE_IDENTITY =
-  "fe1ae90c0f4b9b71c3362d62404518f8bdcbe7ce35de22abdfc4d6d3567cf101";
+  "a531b1383b044f9edf62f6e227fbf93d702437526359be557a9065b457c1bd86";
 export const UMAMI_PG_TLS_HOST_SHA256 =
   "ad0a70c6fc8820bb613a8437c634b6a0a6a04cc3cc36175ab72590d2733c24e6";
+export const UMAMI_GEOGRAPHY_POLICY = "cn-province-map-v2";
+export const UMAMI_CHINA_MAP_SHA256 =
+  "99adfeded5223848bbe37a0a12f8023e11ee12161c7800521c27db42fdeac275";
 export const UMAMI_BASE_PATH = "/admin/analytics-workspace";
 
 /** Error codes deliberately contain no upstream messages, URLs or credentials. */

@@ -142,7 +142,10 @@ describe("the AI connections page", () => {
     vi.stubGlobal("fetch", mockFetch(result()));
     render(createElement(AgentConnectionsClient));
     await waitFor(() => expect(payload.setStepNav).toHaveBeenCalled());
-    expect(payload.setStepNav).toHaveBeenCalledWith([{ label: "AI 连接" }]);
+    expect(payload.setStepNav).toHaveBeenCalledWith([
+      { label: "发布工具", url: "/admin/editorial-workflow" },
+      { label: "AI 连接" },
+    ]);
   });
 
   it("does not disconnect on the first click; it asks", async () => {
