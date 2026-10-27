@@ -1547,10 +1547,10 @@ const grantedUserOf = (profile: unknown): string | null =>
  * before the Backend is asked, and a granted session becomes current while the
  * previous account joins `yoyi-saved-sessions`. `accounts/remove` and
  * `accounts/sign-out-all` end held sessions here, where the Backend's trusted
- * authentication source is available. Without the header a sign-in, and a
- * sign-out, only let go of the saved sessions of the account they sign in or
- * out (signing each out first), and a browser holding none gets the answer it
- * always got.
+ * authentication source is available. Without the header a sign-in, a
+ * sign-out and a confirmed account deletion only let go of the saved sessions
+ * of the account they sign in, sign out or delete (signing each out first),
+ * and a browser holding none gets the answer it always got.
  */
 export const relayServerCommunityAuth = async (
   request: Request,
@@ -1767,13 +1767,19 @@ export const relayServerCommunityAuth = async (
       if (!json) await cancelQuietly(upstream.body);
       const result = authAccountDeletionResultSchema.safeParse(payload);
       if (!result.success) return fail(502);
-      // This browser keeps neither its ordinary nor its appeal cookie.
-      const secure = isSecureRequest(request);
-      const cleared = new Headers(headers);
-      cleared.append(
-        "set-cookie",
-        serializeClearedCommunitySessionCookie(secure),
-      );
+      // This browser keeps neither its ordinary nor its appeal cookie, and
+      // lets go of its saved copies of the deleted account: the deletion
+      // revoked every Session of it, so each copy's sign-out is refused and
+      // the copy leaves the list. A copy whose sign-out cannot be confirmed
+      // (unavailable) stays held, as after 退出登录.
+      const released =
+        asserted.account === undefined
+          ? {}
+          : await releaseSavedSessionsOf(accounts, request, asserted.account);
+      const cleared = appendSessionCookies(new Headers(headers), {
+        active: serializeClearedCommunitySessionCookie(secure),
+        ...released,
+      });
       cleared.append("set-cookie", serializeClearedAppealSessionCookie(secure));
       return Response.json(result.data, { status: 200, headers: cleared });
     }

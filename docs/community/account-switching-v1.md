@@ -43,10 +43,14 @@ stays saved as a hidden copy next to that account's newer session (so a user id
 may repeat in the cookie); the account is still listed once, never as a second
 account. A later sign-in, 退出登录 (when it can name the account, see
 Routes), 移除 or 退出所有账号 of that account goes through the authentication
-relay, which carries the Production auth-ingress proof, and ends the copy. The
-cookie holds at most six entries (two other accounts and the copies); an
-add-account step that would need more is refused with
-`AUTH_ACCOUNT_STATE_UNAVAILABLE` before the Backend is asked.
+relay, which carries the Production auth-ingress proof, and ends the copy. A
+confirmed 注销账号 (#351, a contract 200 from the deletion relay) lets go of
+every saved copy of the deleted account the same way: the deletion revoked them
+all, so their sign-out is `refused` and they leave the list; a copy whose
+sign-out cannot be confirmed (unavailable) stays held and is listed
+as 需重新登录 until 移除 ends it. The cookie holds at most six entries (two
+other accounts and the copies); an add-account step that would need more is
+refused with `AUTH_ACCOUNT_STATE_UNAVAILABLE` before the Backend is asked.
 
 Each session keeps its own absolute Backend lifetime (seven days by default);
 switching never extends it. The ceiling (seven days from when an entry was
@@ -138,12 +142,14 @@ active cookie a new seven-day lifetime.
   account where 移除 ends them. Other accounts stay listed either way.
 - The browser runs every request that rewrites these cookies (switch, remove,
   sign out all, the add-account steps, an ordinary sign-in, a factor change
-  (`factors/complete`, `factors/unlink`, whose answer reissues the session) and
-  sign-out) under one exclusive Web Lock across its tabs, so two answers never
-  write cookies from different snapshots; the read-only list takes the same lock
-  so it reads after a write in flight. Without Web Locks the request runs
-  directly. The existing relays that clear `yoyi-session` once the Backend
-  refuses it (`/api/community/me`, the author, media and notification relays)
+  (`factors/complete`, `factors/unlink`, whose answer reissues the session),
+  sign-out and 注销账号 (#351)) under one exclusive Web Lock across its tabs, so
+  two answers never write cookies from different snapshots; the read-only list
+  takes the same lock so it reads after a write in flight. Without Web Locks the
+  request runs directly. The existing relays that clear `yoyi-session` once the
+  Backend refuses it (`/api/community/me`, the author, media and notification
+  relays, and the auth relay's own reads and code requests: `GET account` and
+  `POST challenges` outside add-account mode, which 账号与安全 and 注销账号 use)
   run outside that lock; see Known limitations.
 
 All answers are `private, no-store` with `Vary: Cookie`; writes require the
@@ -195,7 +201,7 @@ same-origin checks of the author relay.
 - The account routes carry no trusted authentication source in Production, so a
   switch cannot sign out a saved copy the Backend still accepts; the copy stays
   hidden until the authentication relay (sign-in,
-  add-account, 退出登录, 移除, 退出所有账号) ends it.
+  add-account, 退出登录, 移除, 退出所有账号, 注销账号) ends it.
 - An asserted Backend sign-out of a suspended account's session is refused,
   so 移除 and 退出所有账号 let such a session go (`/v1/me` refuses it too)
   without ending it on the Backend; it lapses at its own expiry, and no browser

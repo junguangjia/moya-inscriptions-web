@@ -54,6 +54,10 @@ class FakeBackend {
    */
   readonly signOutUntrusted = new Set<string>();
   readonly grants: Account[] = [];
+  /** Sessions a deletion revoked: an exact retry with one replays it. */
+  readonly deletedSessions = new Map<string, Account>();
+  /** The next deletion commits but answers outside the contract. */
+  cutDeletionAnswer = false;
   private issued = 0;
   readonly fetch = vi.fn<typeof fetch>(async (input, init) => {
     const url = new URL(String(input));
@@ -102,6 +106,36 @@ class FakeBackend {
         );
       this.sessions.delete(token!);
       return new Response(null, { status: 204 });
+    }
+    if (url.pathname === "/v1/community/auth/account/deletion") {
+      const profile =
+        token === undefined
+          ? undefined
+          : (this.sessions.get(token) ?? this.deletedSessions.get(token));
+      if (
+        profile === undefined ||
+        headers.get("x-author-account") !== profile.id
+      )
+        return Response.json(
+          {
+            error: { code: "UNAUTHENTICATED", message: "AUTH_UNAUTHENTICATED" },
+          },
+          { status: 401 },
+        );
+      // Deletion revokes every session of the account.
+      for (const [held, owner] of this.sessions)
+        if (owner.id === profile.id) {
+          this.sessions.delete(held);
+          this.deletedSessions.set(held, owner);
+        }
+      if (this.cutDeletionAnswer) {
+        this.cutDeletionAnswer = false;
+        return Response.json({ outcome: "deleted" });
+      }
+      return Response.json({
+        outcome: "deleted",
+        deletedAt: "2030-01-01T00:00:00.000Z",
+      });
     }
     if (grantPaths.has(url.pathname)) {
       const profile = this.grants.shift();
@@ -729,6 +763,71 @@ describe("signing the current account out", () => {
       }
     },
   );
+});
+
+describe("deleting the current account", () => {
+  const tokenA2 = "E".repeat(43);
+  const proof = "R".repeat(43);
+  const deletion = {
+    reauthToken: proof,
+    idempotencyKey: "00000000-0000-4000-8000-000000000001",
+  };
+  /** A is current with a newer session; an older one and B are saved. */
+  const currentWithCopy = () => {
+    backend.sessions.set(tokenA2, A);
+    backend.sessions.set(tokenA, A);
+    backend.sessions.set(tokenB, B);
+    browser.jar.set("yoyi-session", tokenA2);
+    browser.hold([B, tokenB], [A, tokenA]);
+  };
+
+  it("drops the saved copies of the deleted account and keeps the other accounts", async () => {
+    currentWithCopy();
+    const deleted = await browser.auth("account/deletion", deletion, {
+      "x-author-account": A.id,
+    });
+    expect(deleted.status).toBe(200);
+    expect(browser.active()).toBeUndefined();
+    expect(browser.saved()).toEqual([B.id]);
+    expect(backend.sessions.get(tokenB)).toEqual(B);
+    expect(await listed()).toEqual({
+      current: null,
+      others: [expect.objectContaining({ id: B.id, state: "ready" })],
+      limit: 3,
+    });
+  });
+
+  it("keeps a saved copy whose end it cannot confirm", async () => {
+    currentWithCopy();
+    backend.signOutFails.add(tokenA);
+    const deleted = await browser.auth("account/deletion", deletion, {
+      "x-author-account": A.id,
+    });
+    expect(deleted.status).toBe(200);
+    expect(browser.active()).toBeUndefined();
+    expect(browser.saved()).toEqual([B.id, A.id]);
+  });
+
+  it("keeps every cookie on an unusable answer and lets the copies go on the replayed one", async () => {
+    currentWithCopy();
+    backend.cutDeletionAnswer = true;
+    const cut = await browser.auth("account/deletion", deletion, {
+      "x-author-account": A.id,
+    });
+    expect(cut.status).toBe(502);
+    expect(cut.headers.getSetCookie()).toEqual([]);
+    expect(browser.active()).toBe(tokenA2);
+    expect(browser.saved()).toEqual([B.id, A.id]);
+    expect(backend.callsTo("/v1/community/auth/sign-out")).toHaveLength(0);
+    // The page's same-key retry still presents the revoked session.
+    const replayed = await browser.auth("account/deletion", deletion, {
+      "x-author-account": A.id,
+    });
+    expect(replayed.status).toBe(200);
+    expect(browser.active()).toBeUndefined();
+    expect(browser.saved()).toEqual([B.id]);
+    expect(backend.sessions.get(tokenB)).toEqual(B);
+  });
 });
 
 describe("listing and switching held accounts", () => {

@@ -133,24 +133,30 @@ export const parseAccountDeletionResult = (
 /**
  * account-deletion-v1: ends the signed-in account. `x-author-account` binds the
  * request to the account this page confirmed, so a Session another tab has
- * since changed is refused instead of deleting a different account. The relay
- * clears this browser's Session cookies only on the Backend's success.
+ * since changed is refused instead of deleting a different account. On the
+ * Backend's success the relay clears this browser's Session cookies and lets
+ * go of the saved copies of the account (account-switching-v1); like every
+ * relay, it also clears the session cookie on a 401 once `/v1/me` refuses that
+ * session. It therefore runs under the same cross-tab lock as the other cookie
+ * writes.
  */
 export const requestAccountDeletion = async (
   accountId: string,
   request: AuthAccountDeletionRequest,
 ): Promise<{ readonly status: number; readonly body: unknown }> => {
-  const response = await fetch("/api/community/auth/account/deletion", {
-    method: "POST",
-    headers: {
-      accept: "application/json",
-      "content-type": "application/json",
-      "x-author-account": accountId,
-    },
-    credentials: "same-origin",
-    cache: "no-store",
-    body: JSON.stringify(request),
-  });
+  const response = await exclusiveAccountRequest(() =>
+    fetch("/api/community/auth/account/deletion", {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        "x-author-account": accountId,
+      },
+      credentials: "same-origin",
+      cache: "no-store",
+      body: JSON.stringify(request),
+    }),
+  );
   return { status: response.status, body: await read(response) };
 };
 

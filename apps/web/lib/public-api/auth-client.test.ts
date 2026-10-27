@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { authRequest } from "./auth-client";
+import { authRequest, requestAccountDeletion } from "./auth-client";
 
 const headersOf = (fetch: ReturnType<typeof vi.fn>) =>
   (fetch.mock.calls[0] as unknown as [string, RequestInit])[1]
@@ -82,6 +82,35 @@ describe("auth relay request (account-switching-v1)", () => {
         "passwords/login",
         "sign-out",
       ].map((step) => `/api/community/auth/${step}`),
+    );
+  });
+
+  it("runs an account deletion under the account cookie lock", async () => {
+    let release!: () => void;
+    const held = navigator.locks.request(
+      "yoyi-community-accounts",
+      () =>
+        new Promise<void>((done) => {
+          release = done;
+        }),
+    );
+    const fetch = vi.fn(async () => Response.json({}));
+    vi.stubGlobal("fetch", fetch);
+    const proof = "R".repeat(43);
+    const deleting = requestAccountDeletion(`user-${"a".repeat(32)}`, {
+      reauthToken: proof,
+      idempotencyKey: "00000000-0000-4000-8000-000000000001",
+    });
+    await new Promise((done) => setTimeout(done, 10));
+    const sentWhileHeld = fetch.mock.calls.length;
+    // Released before asserting, so a failure here never strands the lock.
+    release();
+    await held;
+    expect(sentWhileHeld).toBe(0);
+    await expect(deleting).resolves.toEqual({ status: 200, body: {} });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(headersOf(fetch)).toEqual(
+      expect.objectContaining({ "x-author-account": `user-${"a".repeat(32)}` }),
     );
   });
 

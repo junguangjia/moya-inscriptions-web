@@ -683,7 +683,8 @@ export const completeAccountAddition = async (
 /**
  * Lets go of this browser's saved sessions of `userId`, signing each out
  * first: after an ordinary sign-in of that account (its new session is now
- * current) and after 退出登录 of it, so nothing of it stays switchable. A
+ * current), after 退出登录 of it and after its confirmed deletion (注销账号),
+ * so nothing of it stays switchable. A
  * session whose sign-out cannot be confirmed stays held: a hidden copy while
  * the account is current, otherwise listed under that account, where 移除
  * ends it. Without such a session nothing is written, so a browser that holds
