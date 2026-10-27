@@ -1731,7 +1731,9 @@ export const relayServerCommunityAuth = async (
           ? await releaseSavedSessionsOf(accounts, request, signingOut)
           : {};
       return new Response(null, {
-        status: upstream.status,
+        // A session the Backend no longer accepts is already over: this
+        // browser is signed out, so the page leaves as on a confirmed one.
+        status: signedOut && !upstream.ok ? 204 : upstream.status,
         headers: appendSessionCookies(new Headers(headers), {
           ...(signedOut
             ? { active: serializeClearedCommunitySessionCookie(secure) }

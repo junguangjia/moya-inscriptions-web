@@ -1328,10 +1328,7 @@ describe("Sign-out and appeal relay account fences", () => {
     ],
     [500, { error: { code: "INTERNAL_ERROR", message: "Internal error" } }],
     [409, { error: { code: "CONFLICT", message: "AUTH_RATE_LIMITED" } }],
-    [
-      401,
-      { error: { code: "UNAUTHENTICATED", message: "AUTH_ACCOUNT_SUSPENDED" } },
-    ],
+    [409, { error: { code: "CONFLICT", message: "AUTH_ACCOUNT_MISMATCH" } }],
   ])(
     "keeps the session when the Backend answers sign-out with %s and the session still works",
     async (status, body) => {
@@ -1350,36 +1347,33 @@ describe("Sign-out and appeal relay account fences", () => {
     },
   );
 
-  it("clears the session once the Backend no longer accepts it", async () => {
-    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
-    const upstream = vi.fn<typeof fetch>(async (input) =>
-      new URL(String(input)).pathname === "/v1/me"
-        ? Response.json(
-            {
-              error: {
-                code: "UNAUTHENTICATED",
-                message: "Authentication required",
-              },
-            },
-            { status: 401 },
-          )
-        : Response.json(
-            {
-              error: {
-                code: "UNAUTHENTICATED",
-                message: "AUTH_UNAUTHENTICATED",
-              },
-            },
-            { status: 401 },
-          ),
-    );
-    vi.stubGlobal("fetch", upstream);
-    const response = await post("sign-out");
-    expect(response.status).toBe(401);
-    expect(response.headers.getSetCookie()).toEqual([
-      expect.stringMatching(/^yoyi-session=; .*Max-Age=0/u),
-    ]);
-  });
+  // A session `me` refuses too (revoked, expired, or a suspended account,
+  // whose sessions the suspension revoked) is already over: the browser lets
+  // it go and the page leaves as on a confirmed sign-out.
+  it.each(["AUTH_UNAUTHENTICATED", "AUTH_ACCOUNT_SUSPENDED"])(
+    "clears the session and answers success once the Backend no longer accepts it (%s)",
+    async (reason) => {
+      vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+      const refused = (message: string) =>
+        Response.json(
+          { error: { code: "UNAUTHENTICATED", message } },
+          { status: 401 },
+        );
+      const upstream = vi.fn<typeof fetch>(async (input) =>
+        new URL(String(input)).pathname === "/v1/me"
+          ? refused("Authentication required")
+          : refused(reason),
+      );
+      vi.stubGlobal("fetch", upstream);
+      for (const headers of [{ "x-author-account": account }, {}]) {
+        const response = await post("sign-out", headers);
+        expect(response.status).toBe(204);
+        expect(response.headers.getSetCookie()).toEqual([
+          expect.stringMatching(/^yoyi-session=; .*Max-Age=0/u),
+        ]);
+      }
+    },
+  );
 
   it("keeps the session when the sign-out never reached the Backend", async () => {
     vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
