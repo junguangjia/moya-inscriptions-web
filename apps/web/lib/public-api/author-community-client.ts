@@ -327,22 +327,25 @@ export const authorClient = {
   state: (target: ContentIdentity) =>
     request(`content/${targetPath(target)}/state`, contentStateSchema),
   // content-community-completion-v1: direct messages (session required).
+  // account-switching-v1: reads name the confirmed account, so a tab that has
+  // not yet seen a switch is refused instead of shown another account's inbox.
   messages: {
     list: (cursor?: string, signal?: AbortSignal) =>
       request(
         `messages?${query({ cursor, pageSize: 20 })}`,
         directConversationPageSchema,
-        { ...(signal ? { signal } : {}) },
+        { accountScoped: true, ...(signal ? { signal } : {}) },
       ),
     unread: (signal?: AbortSignal) =>
       request("messages/unread", directMessageUnreadSchema, {
+        accountScoped: true,
         ...(signal ? { signal } : {}),
       }),
     with: (userId: string, signal?: AbortSignal) =>
       request(
         `messages/with/${encodeURIComponent(userId)}`,
         directConversationLookupSchema,
-        { ...(signal ? { signal } : {}) },
+        { accountScoped: true, ...(signal ? { signal } : {}) },
       ),
     history: (
       id: string,
@@ -352,7 +355,7 @@ export const authorClient = {
       request(
         `messages/${encodeURIComponent(id)}?${query({ pageSize: 30, ...q })}`,
         directMessagePageSchema,
-        { ...(signal ? { signal } : {}) },
+        { accountScoped: true, ...(signal ? { signal } : {}) },
       ),
     send: (
       body:

@@ -39,6 +39,19 @@ const replyPage = {
   totalPages: 0,
 };
 
+/** A transport answering by URL, for checks on what each request sent. */
+const transport = (answer: (url: URL, init?: RequestInit) => Response) =>
+  vi.fn<typeof globalThis.fetch>(async (input, init) =>
+    answer(new URL(String(input)), init),
+  );
+const sentAccount = (
+  fetch: ReturnType<typeof transport>,
+  index: number,
+): string | undefined =>
+  (
+    fetch.mock.calls[index]?.[1]?.headers as Record<string, string> | undefined
+  )?.["x-author-account"];
+
 const context = (fetch: typeof globalThis.fetch) => ({
   baseUrl: new URL("https://example.test/dev/community/preview"),
   fetch,
@@ -190,6 +203,66 @@ describe("same-origin comment client", () => {
     await expect(
       fetchSameOriginCurrentUser(undefined, context(signedOut)),
     ).resolves.toEqual({ state: "unauthenticated" });
+  });
+
+  it("names the confirmed account on comment and reply writes (account-switching-v1)", async () => {
+    const profile = { ...author, handle: "dev-user-01" };
+    const fetch = transport((url, init) =>
+      url.pathname === "/api/community/me"
+        ? Response.json(profile)
+        : Response.json(comment, {
+            status: init?.method === "POST" ? 201 : 200,
+          }),
+    );
+    // Before any viewer read the write names no account, as before.
+    await createSameOriginCatalogComment(
+      catalogId,
+      { text: "x" },
+      context(fetch),
+    );
+    expect(sentAccount(fetch, 0)).toBeUndefined();
+    await fetchSameOriginCurrentUser(undefined, context(fetch));
+    await createSameOriginCatalogComment(
+      catalogId,
+      { text: "x" },
+      context(fetch),
+    );
+    expect(sentAccount(fetch, 2)).toBe(author.id);
+    await createSameOriginCatalogCommentReply(
+      catalogId,
+      commentId,
+      { text: "回复" },
+      context(fetch),
+    );
+    expect(sentAccount(fetch, 3)).toBe(author.id);
+    // Another transport (another page or test) never carries this account.
+    const other = transport(() => Response.json(comment, { status: 201 }));
+    await createSameOriginCatalogComment(
+      catalogId,
+      { text: "x" },
+      context(other),
+    );
+    expect(sentAccount(other, 0)).toBeUndefined();
+  });
+
+  it("forgets the confirmed account once the viewer reads as signed out", async () => {
+    let signedIn = true;
+    const fetch = transport((url) =>
+      url.pathname === "/api/community/me"
+        ? signedIn
+          ? Response.json({ ...author, handle: "dev-user-01" })
+          : new Response(null, { status: 401 })
+        : Response.json(comment, { status: 201 }),
+    );
+    await fetchSameOriginCurrentUser(undefined, context(fetch));
+    signedIn = false;
+    await fetchSameOriginCurrentUser(undefined, context(fetch));
+    await createSameOriginCatalogComment(
+      catalogId,
+      { text: "x" },
+      context(fetch),
+    );
+    expect(sentAccount(fetch, 2)).toBeUndefined();
   });
 
   it("propagates an aborted read instead of presenting it as an error", async () => {

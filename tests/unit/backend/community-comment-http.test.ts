@@ -252,6 +252,67 @@ describe("Community V1 comment HTTP surface", () => {
     expect(wrongMethod.headers.get("allow")).toBe("GET, POST");
   });
 
+  /*
+   * account-switching-v1: a comment or reply written for the account a page
+   * shows is refused when the session now belongs to another account, so it
+   * is never posted as that account. Without the header nothing changes.
+   */
+  it("refuses a comment or reply whose asserted account is not the session's", async () => {
+    const { baseUrl, commentPort, signIn } = await start();
+    commentPort.policy = "DIRECT_PUBLICATION";
+    const token = await signIn();
+    const write = (url: string, account: string | undefined, text: string) =>
+      fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+          ...(account === undefined ? {} : { "x-author-account": account }),
+        },
+        body: JSON.stringify({ text }),
+      });
+    const commentsUrl = `${baseUrl}/v1/catalog/${publishedCatalogId}/comments`;
+    const refused = await expectApiError(
+      await write(commentsUrl, "user-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f02", "错号"),
+      401,
+      "UNAUTHENTICATED",
+    );
+    expect(refused.error.message).toBe("Account changed");
+    const root = catalogCommentSchema.parse(
+      await (
+        await write(
+          commentsUrl,
+          "user-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f01",
+          "本号",
+        )
+      ).json(),
+    );
+    const repliesUrl = `${commentsUrl}/${root.id}/replies`;
+    await expectApiError(
+      await write(repliesUrl, "user-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f02", "错号"),
+      401,
+      "UNAUTHENTICATED",
+    );
+    expect(
+      (
+        await write(
+          repliesUrl,
+          "user-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f01",
+          "本号回复",
+        )
+      ).status,
+    ).toBe(201);
+    expect((await write(repliesUrl, undefined, "无断言回复")).status).toBe(201);
+    // Only the asserted-account root was stored (its replies make it hot),
+    // with the two accepted replies under it.
+    const page = catalogCommentPageSchema.parse(
+      await (await fetch(commentsUrl)).json(),
+    );
+    expect(
+      [...page.hot, ...page.items].map((item) => [item.text, item.replyTotal]),
+    ).toEqual([["本号", 2]]);
+  });
+
   it("keeps replies one level deep and behind a visible root", async () => {
     const { baseUrl, commentPort, signIn } = await start();
     commentPort.policy = "DIRECT_PUBLICATION";

@@ -27,6 +27,12 @@ import type { AuthReason, CommunityAuthService } from "@moya/api";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 const noStore = { "cache-control": "private, no-store" };
+/**
+ * account-switching-v1: a sign-out names the account the page shows. When the
+ * presented session belongs to another account (another tab made it current),
+ * nothing is signed out and the caller keeps its session.
+ */
+const accountMismatchReason = "AUTH_ACCOUNT_MISMATCH";
 
 /** Forwarding headers cannot choose the rate-limit identity. */
 export const trustedRequestSource = (request: IncomingMessage): string =>
@@ -156,6 +162,15 @@ export const handleCommunityAuth = async (
       if (token === undefined) {
         sendFailure(response, "AUTH_UNAUTHENTICATED");
         return;
+      }
+      const asserted = request.headers["x-author-account"];
+      if (asserted !== undefined) {
+        // A session that is no longer accepted is left to signOut's own answer.
+        const account = await service.readAccount(token);
+        if (account.ok && account.value.userId !== asserted) {
+          sendApiError(response, "CONFLICT", accountMismatchReason);
+          return;
+        }
       }
       const result = await service.signOut(token);
       if (!result.ok) {

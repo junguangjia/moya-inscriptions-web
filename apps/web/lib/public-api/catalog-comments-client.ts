@@ -51,10 +51,25 @@ const readInit = (signal?: AbortSignal): RequestInit => ({
   ...(signal === undefined ? {} : { signal }),
 });
 
-const writeInit = (body: unknown): RequestInit => ({
+/**
+ * account-switching-v1: the account each transport (the page's `fetch`) last
+ * confirmed through `fetchSameOriginCurrentUser`. A comment or reply names it,
+ * so one written before another tab switched accounts is refused rather than
+ * posted as the account that is current now.
+ */
+const confirmedAccounts = new WeakMap<typeof globalThis.fetch, string>();
+
+const writeInit = (
+  body: unknown,
+  account: string | undefined,
+): RequestInit => ({
   body: JSON.stringify(body),
   credentials: "same-origin",
-  headers: { Accept: "application/json", "Content-Type": "application/json" },
+  headers: {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    ...(account === undefined ? {} : { "x-author-account": account }),
+  },
   method: "POST",
 });
 
@@ -134,7 +149,11 @@ const submit = async <Item>(
   parse: (candidate: unknown) => Item | null,
 ): Promise<CommentSubmissionTransportResult<Item>> => {
   try {
-    const response = await context.fetch.call(globalThis, url, writeInit(body));
+    const response = await context.fetch.call(
+      globalThis,
+      url,
+      writeInit(body, confirmedAccounts.get(context.fetch)),
+    );
     if (response.status === 401) return { state: "unauthenticated" };
     if (response.status === 404) return { state: "not-found" };
     if (response.status === 422 || response.status === 400)
@@ -238,13 +257,16 @@ export const fetchSameOriginCurrentUser = async (
       new URL("/api/community/me", context.baseUrl),
       readInit(signal),
     );
-    if (response.status === 401) return { state: "unauthenticated" };
+    if (response.status === 401) {
+      confirmedAccounts.delete(context.fetch);
+      return { state: "unauthenticated" };
+    }
     if (response.status === 503) return { state: "unavailable" };
     if (response.status !== 200) return { state: "unexpected-error" };
     const profile = publicUserProfileSchema.safeParse(await response.json());
-    return profile.success
-      ? { profile: profile.data, state: "success" }
-      : { state: "unexpected-error" };
+    if (!profile.success) return { state: "unexpected-error" };
+    confirmedAccounts.set(context.fetch, profile.data.id);
+    return { profile: profile.data, state: "success" };
   } catch (error) {
     if (signal?.aborted === true) throw error;
     return { state: "unexpected-error" };

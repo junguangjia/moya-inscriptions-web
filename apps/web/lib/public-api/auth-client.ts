@@ -15,7 +15,21 @@ import {
   studioNameInputSchema,
 } from "@moya/contracts/schemas";
 
+import { exclusiveAccountRequest } from "./community-accounts-client";
+
 export type AuthCapabilitiesView = AuthCapabilities;
+
+/**
+ * Ordinary steps whose answers rewrite the session cookies: a sign-in (which
+ * may also let go of a saved copy), a password reset and a sign-out.
+ */
+const sessionCookieSteps: ReadonlySet<string> = new Set([
+  "passwords/login",
+  "challenges/verify",
+  "registrations",
+  "passwords/reset",
+  "sign-out",
+]);
 
 export const parseAuthCapabilities = (
   body: unknown,
@@ -47,20 +61,45 @@ const read = async (response: Response): Promise<unknown> => {
 
 export const authRequest = async (
   path: string,
-  init?: { readonly method?: "GET" | "POST"; readonly body?: unknown },
+  init?: {
+    readonly method?: "GET" | "POST";
+    readonly body?: unknown;
+    /**
+     * account-switching-v1: the sign-in flow runs for another account; the
+     * relay then keeps the current account signed in beside the new one.
+     */
+    readonly addAccount?: boolean;
+    /** The account the page shows; a sign-out for another one is refused. */
+    readonly account?: string;
+  },
 ): Promise<{ readonly status: number; readonly body: unknown }> => {
-  const response = await fetch(`/api/community/auth/${path}`, {
-    method: init?.method ?? (init?.body === undefined ? "GET" : "POST"),
-    headers: {
-      accept: "application/json",
-      ...(init?.body === undefined
-        ? {}
-        : { "content-type": "application/json" }),
-    },
-    credentials: "same-origin",
-    cache: "no-store",
-    ...(init?.body === undefined ? {} : { body: JSON.stringify(init.body) }),
-  });
+  const method = init?.method ?? (init?.body === undefined ? "GET" : "POST");
+  const send = () =>
+    fetch(`/api/community/auth/${path}`, {
+      method,
+      headers: {
+        accept: "application/json",
+        ...(init?.body === undefined
+          ? {}
+          : { "content-type": "application/json" }),
+        ...(init?.addAccount === true
+          ? { "x-yoyi-account-intent": "add" }
+          : {}),
+        ...(init?.account === undefined
+          ? {}
+          : { "x-author-account": init.account }),
+      },
+      credentials: "same-origin",
+      cache: "no-store",
+      ...(init?.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+    });
+  // account-switching-v1: these rewrite the session cookies like the account
+  // routes, so they run under the same cross-tab lock.
+  const response =
+    method === "POST" &&
+    (init?.addAccount === true || sessionCookieSteps.has(path))
+      ? await exclusiveAccountRequest(send)
+      : await send();
   return { status: response.status, body: await read(response) };
 };
 

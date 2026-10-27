@@ -1235,6 +1235,180 @@ describe("Content reads carry the visitor's session to the Backend", () => {
   });
 });
 
+/*
+ * account-switching-v1: a sign-out names the account the page shows, so a
+ * stale tab never signs out the account another tab made current; and an
+ * appeal-login refusal never signs the ordinary account out.
+ */
+describe("Sign-out and appeal relay account fences", () => {
+  const normal = "N".repeat(43);
+  const appeal = "P".repeat(43);
+  const account = `user-${"1".repeat(32)}`;
+  const post = (suffix: string, headers: Record<string, string> = {}) =>
+    relayServerCommunityAuth(
+      new Request(`http://127.0.0.1:3410/api/community/auth/${suffix}`, {
+        method: "POST",
+        headers: {
+          host: "127.0.0.1:3410",
+          origin: "http://127.0.0.1:3410",
+          "content-type": "application/json",
+          cookie: `yoyi-session=${normal}; yoyi-appeal-session=${appeal}`,
+          ...headers,
+        },
+        body: "{}",
+      }),
+    );
+  const refused = () =>
+    Response.json(
+      {
+        error: { code: "UNAUTHENTICATED", message: "AUTH_INVALID_CREDENTIALS" },
+      },
+      { status: 401 },
+    );
+
+  it.each(["appeals/login", "appeals/verify", "appeals/challenges"])(
+    "keeps the ordinary session when %s is refused",
+    async (suffix) => {
+      vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+      const upstream = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(refused())
+        .mockResolvedValue(new Response(null, { status: 401 }));
+      vi.stubGlobal("fetch", upstream);
+      const response = await post(suffix);
+      expect(response.status).toBe(401);
+      expect(response.headers.get("set-cookie")).toBeNull();
+      expect(upstream).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("forwards the page's account on sign-out and clears the cookie only once it is confirmed", async () => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    const upstream = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", upstream);
+    const response = await post("sign-out", { "x-author-account": account });
+    expect(response.status).toBe(204);
+    expect(response.headers.get("set-cookie")).toMatch(
+      /^yoyi-session=; .*Max-Age=0/u,
+    );
+    const headers = new Headers(upstream.mock.calls[0]?.[1]?.headers);
+    expect(headers.get("x-author-account")).toBe(account);
+    expect(headers.get("authorization")).toBe(`Bearer ${normal}`);
+  });
+
+  it.each([409, 503])(
+    "keeps the session when the Backend answers sign-out with %s",
+    async (status) => {
+      vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+      const upstream = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(
+          Response.json(
+            { error: { code: "CONFLICT", message: "AUTH_ACCOUNT_MISMATCH" } },
+            { status },
+          ),
+        );
+      vi.stubGlobal("fetch", upstream);
+      const response = await post("sign-out", { "x-author-account": account });
+      expect(response.status).toBe(status);
+      expect(response.headers.get("set-cookie")).toBeNull();
+      expect(upstream).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("clears a sign-out's session the Backend no longer accepts, and keeps one it still accepts", async () => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    const upstream = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(refused())
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(refused())
+      .mockResolvedValueOnce(Response.json({ id: account }));
+    vi.stubGlobal("fetch", upstream);
+    const gone = await post("sign-out");
+    expect(gone.headers.get("set-cookie")).toMatch(/^yoyi-session=; /u);
+    expect(String(upstream.mock.calls[1]?.[0])).toBe(
+      "http://127.0.0.1:3411/v1/me",
+    );
+    const kept = await post("sign-out");
+    expect(kept.status).toBe(401);
+    expect(kept.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("refuses a malformed account assertion before the Backend", async () => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    const upstream = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", upstream);
+    const response = await post("sign-out", { "x-author-account": "user-x" });
+    expect(response.status).toBe(422);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it("never touches the saved accounts on an ordinary sign-out", async () => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response(null, { status: 204 })),
+    );
+    const response = await post("sign-out");
+    expect(response.headers.getSetCookie()).toEqual([
+      expect.stringMatching(/^yoyi-session=; /u),
+    ]);
+  });
+});
+
+/*
+ * account-switching-v1: direct-message reads are bound to the account the page
+ * shows, like notification reads, so a tab that missed a switch never reads
+ * the other account's conversations.
+ */
+describe("Direct-message reads carry the confirmed account", () => {
+  it("forwards a well-formed account on every messages read and refuses a malformed one", async () => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    const upstream = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => Response.json({ items: [] }));
+    vi.stubGlobal("fetch", upstream);
+    const account = `user-${"2".repeat(32)}`;
+    const read = (path: string, expected: string) =>
+      relayServerAuthorCommunity(
+        new Request(`http://127.0.0.1:3410/api/community/${path}`, {
+          headers: {
+            host: "127.0.0.1:3410",
+            cookie: `yoyi-session=${"M".repeat(43)}`,
+            "x-author-account": expected,
+          },
+        }),
+      );
+    for (const path of [
+      "messages?pageSize=20",
+      "messages/unread",
+      `messages/dm-${"c".repeat(32)}?pageSize=30`,
+    ]) {
+      upstream.mockClear();
+      expect((await read(path, account)).status).toBe(200);
+      expect(
+        new Headers(upstream.mock.calls[0]?.[1]?.headers).get(
+          "x-author-account",
+        ),
+      ).toBe(account);
+      expect((await read(path, "user-x")).status).toBe(422);
+      expect(upstream).toHaveBeenCalledOnce();
+    }
+    // Other public reads still carry no account.
+    upstream.mockClear();
+    expect((await read("editorial/articles", account)).status).toBe(200);
+    expect(
+      new Headers(upstream.mock.calls[0]?.[1]?.headers).has("x-author-account"),
+    ).toBe(false);
+  });
+});
+
 describe("Issue #326 reporting relay", () => {
   const normal = Buffer.alloc(32, 1).toString("base64url"),
     appeal = Buffer.alloc(32, 2).toString("base64url");

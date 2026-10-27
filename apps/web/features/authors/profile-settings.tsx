@@ -20,6 +20,9 @@ import { ArticleAgentConnections } from "../editorial-content/article-authoring/
 import { useArticleAvailability } from "../editorial-content/article-authoring/article-availability";
 import { AccountSecurity } from "../auth/account-security";
 import type { AccountSecurityHandle } from "../auth/account-security";
+import { AccountSwitcher } from "./account-switcher";
+import { communityAccountsClient } from "./account-data";
+import type { CommunityAccountsView } from "./account-data";
 import {
   SettingsFeedbackForm,
   useSettingsFeedback,
@@ -38,6 +41,7 @@ type Page =
   | "blocks"
   | "security"
   | "factor"
+  | "accounts"
   | "reports"
   | "feedback";
 const titles: Record<Page, string> = {
@@ -47,6 +51,7 @@ const titles: Record<Page, string> = {
   blocks: "已屏蔽账户",
   security: "账号与安全",
   factor: "验证登录方式",
+  accounts: "切换账号",
   reports: "我的举报与申诉",
   feedback: "反馈与建议",
 };
@@ -66,6 +71,7 @@ const pageIcons = {
   privacy: "lock-keyhole",
   blocks: "ban",
   security: "shield-check",
+  accounts: "users-round",
   reports: "shield-check",
   feedback: "mail",
 } as const;
@@ -254,6 +260,17 @@ export const ProfileSettings = ({
     busyRef = useRef(false);
   const [securityBusy, setSecurityBusy] = useState(false),
     securityBusyRef = useRef(false);
+  const [accountsBusy, setAccountsBusy] = useState(false),
+    accountsBusyRef = useRef(false);
+  // account-switching-v1: a signed-out browser still lists the accounts it
+  // holds; whether there are any decides if 切换账号 is offered.
+  const viewerId = author.viewer?.id ?? null;
+  const guestConfirmed =
+    viewerId === null && !author.checking && !author.sessionError;
+  const [guestAccounts, setGuestAccounts] =
+    useState<CommunityAccountsView | null>(null);
+  const [guestProbed, setGuestProbed] = useState(false);
+  const guestProbe = useRef(false);
   const [factorTitle, setFactorTitle] = useState("");
   const [signedOut, setSignedOut] = useState(false);
   const [editRequested, setEditRequested] = useState(false),
@@ -291,7 +308,8 @@ export const ProfileSettings = ({
   latest.current = { onClose, onEdit, editRequested, signedOut };
   const privacyDirty = JSON.stringify(saved) !== JSON.stringify(privacy);
   const dirty = privacyDirty || feedback.dirty;
-  const blocked = busy || securityBusy || feedback.pending || closing;
+  const blocked =
+    busy || securityBusy || accountsBusy || feedback.pending || closing;
   const remember = () => {
     if (scroller.current)
       scrollPositions.current[pageRef.current] = scroller.current.scrollTop;
@@ -316,6 +334,10 @@ export const ProfileSettings = ({
     },
     [owner],
   );
+  const handleAccountsBusy = useCallback((value: boolean) => {
+    accountsBusyRef.current = value;
+    setAccountsBusy(value);
+  }, []);
   const handleFlow = useCallback(
     (value: string | null) => {
       if (ownerRef.current !== owner) return;
@@ -369,6 +391,32 @@ export const ProfileSettings = ({
     };
   }, []);
   useEffect(() => {
+    if (viewerId !== null) {
+      guestProbe.current = false;
+      setGuestAccounts(null);
+      setGuestProbed(false);
+      return;
+    }
+    // Read once per signed-out view; a focus recheck does not read again.
+    if (!guestConfirmed || guestProbe.current) return;
+    guestProbe.current = true;
+    const controller = new AbortController();
+    let finished = false;
+    void communityAccountsClient
+      .list(controller.signal)
+      .then((result) => {
+        finished = true;
+        setGuestAccounts(result.state === "ready" ? result.view : null);
+        setGuestProbed(true);
+      })
+      .catch(() => undefined);
+    return () => {
+      if (finished) return;
+      guestProbe.current = false;
+      controller.abort();
+    };
+  }, [guestConfirmed, viewerId]);
+  useEffect(() => {
     blocksRun.current++;
     mutationRun.current++;
     blocksPending.current = false;
@@ -383,6 +431,8 @@ export const ProfileSettings = ({
     setBusy(false);
     securityBusyRef.current = false;
     setSecurityBusy(false);
+    accountsBusyRef.current = false;
+    setAccountsBusy(false);
     // /me may re-key this component after the checking/guest first mount.
     // Preserve the controlled source's public page; private state above resets.
     if (!authReturn?.isRestoring()) show("root", true);
@@ -549,6 +599,7 @@ export const ProfileSettings = ({
   const canBack = () =>
     !busyRef.current &&
     !securityBusyRef.current &&
+    !accountsBusyRef.current &&
     !feedback.isPending() &&
     !closingRef.current;
   const back = () => {
@@ -655,17 +706,16 @@ export const ProfileSettings = ({
       <SettingsIcon className={styles.chevron} name="chevron-right" />
     </button>
   );
-  const guest = (
-    <div className={styles.rows}>
-      <a className={styles.row} href={author.signInHref}>
-        <span className={styles.rowIcon}>
-          <SettingsIcon name="shield-check" />
-        </span>
-        <span className={styles.rowText}>登录后管理账户设置</span>
-        <SettingsIcon className={styles.chevron} name="chevron-right" />
-      </a>
-    </div>
+  const guestSignIn = (
+    <a className={styles.row} href={author.signInHref}>
+      <span className={styles.rowIcon}>
+        <SettingsIcon name="shield-check" />
+      </span>
+      <span className={styles.rowText}>登录后管理账户设置</span>
+      <SettingsIcon className={styles.chevron} name="chevron-right" />
+    </a>
   );
+  const guest = <div className={styles.rows}>{guestSignIn}</div>;
   return (
     <AuthorDialog
       title={page === "factor" ? factorTitle : titles[page]}
@@ -727,6 +777,7 @@ export const ProfileSettings = ({
                       <h3>账户</h3>
                       <div className={styles.rows}>
                         {row("账号与安全", "security", "手机号、邮箱换绑")}
+                        {row("切换账号", "accounts", "添加、切换或退出账户")}
                         {row("我的举报与申诉", "reports")}
                         {onEdit && (
                           <button
@@ -758,7 +809,12 @@ export const ProfileSettings = ({
                 ) : (
                   <section className={styles.group}>
                     <h3>账户</h3>
-                    {guest}
+                    <div className={styles.rows}>
+                      {guestSignIn}
+                      {guestAccounts !== null &&
+                        guestAccounts.others.length > 0 &&
+                        row("切换账号", "accounts", "这台设备上已添加的账户")}
+                    </div>
                   </section>
                 )}
                 <section className={styles.group}>
@@ -829,6 +885,28 @@ export const ProfileSettings = ({
               </>
             )}
             {page === "reports" && <MyReportingCases />}
+            {page === "accounts" &&
+              (viewerId === null && !guestProbed ? (
+                <p className={styles.status} role="status">
+                  正在读取账户…
+                </p>
+              ) : (
+                <AccountSwitcher
+                  viewerId={viewerId}
+                  initialView={viewerId === null ? guestAccounts : undefined}
+                  unsavedSettings={
+                    privacyDirty
+                      ? "列表隐私有未保存的更改"
+                      : feedback.dirty
+                        ? "反馈还没有提交"
+                        : null
+                  }
+                  onBusyChange={handleAccountsBusy}
+                  // Like a sign-out: close, then reload as the account that
+                  // is current now (or signed out).
+                  onSessionChange={() => setSignedOut(true)}
+                />
+              ))}
             {page === "privacy" &&
               (ownProfile ? (
                 <>

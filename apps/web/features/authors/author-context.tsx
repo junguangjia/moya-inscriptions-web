@@ -24,6 +24,7 @@ import {
 import { requestIdentity } from "../shell/request-identity";
 import { useAvatarSave } from "./avatar-save";
 import type { AvatarSaveState } from "./avatar-save";
+import { takeSessionNotice } from "./session-change";
 
 type Viewer = Awaited<ReturnType<typeof authorClient.me>>;
 interface Context {
@@ -72,7 +73,10 @@ export const AuthorProvider = ({
   const accountRef = useRef<string | null>(null),
     epoch = useRef(0),
     mergeWorker = useRef<Promise<void>>(Promise.resolve()),
-    confirmed = useRef(false);
+    confirmed = useRef(false),
+    // account-switching-v1: a message the page before this reload left (a
+    // partial 退出所有账号), shown once this tab knows who it is.
+    carriedNotice = useRef<string | null>(null);
   const [undo, setUndo] = useState<{
     target: ContentIdentity;
     account: string | null;
@@ -94,10 +98,15 @@ export const AuthorProvider = ({
       const next = await authorClient.me();
       if (run !== epoch.current) return;
       if (accountRef.current !== next.id) {
+        // account-switching-v1: a confirmed account replaced by another one
+        // means a switch in another tab (this tab reloads after its own).
+        const switched = accountRef.current !== null;
         cache.current.clear();
         setAvatarSrc(null);
         setUndo(null);
-        setNotice("");
+        setNotice(
+          switched ? `当前账户已在其他页面切换为「${next.displayName}」` : "",
+        );
       }
       authReturn?.identify(next.id);
       accountRef.current = next.id;
@@ -165,7 +174,13 @@ export const AuthorProvider = ({
         setSessionError(false);
       } else setSessionError(true);
     } finally {
-      if (run === epoch.current) setChecking(false);
+      if (run === epoch.current) {
+        setChecking(false);
+        if (carriedNotice.current !== null) {
+          setNotice(carriedNotice.current);
+          carriedNotice.current = null;
+        }
+      }
     }
   }, [authReturn]);
   const avatarSave = useAvatarSave({
@@ -185,6 +200,7 @@ export const AuthorProvider = ({
     },
   });
   useEffect(() => {
+    carriedNotice.current ??= takeSessionNotice();
     void refresh();
     void refreshGuest();
     const update = () => {

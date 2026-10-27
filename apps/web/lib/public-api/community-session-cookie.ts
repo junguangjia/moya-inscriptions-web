@@ -29,8 +29,10 @@ export const isSecureRequest = (request: Request): boolean =>
   new URL(request.url).protocol === "https:" ||
   request.headers.get("x-forwarded-proto") === "https";
 
-const baseAttributes = (secure: boolean): string =>
+/** Host-only (no Domain) and HttpOnly; shared by every Web session cookie. */
+export const sessionCookieAttributes = (secure: boolean): string =>
   `Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`;
+const baseAttributes = sessionCookieAttributes;
 
 export const serializeCommunitySessionCookie = (
   token: string,

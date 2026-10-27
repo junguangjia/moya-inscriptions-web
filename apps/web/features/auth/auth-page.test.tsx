@@ -3,9 +3,10 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { router, me } = vi.hoisted(() => ({
+const { router, me, flowProps } = vi.hoisted(() => ({
   router: { push: vi.fn(), replace: vi.fn(), back: vi.fn() },
   me: vi.fn(),
+  flowProps: [] as Record<string, unknown>[],
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
 vi.mock("../authors/author-data", () => {
@@ -16,7 +17,12 @@ vi.mock("../authors/author-data", () => {
   }
   return { authorClient: { me }, AuthorRequestError };
 });
-vi.mock("./auth-flow", () => ({ AuthFlow: () => <main data-auth-flow="" /> }));
+vi.mock("./auth-flow", () => ({
+  AuthFlow: (props: Record<string, unknown>) => {
+    flowProps.push(props);
+    return <main data-auth-flow="" />;
+  },
+}));
 vi.mock("./auth-return", () => ({ useAuthReturn: () => null }));
 
 import { AuthPage } from "./auth-page";
@@ -33,6 +39,7 @@ describe("authentication loading and error return", () => {
     router.replace.mockReset();
     router.back.mockReset();
     me.mockReset();
+    flowProps.length = 0;
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -75,5 +82,42 @@ describe("authentication loading and error return", () => {
     await act(async () => back()?.click());
     expect(router.back).not.toHaveBeenCalled();
     expect(router.replace).toHaveBeenCalledWith("/", { scroll: false });
+  });
+
+  describe("add-account mode (account-switching-v1)", () => {
+    afterEach(() => {
+      window.history.replaceState(null, "", "/");
+    });
+    const renderFlow = async (path: string) => {
+      window.history.replaceState(null, "", path);
+      me.mockResolvedValue({ id: `user-${"a".repeat(32)}` });
+      await act(async () =>
+        root.render(<AuthPage mode="sign-in" returnTo="/#settings" />),
+      );
+      expect(container.querySelector("[data-auth-flow]")).not.toBeNull();
+      return flowProps.at(-1)!;
+    };
+
+    it("opens the flow in add-account mode from ?intent=add-account", async () => {
+      const props = await renderFlow(
+        "/login?intent=add-account&return=%2F%23settings",
+      );
+      expect(props.addAccount).toBe(true);
+      (props.onModeChange as (mode: string) => void)("register");
+      expect(router.replace).toHaveBeenCalledWith(
+        "/register?return=%2F%23settings&intent=add-account",
+        { scroll: true },
+      );
+    });
+
+    it("keeps the ordinary flow without the intent", async () => {
+      const props = await renderFlow("/login?return=%2F%23settings");
+      expect(props).not.toHaveProperty("addAccount");
+      (props.onModeChange as (mode: string) => void)("register");
+      expect(router.replace).toHaveBeenCalledWith(
+        "/register?return=%2F%23settings",
+        { scroll: true },
+      );
+    });
   });
 });

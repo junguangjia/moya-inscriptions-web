@@ -1,0 +1,65 @@
+.panel {
+  min-width: 0;
+  color: var(--yoyi-color-text-primary);
+}
+/* An inline confirmation takes the row's full width below its actions. */
+.row {
+  flex-wrap: wrap;
+}
+.row > [role="alertdialog"] {
+  flex-basis: 100%;
+}
+.badge {
+  flex: none;
+  padding: var(--yoyi-space-1) var(--yoyi-space-3);
+  border: 1px solid currentColor;
+  border-radius: var(--yoyi-radius-full);
+  color: var(--yoyi-color-seal-red);
+  font-size: var(--yoyi-type-label-size);
+  font-weight: 600;
+}
+.actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--yoyi-space-3);
+}
+.reauth {
+  color: var(--yoyi-color-seal-red);
+}
+.signOutAll {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--yoyi-space-3);
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  margin-top: var(--yoyi-space-7);
+  padding: var(--yoyi-space-3) var(--yoyi-space-4);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-full);
+  color: var(--yoyi-color-seal-red);
+  background: var(--yoyi-color-background-surface);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.signOutAll:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.signOutAll:focus-visible {
+  outline: 2px solid var(--yoyi-color-seal-red);
+  outline-offset: 3px;
+}
+.panel > [role="alertdialog"],
+.panel section > [role="alertdialog"] {
+  margin-top: var(--yoyi-space-4);
+}
+@media (max-width: 359px) {
+  .actions {
+    width: 100%;
+  }
+}
