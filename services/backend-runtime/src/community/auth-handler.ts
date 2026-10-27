@@ -165,9 +165,15 @@ export const handleCommunityAuth = async (
       }
       const asserted = request.headers["x-author-account"];
       if (asserted !== undefined) {
-        // A session that is no longer accepted is left to signOut's own answer.
+        // An asserted account must be readable as this session's own: a
+        // session that is no longer accepted, or a suspended account's, is
+        // answered with that refusal and nothing is signed out.
         const account = await service.readAccount(token);
-        if (account.ok && account.value.userId !== asserted) {
+        if (!account.ok) {
+          sendFailure(response, account.reason);
+          return;
+        }
+        if (account.value.userId !== asserted) {
           sendApiError(response, "CONFLICT", accountMismatchReason);
           return;
         }

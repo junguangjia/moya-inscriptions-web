@@ -46,6 +46,7 @@ const grantPaths = new Set([
 class FakeBackend {
   readonly sessions = new Map<string, Account>();
   readonly unavailable = new Set<string>();
+  /** Sessions, or every session of these accounts, whose sign-out fails. */
   readonly signOutFails = new Set<string>();
   readonly grants: Account[] = [];
   private issued = 0;
@@ -63,10 +64,14 @@ class FakeBackend {
         : Response.json(profile);
     }
     if (url.pathname === "/v1/community/auth/sign-out") {
-      if (token !== undefined && this.signOutFails.has(token))
-        return new Response(null, { status: 503 });
       const profile =
         token === undefined ? undefined : this.sessions.get(token);
+      if (
+        token !== undefined &&
+        (this.signOutFails.has(token) ||
+          (profile !== undefined && this.signOutFails.has(profile.id)))
+      )
+        return new Response(null, { status: 503 });
       if (profile === undefined)
         return Response.json(
           {
@@ -121,6 +126,9 @@ class FakeBackend {
       ([input]) => new URL(String(input)).pathname === path,
     );
   }
+  tokenOf(profile: Account) {
+    return [...this.sessions].find(([, value]) => value === profile)?.[0];
+  }
 }
 
 class Browser {
@@ -152,13 +160,26 @@ class Browser {
     }
     return response;
   }
+  savedEntries() {
+    return readSavedSessions(this.cookie).entries;
+  }
   saved() {
-    return readSavedSessions(this.cookie, Date.now()).entries.map(
-      (entry) => entry.userId,
-    );
+    return this.savedEntries().map((entry) => entry.userId);
   }
   active() {
     return this.jar.get("yoyi-session");
+  }
+  /** Stores saved entries directly, as earlier answers left them. */
+  hold(...entries: readonly (readonly [Account, string, number?])[]) {
+    this.jar.set(
+      "yoyi-saved-sessions",
+      entries
+        .map(
+          ([held, token, expiresAt = Date.now() + 60_000]) =>
+            `${held.id}.${held.handle}.${token}.${expiresAt}`,
+        )
+        .join("~"),
+    );
   }
   auth(path: string, body: unknown, headers: Record<string, string> = {}) {
     return relayServerCommunityAuth(
@@ -178,10 +199,11 @@ class Browser {
   add(path: string, body: unknown = {}) {
     return this.auth(path, body, { "x-yoyi-account-intent": "add" });
   }
-  list() {
+  /** A same-origin fetch: browsers send Fetch Metadata and no Origin on a GET. */
+  list(headers: Record<string, string> = { "sec-fetch-site": "same-origin" }) {
     return relayServerCommunityAccounts(
       new Request(`${origin}/api/community/accounts`, {
-        headers: { host, cookie: this.cookie },
+        headers: { host, cookie: this.cookie, ...headers },
       }),
       "list",
     ).then((response) => this.remember(response));
@@ -215,6 +237,19 @@ const json = async (response: Response) => {
   expectNoToken(text);
   return JSON.parse(text) as unknown;
 };
+const listed = async () => {
+  const response = await browser.list();
+  expect(response.status).toBe(200);
+  // The list never writes a cookie.
+  expect(response.headers.getSetCookie()).toEqual([]);
+  return parseCommunityAccountsView(await json(response));
+};
+const reauth = (held: Account) => ({
+  id: held.id,
+  handle: held.handle,
+  displayName: null,
+  state: "reauth_required",
+});
 /** Signs A in as the only account, as an ordinary sign-in leaves it. */
 const signedInAsA = () => {
   backend.sessions.set(tokenA, A);
@@ -253,11 +288,9 @@ describe("adding accounts through the sign-in flow", () => {
     for (const line of added.headers.getSetCookie())
       expect(line).toContain("HttpOnly; SameSite=Lax");
 
-    const listed = await browser.list();
-    expect(listed.status).toBe(200);
-    expect(listed.headers.get("cache-control")).toBe("private, no-store");
-    expect(listed.headers.getSetCookie()).toEqual([]);
-    expect(parseCommunityAccountsView(await json(listed))).toEqual({
+    const response = await browser.list();
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(parseCommunityAccountsView(await json(response))).toEqual({
       current: B,
       others: [{ ...A, state: "ready" }],
       limit: 3,
@@ -273,8 +306,7 @@ describe("adding accounts through the sign-in flow", () => {
     expect(signedOut.status).toBe(204);
     expect(browser.active()).toBeUndefined();
     expect(browser.saved()).toEqual([A.id]);
-    const listed = parseCommunityAccountsView(await json(await browser.list()));
-    expect(listed).toEqual({
+    expect(await listed()).toEqual({
       current: null,
       others: [{ ...A, state: "ready" }],
       limit: 3,
@@ -304,7 +336,7 @@ describe("adding accounts through the sign-in flow", () => {
         error: { code: "CONFLICT", message: "AUTH_ACCOUNT_LIMIT" },
       });
     }
-    // Only `me` checks of the current account were made.
+    // Only `me` checks of the held sessions were made.
     expect(
       backend.fetch.mock.calls
         .slice(before)
@@ -314,12 +346,84 @@ describe("adding accounts through the sign-in flow", () => {
     expect(browser.saved()).toEqual([B.id, A.id]);
   });
 
+  it("answers unavailable, not the account limit, when a held account cannot be checked", async () => {
+    signedInAsA();
+    backend.grants.push(B, C);
+    await browser.add("passwords/login", {});
+    await browser.add("registrations", {});
+    expect(browser.saved()).toEqual([B.id, A.id]);
+    // A's check goes unanswered: A might be the account that makes room.
+    backend.unavailable.add(tokenA);
+    const refused = await browser.add("passwords/login", {});
+    expect(refused.status).toBe(503);
+    expect(await json(refused)).toMatchObject({
+      error: { message: "AUTH_ACCOUNT_STATE_UNAVAILABLE" },
+    });
+    expect(backend.sessions.get(browser.active()!)).toEqual(C);
+    expect(browser.saved()).toEqual([B.id, A.id]);
+  });
+
+  it("lets an account the Backend no longer accepts make room, signing it out first", async () => {
+    signedInAsA();
+    backend.grants.push(B, C);
+    await browser.add("passwords/login", {});
+    await browser.add("passwords/login", {});
+    backend.sessions.delete(tokenA);
+    backend.grants.push(D);
+    const added = await browser.add("passwords/login", {});
+    expect(added.status).toBe(200);
+    expect(backend.sessions.get(browser.active()!)).toEqual(D);
+    expect(browser.saved()).toEqual([C.id, B.id]);
+    const signOut = backend.callsTo("/v1/community/auth/sign-out").at(-1)!;
+    const headers = new Headers(signOut[1]?.headers);
+    expect(headers.get("authorization")).toBe(`Bearer ${tokenA}`);
+    expect(headers.get("x-author-account")).toBe(A.id);
+  });
+
+  it("does not count a refused account whose sign-out cannot be confirmed, and keeps it listed", async () => {
+    signedInAsA();
+    backend.grants.push(B, C);
+    await browser.add("passwords/login", {});
+    await browser.add("passwords/login", {});
+    backend.sessions.delete(tokenA);
+    backend.signOutFails.add(tokenA);
+    backend.grants.push(D);
+    expect((await browser.add("passwords/login", {})).status).toBe(200);
+    expect(browser.saved()).toEqual([C.id, B.id, A.id]);
+    expect(await listed()).toEqual({
+      current: D,
+      others: [{ ...C, state: "ready" }, { ...B, state: "ready" }, reauth(A)],
+      limit: 3,
+    });
+  });
+
+  it("refuses any step before the Backend while the saved list has no room left", async () => {
+    signedInAsA();
+    const copies = ["1", "2", "3", "4", "5", "6"].map((digit) =>
+      digit.repeat(43),
+    );
+    for (const token of copies) backend.sessions.set(token, B);
+    browser.hold(...copies.map((token) => [B, token] as const));
+    backend.grants.push(C);
+    const before = new Map(browser.jar);
+    for (const path of ["passwords/login", "challenges/verify"]) {
+      const refused = await browser.add(path, {});
+      expect(refused.status).toBe(503);
+      expect(await json(refused)).toMatchObject({
+        error: { message: "AUTH_ACCOUNT_STATE_UNAVAILABLE" },
+      });
+    }
+    expect(backend.callsTo("/v1/community/auth/passwords/login")).toEqual([]);
+    expect(backend.callsTo("/v1/community/auth/challenges/verify")).toEqual([]);
+    expect(browser.jar).toEqual(before);
+  });
+
   it("replaces a listed account's stored session instead of duplicating it, even with three held", async () => {
     signedInAsA();
     backend.grants.push(B, C);
     await browser.add("passwords/login", {});
     await browser.add("passwords/login", {});
-    const oldB = [...backend.sessions].find(([, value]) => value === B)![0];
+    const oldB = backend.tokenOf(B)!;
     backend.grants.push(B);
     const readded = await browser.add("challenges/verify", {});
     expect(readded.status).toBe(200);
@@ -328,6 +432,44 @@ describe("adding accounts through the sign-in flow", () => {
     expect(browser.saved()).toEqual([C.id, A.id]);
     // The replaced session was signed out on the Backend.
     expect(backend.sessions.has(oldB)).toBe(false);
+  });
+
+  it("keeps a replaced session whose sign-out cannot be confirmed as a hidden copy, and ends it later", async () => {
+    signedInAsA();
+    backend.grants.push(B);
+    await browser.add("passwords/login", {});
+    // A is saved; adding A again cannot sign its older session out.
+    backend.signOutFails.add(tokenA);
+    backend.grants.push(A);
+    expect((await browser.add("passwords/login", {})).status).toBe(200);
+    expect(backend.sessions.get(browser.active()!)).toEqual(A);
+    expect(browser.saved()).toEqual([B.id, A.id]);
+    expect(backend.sessions.get(tokenA)).toEqual(A);
+    // The copy is never another account.
+    expect(await listed()).toEqual({
+      current: A,
+      others: [{ ...B, state: "ready" }],
+      limit: 3,
+    });
+    // 退出登录 of A tries again; still unconfirmed, A is then listed so it
+    // can be removed.
+    await browser.auth("sign-out", {}, { "x-author-account": A.id });
+    expect(browser.active()).toBeUndefined();
+    expect(browser.saved()).toEqual([B.id, A.id]);
+    expect(await listed()).toEqual({
+      current: null,
+      others: [
+        { ...B, state: "ready" },
+        { ...A, state: "ready" },
+      ],
+      limit: 3,
+    });
+    backend.signOutFails.delete(tokenA);
+    expect(
+      (await browser.auth("accounts/remove", { accountId: A.id })).status,
+    ).toBe(204);
+    expect(backend.sessions.has(tokenA)).toBe(false);
+    expect(browser.saved()).toEqual([B.id]);
   });
 
   it("signs a new session out again when three accounts were added meanwhile", async () => {
@@ -344,6 +486,25 @@ describe("adding accounts through the sign-in flow", () => {
     });
     expect(browser.jar).toEqual(before);
     expect([...backend.sessions.values()]).not.toContainEqual(D);
+  });
+
+  it("keeps a fourth account whose new session cannot be signed out again, rather than lose it", async () => {
+    signedInAsA();
+    backend.grants.push(B, C);
+    await browser.add("passwords/login", {});
+    await browser.add("passwords/login", {});
+    backend.signOutFails.add(D.id);
+    backend.grants.push(D);
+    const kept = await browser.add("challenges/verify", {});
+    expect(kept.status).toBe(200);
+    expect(backend.sessions.get(browser.active()!)).toEqual(D);
+    expect(browser.saved()).toEqual([C.id, B.id, A.id]);
+    // Every held account is still listed, so one can be removed.
+    expect(await listed()).toEqual({
+      current: D,
+      others: [C, B, A].map((held) => ({ ...held, state: "ready" })),
+      limit: 3,
+    });
   });
 
   it("re-adding the current account only replaces its cookie", async () => {
@@ -437,9 +598,24 @@ describe("adding accounts through the sign-in flow", () => {
     expect(backend.sessions.has(tokenA)).toBe(false);
     // Signing A out now leaves nothing of A switchable on this browser.
     expect((await browser.auth("sign-out", {})).status).toBe(204);
-    expect(
-      parseCommunityAccountsView(await json(await browser.list())),
-    ).toEqual({ current: null, others: [], limit: 3 });
+    expect(await listed()).toEqual({ current: null, others: [], limit: 3 });
+  });
+
+  it("keeps a saved copy an ordinary sign-in cannot sign out, hidden while that account is current", async () => {
+    signedInAsA();
+    backend.grants.push(B);
+    await browser.add("passwords/login", {});
+    await browser.auth("sign-out", {});
+    backend.signOutFails.add(tokenA);
+    backend.grants.push(A);
+    expect((await browser.auth("passwords/login", {})).status).toBe(200);
+    expect(browser.saved()).toEqual([A.id]);
+    expect(await listed()).toEqual({ current: A, others: [], limit: 3 });
+    // 退出登录 of A ends the copy too once the Backend confirms it.
+    backend.signOutFails.delete(tokenA);
+    expect((await browser.auth("sign-out", {})).status).toBe(204);
+    expect(backend.sessions.has(tokenA)).toBe(false);
+    expect(browser.saved()).toEqual([]);
   });
 
   it("refuses an unknown intent instead of guessing", async () => {
@@ -451,6 +627,63 @@ describe("adding accounts through the sign-in flow", () => {
     );
     expect(refused.status).toBe(422);
     expect(backend.fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("signing the current account out", () => {
+  const tokenA2 = "E".repeat(43);
+  /** A is current with a newer session; an older one and B are saved. */
+  const currentWithCopy = () => {
+    backend.sessions.set(tokenA2, A);
+    backend.sessions.set(tokenA, A);
+    backend.sessions.set(tokenB, B);
+    browser.jar.set("yoyi-session", tokenA2);
+    browser.hold([B, tokenB], [A, tokenA]);
+  };
+
+  it.each([
+    ["names the account", { "x-author-account": A.id }],
+    ["asks `me` which account it is", {}],
+  ])(
+    "also signs out the saved sessions of the same account when the page %s",
+    async (_, headers: Record<string, string>) => {
+      currentWithCopy();
+      const signedOut = await browser.auth("sign-out", {}, headers);
+      expect(signedOut.status).toBe(204);
+      expect(browser.active()).toBeUndefined();
+      expect(backend.sessions.has(tokenA2)).toBe(false);
+      expect(backend.sessions.has(tokenA)).toBe(false);
+      expect(backend.sessions.get(tokenB)).toEqual(B);
+      expect(browser.saved()).toEqual([B.id]);
+    },
+  );
+
+  it("leaves the saved sessions alone when the sign-out is refused as another account's", async () => {
+    currentWithCopy();
+    const before = new Map(browser.jar);
+    const refused = await browser.auth(
+      "sign-out",
+      {},
+      { "x-author-account": B.id },
+    );
+    expect(refused.status).toBe(409);
+    expect(refused.headers.getSetCookie()).toEqual([]);
+    expect(browser.jar).toEqual(before);
+    expect(backend.sessions.get(tokenA)).toEqual(A);
+  });
+
+  it("signs this browser out on an unconfirmed answer as before, keeping every saved session", async () => {
+    currentWithCopy();
+    backend.signOutFails.add(tokenA2);
+    const failed = await browser.auth(
+      "sign-out",
+      {},
+      { "x-author-account": A.id },
+    );
+    expect(failed.status).toBe(503);
+    expect(browser.active()).toBeUndefined();
+    expect(browser.saved()).toEqual([B.id, A.id]);
+    expect(backend.sessions.get(tokenA)).toEqual(A);
   });
 });
 
@@ -490,7 +723,7 @@ describe("listing and switching held accounts", () => {
     expect(browser.active()).toBe(tokenA);
   });
 
-  it("refuses a target whose session was refused, drops it and changes nothing else", async () => {
+  it("refuses a target whose session was refused and keeps it listed as 需重新登录 until it is removed", async () => {
     await holdAandB();
     const current = browser.active();
     backend.sessions.delete(tokenA);
@@ -500,7 +733,14 @@ describe("listing and switching held accounts", () => {
       reason: "reauth_required",
     });
     expect(browser.active()).toBe(current);
+    expect(browser.saved()).toEqual([A.id]);
+    for (let read = 0; read < 2; read++)
+      expect((await listed())?.others).toEqual([reauth(A)]);
+    // 移除 works for it too: its sign-out is refused, so it is let go.
+    const removed = await browser.auth("accounts/remove", { accountId: A.id });
+    expect(removed.status).toBe(204);
     expect(browser.saved()).toEqual([]);
+    expect((await listed())?.others).toEqual([]);
   });
 
   it("changes nothing while a session cannot be checked", async () => {
@@ -518,68 +758,44 @@ describe("listing and switching held accounts", () => {
     expect(browser.jar).toEqual(before);
   });
 
-  it("reports a refused saved account once as needing sign-in, then no longer holds it", async () => {
+  it("lists a refused saved account as 需重新登录 on every read and keeps holding it", async () => {
     await holdAandB();
     backend.sessions.delete(tokenA);
-    const first = parseCommunityAccountsView(await json(await browser.list()));
-    expect(first).toEqual({
-      current: B,
-      others: [
-        {
-          id: A.id,
-          handle: A.handle,
-          displayName: null,
-          state: "reauth_required",
-        },
-      ],
-      limit: 3,
-    });
-    expect(browser.saved()).toEqual([]);
-    expect(
-      parseCommunityAccountsView(await json(await browser.list()))?.others,
-    ).toEqual([]);
+    for (let read = 0; read < 2; read++)
+      expect(await listed()).toEqual({
+        current: B,
+        others: [reauth(A)],
+        limit: 3,
+      });
+    expect(browser.saved()).toEqual([A.id]);
   });
 
   const tokenA2 = "E".repeat(43);
   /** A is current with a newer session; an older copy of A is still saved. */
-  const currentWithSavedCopy = (others = "") => {
+  const currentWithSavedCopy = (...others: (readonly [Account, string])[]) => {
     backend.sessions.set(tokenA2, A);
     browser.jar.set("yoyi-session", tokenA2);
-    browser.jar.set(
-      "yoyi-saved-sessions",
-      `${A.id}.${A.handle}.${tokenA}.${Date.now() + 60_000}${others}`,
-    );
+    browser.hold([A, tokenA], ...others);
   };
 
-  it("never lists a saved copy of the current account, refused or not", async () => {
-    // The Backend no longer accepts the copy: it is let go without a row.
-    currentWithSavedCopy();
-    expect(
-      parseCommunityAccountsView(await json(await browser.list())),
-    ).toEqual({ current: A, others: [], limit: 3 });
-    expect(browser.saved()).toEqual([]);
+  it("never lists a saved copy of the current account and never lets it go on a read", async () => {
+    for (const accepted of [false, true]) {
+      if (accepted) backend.sessions.set(tokenA, A);
+      currentWithSavedCopy();
+      expect(await listed()).toEqual({ current: A, others: [], limit: 3 });
+      expect(browser.saved()).toEqual([A.id]);
+    }
     expect(backend.callsTo("/v1/community/auth/sign-out")).toEqual([]);
-    // A copy the Backend still accepts is signed out as it is let go.
-    backend.sessions.set(tokenA, A);
-    currentWithSavedCopy();
-    expect(
-      parseCommunityAccountsView(await json(await browser.list())),
-    ).toEqual({ current: A, others: [], limit: 3 });
-    expect(browser.saved()).toEqual([]);
-    expect(backend.sessions.has(tokenA)).toBe(false);
+    expect(backend.sessions.get(tokenA)).toEqual(A);
     expect(browser.active()).toBe(tokenA2);
-    expect(backend.sessions.get(tokenA2)).toEqual(A);
   });
 
   it("never signs the current session out when a saved copy carries the same token", async () => {
     signedInAsA();
-    browser.jar.set(
-      "yoyi-saved-sessions",
-      `${A.id}.${A.handle}.${tokenA}.${Date.now() + 60_000}`,
-    );
-    expect(
-      parseCommunityAccountsView(await json(await browser.list())),
-    ).toEqual({ current: A, others: [], limit: 3 });
+    browser.hold([A, tokenA]);
+    expect(await listed()).toEqual({ current: A, others: [], limit: 3 });
+    // A repeated tap lets the duplicate go without ending the session.
+    expect((await browser.switchTo(A.id)).status).toBe(200);
     expect(backend.callsTo("/v1/community/auth/sign-out")).toEqual([]);
     expect(backend.sessions.get(tokenA)).toEqual(A);
     expect(browser.active()).toBe(tokenA);
@@ -588,9 +804,7 @@ describe("listing and switching held accounts", () => {
 
   it("signs a saved copy out when a switch lets it go", async () => {
     backend.sessions.set(tokenB, B);
-    currentWithSavedCopy(
-      `~${B.id}.${B.handle}.${tokenB}.${Date.now() + 60_000}`,
-    );
+    currentWithSavedCopy([B, tokenB]);
     backend.sessions.set(tokenA, A);
     // A repeated tap on the current account drops its copy.
     expect((await browser.switchTo(A.id)).status).toBe(200);
@@ -599,35 +813,96 @@ describe("listing and switching held accounts", () => {
     expect(browser.saved()).toEqual([B.id]);
     // Switching away replaces an older copy with the active session.
     backend.sessions.set(tokenA, A);
-    currentWithSavedCopy(
-      `~${B.id}.${B.handle}.${tokenB}.${Date.now() + 60_000}`,
-    );
+    currentWithSavedCopy([B, tokenB]);
     expect((await browser.switchTo(B.id)).status).toBe(200);
     expect(backend.sessions.has(tokenA)).toBe(false);
     expect(browser.active()).toBe(tokenB);
     expect(browser.saved()).toEqual([A.id]);
-    const saved = readSavedSessions(browser.cookie, Date.now()).entries;
-    expect(saved.map((entry) => entry.token)).toEqual([tokenA2]);
+    expect(browser.savedEntries().map((entry) => entry.token)).toEqual([
+      tokenA2,
+    ]);
   });
 
-  it("clears a refused current session and still lists the others", async () => {
+  it("keeps a copy whose sign-out cannot be confirmed, hidden behind its account's newer session", async () => {
+    backend.sessions.set(tokenA, A);
+    backend.sessions.set(tokenB, B);
+    backend.signOutFails.add(tokenA);
+    currentWithSavedCopy([B, tokenB]);
+    // A repeated tap cannot end the copy: it stays.
+    expect((await browser.switchTo(A.id)).status).toBe(200);
+    expect(browser.savedEntries().map((entry) => entry.token)).toEqual([
+      tokenA,
+      tokenB,
+    ]);
+    // Switching away keeps it beside A's newer session; A is listed once.
+    expect((await browser.switchTo(B.id)).status).toBe(200);
+    expect(browser.active()).toBe(tokenB);
+    expect(browser.savedEntries().map((entry) => entry.token)).toEqual([
+      tokenA2,
+      tokenA,
+    ]);
+    expect(await listed()).toEqual({
+      current: B,
+      others: [{ ...A, state: "ready" }],
+      limit: 3,
+    });
+    // Back to A: its newer session becomes current again, the copy stays.
+    expect((await browser.switchTo(A.id)).status).toBe(200);
+    expect(browser.active()).toBe(tokenA2);
+    expect(browser.savedEntries().map((entry) => entry.token)).toEqual([
+      tokenB,
+      tokenA,
+    ]);
+    expect(backend.sessions.get(tokenA)).toEqual(A);
+  });
+
+  it("reports a refused current session as signed out without clearing it, and still lists the others", async () => {
     await holdAandB();
-    backend.sessions.delete(browser.active()!);
-    const listed = parseCommunityAccountsView(await json(await browser.list()));
-    expect(listed?.current).toBeNull();
-    expect(listed?.others).toEqual([{ ...A, state: "ready" }]);
-    expect(browser.active()).toBeUndefined();
+    const refusedToken = browser.active()!;
+    backend.sessions.delete(refusedToken);
+    expect(await listed()).toEqual({
+      current: null,
+      others: [{ ...A, state: "ready" }],
+      limit: 3,
+    });
+    expect(browser.active()).toBe(refusedToken);
   });
 
-  it("clears a malformed saved list instead of trusting it", async () => {
+  it("reads past a malformed saved list without clearing it; the next change clears it", async () => {
     signedInAsA();
     browser.jar.set(
       "yoyi-saved-sessions",
       `user-${"b".repeat(32)}.x.${tokenB}`,
     );
-    const listed = await browser.list();
-    expect(parseCommunityAccountsView(await json(listed))?.others).toEqual([]);
+    expect((await listed())?.others).toEqual([]);
+    expect(browser.jar.has("yoyi-saved-sessions")).toBe(true);
+    expect((await browser.switchTo(B.id)).status).toBe(404);
     expect(browser.jar.has("yoyi-saved-sessions")).toBe(false);
+  });
+
+  it("answers only this origin's own pages, before any check", async () => {
+    await holdAandB();
+    backend.fetch.mockClear();
+    for (const headers of [
+      { "sec-fetch-site": "cross-site" },
+      { "sec-fetch-site": "same-site" },
+      { "sec-fetch-site": "none" },
+      { "sec-fetch-site": "same-origin", origin: "https://foreign.invalid" },
+      { origin: "https://foreign.invalid" },
+    ]) {
+      const refused = await browser.list(headers);
+      expect(refused.status).toBe(403);
+      expect(refused.headers.getSetCookie()).toEqual([]);
+    }
+    expect(backend.fetch).not.toHaveBeenCalled();
+    // A same-origin fetch, with or without Origin; a browser without Fetch
+    // Metadata sends neither header on a same-origin GET.
+    for (const headers of [
+      { "sec-fetch-site": "same-origin" },
+      { "sec-fetch-site": "same-origin", origin },
+      {},
+    ])
+      expect((await browser.list(headers)).status).toBe(200);
   });
 
   it("refuses cross-site, non-JSON, oversized and malformed switch requests before any check", async () => {
@@ -697,12 +972,6 @@ describe("listing and switching held accounts", () => {
 describe("saved sessions past their ceiling", () => {
   const day = 24 * 60 * 60 * 1000;
   const start = Date.parse("2026-10-27T00:00:00.000Z");
-  const lapsedA = {
-    id: A.id,
-    handle: A.handle,
-    displayName: null,
-    state: "reauth_required",
-  };
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(start);
@@ -721,32 +990,41 @@ describe("saved sessions past their ceiling", () => {
       .callsTo("/v1/me")
       .map(([, init]) => new Headers(init?.headers).get("authorization"));
 
-  it("reports a lapsed account once while a newer account keeps the list alive", async () => {
+  it("still asks the Backend about an account past its ceiling, and lists what it answers", async () => {
     await holdAandB();
-    vi.setSystemTime(start + 5 * day);
-    backend.grants.push(C);
-    await browser.add("passwords/login", {});
-    expect(browser.saved()).toEqual([B.id, A.id]);
-    // A's absolute session ended on the Backend after seven days.
     vi.setSystemTime(start + 8 * day);
-    backend.sessions.delete(tokenA);
     backend.fetch.mockClear();
-    const first = parseCommunityAccountsView(await json(await browser.list()));
-    expect(first).toEqual({
-      current: C,
-      others: [{ ...B, state: "ready" }, lapsedA],
+    // A longer configured lifetime: the Backend still accepts A.
+    expect(await listed()).toEqual({
+      current: B,
+      others: [{ ...A, state: "ready" }],
       limit: 3,
     });
-    // Past its ceiling nothing needs to be asked about A.
-    expect(meTokens()).not.toContain(`Bearer ${tokenA}`);
-    expect(browser.saved()).toEqual([B.id]);
-    expect(readSavedSessions(browser.cookie, Date.now()).lapsed).toEqual([]);
-    expect(
-      parseCommunityAccountsView(await json(await browser.list()))?.others,
-    ).toEqual([{ ...B, state: "ready" }]);
+    expect(meTokens()).toContain(`Bearer ${tokenA}`);
+    // A's session ended: 需重新登录 on every read, still held.
+    backend.sessions.delete(tokenA);
+    for (let read = 0; read < 2; read++)
+      expect((await listed())?.others).toEqual([reauth(A)]);
+    expect(browser.saved()).toEqual([A.id]);
   });
 
-  it("keeps the list past its ceiling, so a lapsed account is still reported after signing in again", async () => {
+  it("switches to an account past its ceiling that the Backend still accepts, with a new cookie lifetime", async () => {
+    await holdAandB();
+    vi.setSystemTime(start + 8 * day);
+    const switched = await browser.switchTo(A.id);
+    expect(switched.status).toBe(200);
+    expect(browser.active()).toBe(tokenA);
+    expect(browser.expiry.get("yoyi-session")).toBe(start + 15 * day);
+    // One the Backend refused stays held and is refused, never switched to.
+    vi.setSystemTime(start + 9 * day);
+    backend.sessions.delete(browser.savedEntries()[0]!.token);
+    const refused = await browser.switchTo(B.id);
+    expect(refused.status).toBe(409);
+    expect(browser.active()).toBe(tokenA);
+    expect(browser.saved()).toEqual([B.id]);
+  });
+
+  it("keeps the list past its ceiling, so an account whose session ended is still listed after signing in again", async () => {
     await holdAandB();
     vi.setSystemTime(start + day);
     await browser.auth("sign-out", {});
@@ -754,60 +1032,31 @@ describe("saved sessions past their ceiling", () => {
     await browser.auth("passwords/login", {});
     vi.setSystemTime(start + 8 * day);
     backend.sessions.delete(tokenA);
-    expect(
-      parseCommunityAccountsView(await json(await browser.list())),
-    ).toEqual({ current: B, others: [lapsedA], limit: 3 });
-    expect(browser.jar.has("yoyi-saved-sessions")).toBe(false);
-  });
-
-  it("refuses a lapsed target without asking the Backend and drops it", async () => {
-    await holdAandB();
-    const current = browser.active();
-    vi.setSystemTime(start + 8 * day);
-    backend.fetch.mockClear();
-    const refused = await browser.switchTo(A.id);
-    expect(refused.status).toBe(409);
-    expect(parseCommunityAccountRefusal(await json(refused))).toEqual({
-      reason: "reauth_required",
-    });
-    expect(meTokens()).not.toContain(`Bearer ${tokenA}`);
-    expect(browser.active()).toBe(current);
-    expect(browser.jar.has("yoyi-saved-sessions")).toBe(false);
-  });
-
-  it("keeps a lapsed entry through an addition, so it is still reported", async () => {
-    await holdAandB();
-    vi.setSystemTime(start + 8 * day);
-    backend.grants.push(C);
-    expect((await browser.add("passwords/login", {})).status).toBe(200);
-    expect(browser.saved()).toEqual([B.id]);
-    expect(
-      parseCommunityAccountsView(await json(await browser.list())),
-    ).toEqual({
-      current: C,
-      others: [{ ...B, state: "ready" }, lapsedA],
+    expect(await listed()).toEqual({
+      current: B,
+      others: [reauth(A)],
       limit: 3,
     });
+    expect(browser.saved()).toEqual([A.id]);
   });
 
-  it("keeps a lapsed entry through a switch, so it is still reported", async () => {
+  it("keeps an ended account through an addition and a switch, so it is still listed", async () => {
     await holdAandB();
-    vi.setSystemTime(start + day);
-    backend.sessions.set(tokenC, C);
-    browser.jar.set(
-      "yoyi-saved-sessions",
-      `${A.id}.${A.handle}.${tokenA}.${start + 7 * day}~${C.id}.${C.handle}.${tokenC}.${start + 20 * day}`,
-    );
     vi.setSystemTime(start + 8 * day);
-    expect((await browser.switchTo(C.id)).status).toBe(200);
-    expect(
-      readSavedSessions(browser.cookie, Date.now()).lapsed.map(
-        (entry) => entry.userId,
-      ),
-    ).toEqual([A.id]);
-    expect(
-      parseCommunityAccountsView(await json(await browser.list()))?.others,
-    ).toEqual([{ ...B, state: "ready" }, lapsedA]);
+    backend.sessions.delete(tokenA);
+    backend.grants.push(C);
+    expect((await browser.add("passwords/login", {})).status).toBe(200);
+    expect(browser.saved()).toEqual([B.id, A.id]);
+    expect((await listed())?.others).toEqual([
+      { ...B, state: "ready" },
+      reauth(A),
+    ]);
+    expect((await browser.switchTo(B.id)).status).toBe(200);
+    expect(browser.saved()).toEqual([C.id, A.id]);
+    expect((await listed())?.others).toEqual([
+      { ...C, state: "ready" },
+      reauth(A),
+    ]);
   });
 });
 
@@ -816,10 +1065,7 @@ describe("removing accounts and signing every account out", () => {
     signedInAsA();
     backend.sessions.set(tokenB, B);
     backend.sessions.set(tokenC, C);
-    browser.jar.set(
-      "yoyi-saved-sessions",
-      `${B.id}.${B.handle}.${tokenB}.${Date.now() + 60_000}~${C.id}.${C.handle}.${tokenC}.${Date.now() + 60_000}`,
-    );
+    browser.hold([B, tokenB], [C, tokenC]);
   };
 
   it("signs a removed account out on the Backend, naming that account", async () => {
@@ -856,6 +1102,27 @@ describe("removing accounts and signing every account out", () => {
     expect(browser.saved()).toEqual([C.id]);
   });
 
+  it("removes every saved session of the account, keeping only an unconfirmed one", async () => {
+    signedInAsA();
+    const olderB = "F".repeat(43);
+    backend.sessions.set(tokenB, B);
+    backend.sessions.set(olderB, B);
+    browser.hold([B, tokenB], [C, tokenC], [B, olderB]);
+    backend.signOutFails.add(olderB);
+    const partial = await browser.auth("accounts/remove", { accountId: B.id });
+    expect(partial.status).toBe(503);
+    expect(backend.sessions.has(tokenB)).toBe(false);
+    expect(browser.savedEntries().map((entry) => entry.token)).toEqual([
+      tokenC,
+      olderB,
+    ]);
+    backend.signOutFails.delete(olderB);
+    expect(
+      (await browser.auth("accounts/remove", { accountId: B.id })).status,
+    ).toBe(204);
+    expect(browser.saved()).toEqual([C.id]);
+  });
+
   it("refuses a malformed remove request and a GET before reaching the Backend", async () => {
     await holdThree();
     for (const body of [{}, { accountId: "user-x" }, { accountId: B.id, x: 1 }])
@@ -878,9 +1145,15 @@ describe("removing accounts and signing every account out", () => {
     expect(all.status).toBe(204);
     expect(backend.sessions.size).toBe(0);
     expect(browser.jar.size).toBe(0);
-    expect(
-      parseCommunityAccountsView(await json(await browser.list())),
-    ).toEqual({ current: null, others: [], limit: 3 });
+    expect(await listed()).toEqual({ current: null, others: [], limit: 3 });
+  });
+
+  it("signs out sessions past their ceiling too, instead of dropping them", async () => {
+    signedInAsA();
+    backend.sessions.set(tokenB, B);
+    browser.hold([B, tokenB, Date.now() - 1]);
+    expect((await browser.auth("accounts/sign-out-all", {})).status).toBe(204);
+    expect(backend.sessions.has(tokenB)).toBe(false);
   });
 
   it("keeps exactly the sessions whose sign-out could not be confirmed", async () => {
@@ -925,10 +1198,7 @@ describe("removing accounts and signing every account out", () => {
     expect(backend.sessions.has(tokenC)).toBe(false);
     // Both at once: the current session and another account are still held.
     backend.sessions.set(tokenB, B);
-    browser.jar.set(
-      "yoyi-saved-sessions",
-      `${B.id}.${B.handle}.${tokenB}.${Date.now() + 60_000}`,
-    );
+    browser.hold([B, tokenB]);
     backend.signOutFails.add(tokenB);
     expect(await json(await browser.auth("accounts/sign-out-all", {}))).toEqual(
       {
@@ -943,10 +1213,7 @@ describe("removing accounts and signing every account out", () => {
 
   it("counts a browser with no current session as cleared", async () => {
     backend.sessions.set(tokenB, B);
-    browser.jar.set(
-      "yoyi-saved-sessions",
-      `${B.id}.${B.handle}.${tokenB}.${Date.now() + 60_000}`,
-    );
+    browser.hold([B, tokenB]);
     backend.signOutFails.add(tokenB);
     expect(await json(await browser.auth("accounts/sign-out-all", {}))).toEqual(
       {
@@ -984,5 +1251,40 @@ describe("removing accounts and signing every account out", () => {
       expect(headers.get("x-moya-auth-relay")).toBe(relay);
       expect(headers.get("x-moya-auth-source")).toBe("192.0.2.7");
     }
+  });
+});
+
+describe("answer parsers", () => {
+  const others = (count: number) =>
+    Array.from({ length: count }, (_, index) =>
+      reauth(account(index.toString(16), `held-${index}`, "")),
+    );
+
+  it("accept every account the saved list can hold, and no more", () => {
+    // More than two other accounts only when a session could not be signed
+    // out and is kept rather than lost.
+    expect(
+      parseCommunityAccountsView({ current: A, others: others(6), limit: 3 })
+        ?.others,
+    ).toHaveLength(6);
+    expect(
+      parseCommunityAccountsView({ current: A, others: others(7), limit: 3 }),
+    ).toBeNull();
+    const remaining = (count: number) =>
+      others(count).map(({ id, handle }) => ({ id, handle }));
+    expect(
+      parseCommunitySignOutAllPartial({
+        reason: "unavailable",
+        currentCleared: true,
+        remaining: remaining(6),
+      })?.remaining,
+    ).toHaveLength(6);
+    expect(
+      parseCommunitySignOutAllPartial({
+        reason: "unavailable",
+        currentCleared: true,
+        remaining: remaining(7),
+      }),
+    ).toBeNull();
   });
 });

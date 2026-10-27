@@ -14,13 +14,15 @@ import {
 } from "@moya/contracts/schemas";
 import { localCatalogFileUrl } from "../../features/detail/local-catalog-media";
 import {
+  accountOfSession,
   appendSessionCookies,
   completeAccountAddition,
+  holdsSavedSessions,
   listCommunityAccounts,
   parseAccountTarget,
+  releaseSavedSessionsOf,
   removeCommunityAccount,
   revokeCommunitySession,
-  settleOrdinarySignIn,
   signOutAllCommunityAccounts,
   startAccountAddition,
   switchCommunityAccount,
@@ -32,7 +34,11 @@ import {
   serializeClearedCommunitySessionCookie,
   serializeCommunitySessionCookie,
 } from "./community-session-cookie";
-import { assertedAccountOf, isSameOriginWrite } from "./same-origin-write";
+import {
+  assertedAccountOf,
+  isSameOriginRead,
+  isSameOriginWrite,
+} from "./same-origin-write";
 
 import { fetchCatalogSearchPage } from "./catalog-search";
 import type { CatalogSearchTransportResult } from "./catalog-search";
@@ -1459,8 +1465,9 @@ export const relayServerProfileMedia = async (
 
 /**
  * account-switching-v1: the account routes this browser uses to see and swap
- * its held accounts. Both only read `me` with each held session; ending a
- * session needs the authentication ingress and lives in the auth relay.
+ * its held accounts. The list only reads `me` with each held session and sets
+ * no cookie; ending a session needs the authentication ingress and lives in
+ * the auth relay. Both answer only this origin's own pages.
  */
 export const relayServerCommunityAccounts = async (
   request: Request,
@@ -1474,7 +1481,8 @@ export const relayServerCommunityAccounts = async (
   const fail = (status: number) => new Response(null, { status, headers });
   if (request.method !== (operation === "list" ? "GET" : "POST"))
     return fail(405);
-  if (operation === "switch" && !isSameOriginWrite(request)) return fail(403);
+  if (!(operation === "list" ? isSameOriginRead : isSameOriginWrite)(request))
+    return fail(403);
   try {
     const context = {
       baseUrl: parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL),
@@ -1518,6 +1526,19 @@ const challengePurposeOf = (body: string | undefined): unknown => {
   }
 };
 
+/** The Backend's refusal of a sign-out for an account that is not current. */
+const accountMismatchReason = "AUTH_ACCOUNT_MISMATCH";
+
+const apiErrorMessageOf = (body: unknown): unknown =>
+  typeof body === "object" &&
+  body !== null &&
+  "error" in body &&
+  typeof body.error === "object" &&
+  body.error !== null &&
+  "message" in body.error
+    ? body.error.message
+    : undefined;
+
 const grantedUserOf = (profile: unknown): string | null =>
   typeof profile === "object" &&
   profile !== null &&
@@ -1537,9 +1558,10 @@ const grantedUserOf = (profile: unknown): string | null =>
  * before the Backend is asked, and a granted session becomes current while the
  * previous account joins `yoyi-saved-sessions`. `accounts/remove` and
  * `accounts/sign-out-all` end held sessions here, where the Backend's trusted
- * authentication source is available. Without the header a sign-in only lets
- * go of an older saved session of the account it signed in (signing it out),
- * and a browser holding none gets the answer it always got.
+ * authentication source is available. Without the header a sign-in, and a
+ * sign-out, only let go of the saved sessions of the account they sign in or
+ * out (signing each out first), and a browser holding none gets the answer it
+ * always got.
  */
 export const relayServerCommunityAuth = async (
   request: Request,
@@ -1674,6 +1696,16 @@ export const relayServerCommunityAuth = async (
         );
       addition = started.addition;
     }
+    // 退出登录 also lets go of this browser's saved sessions of the account
+    // it signs out. Which account that is: the page's assertion (the Backend
+    // refuses a mismatch), or else `me` before the session ends. A browser
+    // that holds no saved session needs neither.
+    const signingOut =
+      suffix === "sign-out" &&
+      token !== undefined &&
+      holdsSavedSessions(request)
+        ? (asserted.account ?? (await accountOfSession(accounts, token)))
+        : null;
     const upstream = await fetch(target, {
       method: request.method,
       headers: outgoing,
@@ -1695,24 +1727,30 @@ export const relayServerCommunityAuth = async (
         },
       });
     if (suffix === "sign-out") {
+      // As before account switching, any answer leaves this browser signed out
+      // of its current account, except the approved fence: another tab made a
+      // different account current (409 AUTH_ACCOUNT_MISMATCH), whose session
+      // stays. Other held accounts stay listed either way.
+      const mismatch =
+        upstream.status === 409 &&
+        (await upstream.json().then(
+          (value: unknown) =>
+            apiErrorMessageOf(value) === accountMismatchReason,
+          () => false,
+        ));
       await upstream.body?.cancel().catch(() => undefined);
-      // Only a confirmed sign-out, or a session the Backend no longer accepts,
-      // leaves this browser signed out. A refusal for another reason (another
-      // account is current now, the Backend is unavailable) keeps the cookie.
-      // Other held accounts stay listed either way.
-      const signedOut =
-        upstream.ok ||
-        token === undefined ||
-        (upstream.status === 401 &&
-          (await communitySessionRefused(base, token)));
+      const released =
+        upstream.ok && signingOut !== null
+          ? await releaseSavedSessionsOf(accounts, request, signingOut)
+          : {};
       return new Response(null, {
         status: upstream.status,
-        headers: {
-          ...headers,
-          ...(signedOut
-            ? { "set-cookie": serializeClearedCommunitySessionCookie(secure) }
-            : {}),
-        },
+        headers: appendSessionCookies(new Headers(headers), {
+          ...(mismatch
+            ? {}
+            : { active: serializeClearedCommunitySessionCookie(secure) }),
+          ...released,
+        }),
       });
     }
     const type = upstream.headers.get("content-type") ?? "";
@@ -1789,7 +1827,7 @@ export const relayServerCommunityAuth = async (
             ),
             ...(userId === null
               ? {}
-              : await settleOrdinarySignIn(accounts, request, userId)),
+              : await releaseSavedSessionsOf(accounts, request, userId)),
           };
         } else {
           const userId =

@@ -56,6 +56,8 @@ interface Fixture {
   readonly operations: string[];
   /** Saved accounts whose sign-out the fake Backend cannot confirm. */
   readonly unconfirmed?: readonly string[];
+  /** Saved accounts whose session the fake Backend no longer accepts. */
+  readonly refused?: readonly string[];
 }
 
 const answer = (route: Route, status: number, json?: unknown) =>
@@ -81,10 +83,16 @@ const install = async (page: Page, fixture: Fixture) => {
     if (path === "accounts")
       return answer(route, 200, {
         current: fixture.current,
-        others: fixture.saved.map((account) => ({
-          ...account,
-          state: "ready",
-        })),
+        others: fixture.saved.map((account) =>
+          fixture.refused?.includes(account.id)
+            ? {
+                id: account.id,
+                handle: account.handle,
+                displayName: null,
+                state: "reauth_required",
+              }
+            : { ...account, state: "ready" },
+        ),
         limit: 3,
       });
     if (path === "accounts/switch") {
@@ -349,4 +357,52 @@ test("a partial 退出所有账号 reloads signed out and names the account stil
   settings = await openSettings(page);
   await expect(settings).toContainText("登录后管理账户设置");
   await expect(feedback).not.toContainText("已退出当前账号");
+});
+
+test("a 需重新登录 account stays listed on every read and 移除 lets it go", async ({
+  browser,
+  page: projectPage,
+}, testInfo) => {
+  test.skip(
+    !["desktop-chromium", "mobile-webkit"].includes(testInfo.project.name),
+    "Phone flow: Chromium phone emulation and mobile WebKit.",
+  );
+  const { page, baseURL } = await phonePage(browser, projectPage, testInfo);
+  const fixture: Fixture = {
+    current: first,
+    saved: [second],
+    operations: [],
+    refused: [second.id],
+  };
+  await install(page, fixture);
+  await addSessionCookie(page.context(), baseURL);
+  await page.goto("/");
+
+  const expired = `[data-account-row="${second.id}"]`;
+  let settings = await openSwitcher(page);
+  for (let read = 0; read < 2; read++) {
+    await expect(settings.locator(expired)).toHaveAttribute(
+      "data-account-state",
+      "reauth_required",
+    );
+    await expect(settings.locator(expired)).toContainText("需重新登录");
+    await expect(
+      settings.locator(expired).getByRole("button", { name: /^重新登录/ }),
+    ).toBeVisible();
+    await expect(settings).toContainText("不再使用时可以移除");
+    // Reading again (a new page) still lists it.
+    if (read === 0) {
+      await page.reload();
+      settings = await openSwitcher(page);
+    }
+  }
+  await settings
+    .getByRole("button", { name: `移除「@${second.handle}」` })
+    .click();
+  const removal = settings.getByRole("alertdialog");
+  await expect(removal).toContainText("其他设备不受影响");
+  await removal.getByRole("button", { name: "移除", exact: true }).click();
+  await expect(settings.locator("[data-account-row]")).toHaveCount(0);
+  await expect(settings).toContainText(`已移除「@${second.handle}」`);
+  expect(fixture.operations).toEqual([`remove:${second.id}`]);
 });

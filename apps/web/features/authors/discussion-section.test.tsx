@@ -27,7 +27,14 @@ const { profile, discussion, replies, send, context, openProfile } = vi.hoisted(
   }),
 );
 vi.mock("./author-data", () => ({
-  authorClient: { profile, discussion, replies, send },
+  // The client's confirmed account follows the view's (account-switching-v1).
+  authorClient: {
+    profile,
+    discussion,
+    replies,
+    send,
+    account: () => context.viewer?.id ?? null,
+  },
   AuthorRequestError: class extends Error {},
 }));
 vi.mock("./author-context", () => ({

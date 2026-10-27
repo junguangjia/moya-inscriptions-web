@@ -1282,7 +1282,7 @@ describe("Sign-out and appeal relay account fences", () => {
     },
   );
 
-  it("forwards the page's account on sign-out and clears the cookie only once it is confirmed", async () => {
+  it("forwards the page's account on sign-out and clears the cookie once it is confirmed", async () => {
     vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
     const upstream = vi
       .fn<typeof fetch>()
@@ -1298,43 +1298,70 @@ describe("Sign-out and appeal relay account fences", () => {
     expect(headers.get("authorization")).toBe(`Bearer ${normal}`);
   });
 
-  it.each([409, 503])(
-    "keeps the session when the Backend answers sign-out with %s",
-    async (status) => {
-      vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
-      const upstream = vi
-        .fn<typeof fetch>()
-        .mockResolvedValue(
-          Response.json(
-            { error: { code: "CONFLICT", message: "AUTH_ACCOUNT_MISMATCH" } },
-            { status },
-          ),
-        );
-      vi.stubGlobal("fetch", upstream);
-      const response = await post("sign-out", { "x-author-account": account });
-      expect(response.status).toBe(status);
-      expect(response.headers.get("set-cookie")).toBeNull();
-      expect(upstream).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("clears a sign-out's session the Backend no longer accepts, and keeps one it still accepts", async () => {
+  it("keeps the session only when the Backend refuses the sign-out as another account's", async () => {
     vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
     const upstream = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(refused())
-      .mockResolvedValueOnce(new Response(null, { status: 401 }))
-      .mockResolvedValueOnce(refused())
-      .mockResolvedValueOnce(Response.json({ id: account }));
+      .mockResolvedValue(
+        Response.json(
+          { error: { code: "CONFLICT", message: "AUTH_ACCOUNT_MISMATCH" } },
+          { status: 409 },
+        ),
+      );
     vi.stubGlobal("fetch", upstream);
-    const gone = await post("sign-out");
-    expect(gone.headers.get("set-cookie")).toMatch(/^yoyi-session=; /u);
-    expect(String(upstream.mock.calls[1]?.[0])).toBe(
-      "http://127.0.0.1:3411/v1/me",
+    const response = await post("sign-out", { "x-author-account": account });
+    expect(response.status).toBe(409);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(upstream).toHaveBeenCalledOnce();
+  });
+
+  // As before account switching, any other answer leaves this browser signed
+  // out, without asking `me` whether the session still works.
+  it.each([
+    [
+      503,
+      {
+        error: { code: "SERVICE_UNAVAILABLE", message: "AUTH_NOT_CONFIGURED" },
+      },
+    ],
+    [409, { error: { code: "CONFLICT", message: "AUTH_RATE_LIMITED" } }],
+    [
+      401,
+      { error: { code: "UNAUTHENTICATED", message: "AUTH_ACCOUNT_SUSPENDED" } },
+    ],
+    [
+      401,
+      { error: { code: "UNAUTHENTICATED", message: "AUTH_UNAUTHENTICATED" } },
+    ],
+  ])(
+    "clears the session when the Backend answers sign-out with %s",
+    async (status, body) => {
+      vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+      const upstream = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(Response.json(body, { status }));
+      vi.stubGlobal("fetch", upstream);
+      for (const headers of [{ "x-author-account": account }, {}]) {
+        upstream.mockClear();
+        const response = await post("sign-out", headers);
+        expect(response.status).toBe(status);
+        expect(response.headers.getSetCookie()).toEqual([
+          expect.stringMatching(/^yoyi-session=; .*Max-Age=0/u),
+        ]);
+        expect(upstream).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it("keeps the session when the sign-out never reached the Backend", async () => {
+    vi.stubEnv("MOYA_PUBLIC_API_BASE_URL", "http://127.0.0.1:3411");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockRejectedValue(new TypeError("offline")),
     );
-    const kept = await post("sign-out");
-    expect(kept.status).toBe(401);
-    expect(kept.headers.get("set-cookie")).toBeNull();
+    const response = await post("sign-out");
+    expect(response.status).toBe(503);
+    expect(response.headers.get("set-cookie")).toBeNull();
   });
 
   it("refuses a malformed account assertion before the Backend", async () => {

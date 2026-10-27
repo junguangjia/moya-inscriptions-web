@@ -43,7 +43,10 @@ interface AccountRow {
   /** Unknown for an account that was already refused when it was read. */
   readonly displayName: string | null;
   readonly studioName?: string | undefined;
-  /** `reauth_required`: no longer held; signing in again adds it back. */
+  /**
+   * `reauth_required`: still held, but its session is no longer accepted;
+   * signing in again replaces it, and 移除 lets it go.
+   */
   readonly state: "ready" | "reauth_required";
 }
 
@@ -69,54 +72,34 @@ type Confirmation =
 const nameOf = (account: { displayName: string | null; handle: string }) =>
   account.displayName ?? `@${account.handle}`;
 
-/**
- * A read reports a refused account once and then no longer holds it, so the
- * accounts already shown as 需重新登录 stay until this page closes, unless a
- * later read holds them again.
- */
-const merged = (
-  shown: Accounts | null,
-  view: CommunityAccountsView,
-): Accounts => {
-  const held = new Set([
-    ...(view.current === null ? [] : [view.current.id]),
-    ...view.others.map((other) => other.id),
-  ]);
-  return {
-    current: view.current,
-    others: [
-      ...view.others,
-      ...(shown?.others ?? []).filter(
-        (other) => other.state === "reauth_required" && !held.has(other.id),
-      ),
-    ],
-  };
-};
+/** A read lists everything this browser holds, 需重新登录 accounts included. */
+const accountsOf = (view: CommunityAccountsView): Accounts => ({
+  current: view.current,
+  others: view.others,
+});
 
 /**
  * What a partial 退出所有账号 left, from its own answer: the current account
- * unless it was cleared, the other accounts still held (as this page showed
- * them) and the earlier 需重新登录 reports.
+ * unless it was cleared, and the accounts still held, as this page showed
+ * them. A kept current session's own saved copy is no other account.
  */
 const remainingAfterSignOut = (
   shown: Accounts | null,
   currentCleared: boolean,
   remaining: readonly CommunityAccountHeld[],
 ): Accounts => {
-  const held = new Set(remaining.map((account) => account.id));
+  const current = currentCleared ? null : (shown?.current ?? null);
   return {
-    current: currentCleared ? null : (shown?.current ?? null),
-    others: [
-      ...remaining.map(
+    current,
+    others: remaining
+      .filter((account) => account.id !== current?.id)
+      .map(
         (account): AccountRow =>
-          shown?.others.find(
-            (other) => other.id === account.id && other.state === "ready",
-          ) ?? { ...account, displayName: null, state: "ready" },
+          shown?.others.find((other) => other.id === account.id) ??
+          (shown?.current?.id === account.id
+            ? { ...shown.current, state: "ready" }
+            : { ...account, displayName: null, state: "ready" }),
       ),
-      ...(shown?.others ?? []).filter(
-        (other) => other.state === "reauth_required" && !held.has(other.id),
-      ),
-    ],
   };
 };
 
@@ -145,7 +128,7 @@ export const AccountSwitcher = ({
   const enterAuth = useAuthEntry();
   const progress = useGlobalUploadProgress();
   const [accounts, setAccounts] = useState<Accounts | null>(() =>
-    initialView ? merged(null, initialView) : null,
+    initialView ? accountsOf(initialView) : null,
   );
   const [loading, setLoading] = useState(!initialView);
   const [unavailable, setUnavailable] = useState(false);
@@ -180,7 +163,7 @@ export const AccountSwitcher = ({
       const result = await communityAccountsClient.list(signal);
       if (!mounted.current || run !== reads.current) return;
       if (result.state === "ready") {
-        setAccounts((shown) => merged(shown, result.view));
+        setAccounts(accountsOf(result.view));
         setUnavailable(false);
       } else setUnavailable(true);
     } catch {
@@ -392,9 +375,9 @@ export const AccountSwitcher = ({
         after.view.current === null &&
         viewerId !== null
       ) {
-        departSignedOut(
-          after.view.others.filter((other) => other.state === "ready"),
-        );
+        // Every account still held, 需重新登录 ones included, is one whose
+        // sign-out was not confirmed.
+        departSignedOut(after.view.others);
         return;
       }
       if (!mounted.current) return;
@@ -405,8 +388,7 @@ export const AccountSwitcher = ({
           ? "退出未能确认，请检查网络后重试。"
           : "退出未能确认，请重试。",
       );
-      if (after.state === "ready")
-        setAccounts((shown) => merged(shown, after.view));
+      if (after.state === "ready") setAccounts(accountsOf(after.view));
     } finally {
       end();
     }
@@ -590,28 +572,15 @@ export const AccountSwitcher = ({
                 </span>
                 <span className={styles.actions}>
                   {account.state === "ready" ? (
-                    <>
-                      <button
-                        type="button"
-                        className={settings.action}
-                        disabled={disabled}
-                        aria-label={`切换到「${nameOf(account)}」`}
-                        onClick={() => void switchTo(account)}
-                      >
-                        切换
-                      </button>
-                      <button
-                        type="button"
-                        className={settings.action}
-                        disabled={disabled}
-                        aria-label={`移除「${nameOf(account)}」`}
-                        onClick={() =>
-                          setConfirming({ kind: "remove", account })
-                        }
-                      >
-                        移除
-                      </button>
-                    </>
+                    <button
+                      type="button"
+                      className={settings.action}
+                      disabled={disabled}
+                      aria-label={`切换到「${nameOf(account)}」`}
+                      onClick={() => void switchTo(account)}
+                    >
+                      切换
+                    </button>
                   ) : (
                     <button
                       type="button"
@@ -623,6 +592,15 @@ export const AccountSwitcher = ({
                       重新登录
                     </button>
                   )}
+                  <button
+                    type="button"
+                    className={settings.action}
+                    disabled={disabled}
+                    aria-label={`移除「${nameOf(account)}」`}
+                    onClick={() => setConfirming({ kind: "remove", account })}
+                  >
+                    移除
+                  </button>
                 </span>
                 {confirmation("switch", account.id)}
                 {confirmation("remove", account.id)}
@@ -634,7 +612,7 @@ export const AccountSwitcher = ({
         )}
         {accounts.others.some((other) => other.state === "reauth_required") && (
           <p className={settings.help}>
-            登录已过期或失效的账户已从这台设备移除，重新登录后可再次切换。
+            登录已过期或失效的账户需要重新登录后才能切换，不再使用时可以移除。
           </p>
         )}
       </section>

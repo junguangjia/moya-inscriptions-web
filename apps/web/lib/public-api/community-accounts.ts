@@ -9,8 +9,8 @@ import {
   serializeCommunitySessionCookie,
 } from "./community-session-cookie";
 import {
-  maximumSavedSessions,
   readSavedSessions,
+  savedSessionsCapacity,
   serializeSavedSessionsCookie,
 } from "./saved-sessions-cookie";
 
@@ -30,6 +30,12 @@ import type { PublicUserProfile } from "@moya/contracts";
  * others wait in the HttpOnly `yoyi-saved-sessions`. Every account is still
  * validated by the Backend on each request with its own session, and no token
  * ever reaches a response body.
+ *
+ * A held session is let go of only once the Backend confirms that it ended:
+ * signed out now, or no longer accepted. An older session of an account whose
+ * sign-out cannot be confirmed stays saved as a hidden copy, never listed or
+ * switched to while the account is current, and a later sign-out through the
+ * authentication relay ends it.
  */
 export interface CommunityAccountsContext {
   readonly baseUrl: URL;
@@ -43,13 +49,12 @@ export interface CommunityAccountsContext {
 }
 
 /**
- * The Backend's absolute session lifetime. Web never learns an active
- * session's own expiry (a browser does not send cookie attributes back), so an
- * account moved from `yoyi-session` into the saved list gets this ceiling.
- * Switching never extends the session itself: the Backend refuses it at its
- * real expiry, and the entry then reads as `reauth_required`. Past the ceiling
- * the entry is `lapsed`; the cookie keeps it a while longer so the list can
- * still report it.
+ * The Backend's default absolute session lifetime. Web never learns a
+ * session's own expiry (a browser does not send cookie attributes back), so a
+ * session moved into the saved list gets this ceiling as the browser's
+ * lifetime for it. Switching never extends the session itself: the Backend
+ * refuses it at its real expiry, and the account then reads as
+ * `reauth_required`.
  */
 const sessionLifetimeCeilingMs = 7 * 24 * 60 * 60 * 1000;
 
@@ -120,6 +125,24 @@ const checkSession = async (
   };
 };
 
+/** The profile a check confirms for `userId`, or null. */
+const acceptedAs = (
+  check: SessionCheck | undefined,
+  userId: string,
+): PublicUserProfile | null =>
+  check?.state === "ready" && check.profile.id === userId
+    ? check.profile
+    : null;
+
+/** The account a session belongs to, when `me` accepts it. */
+export const accountOfSession = async (
+  context: CommunityAccountsContext,
+  token: string,
+): Promise<string | null> => {
+  const check = await checkSession(context, token);
+  return check.state === "ready" ? check.profile.id : null;
+};
+
 export type SessionRevocation = "revoked" | "refused" | "failed";
 
 /**
@@ -164,36 +187,60 @@ export const revokeCommunitySession = async (
   }
 };
 
-const heldSessions = (request: Request, now: number) => {
+const heldSessions = (request: Request) => {
   const cookie = request.headers.get("cookie");
+  const saved = readSavedSessions(cookie);
   return {
     activeToken: readCommunitySessionToken(cookie),
-    saved: readSavedSessions(cookie, now),
+    saved: saved.entries,
+    stale: saved.stale,
     secure: isSecureRequest(request),
   };
 };
 
+/** Whether this browser holds any saved session at all. */
+export const holdsSavedSessions = (request: Request): boolean =>
+  heldSessions(request).saved.length > 0;
+
+/** The accounts the saved list names, in order, without `except`. */
+const accountsOf = (
+  entries: readonly SavedSession[],
+  except?: string,
+): string[] =>
+  [...new Set(entries.map((entry) => entry.userId))].filter(
+    (id) => id !== except,
+  );
+
+/** The first entry of each token: a later one repeats a session held already. */
+const distinctTokens = (entries: readonly SavedSession[]): SavedSession[] =>
+  entries.filter(
+    (entry, index) =>
+      entries.findIndex((other) => other.token === entry.token) === index,
+  );
+
 /**
- * Best-effort Backend sign-out of saved sessions this browser lets go: an
- * older copy of an account whose newer session it keeps. Only the active
- * session is ever forwarded on requests, so ending these is safe; the active
- * one itself is never touched. Their entries are dropped whatever the outcome.
- * The account routes carry no trusted authentication source, so in Production
- * the Backend refuses their sign-out and such a copy lapses at its expiry; the
- * auth relay (sign-in, add-account) ends it for real.
+ * Signs out saved sessions this browser lets go of and answers the ones it
+ * must keep. An entry leaves once its sign-out is confirmed (`revoked`, or
+ * `refused`: no longer accepted) or when it repeats the active session's
+ * token, as a duplicate of `yoyi-session` that follows that cookie and is
+ * never signed out here. Any other entry stays as a hidden copy. The account
+ * routes carry no trusted authentication source, so in Production their
+ * sign-out of a copy the Backend still accepts fails and the copy stays until
+ * the authentication relay ends it.
  */
 const releaseCopies = async (
   context: CommunityAccountsContext,
   copies: readonly SavedSession[],
   activeToken: string | undefined,
-): Promise<void> => {
-  await Promise.all(
-    copies
-      .filter((entry) => entry.token !== activeToken)
-      .map((entry) =>
-        revokeCommunitySession(context, entry.token, entry.userId),
-      ),
+): Promise<SavedSession[]> => {
+  const outcomes = await Promise.all(
+    copies.map((entry) =>
+      entry.token === activeToken
+        ? null
+        : revokeCommunitySession(context, entry.token, entry.userId),
+    ),
   );
+  return copies.filter((_, index) => outcomes[index] === "failed");
 };
 
 const savedEntryFor = (
@@ -206,6 +253,16 @@ const savedEntryFor = (
   token,
   expiresAt: now + sessionLifetimeCeilingMs,
 });
+
+/**
+ * The active cookie's expiry for a saved session: its ceiling, or a new one
+ * when the Backend still accepts it past that ceiling (a longer configured
+ * lifetime). The Backend keeps enforcing the session's real expiry.
+ */
+const activeExpiryOf = (entry: SavedSession, now: number): Date =>
+  new Date(
+    entry.expiresAt > now ? entry.expiresAt : now + sessionLifetimeCeilingMs,
+  );
 
 /** The body of switch and remove: exactly `{ "accountId": "<user id>" }`. */
 export const parseAccountTarget = (text: string): string | null => {
@@ -228,231 +285,189 @@ export const parseAccountTarget = (text: string): string | null => {
 };
 
 /**
- * `GET /api/community/accounts`. Every held session is checked with `me`. A
- * refused current session is cleared as `/api/community/me` does; a refused
- * or lapsed saved one is dropped and reported once as `reauth_required`. A
- * saved copy of the current account is never another account: it is let go
- * (and signed out when still accepted) without a row. Any check the Backend
- * cannot answer for another account leaves everything as it is (503).
+ * `GET /api/community/accounts`, read-only: it never sets a cookie. Every held
+ * session is checked with `me`, whatever its ceiling. A refused active
+ * session reads as `current: null` (the relays that use it clear it). Each
+ * other account is listed once: `ready` when one of its sessions is accepted
+ * as that account, otherwise `reauth_required`, on every read until it is
+ * removed or signed in again. Saved sessions of the current account are
+ * hidden copies. A check the Backend cannot answer for a listed account
+ * leaves the answer unknown (503).
  */
 export const listCommunityAccounts = async (
   context: CommunityAccountsContext,
   request: Request,
 ): Promise<Response> => {
-  const { activeToken, saved, secure } = heldSessions(request, context.now);
+  const { activeToken, saved } = heldSessions(request);
   const [active, checks] = await Promise.all([
     activeToken === undefined ? null : checkSession(context, activeToken),
-    Promise.all(
-      saved.entries.map((entry) => checkSession(context, entry.token)),
-    ),
+    Promise.all(saved.map((entry) => checkSession(context, entry.token))),
   ]);
   if (active?.state === "unavailable") return refuse(503, "unavailable");
   const current = active?.state === "ready" ? active.profile : null;
-  const copyOfCurrent = (entry: SavedSession) => entry.userId === current?.id;
-  if (
-    checks.some(
-      (check, index) =>
-        check.state === "unavailable" && !copyOfCurrent(saved.entries[index]!),
-    )
-  )
-    return refuse(503, "unavailable");
-  const kept: SavedSession[] = [];
   const others: CommunityAccountListing[] = [];
-  const copies: SavedSession[] = [];
-  let changed = saved.stale;
-  saved.entries.forEach((entry, index) => {
-    const check = checks[index]!;
-    // An older saved session of the current account (an ordinary sign-in
-    // into a saved account, or answers that overlapped) is no other account,
-    // accepted or not.
-    if (copyOfCurrent(entry)) {
-      changed = true;
-      if (check.state !== "refused") copies.push(entry);
-      return;
+  for (const userId of accountsOf(saved, current?.id)) {
+    const own = saved.flatMap((entry, index) =>
+      entry.userId === userId ? [{ entry, check: checks[index] }] : [],
+    );
+    const profile = own
+      .map(({ check }) => acceptedAs(check, userId))
+      .find((found) => found !== null);
+    if (profile) {
+      others.push({ ...profile, state: "ready" });
+      continue;
     }
-    if (check.state === "ready" && check.profile.id === entry.userId) {
-      if (check.profile.handle !== entry.handle) changed = true;
-      kept.push({ ...entry, handle: check.profile.handle });
-      others.push({ ...check.profile, state: "ready" });
-      return;
-    }
-    changed = true;
+    if (own.some(({ check }) => check?.state === "unavailable"))
+      return refuse(503, "unavailable");
     others.push({
-      id: entry.userId,
-      handle: entry.handle,
-      displayName: null,
-      state: "reauth_required",
-    });
-  });
-  // A session past its ceiling has ended: reported once, without asking.
-  for (const entry of saved.lapsed) {
-    changed = true;
-    if (copyOfCurrent(entry)) continue;
-    others.push({
-      id: entry.userId,
-      handle: entry.handle,
+      id: userId,
+      handle: own[0]!.entry.handle,
       displayName: null,
       state: "reauth_required",
     });
   }
-  await releaseCopies(context, copies, activeToken);
-  return answer(
-    200,
-    { current, others, limit: communityAccountLimit },
-    {
-      ...(active?.state === "refused"
-        ? { active: serializeClearedCommunitySessionCookie(secure) }
-        : {}),
-      ...(changed ? { saved: serializeSavedSessionsCookie(kept, secure) } : {}),
-    },
-  );
+  return answer(200, { current, others, limit: communityAccountLimit });
 };
 
 /**
- * `POST /api/community/accounts/switch`. The target must be a saved account
- * whose session `me` confirms is that account; the active and saved sessions
- * are then swapped in one answer's cookies. A refused or lapsed target is
- * dropped and nothing else changes (409); an unanswered check changes nothing
- * (503).
+ * `POST /api/community/accounts/switch`. The target must be another account
+ * this browser holds, with a session `me` confirms is that account; the active
+ * and saved sessions are then swapped in one answer's cookies. A target none
+ * of whose sessions is accepted answers 409 and stays held, still listed as
+ * 需重新登录; an unanswered check changes nothing (503).
  */
 export const switchCommunityAccount = async (
   context: CommunityAccountsContext,
   request: Request,
   accountId: string,
 ): Promise<Response> => {
-  const { activeToken, saved, secure } = heldSessions(request, context.now);
-  const target = saved.entries.find((entry) => entry.userId === accountId);
-  const lapsedTarget = saved.lapsed.find((entry) => entry.userId === accountId);
-  // Everything else this browser holds, lapsed entries included, so they are
-  // still reported later.
-  const rest = [...saved.entries, ...saved.lapsed].filter(
-    (entry) => entry !== target && entry !== lapsedTarget,
-  );
-  const [active, checked] = await Promise.all([
+  const { activeToken, saved, stale, secure } = heldSessions(request);
+  const targets = saved.filter((entry) => entry.userId === accountId);
+  const [active, checks] = await Promise.all([
     activeToken === undefined ? null : checkSession(context, activeToken),
-    target === undefined ? null : checkSession(context, target.token),
+    Promise.all(targets.map((entry) => checkSession(context, entry.token))),
   ]);
-  if (active?.state === "unavailable" || checked?.state === "unavailable")
-    return refuse(503, "unavailable");
+  if (active?.state === "unavailable") return refuse(503, "unavailable");
   const unchanged: SessionCookieUpdates = {
     ...(active?.state === "refused"
       ? { active: serializeClearedCommunitySessionCookie(secure) }
       : {}),
-    ...(saved.stale ? { saved: serializeSavedSessionsCookie([], secure) } : {}),
+    ...(stale ? { saved: serializeSavedSessionsCookie([], secure) } : {}),
   };
-  if (active?.state === "ready" && active.profile.id === accountId) {
-    // A repeated tap after a completed switch: already current. A saved copy
-    // of the same account is let go.
-    if (target === undefined && lapsedTarget === undefined)
-      return answer(200, { current: active.profile }, unchanged);
-    await releaseCopies(
-      context,
-      target === undefined ? [] : [target],
-      activeToken,
-    );
+  const previous = active?.state === "ready" ? active.profile : null;
+  if (previous?.id === accountId) {
+    // A repeated tap after a completed switch: already current. Its saved
+    // copies are let go once their sign-out is confirmed.
+    const kept = await releaseCopies(context, targets, activeToken);
     return answer(
       200,
-      { current: active.profile },
-      { saved: serializeSavedSessionsCookie(rest, secure) },
+      { current: previous },
+      kept.length === targets.length
+        ? unchanged
+        : {
+            saved: serializeSavedSessionsCookie(
+              [...saved.filter((entry) => entry.userId !== accountId), ...kept],
+              secure,
+            ),
+          },
     );
   }
-  if (lapsedTarget !== undefined)
-    return refuse(409, "reauth_required", {
-      ...unchanged,
-      saved: serializeSavedSessionsCookie(rest, secure),
-    });
-  if (target === undefined || checked === null)
-    return refuse(404, "account_not_found", unchanged);
-  if (checked.state !== "ready" || checked.profile.id !== accountId)
-    return refuse(409, "reauth_required", {
-      ...unchanged,
-      saved: serializeSavedSessionsCookie(rest, secure),
-    });
-  const previous = active?.state === "ready" ? active.profile : null;
-  const next =
-    previous === null
-      ? rest
-      : [
-          savedEntryFor(previous, activeToken!, context.now),
-          ...rest.filter((entry) => entry.userId !== previous.id),
-        ];
-  // An older saved copy of the account that now leaves `yoyi-session` is
-  // replaced by its active session.
-  await releaseCopies(
+  if (targets.length === 0) return refuse(404, "account_not_found", unchanged);
+  const chosenAt = targets.findIndex(
+    (_, index) => acceptedAs(checks[index], accountId) !== null,
+  );
+  if (chosenAt < 0)
+    return checks.some((check) => check.state === "unavailable")
+      ? refuse(503, "unavailable")
+      : refuse(409, "reauth_required", unchanged);
+  const chosen = targets[chosenAt]!;
+  const profile = acceptedAs(checks[chosenAt], accountId)!;
+  // Older sessions of the account that becomes current, and of the one that
+  // leaves `yoyi-session` (replaced by its active session), are let go once
+  // their sign-out is confirmed.
+  const replaced = (entry: SavedSession) =>
+    entry.userId === accountId || entry.userId === previous?.id;
+  const kept = await releaseCopies(
     context,
-    saved.entries.filter((entry) => entry.userId === previous?.id),
+    saved.filter((entry) => entry !== chosen && replaced(entry)),
     activeToken,
   );
   return answer(
     200,
-    { current: checked.profile },
+    { current: profile },
     {
       active: serializeCommunitySessionCookie(
-        target.token,
-        new Date(target.expiresAt),
+        chosen.token,
+        activeExpiryOf(chosen, context.now),
         secure,
       ),
-      saved: serializeSavedSessionsCookie(next, secure),
+      saved: serializeSavedSessionsCookie(
+        distinctTokens([
+          ...(previous === null
+            ? []
+            : [savedEntryFor(previous, activeToken!, context.now)]),
+          ...saved.filter((entry) => !replaced(entry)),
+          ...kept,
+        ]),
+        secure,
+      ),
     },
   );
 };
 
 /**
- * `POST /api/community/auth/accounts/remove`: signs one saved account out on
- * the Backend and lets it go. An already refused session is just dropped; an
- * unknown outcome keeps it (503).
+ * `POST /api/community/auth/accounts/remove`: signs out every session this
+ * browser holds for another account, a 需重新登录 one included, and lets each
+ * go once its sign-out is confirmed or it is no longer accepted. A session
+ * whose outcome is unknown stays held (503).
  */
 export const removeCommunityAccount = async (
   context: CommunityAccountsContext,
   request: Request,
   accountId: string,
 ): Promise<Response> => {
-  const { saved, secure } = heldSessions(request, context.now);
-  const target = saved.entries.find((entry) => entry.userId === accountId);
-  const cleared: SessionCookieUpdates = saved.stale
-    ? { saved: serializeSavedSessionsCookie([], secure) }
-    : {};
-  if (target === undefined) return refuse(404, "account_not_found", cleared);
-  const outcome = await revokeCommunitySession(
-    context,
-    target.token,
-    target.userId,
-  );
-  if (outcome === "failed") return refuse(503, "unavailable", cleared);
-  return answer(204, undefined, {
-    saved: serializeSavedSessionsCookie(
-      [...saved.entries, ...saved.lapsed].filter((entry) => entry !== target),
-      secure,
-    ),
-  });
+  const { activeToken, saved, stale, secure } = heldSessions(request);
+  const targets = saved.filter((entry) => entry.userId === accountId);
+  if (targets.length === 0)
+    return refuse(
+      404,
+      "account_not_found",
+      stale ? { saved: serializeSavedSessionsCookie([], secure) } : {},
+    );
+  const kept = await releaseCopies(context, targets, activeToken);
+  const cookies: SessionCookieUpdates =
+    kept.length === targets.length
+      ? {}
+      : {
+          saved: serializeSavedSessionsCookie(
+            [...saved.filter((entry) => entry.userId !== accountId), ...kept],
+            secure,
+          ),
+        };
+  return kept.length === 0
+    ? answer(204, undefined, cookies)
+    : refuse(503, "unavailable", cookies);
 };
 
 /**
  * `POST /api/community/auth/accounts/sign-out-all`: signs every held session
- * out on the Backend. Whatever was signed out (or already refused or lapsed)
- * is cleared; a session whose sign-out could not be confirmed stays held. The
- * 503 then says whether the current session was cleared and names (id and
- * handle only) the other accounts still held, so the page can reload as
- * signed out or stay and offer another try without reading the list again.
+ * out on the Backend, whatever its ceiling. Whatever was signed out (or was
+ * already refused) is cleared; a session whose sign-out could not be confirmed
+ * stays held. The 503 then says whether the current session was cleared and
+ * names (id and handle only) the accounts still held, so the page can reload
+ * as signed out or stay and offer another try without reading the list again.
  */
 export const signOutAllCommunityAccounts = async (
   context: CommunityAccountsContext,
   request: Request,
 ): Promise<Response> => {
-  const { activeToken, saved, secure } = heldSessions(request, context.now);
-  const [activeOutcome, savedOutcomes] = await Promise.all([
+  const { activeToken, saved, secure } = heldSessions(request);
+  const [activeOutcome, remaining] = await Promise.all([
     activeToken === undefined
       ? ("revoked" as const)
       : revokeCommunitySession(context, activeToken),
-    Promise.all(
-      saved.entries.map((entry) =>
-        revokeCommunitySession(context, entry.token, entry.userId),
-      ),
-    ),
+    releaseCopies(context, saved, activeToken),
   ]);
-  const remaining = saved.entries.filter(
-    (_, index) => savedOutcomes[index] === "failed",
-  );
   const currentCleared = activeOutcome !== "failed";
   const cookies: SessionCookieUpdates = {
     ...(currentCleared
@@ -467,9 +482,9 @@ export const signOutAllCommunityAccounts = async (
         {
           reason: "unavailable",
           currentCleared,
-          remaining: remaining.map((entry) => ({
-            id: entry.userId,
-            handle: entry.handle,
+          remaining: accountsOf(remaining).map((id) => ({
+            id,
+            handle: remaining.find((entry) => entry.userId === id)!.handle,
           })),
         },
         cookies,
@@ -480,11 +495,18 @@ export const signOutAllCommunityAccounts = async (
 export interface AccountAddition {
   readonly activeToken: string | undefined;
   readonly active: PublicUserProfile | null;
+  /** The saved list after this step's own clean-up. */
   readonly saved: readonly SavedSession[];
-  /** Kept when there is room, so the list still reports them. */
-  readonly lapsed: readonly SavedSession[];
+  /**
+   * Saved sessions `me` refused whose sign-out could not be confirmed: still
+   * held, but not counted toward the limit.
+   */
+  readonly uncounted: readonly SavedSession[];
   readonly secure: boolean;
-  /** A refused active session or a stale saved list is cleaned up by any answer. */
+  /**
+   * A refused active session, a stale saved list and sessions let go to make
+   * room are cleaned up by any answer.
+   */
   readonly cookies: SessionCookieUpdates;
 }
 
@@ -499,24 +521,21 @@ export type AccountAdditionStart =
 
 /**
  * Before an add-account sign-in step reaches the Backend: confirms which
- * account is current (so it can be kept) and, with `enforceLimit`, refuses
- * when this browser already holds three accounts. An unconfirmed current
- * account refuses the step rather than risk losing it.
+ * account is current (so it can be kept) and that the new session can be
+ * held. At the limit, saved sessions `me` refuses do not count and are let go
+ * here, once their sign-out is confirmed, to make room. With `enforceLimit`
+ * the step is refused while three accounts are still held; any step is
+ * refused when the saved list has no room left without dropping a session.
+ * An unconfirmed current account refuses the step rather than risk losing it.
  */
 export const startAccountAddition = async (
   context: CommunityAccountsContext,
   request: Request,
   enforceLimit: boolean,
 ): Promise<AccountAdditionStart> => {
-  const { activeToken, saved, secure } = heldSessions(request, context.now);
+  const { activeToken, saved, stale, secure } = heldSessions(request);
   const check =
     activeToken === undefined ? null : await checkSession(context, activeToken);
-  const cookies: SessionCookieUpdates = {
-    ...(check?.state === "refused"
-      ? { active: serializeClearedCommunitySessionCookie(secure) }
-      : {}),
-    ...(saved.stale ? { saved: serializeSavedSessionsCookie([], secure) } : {}),
-  };
   if (check?.state === "unavailable")
     return {
       ok: false,
@@ -525,18 +544,64 @@ export const startAccountAddition = async (
       cookies: {},
     };
   const active = check?.state === "ready" ? check.profile : null;
-  const held =
-    saved.entries.filter((entry) => entry.userId !== active?.id).length +
-    (active === null ? 0 : 1);
-  if (enforceLimit && held >= communityAccountLimit)
-    return { ok: false, status: 409, reason: "AUTH_ACCOUNT_LIMIT", cookies };
+  const held = (entries: readonly SavedSession[]) =>
+    accountsOf(entries, active?.id).length + (active === null ? 0 : 1);
+  let entries = saved;
+  let uncounted: SavedSession[] = [];
+  let unanswered = false;
+  if (
+    held(entries) >= communityAccountLimit ||
+    entries.length >= savedSessionsCapacity
+  ) {
+    const checks = await Promise.all(
+      entries.map((entry) => checkSession(context, entry.token)),
+    );
+    const refused = entries.filter(
+      (_, index) => checks[index]!.state === "refused",
+    );
+    unanswered = checks.some((result) => result.state === "unavailable");
+    uncounted = await releaseCopies(context, refused, activeToken);
+    entries = entries.filter(
+      (entry) => !refused.includes(entry) || uncounted.includes(entry),
+    );
+  }
+  const cookies: SessionCookieUpdates = {
+    ...(check?.state === "refused"
+      ? { active: serializeClearedCommunitySessionCookie(secure) }
+      : {}),
+    ...(stale || entries.length < saved.length
+      ? { saved: serializeSavedSessionsCookie(entries, secure) }
+      : {}),
+  };
+  if (
+    enforceLimit &&
+    held(entries.filter((entry) => !uncounted.includes(entry))) >=
+      communityAccountLimit
+  )
+    // A held account whose check went unanswered may be the one that would
+    // make room: that is a transient state, not the account limit.
+    return unanswered
+      ? {
+          ok: false,
+          status: 503,
+          reason: "AUTH_ACCOUNT_STATE_UNAVAILABLE",
+          cookies,
+        }
+      : { ok: false, status: 409, reason: "AUTH_ACCOUNT_LIMIT", cookies };
+  if (entries.length >= savedSessionsCapacity)
+    return {
+      ok: false,
+      status: 503,
+      reason: "AUTH_ACCOUNT_STATE_UNAVAILABLE",
+      cookies,
+    };
   return {
     ok: true,
     addition: {
       activeToken,
       active,
-      saved: saved.entries,
-      lapsed: saved.lapsed,
+      saved: entries,
+      uncounted,
       secure,
       cookies,
     },
@@ -545,11 +610,14 @@ export const startAccountAddition = async (
 
 /**
  * After the Backend granted a session for `userId` in add-account mode: the
- * new account becomes current and the previous one joins the saved list. A
- * saved older session of the same account, or of the previous one, is
- * replaced (and signed out), never duplicated. If this browser meanwhile
- * holds three other accounts, the new session is signed out again and nothing
- * changes (`accepted: false`).
+ * new account becomes current and the previous one joins the saved list.
+ * Older sessions of the new account, and of the previous one (replaced by its
+ * active session), are let go once their sign-out is confirmed, never
+ * duplicated as accounts. If this browser meanwhile holds three other
+ * accounts, the new session is signed out again and nothing changes
+ * (`accepted: false`). When that sign-out cannot be confirmed the account is
+ * kept instead, a fourth one until the reader removes one, so a session that
+ * may be live is never lost.
  */
 export const completeAccountAddition = async (
   context: CommunityAccountsContext,
@@ -560,29 +628,31 @@ export const completeAccountAddition = async (
   readonly accepted: boolean;
   readonly cookies: SessionCookieUpdates;
 }> => {
-  const { active, activeToken, saved, lapsed, secure } = addition;
-  const previous = saved.find((entry) => entry.userId === userId);
-  const replaced = (entry: SavedSession) =>
-    entry.userId === userId || entry.userId === active?.id;
-  const others = saved.filter((entry) => !replaced(entry));
+  const { active, activeToken, saved, uncounted, secure } = addition;
   // Re-adding the current account only replaces its cookie. The older session
   // is not signed out: a request still in flight with it would otherwise read
   // as a refused session and clear the new cookie.
-  const next =
+  const leaving =
     active !== null && active.id !== userId && activeToken !== undefined
-      ? [savedEntryFor(active, activeToken, context.now), ...others]
-      : others;
-  if (next.length > maximumSavedSessions) {
-    await revokeCommunitySession(context, grant.token, userId);
+      ? active
+      : null;
+  const replaced = (entry: SavedSession) =>
+    entry.userId === userId || entry.userId === leaving?.id;
+  const others = new Set([
+    ...(leaving === null ? [] : [leaving.id]),
+    ...accountsOf(
+      saved.filter((entry) => !uncounted.includes(entry)),
+      userId,
+    ),
+  ]);
+  if (
+    others.size >= communityAccountLimit &&
+    (await revokeCommunitySession(context, grant.token, userId)) !== "failed"
+  )
     return { accepted: false, cookies: addition.cookies };
-  }
-  if (previous !== undefined)
-    await revokeCommunitySession(context, previous.token, userId);
-  // An older saved copy of the previous account is replaced by its active
-  // session.
-  await releaseCopies(
+  const kept = await releaseCopies(
     context,
-    saved.filter((entry) => entry !== previous && entry.userId === active?.id),
+    saved.filter(replaced),
     activeToken,
   );
   return {
@@ -594,10 +664,13 @@ export const completeAccountAddition = async (
         secure,
       ),
       saved: serializeSavedSessionsCookie(
-        [...next, ...lapsed.filter((entry) => !replaced(entry))].slice(
-          0,
-          maximumSavedSessions,
-        ),
+        distinctTokens([
+          ...(leaving === null
+            ? []
+            : [savedEntryFor(leaving, activeToken!, context.now)]),
+          ...saved.filter((entry) => !replaced(entry)),
+          ...kept,
+        ]),
         secure,
       ),
     },
@@ -605,30 +678,29 @@ export const completeAccountAddition = async (
 };
 
 /**
- * After an ordinary sign-in (no add-account mode) granted a session for
- * `userId`: an older saved session of the same account is no other account
- * any more. It is signed out on the Backend (best effort) and let go in the
- * same answer, so a later 退出登录 leaves nothing of this account switchable.
- * Without such a copy nothing is written: a browser that holds no other
- * account gets exactly the answer it got before.
+ * Lets go of this browser's saved sessions of `userId`, signing each out
+ * first: after an ordinary sign-in of that account (its new session is now
+ * current) and after 退出登录 of it, so nothing of it stays switchable. A
+ * session whose sign-out cannot be confirmed stays held: a hidden copy while
+ * the account is current, otherwise listed under that account, where 移除
+ * ends it. Without such a session nothing is written, so a browser that holds
+ * no other account gets exactly the answer it got before.
  */
-export const settleOrdinarySignIn = async (
+export const releaseSavedSessionsOf = async (
   context: CommunityAccountsContext,
   request: Request,
   userId: string,
 ): Promise<SessionCookieUpdates> => {
-  const { activeToken, saved, secure } = heldSessions(request, context.now);
-  const held = [...saved.entries, ...saved.lapsed];
-  if (!held.some((entry) => entry.userId === userId)) return {};
-  await releaseCopies(
-    context,
-    saved.entries.filter((entry) => entry.userId === userId),
-    activeToken,
-  );
-  return {
-    saved: serializeSavedSessionsCookie(
-      held.filter((entry) => entry.userId !== userId),
-      secure,
-    ),
-  };
+  const { activeToken, saved, secure } = heldSessions(request);
+  const copies = saved.filter((entry) => entry.userId === userId);
+  if (copies.length === 0) return {};
+  const kept = await releaseCopies(context, copies, activeToken);
+  return kept.length === copies.length
+    ? {}
+    : {
+        saved: serializeSavedSessionsCookie(
+          [...saved.filter((entry) => entry.userId !== userId), ...kept],
+          secure,
+        ),
+      };
 };

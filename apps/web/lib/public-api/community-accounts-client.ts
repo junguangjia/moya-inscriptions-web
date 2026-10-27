@@ -110,8 +110,8 @@ export const communityAccountsClient = {
   /** The current account and the others this browser holds. */
   list: async (signal?: AbortSignal): Promise<CommunityAccountsRead> => {
     try {
-      // A read can drop refused entries from the saved list, so it takes the
-      // same lock as the writes.
+      // The read changes nothing; it takes the same lock as the writes so it
+      // reads what a write in flight in another tab leaves.
       const response = await exclusiveAccountRequest(
         () =>
           fetch("/api/community/accounts", {

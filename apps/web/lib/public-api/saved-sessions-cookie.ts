@@ -1,22 +1,31 @@
+import { savedSessionsCapacity } from "./community-accounts-view";
 import { sessionCookieAttributes } from "./community-session-cookie";
 
 /**
  * account-switching-v1: the other signed-in accounts this browser holds, next
  * to the active one in `yoyi-session`. It carries the same attributes (HttpOnly,
  * host-only, `Path=/`, `SameSite=Lax`, Secure on HTTPS), so no token is ever
- * readable by browser JavaScript. With the active account a browser holds at
- * most three, so this list holds two.
+ * readable by browser JavaScript.
  *
- * Value: one or two entries joined by `~`, each
- * `<user id>.<handle>.<session token>.<expiry in epoch milliseconds>`. The
- * handle only names an entry whose session the Backend no longer accepts.
+ * Value: entries joined by `~`, each
+ * `<user id>.<handle>.<session token>.<ceiling in epoch milliseconds>`. A token
+ * appears once. A user id may repeat: an older session of an account that this
+ * browser let go of stays held, as a hidden copy, until the Backend confirms
+ * its sign-out, so the only copy of a session that may still be live is never
+ * dropped. The handle only names an account none of whose sessions the Backend
+ * accepts any more.
  */
 export const savedSessionsCookieName = "yoyi-saved-sessions";
-export const maximumSavedSessions = 2;
 /**
- * How long the cookie outlives its latest entry. An entry past its ceiling has
- * certainly lapsed on the Backend, and the browser keeps it this much longer
- * so the account list can still report it as 需重新登录 instead of losing it.
+ * At most `savedSessionsCapacity` entries: two other accounts (three with the
+ * current one) and the copies whose sign-out could not be confirmed yet. An
+ * add-account step that would need more is refused before the Backend is
+ * asked.
+ */
+export { savedSessionsCapacity };
+/**
+ * How long the cookie outlives its latest entry's ceiling, so an entry whose
+ * session has ended is still listed as 需重新登录 instead of disappearing.
  */
 export const savedSessionsRetentionMs = 7 * 24 * 60 * 60 * 1000;
 
@@ -24,18 +33,16 @@ export interface SavedSession {
   readonly userId: string;
   readonly handle: string;
   readonly token: string;
-  /** Epoch milliseconds. The Backend still enforces each session's own absolute lifetime. */
+  /**
+   * Epoch milliseconds: the session's lifetime ceiling counted from when it
+   * was saved. It only sets how long the browser keeps the cookie; the
+   * Backend alone decides whether the session is still accepted.
+   */
   readonly expiresAt: number;
 }
 
 export interface SavedSessionsRead {
-  /** Entries still inside their ceiling. */
   readonly entries: readonly SavedSession[];
-  /**
-   * Entries past their ceiling: that session has ended. They stay stored
-   * until the account list reports them once as `reauth_required`.
-   */
-  readonly lapsed: readonly SavedSession[];
   /** The stored cookie is malformed or repeated and must be cleared. */
   readonly stale: boolean;
 }
@@ -46,7 +53,7 @@ const cookiePairPattern = /^([^=]+)=(.*)$/u;
 
 const parseEntries = (value: string): SavedSession[] | null => {
   const parts = value.split("~");
-  if (parts.length > maximumSavedSessions) return null;
+  if (parts.length > savedSessionsCapacity) return null;
   const entries: SavedSession[] = [];
   for (const part of parts) {
     const match = entryPattern.exec(part);
@@ -60,38 +67,31 @@ const parseEntries = (value: string): SavedSession[] | null => {
       expiresAt,
     });
   }
-  const users = new Set(entries.map((entry) => entry.userId));
   const tokens = new Set(entries.map((entry) => entry.token));
-  return users.size === entries.length && tokens.size === entries.length
-    ? entries
-    : null;
+  return tokens.size === entries.length ? entries : null;
 };
 
 /**
  * Reads the saved list from a raw Cookie header. Anything malformed, including
- * a repeated cookie, fails closed: no entry is trusted and the cookie is to be
- * cleared. Entries past their ceiling are returned apart as `lapsed`.
+ * a repeated cookie or a repeated token, fails closed: no entry is trusted and
+ * the cookie is to be cleared. An entry past its ceiling is still returned:
+ * only the Backend can say whether its session has ended.
  */
 export const readSavedSessions = (
   cookieHeader: string | null | undefined,
-  now: number,
 ): SavedSessionsRead => {
-  const none = { entries: [], lapsed: [] };
-  if (!cookieHeader) return { ...none, stale: false };
+  if (!cookieHeader) return { entries: [], stale: false };
   const values: string[] = [];
   for (const pair of cookieHeader.split(";")) {
     const match = cookiePairPattern.exec(pair.trim());
     if (match?.[1]?.trim() === savedSessionsCookieName)
       values.push(match[2]?.trim() ?? "");
   }
-  if (values.length === 0) return { ...none, stale: false };
+  if (values.length === 0) return { entries: [], stale: false };
   const entries = values.length === 1 ? parseEntries(values[0]!) : null;
-  if (entries === null) return { ...none, stale: true };
-  return {
-    entries: entries.filter((entry) => entry.expiresAt > now),
-    lapsed: entries.filter((entry) => entry.expiresAt <= now),
-    stale: false,
-  };
+  return entries === null
+    ? { entries: [], stale: true }
+    : { entries, stale: false };
 };
 
 export const serializeClearedSavedSessionsCookie = (secure: boolean): string =>

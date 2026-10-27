@@ -654,6 +654,74 @@ describe("DirectMessagePanel rows, notices and header (C3 repair)", () => {
     ).toBe("");
   });
 
+  // account-switching-v1: another tab's switch can reach the client before
+  // this view follows; the draft written as the shown account is not sent.
+  it("never sends a draft as the account another tab switched to before this view followed", async () => {
+    author.viewer = { id: me };
+    authorClient.setAccount(me);
+    state = "active";
+    await act(async () =>
+      root.render(<DirectMessagePanel onOpenProfile={vi.fn()} />),
+    );
+    await flush();
+    await openFirstConversation();
+    const textarea = node.querySelector(
+      'textarea[aria-label="私信内容"]',
+    ) as HTMLTextAreaElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!.call(textarea, "写给对方的草稿");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    authorClient.setAccount(`user-${"3".repeat(32)}`);
+    await act(async () => textarea.closest("form")!.requestSubmit());
+    await flush();
+    expect(
+      calls.some(
+        (c) => c.method === "POST" && c.url.endsWith("/api/community/messages"),
+      ),
+    ).toBe(false);
+    expect(node.querySelector("[data-dm-error]")?.textContent).toContain(
+      "当前账户已切换，这条私信未发送。",
+    );
+    expect(textarea.value).toBe("写给对方的草稿");
+  });
+
+  it("says the account is unconfirmed, not switched, when a failed recheck cleared it", async () => {
+    author.viewer = { id: me };
+    authorClient.setAccount(me);
+    state = "active";
+    await act(async () =>
+      root.render(<DirectMessagePanel onOpenProfile={vi.fn()} />),
+    );
+    await flush();
+    await openFirstConversation();
+    const textarea = node.querySelector(
+      'textarea[aria-label="私信内容"]',
+    ) as HTMLTextAreaElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!.call(textarea, "写给对方的草稿");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    authorClient.setAccount(null);
+    await act(async () => textarea.closest("form")!.requestSubmit());
+    await flush();
+    expect(
+      calls.some(
+        (c) => c.method === "POST" && c.url.endsWith("/api/community/messages"),
+      ),
+    ).toBe(false);
+    expect(node.querySelector("[data-dm-error]")?.textContent).toContain(
+      "账户状态暂时无法确认，这条私信未发送，请稍后重试。",
+    );
+    expect(textarea.value).toBe("写给对方的草稿");
+  });
+
   it("offers a retry when a conversation cannot be loaded", async () => {
     author.viewer = { id: me };
     authorClient.setAccount(me);
@@ -1074,6 +1142,39 @@ describe("targeted entry loading", () => {
       ).toBe(false);
     });
   }
+
+  it("never starts a conversation as the account another tab switched to before this view followed", async () => {
+    const pair = hold(`/messages/with/${other}`);
+    await render();
+    await pair({ conversation: null });
+    const input = node.querySelector("textarea")!;
+    await typeDraft(input);
+    authorClient.setAccount(`user-${"3".repeat(32)}`);
+    await act(async () => input.closest("form")!.requestSubmit());
+    await flush();
+    expect(
+      calls.some(
+        (call) =>
+          call.method === "POST" &&
+          call.url.endsWith("/api/community/messages"),
+      ),
+    ).toBe(false);
+    expect(node.querySelector("[data-dm-error]")?.textContent).toContain(
+      "当前账户已切换，这条私信未发送。",
+    );
+    expect(input.value).toBe("加载时的草稿");
+    // Once the client and the view agree again, the same draft goes out.
+    authorClient.setAccount(me);
+    await act(async () => input.closest("form")!.requestSubmit());
+    await flush();
+    expect(
+      calls.filter(
+        (call) =>
+          call.method === "POST" &&
+          call.url.endsWith("/api/community/messages"),
+      ),
+    ).toHaveLength(1);
+  });
 
   it("ignores a superseded pair response when a later participant is selected", async () => {
     const pair = hold(`/messages/with/${other}`);

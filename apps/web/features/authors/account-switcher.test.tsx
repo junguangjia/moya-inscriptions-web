@@ -164,10 +164,14 @@ describe("AccountSwitcher", () => {
     expect(row(second.id)?.getAttribute("data-account-state")).toBe("ready");
     expect(button("切换到「第二个账户」")).toBeDefined();
     expect(row(expired.id)?.textContent).toContain("需重新登录");
-    expect(row(expired.id)?.querySelector("button")?.textContent).toBe(
-      "重新登录",
+    expect(
+      [...row(expired.id)!.querySelectorAll("button")].map(
+        (item) => item.textContent,
+      ),
+    ).toEqual(["重新登录", "移除"]);
+    expect(node.textContent).toContain(
+      "登录已过期或失效的账户需要重新登录后才能切换，不再使用时可以移除。",
     );
-    expect(node.textContent).toContain("已从这台设备移除");
     // Nothing in the page carries a session.
     expect(node.innerHTML).not.toMatch(/token/iu);
   });
@@ -336,10 +340,10 @@ describe("AccountSwitcher", () => {
     expect(button("切换到「第二个账户」").disabled).toBe(false);
   });
 
-  it("reads again when the target is no longer held, keeping earlier 需重新登录 reports", async () => {
+  it("reads again when the target is no longer held and shows what that read holds", async () => {
     client.list
       .mockResolvedValueOnce(view([ready(second), expired]))
-      .mockResolvedValueOnce(view([]));
+      .mockResolvedValueOnce(view([expired]));
     client.switchTo.mockResolvedValue({
       state: "refused",
       reason: "account_not_found",
@@ -350,6 +354,25 @@ describe("AccountSwitcher", () => {
     expect(client.list).toHaveBeenCalledTimes(2);
     expect(row(second.id)).toBeNull();
     expect(row(expired.id)?.textContent).toContain("需重新登录");
+  });
+
+  it("removes a 需重新登录 account after confirmation, like any other", async () => {
+    client.list.mockResolvedValue(view([ready(second), expired]));
+    await render();
+    await click("移除「@synthetic-expired」");
+    expect(node.querySelector("[role=alertdialog]")?.textContent).toContain(
+      "这个账户会在这台设备上退出登录",
+    );
+    await act(async () =>
+      [...node.querySelectorAll("[role=alertdialog] button")]
+        .find((item) => item.textContent === "移除")
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
+    );
+    expect(client.remove).toHaveBeenCalledWith(expired.id);
+    expect(row(expired.id)).toBeNull();
+    expect(row(second.id)).not.toBeNull();
+    expect(node.textContent).toContain("已移除「@synthetic-expired」");
+    expect(node.textContent).not.toContain("需要重新登录后才能切换");
   });
 
   it("removes another account only after confirmation", async () => {
@@ -503,12 +526,39 @@ describe("AccountSwitcher", () => {
     );
     expect(row(second.id)?.getAttribute("data-account-state")).toBe("ready");
     expect(row(third.id)).toBeNull();
-    expect(row(expired.id)?.textContent).toContain("需重新登录");
+    // A 需重新登录 account was signed out too: refused, so let go.
+    expect(row(expired.id)).toBeNull();
     expect(announce).toHaveBeenCalledOnce();
     // This tab's identity is still the account the page shows.
     expect(author.refresh).not.toHaveBeenCalled();
     expect(node.textContent).not.toContain("当前账户已变化");
     expect(button("退出所有账号").disabled).toBe(false);
+  });
+
+  it("never shows the kept current account's own saved copy as another account", async () => {
+    client.signOutAll.mockResolvedValue(partial(false, [current, second]));
+    await render();
+    await confirmSignOutAll();
+    expect(onSessionChange).not.toHaveBeenCalled();
+    expect(node.querySelector("[data-account-current]")?.textContent).toContain(
+      "当前账户",
+    );
+    expect(row(current.id)).toBeNull();
+    expect(row(second.id)?.getAttribute("data-account-state")).toBe("ready");
+  });
+
+  it("shows a former current account still held after a partial sign-out by its name", async () => {
+    client.signOutAll.mockResolvedValue(partial(true, [current]));
+    await render({
+      viewerId: null,
+      initialView: view([ready(second)], current).view as Parameters<
+        typeof AccountSwitcher
+      >[0]["initialView"],
+    });
+    await confirmSignOutAll();
+    expect(node.querySelector("[data-account-current]")).toBeNull();
+    expect(row(current.id)?.textContent).toContain("当前账户");
+    expect(row(second.id)).toBeNull();
   });
 
   it("stays on a signed-out page and lists what is left", async () => {
@@ -567,6 +617,19 @@ describe("AccountSwitcher", () => {
     expect(client.list).toHaveBeenCalledTimes(2);
     expect(carry).toHaveBeenCalledWith(
       "已退出当前账号；另有 1 个账号未能确认退出：「第二个账户」。请到 设置 → 切换账号 再次退出。",
+    );
+    expect(onSessionChange).toHaveBeenCalledOnce();
+  });
+
+  it("names a 需重新登录 account that read still holds: its sign-out was not confirmed either", async () => {
+    client.signOutAll.mockResolvedValue({ state: "failed" });
+    client.list
+      .mockResolvedValueOnce(view())
+      .mockResolvedValueOnce(view([expired], null));
+    await render();
+    await confirmSignOutAll();
+    expect(carry).toHaveBeenCalledWith(
+      "已退出当前账号；另有 1 个账号未能确认退出：「@synthetic-expired」。请到 设置 → 切换账号 再次退出。",
     );
     expect(onSessionChange).toHaveBeenCalledOnce();
   });

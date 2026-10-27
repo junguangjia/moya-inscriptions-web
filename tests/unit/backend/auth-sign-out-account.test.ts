@@ -26,7 +26,8 @@ afterEach(async () => {
 
 const start = async () => {
   const codes: string[] = [];
-  const service = new CommunityAuthService(createMemoryCommunityAuthPort(), {
+  const port = createMemoryCommunityAuthPort();
+  const service = new CommunityAuthService(port, {
     environment: "development",
     profile: "full-local",
     keys: {
@@ -98,7 +99,7 @@ const start = async () => {
       },
       body: "{}",
     });
-  return { service, register, signOut };
+  return { service, port, register, signOut };
 };
 
 describe("Backend sign-out with an account assertion (account-switching-v1)", () => {
@@ -135,5 +136,28 @@ describe("Backend sign-out with an account assertion (account-switching-v1)", ()
     expect(apiErrorSchema.parse(await again.json()).error.code).toBe(
       "UNAUTHENTICATED",
     );
+  });
+
+  it("answers an asserted sign-out of a suspended account's session with that refusal and signs nothing out", async () => {
+    const { service, port, register, signOut } = await start();
+    const session = await register("switch-d@example.invalid", "账号丁");
+    port.setStatus(session.profile.id, "suspended");
+    const refused = await signOut(session.token, session.profile.id);
+    expect(refused.status).toBe(401);
+    expect(apiErrorSchema.parse(await refused.json()).error).toMatchObject({
+      code: "UNAUTHENTICATED",
+      message: "AUTH_ACCOUNT_SUSPENDED",
+    });
+    // The session itself was not ended: reinstated, it is accepted again.
+    port.setStatus(session.profile.id, "active");
+    expect((await service.readAccount(session.token)).ok).toBe(true);
+    // Without an assertion the existing sign-out is unchanged.
+    port.setStatus(session.profile.id, "suspended");
+    expect((await signOut(session.token)).status).toBe(204);
+    port.setStatus(session.profile.id, "active");
+    expect(await service.readAccount(session.token)).toMatchObject({
+      ok: false,
+      reason: "AUTH_UNAUTHENTICATED",
+    });
   });
 });

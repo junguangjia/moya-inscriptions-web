@@ -9,12 +9,19 @@ import type { PublicUserProfile } from "@moya/contracts";
 
 /** At most three signed-in accounts per browser, the current one included. */
 export const communityAccountLimit = 3;
+/**
+ * The saved list holds at most this many sessions: two other accounts and the
+ * older copies whose sign-out is not confirmed yet. No answer names more other
+ * accounts than that (more than two only in the rare cases where a session
+ * could not be signed out and is kept rather than lost).
+ */
+export const savedSessionsCapacity = 6;
 
 /**
  * Another account this browser holds. `reauth_required`: the Backend no longer
  * accepts its session (expired, signed out elsewhere, suspended or deleted).
- * Such an entry is reported once, by the answer that found it, and is no
- * longer held afterwards; only its id and handle are known.
+ * Such an account stays held and is listed so on every read until it is
+ * removed or signed in again; only its id and handle are known.
  */
 export type CommunityAccountListing =
   | (PublicUserProfile & { readonly state: "ready" })
@@ -41,7 +48,7 @@ export interface CommunityAccountSwitched {
  * Why an account operation changed nothing (or, for `unavailable` after
  * signing out every account, not everything):
  * - `reauth_required` (409): the target's session is no longer accepted; it
- *   was removed from this browser and must be added again by signing in;
+ *   stays listed as 需重新登录 until it is signed in again or removed;
  * - `account_not_found` (404): this browser does not hold that account;
  * - `unavailable` (503): the Backend could not confirm the outcome.
  */
@@ -71,7 +78,10 @@ export interface CommunitySignOutAllPartial {
    * sign-out could not be confirmed and it stays current.
    */
   readonly currentCleared: boolean;
-  /** The other accounts whose sign-out could not be confirmed; still held. */
+  /**
+   * The accounts whose sign-out could not be confirmed; still held. While the
+   * current session stays, a saved copy of its own account may be named too.
+   */
   readonly remaining: readonly CommunityAccountHeld[];
 }
 
@@ -123,7 +133,7 @@ export const parseCommunityAccountsView = (
     Object.keys(record).length !== 3 ||
     record.limit !== communityAccountLimit ||
     !Array.isArray(record.others) ||
-    record.others.length >= communityAccountLimit
+    record.others.length > savedSessionsCapacity
   )
     return null;
   const current = record.current === null ? null : profileOf(record.current);
@@ -163,7 +173,7 @@ export const parseCommunitySignOutAllPartial = (
     record.reason !== "unavailable" ||
     typeof record.currentCleared !== "boolean" ||
     !Array.isArray(record.remaining) ||
-    record.remaining.length >= communityAccountLimit
+    record.remaining.length > savedSessionsCapacity
   )
     return null;
   const remaining: CommunityAccountHeld[] = [];
