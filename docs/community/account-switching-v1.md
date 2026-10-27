@@ -1,6 +1,6 @@
 # Account switching v1 — Issue #352
 
-Task: `account-switching-v1` r2. One browser holds up to three signed-in
+Task: `account-switching-v1` r3. One browser holds up to three signed-in
 accounts and switches between them from settings. Owner decisions (2026-10-27):
 at most three accounts including the current one; signing out of the current
 account returns to the signed-out state and keeps the other added accounts in
@@ -120,7 +120,7 @@ active cookie a new seven-day lifetime.
   existing 退出未能确认，请重试 is then true: the retry can still end it. Before
   account switching the relay cleared the cookie after any delivered answer,
   which could leave a live session the browser could no longer end; this
-  behavior change awaits the Owner's confirmation at device acceptance. On a
+  behavior change was confirmed by the Owner on 2026-10-27 (Issue #352 r3). On a
   confirmed sign-out it also signs out this browser's saved sessions of the same
   account (named by the page's assertion, or else by `/v1/me` before the
   sign-out; a browser holding no saved session needs neither); confirmed ones
