@@ -829,6 +829,64 @@ describe("AccountSecurity request and host boundaries", () => {
     await act(async () => pending.resolve({ status: 204, body: null }));
     expect(confirmed).toHaveBeenCalledOnce();
   });
+  it("names the shown account on sign-out and tells other tabs (account-switching-v1)", async () => {
+    const confirmed = vi.fn();
+    const pending = deferredResult<{ status: number; body: unknown }>();
+    request.mockImplementation(async (path) =>
+      path === "account" ? { status: 200, body: account } : pending.promise,
+    );
+    window.localStorage.removeItem("yoyi-community-session-change");
+    await mount();
+    await act(async () =>
+      root!.render(
+        <AccountSecurity
+          expectedViewerId={account.userId}
+          onSignedOut={confirmed}
+        />,
+      ),
+    );
+    await click("退出登录");
+    expect(request.mock.calls.find(([path]) => path === "sign-out")).toEqual([
+      "sign-out",
+      { method: "POST", body: {}, account: account.userId },
+    ]);
+    expect(
+      window.localStorage.getItem("yoyi-community-session-change"),
+    ).toBeNull();
+    await act(async () => pending.resolve({ status: 204, body: null }));
+    expect(confirmed).toHaveBeenCalledOnce();
+    expect(
+      window.localStorage.getItem("yoyi-community-session-change"),
+    ).not.toBeNull();
+  });
+  it("stays signed in when another tab made a different account current", async () => {
+    const confirmed = vi.fn();
+    request.mockImplementation(async (path) =>
+      path === "account"
+        ? { status: 200, body: account }
+        : {
+            status: 409,
+            body: {
+              error: { code: "CONFLICT", message: "AUTH_ACCOUNT_MISMATCH" },
+            },
+          },
+    );
+    await mount();
+    await act(async () =>
+      root!.render(
+        <AccountSecurity
+          expectedViewerId={account.userId}
+          onSignedOut={confirmed}
+        />,
+      ),
+    );
+    await click("退出登录");
+    expect(node.querySelector("[role=alert]")?.textContent).toContain(
+      "当前账户已在其他页面切换",
+    );
+    expect(confirmed).not.toHaveBeenCalled();
+    expect(authButton(node, "退出登录").disabled).toBe(false);
+  });
   it("does not continue proof -> unlink after the expected account changes", async () => {
     const pending = deferredResult<{ status: number; body: unknown }>();
     const other = "user-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";

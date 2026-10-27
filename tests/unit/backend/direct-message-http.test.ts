@@ -233,6 +233,38 @@ describe("direct message HTTP surface (content-community-completion-v1)", () => 
     },
   );
 
+  // account-switching-v1: a tab that has not seen an account switch asserts
+  // the account it shows; private reads refuse a session of another account.
+  it.each(["development", "production"] as const)(
+    "refuses a direct-message read whose asserted account is not the session's in %s",
+    async (nodeEnv) => {
+      const { base, sessions } = await start(nodeEnv, new FixturePort());
+      const session = await signIn(sessions, "dev-user-01");
+      const other = await signIn(sessions, "dev-user-02");
+      const read = (path: string, account?: string) =>
+        fetch(`${base}/v1/community/${path}`, {
+          headers: {
+            authorization: `Bearer ${session.token}`,
+            ...(account === undefined ? {} : { "x-author-account": account }),
+          },
+        });
+      for (const path of [
+        "messages",
+        "messages/unread",
+        `messages/${conversationId}`,
+        `messages/with/user-${"9".repeat(32)}`,
+      ]) {
+        const refused = await read(path, other.profile.id);
+        expect(refused.status).toBe(401);
+        expect(apiErrorSchema.parse(await refused.json()).error.code).toBe(
+          "UNAUTHENTICATED",
+        );
+        expect((await read(path, session.profile.id)).status).toBe(200);
+        expect((await read(path)).status).toBe(200);
+      }
+    },
+  );
+
   it("requires a port and keeps Production messages behind Backend session authorization", async () => {
     const { base: withoutPort, sessions } = await start("development");
     const session = await signIn(sessions, "dev-user-01");

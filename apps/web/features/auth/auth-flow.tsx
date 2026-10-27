@@ -13,6 +13,7 @@ import {
 } from "./auth-api";
 import type { AuthCapabilitiesView, AuthChallengeView } from "./auth-api";
 import { StudioNameField, studioNameInput } from "../authors/studio-name-field";
+import { announceCommunitySessionChange } from "../authors/session-change";
 import { RegistrationAvatar } from "./registration-avatar";
 
 import styles from "./auth-flow.module.css";
@@ -61,6 +62,11 @@ const reasons: Record<string, string> = {
   AUTH_NOT_CONFIGURED: "登录服务暂时不可用，请稍后重试。",
   AUTH_INVITATION_REQUIRED: "请输入邀请码后注册。",
   AUTH_INVITATION_INVALID: "邀请码无效、已过期或名额已用完，请联系邀请人。",
+  // account-switching-v1: the add-account mode's own refusals.
+  AUTH_ACCOUNT_LIMIT:
+    "这台设备最多同时登录 3 个账户。请先在“切换账号”中移除一个账户，再添加。",
+  AUTH_ACCOUNT_STATE_UNAVAILABLE:
+    "暂时无法确认这台设备上已登录的账户，请稍后重试。",
 };
 
 const recordOf = (value: unknown): Record<string, unknown> | null =>
@@ -123,6 +129,7 @@ export const AuthFlow = ({
   initialChannel = "email",
   onInputChange,
   onChannelChange,
+  addAccount = false,
 }: {
   readonly mode: Mode;
   readonly returnTo: string;
@@ -133,6 +140,11 @@ export const AuthFlow = ({
   readonly initialChannel?: Channel;
   readonly onInputChange?: (channel: Channel, value: string) => void;
   readonly onChannelChange?: (channel: Channel) => void;
+  /**
+   * account-switching-v1: signs in (or registers) another account while the
+   * current one stays signed in on this browser. Every request says so.
+   */
+  readonly addAccount?: boolean;
 }) => {
   const titleId = useId();
   const fieldId = useId();
@@ -194,6 +206,7 @@ export const AuthFlow = ({
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [pending, setPending] = useState<Operation | null>(null);
   const destination = safeReturnPath(returnTo);
+  const intentQuery = addAccount ? "&intent=add-account" : "";
   const developmentAgreementAvailable = process.env.NODE_ENV === "development";
   const approvedAgreement =
     !developmentAgreementAvailable && capabilities?.registration?.available
@@ -239,7 +252,9 @@ export const AuthFlow = ({
     const current = ++capabilityRequest.current;
     setCapabilityState("loading");
     try {
-      const result = await authRequest("capabilities");
+      const result = await (addAccount
+        ? authRequest("capabilities", { addAccount })
+        : authRequest("capabilities"));
       if (current !== capabilityRequest.current) return;
       const value =
         result.status === 200 ? parseAuthCapabilities(result.body) : null;
@@ -346,7 +361,7 @@ export const AuthFlow = ({
     if (onModeChange) onModeChange(next);
     else
       window.location.assign(
-        `${next === "register" ? "/register" : "/login"}?return=${encodeURIComponent(destination)}`,
+        `${next === "register" ? "/register" : "/login"}?return=${encodeURIComponent(destination)}${intentQuery}`,
       );
   };
 
@@ -393,6 +408,16 @@ export const AuthFlow = ({
   const handleFailure = (operation: Operation, body: unknown) => {
     const reason = reasonOf(body);
     if (reason === "AUTH_CHANNEL_UNAVAILABLE") void loadCapabilities();
+    if (reason === "AUTH_ACCOUNT_LIMIT") {
+      // Nothing can continue until an account is removed on this browser.
+      clearProof();
+      setStep("identifier");
+      setMasked("");
+      setPassword("");
+      setPasswordConfirm("");
+      setFeedback({ message: messageOf(body) });
+      return;
+    }
     if (
       ["AUTH_INVITATION_REQUIRED", "AUTH_INVITATION_INVALID"].includes(reason)
     ) {
@@ -483,6 +508,7 @@ export const AuthFlow = ({
     try {
       const result = await authRequest(path, {
         body: { ...payload, idempotencyKey: key },
+        ...(addAccount ? { addAccount } : {}),
       });
       if (current !== flow.current) return;
       const reason = reasonOf(result.body);
@@ -623,6 +649,7 @@ export const AuthFlow = ({
           body?.outcome === "signed_in" &&
           hasCompletedAuthSession(body)
         ) {
+          if (addAccount) announceCommunitySessionChange();
           finish();
           return;
         }
@@ -723,6 +750,7 @@ export const AuthFlow = ({
       { channel: passwordIdentifier, identifier: normalized, password },
       (result) => {
         if (result.status === 200 && hasCompletedAuthSession(result.body)) {
+          if (addAccount) announceCommunitySessionChange();
           finish();
           return;
         }
@@ -806,6 +834,7 @@ export const AuthFlow = ({
           recordOf(result.body)?.outcome === "registered" &&
           hasCompletedAuthSession(recordOf(result.body))
         ) {
+          if (addAccount) announceCommunitySessionChange();
           clearProof();
           setPassword("");
           setPasswordConfirm("");
@@ -863,8 +892,10 @@ export const AuthFlow = ({
                 ? "找回密码"
                 : mode === "register"
                   ? "注册"
-                  : "登录";
-  const modeLink = `${mode === "register" ? "/login" : "/register"}?return=${encodeURIComponent(destination)}`;
+                  : addAccount
+                    ? "添加账号"
+                    : "登录";
+  const modeLink = `${mode === "register" ? "/login" : "/register"}?return=${encodeURIComponent(destination)}${intentQuery}`;
   const registrationStep =
     !resetting &&
     (mode === "register" || step === "password" || step === "profile");
@@ -907,7 +938,8 @@ export const AuthFlow = ({
                 的公开账户，用来登录、绑定邮箱或手机号，以及继续使用现有的作品与评论功能。验证邮箱或手机号不是身份证实名，也不是人脸核验。
               </p>
               <p>
-                正式上线前需要替换为已批准的法律文本。这里没有客服渠道，也没有账户注销流程。
+                正式上线前需要替换为已批准的法律文本。这里没有客服渠道。账号可以在“设置
+                → 账号与安全 → 注销账号”中自行注销；注销立即生效，不能恢复。
               </p>
             </>
           ) : (
@@ -965,11 +997,14 @@ export const AuthFlow = ({
           </h1>
           {mode === "sign-in" && step === "identifier" && !resetting && (
             <p className={styles.subtitle}>
-              {passwordOnly || capabilities?.registration?.available === false
-                ? "内测阶段暂不开放注册，已有账户可直接登录。"
-                : capabilities?.registration?.invitationRequired
-                  ? "内测阶段可凭邀请码注册，已有账户可直接登录。"
-                  : "已有账户可直接登录。"}
+              {addAccount
+                ? "登录后切换到这个账户，当前账户仍可在“切换账号”中切回。"
+                : passwordOnly ||
+                    capabilities?.registration?.available === false
+                  ? "内测阶段暂不开放注册，已有账户可直接登录。"
+                  : capabilities?.registration?.invitationRequired
+                    ? "内测阶段可凭邀请码注册，已有账户可直接登录。"
+                    : "已有账户可直接登录。"}
             </p>
           )}
         </header>

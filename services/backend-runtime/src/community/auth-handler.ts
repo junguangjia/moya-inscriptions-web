@@ -1,5 +1,7 @@
 import { isCommunityStoreUnavailableError } from "@moya/api";
 import {
+  authAccountDeletionRequestSchema,
+  authAccountDeletionResultSchema,
   authAccountSecuritySchema,
   authCapabilitiesSchema,
   authChallengeAcceptedSchema,
@@ -12,6 +14,7 @@ import {
   authUnlinkRequestSchema,
   authVerifyRequestSchema,
   publicUserDisplayNameSchema,
+  publicUserIdSchema,
   publicUserProfileSchema,
 } from "@moya/contracts/schemas";
 
@@ -27,6 +30,12 @@ import type { AuthReason, CommunityAuthService } from "@moya/api";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 const noStore = { "cache-control": "private, no-store" };
+/**
+ * account-switching-v1: a sign-out names the account the page shows. When the
+ * presented session belongs to another account (another tab made it current),
+ * nothing is signed out and the caller keeps its session.
+ */
+const accountMismatchReason = "AUTH_ACCOUNT_MISMATCH";
 
 /** Forwarding headers cannot choose the rate-limit identity. */
 export const trustedRequestSource = (request: IncomingMessage): string =>
@@ -156,6 +165,24 @@ export const handleCommunityAuth = async (
       if (token === undefined) {
         sendFailure(response, "AUTH_UNAUTHENTICATED");
         return;
+      }
+      const asserted = request.headers["x-author-account"];
+      if (asserted !== undefined) {
+        // A live session of another account is refused and kept, and a
+        // suspended account's live session is refused with that reason;
+        // nothing is signed out. A session that is no longer accepted signs
+        // out as without an assertion: an open factor-change receipt of it is
+        // still sealed (revoking the session reissued from it), otherwise the
+        // answer stays AUTH_UNAUTHENTICATED.
+        const account = await service.readAccount(token);
+        if (!account.ok && account.reason !== "AUTH_UNAUTHENTICATED") {
+          sendFailure(response, account.reason);
+          return;
+        }
+        if (account.ok && account.value.userId !== asserted) {
+          sendApiError(response, "CONFLICT", accountMismatchReason);
+          return;
+        }
       }
       const result = await service.signOut(token);
       if (!result.ok) {
@@ -431,6 +458,40 @@ export const handleCommunityAuth = async (
           session: sessionBody(result.value.session),
           account: authAccountSecuritySchema.parse(result.value.account),
         },
+        noStore,
+      );
+      return;
+    }
+    if (path === "account/deletion") {
+      // account-deletion-v1: the confirmed account must own the Session. A
+      // missing or malformed assertion is refused here, one naming another
+      // account by the service, both before anything changes.
+      const asserted = request.headers["x-author-account"];
+      if (
+        typeof asserted !== "string" ||
+        !publicUserIdSchema.safeParse(asserted).success
+      ) {
+        sendFailure(response, "AUTH_UNAUTHENTICATED");
+        return;
+      }
+      const parsed = authAccountDeletionRequestSchema.safeParse(body);
+      if (!parsed.success) {
+        sendApiError(response, "INVALID_INPUT", "AUTH_PROOF_REJECTED");
+        return;
+      }
+      const result = await service.deleteAccount({
+        ...parsed.data,
+        sessionToken: token,
+        expectedAccountId: asserted,
+      });
+      if (!result.ok) {
+        sendFailure(response, result.reason);
+        return;
+      }
+      sendJson(
+        response,
+        200,
+        authAccountDeletionResultSchema.parse(result.value),
         noStore,
       );
       return;

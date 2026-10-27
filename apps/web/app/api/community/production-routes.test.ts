@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GET, POST, PUT } from "./[...path]/route";
 import { GET as authGet, POST as authPost } from "./auth/[...path]/route";
+import { GET as accountsGet } from "./accounts/route";
+import { POST as accountsSwitch } from "./accounts/switch/route";
 import { GET as stream } from "./notifications/stream/route";
 import { GET as profileRendition } from "./media/[mediaId]/[rendition]/route";
 import { GET as catalogRendition } from "../development/catalog-renditions/[renditionId]/route";
@@ -79,7 +81,11 @@ describe("Production community route relays", () => {
     const headers = new Headers(upstream.mock.calls[0]?.[1]?.headers);
     expect(headers.get("authorization")).toBe(`Bearer ${session}`);
     expect(headers.has("cookie")).toBe(false);
-    if (path === "notifications" || path === "article-authoring")
+    if (
+      path === "notifications" ||
+      path === "article-authoring" ||
+      path === "messages"
+    )
       expect(headers.get("x-author-account")).toBe(account);
   });
 
@@ -292,5 +298,75 @@ describe("Production Development-only media routes", () => {
     expect(response.status).toBe(404);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(upstream).not.toHaveBeenCalled();
+  });
+});
+
+/*
+ * account-switching-v1: listing and switching only read `me` with each held
+ * session, so they need no authentication ingress; ending a held session goes
+ * through the authentication relay, which has it.
+ */
+describe("Production account routes", () => {
+  const other = `user-${"b".repeat(32)}`;
+  const otherSession = "O".repeat(43);
+  const saved = `yoyi-saved-sessions=${other}.account-b.${otherSession}.${Date.now() + 60_000}`;
+  const profiles: Record<string, unknown> = {
+    [session]: { id: account, handle: "account-a", displayName: "账号甲" },
+    [otherSession]: { id: other, handle: "account-b", displayName: "账号乙" },
+  };
+  const accountsRequest = (path: string, method = "GET", body?: unknown) => {
+    const base = request(`accounts${path}`, method, body);
+    base.headers.set("cookie", `yoyi-session=${session}; ${saved}`);
+    base.headers.delete("x-moya-auth-ingress");
+    return base;
+  };
+  const backendMe = () =>
+    vi.fn<typeof fetch>(async (_input, init) => {
+      const token = new Headers(init?.headers)
+        .get("authorization")
+        ?.replace(/^Bearer /u, "");
+      return token !== undefined && token in profiles
+        ? Response.json(profiles[token])
+        : new Response(null, { status: 401 });
+    });
+
+  it("lists the held accounts and switches between them without the ingress", async () => {
+    const upstream = backendMe();
+    vi.stubGlobal("fetch", upstream);
+    const listed = await accountsGet(accountsRequest(""));
+    expect(listed.status).toBe(200);
+    const text = await listed.text();
+    expect(text).not.toContain(session);
+    expect(text).not.toContain(otherSession);
+    expect(JSON.parse(text)).toMatchObject({
+      current: { id: account },
+      others: [{ id: other, state: "ready" }],
+      limit: 3,
+    });
+    const switched = await accountsSwitch(
+      accountsRequest("/switch", "POST", { accountId: other }),
+    );
+    expect(switched.status).toBe(200);
+    const cookies = switched.headers.getSetCookie();
+    expect(cookies[0]).toMatch(
+      new RegExp(
+        `^yoyi-session=${otherSession}; .*HttpOnly; SameSite=Lax; Secure$`,
+        "u",
+      ),
+    );
+    expect(cookies[1]).toMatch(
+      new RegExp(
+        `^yoyi-saved-sessions=${account}\\.account-a\\.${session}\\.`,
+        "u",
+      ),
+    );
+    expect(
+      upstream.mock.calls.every(
+        ([input]) => String(input) === `${backend}v1/me`,
+      ),
+    ).toBe(true);
+    const foreign = accountsRequest("/switch", "POST", { accountId: other });
+    foreign.headers.set("origin", "https://foreign.invalid");
+    expect((await accountsSwitch(foreign)).status).toBe(403);
   });
 });

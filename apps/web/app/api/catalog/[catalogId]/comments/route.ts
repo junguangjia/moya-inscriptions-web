@@ -1,5 +1,9 @@
 import { readCommunitySessionToken } from "../../../../../lib/public-api/community-session-cookie";
 import {
+  assertedAccountOf,
+  isSameOriginWrite,
+} from "../../../../../lib/public-api/same-origin-write";
+import {
   createServerCatalogComment,
   fetchServerCatalogCommentPage,
 } from "../../../../../lib/public-api/server";
@@ -97,18 +101,31 @@ export const GET = async (
   }
 };
 
-/** The session credential stays in the HttpOnly cookie; Web only relays it. */
+/**
+ * The session credential stays in the HttpOnly cookie; Web only relays it.
+ * account-switching-v1: a cross-site write is refused, and the account the
+ * page asserts must still own the session, so a comment written before another
+ * tab switched accounts is never posted as the other account.
+ */
 export const POST = async (
   request: Request,
   context: CommentRouteContext,
 ): Promise<Response> => {
+  if (!isSameOriginWrite(request)) return emptyResponse(403);
+  const asserted = assertedAccountOf(request);
+  if (!asserted.valid) return emptyResponse(422);
   const token = readCommunitySessionToken(request.headers.get("cookie"));
   if (token === undefined) return emptyResponse(401);
   const body = await readBoundedJson(request);
   if (body === null) return emptyResponse(422);
   const { catalogId } = await context.params;
   try {
-    const result = await createServerCatalogComment(catalogId, token, body);
+    const result = await createServerCatalogComment(
+      catalogId,
+      token,
+      body,
+      asserted.account,
+    );
     switch (result.state) {
       case "success":
         // 202 keeps the author's pending submission truthful.

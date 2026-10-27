@@ -35,15 +35,21 @@ export const WorkspaceNavigation = ({
     const fallback = window.setTimeout(() => {
       if (current) setNavOpen(true);
     }, 750);
+    let afterPreference: number | undefined;
     void getPreference("nav")
       .catch(() => undefined)
       .then(() => {
         window.clearTimeout(fallback);
-        if (current) setNavOpen(true);
+        // Payload applies the preference through another async layer. Finish
+        // the desktop default after that microtask chain, including old false.
+        afterPreference = window.setTimeout(() => {
+          if (current) setNavOpen(true);
+        }, 0);
       });
     return () => {
       current = false;
       window.clearTimeout(fallback);
+      window.clearTimeout(afterPreference);
     };
   }, [hydrated, getPreference, setNavOpen]);
   useEffect(() => {

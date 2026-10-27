@@ -5,11 +5,15 @@ import type {
 } from "@moya/contracts";
 import type { CommentModerationState } from "@moya/contracts/internal/community-operator";
 
-/** The author fields the read side carries; never a credential or a status. */
+/**
+ * The author fields the read side carries; never a credential or a status.
+ * `deleted` marks an author whose account was deleted (account-deletion-v1).
+ */
 export interface CommentAuthorRecord {
   readonly id: PublicUserId;
   readonly displayName: string;
   readonly studioName?: string;
+  readonly deleted?: true;
 }
 
 /** Internal comment record. It is neither a Public DTO nor a persistence row. */

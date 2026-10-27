@@ -47,6 +47,7 @@ import type {
   ProfileRenderSweepOptions,
   ProfileRenditionIdentity,
   ProfileRenditionReadTarget,
+  PublishingAccountPurge,
   PublishingCleanupCounts,
   PublishingCommandIdentity,
   PublishingDerivativeCommit,
@@ -91,6 +92,7 @@ import * as mediaRead from "./publishing/media-read.js";
 import * as catalogAssets from "./publishing/catalog-assets.js";
 import * as catalogBlocks from "./publishing/catalog-zoom-blocks.js";
 import * as profileAssets from "./publishing/profile-assets.js";
+import * as accountPurge from "./publishing/account-purge.js";
 
 /**
  * Work publishing persistence on PostgreSQL, plus the Catalog media asset
@@ -465,6 +467,17 @@ export class PostgresWorkPublishingAdapter
     return works.purgeTrashedWork(
       this.pool,
       workId,
+      now,
+      this.options.publication,
+    );
+  }
+  purgeDeletedAccount(
+    accountId: string,
+    now: Date,
+  ): Promise<PublishingAccountPurge> {
+    return accountPurge.purgeDeletedAccount(
+      this.pool,
+      accountId,
       now,
       this.options.publication,
     );

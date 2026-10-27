@@ -39,7 +39,11 @@ const comment = {
 const readRequest = (query = "") =>
   new Request(`http://localhost/api/catalog/${catalogId}/comments${query}`);
 
-const writeRequest = (body: unknown, cookie?: string) => {
+const writeRequest = (
+  body: unknown,
+  cookie?: string,
+  extra: Record<string, string> = {},
+) => {
   const payload = JSON.stringify(body);
   return new Request(`http://localhost/api/catalog/${catalogId}/comments`, {
     method: "POST",
@@ -47,6 +51,7 @@ const writeRequest = (body: unknown, cookie?: string) => {
       "content-type": "application/json",
       "content-length": String(new TextEncoder().encode(payload).byteLength),
       ...(cookie === undefined ? {} : { cookie }),
+      ...extra,
     },
     body: payload,
   });
@@ -152,9 +157,84 @@ describe("same-origin comment bridge", () => {
     );
     expect(response.status).toBe(201);
     expect(await response.json()).toEqual(comment);
-    expect(createMock).toHaveBeenCalledWith(catalogId, opaqueSession, {
-      text: "评论正文",
+    expect(createMock).toHaveBeenCalledWith(
+      catalogId,
+      opaqueSession,
+      { text: "评论正文" },
+      undefined,
+    );
+  });
+
+  /*
+   * account-switching-v1: a comment written before another tab switched
+   * accounts carries the account the page showed; the Backend refuses it when
+   * the session now belongs to another account.
+   */
+  it("forwards the asserted account and refuses a malformed one before the Backend", async () => {
+    createMock.mockResolvedValue({
+      state: "success",
+      item: comment,
+      awaitingApproval: false,
     });
+    const account = `user-${"a".repeat(32)}`;
+    const response = await POST(
+      writeRequest({ text: "评论正文" }, `yoyi-session=${opaqueSession}`, {
+        "x-author-account": account,
+      }),
+      context,
+    );
+    expect(response.status).toBe(201);
+    expect(createMock).toHaveBeenCalledWith(
+      catalogId,
+      opaqueSession,
+      { text: "评论正文" },
+      account,
+    );
+    createMock.mockClear();
+    const malformed = await POST(
+      writeRequest({ text: "评论正文" }, `yoyi-session=${opaqueSession}`, {
+        "x-author-account": "user-other",
+      }),
+      context,
+    );
+    expect(malformed.status).toBe(422);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { origin: "https://foreign.invalid" },
+    { origin: "https://localhost" },
+    { "sec-fetch-site": "cross-site" },
+  ])(
+    "refuses a cross-site write %o before reading the session",
+    async (headers) => {
+      const response = await POST(
+        writeRequest({ text: "评论正文" }, `yoyi-session=${opaqueSession}`, {
+          host: "localhost",
+          ...headers,
+        }),
+        context,
+      );
+      expect(response.status).toBe(403);
+      expect(createMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("accepts a same-origin browser write", async () => {
+    createMock.mockResolvedValue({
+      state: "success",
+      item: comment,
+      awaitingApproval: false,
+    });
+    const response = await POST(
+      writeRequest({ text: "评论正文" }, `yoyi-session=${opaqueSession}`, {
+        host: "localhost",
+        origin: "http://localhost",
+        "sec-fetch-site": "same-origin",
+      }),
+      context,
+    );
+    expect(response.status).toBe(201);
   });
 
   it("answers 202 while the submission awaits approval", async () => {

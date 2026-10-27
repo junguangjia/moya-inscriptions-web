@@ -24,6 +24,7 @@ import {
 import { requestIdentity } from "../shell/request-identity";
 import { useAvatarSave } from "./avatar-save";
 import type { AvatarSaveState } from "./avatar-save";
+import { takeSessionNotice } from "./session-change";
 
 type Viewer = Awaited<ReturnType<typeof authorClient.me>>;
 interface Context {
@@ -39,6 +40,17 @@ interface Context {
   notice: string;
   signInHref: string;
   refresh: () => Promise<void>;
+  /**
+   * account-deletion-v1: while an account deletion's outcome is pending or
+   * shown, a Session recheck (focus, another tab, a retry timer) would sign
+   * the page out mid-flow and, through /me, clear the Session cookie that the
+   * same-key retry must still present. Rechecks (including one already under
+   * way) wait until every hold is released, then run once. So do `revision`
+   * changes, which make readers (the open profile, whose failed read re-keys
+   * its settings to a guest, and this provider's own profile read) request
+   * again with that Session, and a pending avatar save's next request.
+   */
+  holdSession: () => () => void;
   notify: (text: string) => void;
   mutate: () => void;
   favorite: (target: ContentIdentity, enabled: boolean) => Promise<boolean>;
@@ -72,7 +84,20 @@ export const AuthorProvider = ({
   const accountRef = useRef<string | null>(null),
     epoch = useRef(0),
     mergeWorker = useRef<Promise<void>>(Promise.resolve()),
-    confirmed = useRef(false);
+    confirmed = useRef(false),
+    // account-switching-v1: a message the page before this reload left (a
+    // partial 退出所有账号), shown once this tab knows who it is.
+    carriedNotice = useRef<string | null>(null);
+  const holds = useRef(0),
+    deferred = useRef(false),
+    revisionDeferred = useRef(false),
+    checkingRun = useRef<number | null>(null);
+  const [held, setHeld] = useState(false);
+  /** Readers refetch on a new revision; a held Session defers it (holdSession). */
+  const bumpRevision = useCallback(() => {
+    if (holds.current > 0) revisionDeferred.current = true;
+    else setRevision((v) => v + 1);
+  }, []);
   const [undo, setUndo] = useState<{
     target: ContentIdentity;
     account: string | null;
@@ -84,7 +109,12 @@ export const AuthorProvider = ({
       .then(setGuestFavorites)
       .catch(() => setNotice("本机存储不可用"));
   const refresh = useCallback(async () => {
+    if (holds.current > 0) {
+      deferred.current = true;
+      return;
+    }
     const run = ++epoch.current;
+    checkingRun.current = run;
     confirmed.current = false;
     // Revalidation is not an account switch. Keep the confirmed identity so
     // focus returning from a device picker cannot invalidate in-flight writes.
@@ -94,10 +124,15 @@ export const AuthorProvider = ({
       const next = await authorClient.me();
       if (run !== epoch.current) return;
       if (accountRef.current !== next.id) {
+        // account-switching-v1: a confirmed account replaced by another one
+        // means a switch in another tab (this tab reloads after its own).
+        const switched = accountRef.current !== null;
         cache.current.clear();
         setAvatarSrc(null);
         setUndo(null);
-        setNotice("");
+        setNotice(
+          switched ? `当前账户已在其他页面切换为「${next.displayName}」` : "",
+        );
       }
       authReturn?.identify(next.id);
       accountRef.current = next.id;
@@ -112,7 +147,7 @@ export const AuthorProvider = ({
           : next,
       );
       setSessionError(false);
-      setRevision((v) => v + 1);
+      bumpRevision();
       const merge = async () => {
         if (run !== epoch.current || !confirmed.current) return;
         try {
@@ -139,7 +174,7 @@ export const AuthorProvider = ({
             await acknowledgeGuestBatch(batch, result.acknowledged);
             if (run === epoch.current) {
               await refreshGuest();
-              setRevision((v) => v + 1);
+              bumpRevision();
               setNotice(
                 result.acknowledged.length
                   ? "本机收藏已合并到账户"
@@ -165,18 +200,52 @@ export const AuthorProvider = ({
         setSessionError(false);
       } else setSessionError(true);
     } finally {
-      if (run === epoch.current) setChecking(false);
+      if (checkingRun.current === run) checkingRun.current = null;
+      if (run === epoch.current) {
+        setChecking(false);
+        if (carriedNotice.current !== null) {
+          setNotice(carriedNotice.current);
+          carriedNotice.current = null;
+        }
+      }
     }
-  }, [authReturn]);
+  }, [authReturn, bumpRevision]);
+  const holdSession = useCallback(() => {
+    holds.current += 1;
+    setHeld(true);
+    // A recheck already under way could still sign the page out: its answer
+    // is dropped and the recheck runs again once released.
+    if (checkingRun.current !== null && checkingRun.current === epoch.current) {
+      epoch.current += 1;
+      checkingRun.current = null;
+      deferred.current = true;
+    }
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      holds.current -= 1;
+      if (holds.current > 0) return;
+      setHeld(false);
+      if (revisionDeferred.current) {
+        revisionDeferred.current = false;
+        setRevision((v) => v + 1);
+      }
+      if (!deferred.current) return;
+      deferred.current = false;
+      void refresh();
+    };
+  }, [refresh]);
   const avatarSave = useAvatarSave({
     accountId: viewer?.id ?? null,
     checking,
     sessionError,
+    held,
     refresh,
     onSaved: (profile, selectedAvatarIsCurrent) => {
       cache.current.set(`profile:${profile.id}`, profile);
       setAvatarSrc(avatarThumbSrc(profile.avatar));
-      setRevision((n) => n + 1);
+      bumpRevision();
       setNotice(
         selectedAvatarIsCurrent
           ? "头像已更换"
@@ -185,6 +254,7 @@ export const AuthorProvider = ({
     },
   });
   useEffect(() => {
+    carriedNotice.current ??= takeSessionNotice();
     void refresh();
     void refreshGuest();
     const update = () => {
@@ -230,7 +300,7 @@ export const AuthorProvider = ({
     );
     return () => window.clearTimeout(timer);
   }, [undo]);
-  const mutate = useCallback(() => setRevision((v) => v + 1), []);
+  const mutate = bumpRevision;
   const favorite = async (target: ContentIdentity, enabled: boolean) => {
     if (!confirmed.current || checking || sessionError) {
       notify("正在确认账户，请稍后重试");
@@ -290,6 +360,7 @@ export const AuthorProvider = ({
         notice,
         signInHref,
         refresh,
+        holdSession,
         notify,
         mutate,
         favorite,

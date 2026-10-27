@@ -4,6 +4,7 @@ import {
   reportingClient,
   appealReportingClient,
   downloadReportEvidence,
+  reportEvidenceUploadsInFlight,
   ReportingRequestError,
 } from "./community-reporting-client";
 const report = {
@@ -51,6 +52,55 @@ describe("community reporting client", () => {
     expect(
       JSON.parse(fetcher.mock.calls[0]![1]!.body as string),
     ).not.toHaveProperty("reason");
+  });
+  it("counts evidence uploads while they are in flight, for the account switch guard", async () => {
+    const answers: ((response: Response) => void)[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(
+        () =>
+          new Promise<Response>((done) => {
+            answers.push(done);
+          }),
+      ),
+    );
+    const command = {
+      fileName: "synthetic.png",
+      mimeType: "image/png" as const,
+      contentBase64: "iVBORw0KGgo=",
+      sensitive: true,
+      requestId,
+    };
+    expect(reportEvidenceUploadsInFlight()).toBe(0);
+    const uploading = reportingClient.evidence(
+      "user-synthetic",
+      "report-synthetic",
+      command,
+    );
+    const appealing = appealReportingClient.evidence(
+      "user-synthetic",
+      "report-synthetic",
+      command,
+    );
+    expect(reportEvidenceUploadsInFlight()).toBe(2);
+    answers[1]!(new Response(null, { status: 503 }));
+    await expect(appealing).rejects.toBeInstanceOf(ReportingRequestError);
+    expect(reportEvidenceUploadsInFlight()).toBe(1);
+    answers[0]!(
+      Response.json({
+        id: "evidence-synthetic",
+        fileName: "synthetic.png",
+        mimeType: "image/png",
+        size: 8,
+        sensitive: true,
+        createdAt: "2026-10-27T00:00:00.000Z",
+        downloadPath: "/api/community/reports/report-synthetic/evidence/x",
+      }),
+    );
+    await expect(uploading).resolves.toMatchObject({
+      id: "evidence-synthetic",
+    });
+    expect(reportEvidenceUploadsInFlight()).toBe(0);
   });
   it("selects the restricted credential only for the explicit appeal transport", async () => {
     const fetcher = vi.fn<typeof fetch>(async () =>

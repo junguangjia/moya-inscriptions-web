@@ -64,20 +64,33 @@ const request = async <T>(
   return parser.parse(await response.json());
 };
 const segment = encodeURIComponent;
+let evidenceUploads = 0;
+/**
+ * account-switching-v1: evidence uploads of this page still in flight. A switch
+ * or sign-out reloads the page, which would cut one off, so the settings guard
+ * names it first.
+ */
+export const reportEvidenceUploadsInFlight = (): number => evidenceUploads;
 const caseActions = (restricted: boolean) => ({
-  evidence: (
+  evidence: async (
     account: string,
     id: string,
     command: CommunityReportEvidenceUploadRequest,
-  ) =>
-    request(
-      account,
-      `reports/${segment(id)}/evidence`,
-      communityReportEvidenceSchema,
-      communityReportEvidenceUploadRequestSchema.parse(command),
-      undefined,
-      restricted,
-    ),
+  ) => {
+    evidenceUploads += 1;
+    try {
+      return await request(
+        account,
+        `reports/${segment(id)}/evidence`,
+        communityReportEvidenceSchema,
+        communityReportEvidenceUploadRequestSchema.parse(command),
+        undefined,
+        restricted,
+      );
+    } finally {
+      evidenceUploads -= 1;
+    }
+  },
   decisions: (account: string, page = 1, signal?: AbortSignal) =>
     request(
       account,

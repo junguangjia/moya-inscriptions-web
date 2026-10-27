@@ -314,9 +314,157 @@ export const setVisibility = async (
   );
 
 /**
- * Permanently deletes only the authenticated author's work. The remaining work
- * identity is a content-free tombstone for discussions and audit references;
- * there is no restore operation. Byte deletion runs through the existing worker.
+ * Permanently erases one work of `authorId` inside the caller's transaction,
+ * which already holds the author's account lock (an author command's
+ * `lockActor`, or the account purge's lock on a deleted account). The
+ * remaining work identity is a content-free tombstone for discussions and
+ * audit references; there is no restore operation. Byte deletion runs
+ * through the existing worker.
+ *
+ * `scope` "live" erases only a work that is not deleted (the author's own
+ * deletion). "any" also scrubs a work the trash retention already marked
+ * deleted, whose title, text and revisions that purge keeps (the account
+ * purge, account-deletion-v1); its deletion time is kept. Returns false,
+ * having changed nothing, for an unknown or foreign work, and under "live"
+ * for a deleted one.
+ */
+export const eraseWork = async (
+  db: PublishingDb,
+  authorId: string,
+  workId: string,
+  now: Date,
+  publication: PublicationSyncOptions | undefined,
+  scope: "live" | "any" = "live",
+): Promise<boolean> => {
+  // Same lock order as submission and the legacy retention worker: holders
+  // before work, then media. The account lock serializes the author's writes.
+  await db.query(
+    "SELECT id FROM community.publishing_sessions WHERE work_id=$1 AND owner_id=$2 ORDER BY id FOR UPDATE",
+    [workId, authorId],
+  );
+  const drafts = (
+    await db.query<{ id: string }>(
+      "SELECT id FROM community.work_drafts WHERE work_id=$1 AND owner_id=$2 ORDER BY id FOR UPDATE",
+      [workId, authorId],
+    )
+  ).rows.map((row) => row.id);
+  const work = (
+    await db.query<{ deleted: boolean }>(
+      "SELECT deleted_at IS NOT NULL AS deleted FROM community.works WHERE id=$1 AND author_id=$2 FOR UPDATE",
+      [workId, authorId],
+    )
+  ).rows[0];
+  if (work === undefined || (scope === "live" && work.deleted)) return false;
+  const publicationSync = await beginWorkPublicationSync(
+    db,
+    workId,
+    publication,
+  );
+  // Finished legacy drafts were never backfilled into media_items. Capture
+  // their native media IDs before erasing the only remaining content rows.
+  const legacyMediaIds = (
+    await db.query<{ id: string }>(
+      `SELECT unnest(media_ids) AS id FROM community.works WHERE id=$1
+       UNION SELECT unnest(media_ids) FROM community.work_edit_drafts WHERE work_id=$1`,
+      [workId],
+    )
+  ).rows.map((row) => row.id);
+  const holders = (
+    await db.query<{
+      kind: "revision" | "draft" | "snapshot" | "session";
+      id: string;
+    }>(
+      `SELECT 'revision'::text AS kind,id FROM community.work_revisions WHERE work_id=$1
+       UNION ALL SELECT 'draft',id FROM community.work_drafts WHERE work_id=$1
+       UNION ALL SELECT 'snapshot',id FROM community.work_draft_snapshots WHERE work_id=$1 OR draft_id=ANY($2::text[])
+       UNION ALL SELECT 'session',id FROM community.publishing_sessions WHERE work_id=$1`,
+      [workId, drafts],
+    )
+  ).rows;
+  const released = await releaseHolderRefs(
+    db,
+    (["revision", "draft", "snapshot", "session"] as const).map((kind) => ({
+      holderKind: kind,
+      holderIds: holders
+        .filter((holder) => holder.kind === kind)
+        .map((holder) => holder.id),
+    })),
+    now,
+  );
+  const at = nowParam(now);
+  await db.query(
+    `UPDATE community.works SET title='',text='',media_ids='{}',
+      public_revision_id=NULL,author_revision_id=NULL,visibility='self',
+      trashed_at=NULL,trash_purge_after=NULL,deleted_at=COALESCE(deleted_at,$2::timestamptz),
+      updated_at=$2::timestamptz,version=version+1 WHERE id=$1`,
+    [workId, at],
+  );
+  await db.query(
+    "DELETE FROM community.work_draft_snapshots WHERE work_id=$1 OR draft_id=ANY($2::text[])",
+    [workId, drafts],
+  );
+  await db.query(
+    `UPDATE community.publishing_sessions SET state=CASE WHEN state='active' THEN 'discarded' ELSE state END,
+      ended_at=CASE WHEN state='active' THEN $2::timestamptz ELSE ended_at END,draft_id=NULL
+     WHERE work_id=$1 OR draft_id=ANY($3::text[])`,
+    [workId, at, drafts],
+  );
+  await db.query(
+    "DELETE FROM community.work_drafts WHERE work_id=$1 OR conflict_of=ANY($2::text[])",
+    [workId, drafts],
+  );
+  await db.query("DELETE FROM community.work_edit_drafts WHERE work_id=$1", [
+    workId,
+  ]);
+  await db.query(
+    "DELETE FROM community.work_revision_items WHERE revision_id IN (SELECT id FROM community.work_revisions WHERE work_id=$1)",
+    [workId],
+  );
+  await db.query("DELETE FROM community.work_revisions WHERE work_id=$1", [
+    workId,
+  ]);
+  // Earlier Phase 4 edit receipts could contain a full draft. Preserve the
+  // receipt identity/fingerprint but erase its payload and refuse replay.
+  await db.query(
+    `UPDATE community.author_command_receipts SET result='{"permanentlyDeleted":true}'::jsonb
+     WHERE actor_id=$1 AND (result->>'workId'=$2 OR result->>'work_id'=$2)
+       AND (result ? 'content' OR result ? 'title' OR result ? 'text' OR result ? 'body')`,
+    [authorId, workId],
+  );
+  await db.query(
+    `UPDATE community.content_operator_receipts SET result='{"permanentlyDeleted":true}'::jsonb
+     WHERE (result->>'id'=$1 OR result->>'workId'=$1)
+       AND (result ? 'title' OR result ? 'text' OR result ? 'body' OR result ? 'content')`,
+    [workId],
+  );
+  await db.query(
+    `UPDATE community.content_operator_events
+     SET detail=jsonb_set(detail,'{result}','{"permanentlyDeleted":true}'::jsonb)
+     WHERE content_type='work' AND content_id=$1
+       AND (detail->'result' ? 'title' OR detail->'result' ? 'text'
+         OR detail->'result' ? 'body' OR detail->'result' ? 'content')`,
+    [workId],
+  );
+  await cancelItems(db, released, now, { onlyUnreferenced: true });
+  await eraseUnreferencedLegacyMedia(
+    db,
+    authorId,
+    released,
+    now,
+    legacyMediaIds,
+  );
+  // Superseded queued retention work must not keep an unnecessary timer.
+  await db.query(
+    "DELETE FROM community.publishing_jobs WHERE kind='purge_trashed_work' AND subject_id=$1 AND state='queued'",
+    [workId],
+  );
+  await publicationSync.finish(now);
+  return true;
+};
+
+/**
+ * Permanently deletes only the authenticated author's work (`eraseWork`
+ * under the author command's account lock, receipt and audit row).
  */
 export const deleteWork = async (
   pool: Pool,
@@ -337,124 +485,8 @@ export const deleteWork = async (
       now,
     },
     async (db) => {
-      // Same lock order as submission and the legacy retention worker: holders
-      // before work, then media. The account lock serializes the author's writes.
-      await db.query(
-        "SELECT id FROM community.publishing_sessions WHERE work_id=$1 AND owner_id=$2 ORDER BY id FOR UPDATE",
-        [workId, actorId],
-      );
-      const drafts = (
-        await db.query<{ id: string }>(
-          "SELECT id FROM community.work_drafts WHERE work_id=$1 AND owner_id=$2 ORDER BY id FOR UPDATE",
-          [workId, actorId],
-        )
-      ).rows.map((row) => row.id);
-      await lockOwnWork(db, actorId, workId);
-      const publicationSync = await beginWorkPublicationSync(
-        db,
-        workId,
-        publication,
-      );
-      // Finished legacy drafts were never backfilled into media_items. Capture
-      // their native media IDs before erasing the only remaining content rows.
-      const legacyMediaIds = (
-        await db.query<{ id: string }>(
-          `SELECT unnest(media_ids) AS id FROM community.works WHERE id=$1
-           UNION SELECT unnest(media_ids) FROM community.work_edit_drafts WHERE work_id=$1`,
-          [workId],
-        )
-      ).rows.map((row) => row.id);
-      const holders = (
-        await db.query<{
-          kind: "revision" | "draft" | "snapshot" | "session";
-          id: string;
-        }>(
-          `SELECT 'revision'::text AS kind,id FROM community.work_revisions WHERE work_id=$1
-           UNION ALL SELECT 'draft',id FROM community.work_drafts WHERE work_id=$1
-           UNION ALL SELECT 'snapshot',id FROM community.work_draft_snapshots WHERE work_id=$1 OR draft_id=ANY($2::text[])
-           UNION ALL SELECT 'session',id FROM community.publishing_sessions WHERE work_id=$1`,
-          [workId, drafts],
-        )
-      ).rows;
-      const released = await releaseHolderRefs(
-        db,
-        (["revision", "draft", "snapshot", "session"] as const).map((kind) => ({
-          holderKind: kind,
-          holderIds: holders
-            .filter((holder) => holder.kind === kind)
-            .map((holder) => holder.id),
-        })),
-        now,
-      );
-      const at = nowParam(now);
-      await db.query(
-        `UPDATE community.works SET title='',text='',media_ids='{}',
-          public_revision_id=NULL,author_revision_id=NULL,visibility='self',
-          trashed_at=NULL,trash_purge_after=NULL,deleted_at=$2::timestamptz,
-          updated_at=$2::timestamptz,version=version+1 WHERE id=$1`,
-        [workId, at],
-      );
-      await db.query(
-        "DELETE FROM community.work_draft_snapshots WHERE work_id=$1 OR draft_id=ANY($2::text[])",
-        [workId, drafts],
-      );
-      await db.query(
-        `UPDATE community.publishing_sessions SET state=CASE WHEN state='active' THEN 'discarded' ELSE state END,
-          ended_at=CASE WHEN state='active' THEN $2::timestamptz ELSE ended_at END,draft_id=NULL
-         WHERE work_id=$1 OR draft_id=ANY($3::text[])`,
-        [workId, at, drafts],
-      );
-      await db.query(
-        "DELETE FROM community.work_drafts WHERE work_id=$1 OR conflict_of=ANY($2::text[])",
-        [workId, drafts],
-      );
-      await db.query(
-        "DELETE FROM community.work_edit_drafts WHERE work_id=$1",
-        [workId],
-      );
-      await db.query(
-        "DELETE FROM community.work_revision_items WHERE revision_id IN (SELECT id FROM community.work_revisions WHERE work_id=$1)",
-        [workId],
-      );
-      await db.query("DELETE FROM community.work_revisions WHERE work_id=$1", [
-        workId,
-      ]);
-      // Earlier Phase 4 edit receipts could contain a full draft. Preserve the
-      // receipt identity/fingerprint but erase its payload and refuse replay.
-      await db.query(
-        `UPDATE community.author_command_receipts SET result='{"permanentlyDeleted":true}'::jsonb
-         WHERE actor_id=$1 AND (result->>'workId'=$2 OR result->>'work_id'=$2)
-           AND (result ? 'content' OR result ? 'title' OR result ? 'text' OR result ? 'body')`,
-        [actorId, workId],
-      );
-      await db.query(
-        `UPDATE community.content_operator_receipts SET result='{"permanentlyDeleted":true}'::jsonb
-         WHERE (result->>'id'=$1 OR result->>'workId'=$1)
-           AND (result ? 'title' OR result ? 'text' OR result ? 'body' OR result ? 'content')`,
-        [workId],
-      );
-      await db.query(
-        `UPDATE community.content_operator_events
-         SET detail=jsonb_set(detail,'{result}','{"permanentlyDeleted":true}'::jsonb)
-         WHERE content_type='work' AND content_id=$1
-           AND (detail->'result' ? 'title' OR detail->'result' ? 'text'
-             OR detail->'result' ? 'body' OR detail->'result' ? 'content')`,
-        [workId],
-      );
-      await cancelItems(db, released, now, { onlyUnreferenced: true });
-      await eraseUnreferencedLegacyMedia(
-        db,
-        actorId,
-        released,
-        now,
-        legacyMediaIds,
-      );
-      // Superseded queued retention work must not keep an unnecessary timer.
-      await db.query(
-        "DELETE FROM community.publishing_jobs WHERE kind='purge_trashed_work' AND subject_id=$1 AND state='queued'",
-        [workId],
-      );
-      await publicationSync.finish(now);
+      if (!(await eraseWork(db, actorId, workId, now, publication)))
+        throw new CommunityNotFoundError();
       return { deleted: true } as const;
     },
   );

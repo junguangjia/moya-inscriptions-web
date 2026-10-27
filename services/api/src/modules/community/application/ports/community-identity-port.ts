@@ -35,11 +35,13 @@ export interface CommunityIdentityPort {
    * transaction; it changes no comment's moderation state. Null when unknown.
    * When `audit` is given, its moderation event is written in that same
    * transaction, and only when the status actually changed: a repeated
-   * transition returns the unchanged user and records nothing.
+   * transition returns the unchanged user and records nothing. A deleted
+   * account is terminal: nothing is written and the unchanged user (status
+   * `deleted`) is returned.
    */
   setUserStatus(
     id: PublicUserId,
-    status: PublicUserRecord["status"],
+    status: Exclude<PublicUserRecord["status"], "deleted">,
     at: Date,
     audit?: ModerationEventDraft,
   ): Promise<{

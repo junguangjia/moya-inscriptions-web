@@ -20,6 +20,7 @@ import {
   outcomeUnknown,
   submissionStateLabels,
   UNTITLED_WORK,
+  userStatusLabels,
   workActionPhrases,
   workTitleOf,
 } from "./api";
@@ -586,8 +587,7 @@ export const CommunityContentClient = () => {
               </button>
               <h2>{activeUser.displayName}</h2>
               <p>
-                @{activeUser.handle} ·{" "}
-                {activeUser.status === "active" ? "正常" : "已停用"}
+                @{activeUser.handle} · {userStatusLabels[activeUser.status]}
               </p>
               <p>{activeUser.bio || "尚未填写简介"}</p>
               <p>
@@ -846,14 +846,14 @@ export const CommunityContentClient = () => {
                         </td>
                         <td>
                           {item.authorName}
-                          {item.authorStatus === "suspended" ? (
+                          {item.authorStatus === "active" ? null : (
                             <span
                               className={styles.chip}
-                              data-state="suspended"
+                              data-state={item.authorStatus}
                             >
-                              账号已停用
+                              账号{userStatusLabels[item.authorStatus]}
                             </span>
-                          ) : null}
+                          )}
                         </td>
                         <td>
                           <span

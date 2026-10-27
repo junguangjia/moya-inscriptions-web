@@ -25,6 +25,7 @@ import {
   submissionActionLabels,
   submissionDoneLabels,
   submissionStateLabels,
+  userStatusLabels,
   workStateLabels,
   workSubmissionMediaSrc,
 } from "./api";
@@ -541,17 +542,17 @@ export const WorkSubmissionsQueueClient = () => {
                         {item.author.displayName}
                         <span className={styles.secondary}>
                           @{item.author.handle}
-                          {item.author.status === "suspended" ? (
+                          {item.author.status === "active" ? null : (
                             <>
                               {" "}
                               <span
                                 className={styles.chip}
-                                data-state="suspended"
+                                data-state={item.author.status}
                               >
-                                账号已停用
+                                账号{userStatusLabels[item.author.status]}
                               </span>
                             </>
-                          ) : null}
+                          )}
                         </span>
                       </td>
                       <td>
@@ -852,7 +853,9 @@ export const SubmissionDetail = ({
         {data.author.displayName}
         <span className={styles.secondary}>
           @{data.author.handle}
-          {data.author.status === "suspended" ? " · 账号已停用" : ""}
+          {data.author.status === "active"
+            ? ""
+            : ` · 账号${userStatusLabels[data.author.status]}`}
         </span>
         <span className={`${styles.secondary} ${styles.mono}`}>
           {data.author.id}

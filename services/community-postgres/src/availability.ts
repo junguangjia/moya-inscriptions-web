@@ -47,6 +47,17 @@ export const asCommunityOperationError = (
     return new CommunityConflictError(
       "An active report decision still restricts this target",
     );
+  // account-deletion-v1: the database refused to move a deleted account out
+  // of its terminal status (or to delete a non-active one).
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "constraint" in error &&
+    error.constraint === "public_users_status_terminal"
+  )
+    return new CommunityConflictError(
+      "A deleted account cannot change its status",
+    );
   const code = errorCode(error);
   if (
     phase === "connect" ||

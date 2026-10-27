@@ -2562,3 +2562,86 @@ describe("edited-frame background progress lifecycle", () => {
     t.runtime.dispose();
   });
 });
+
+describe("account deletion (account-deletion-v1)", () => {
+  it.each([
+    ["a live account keeps working", false],
+    ["a deleted account's work ends for good", true],
+  ])(
+    "%s: a late registration answer, autosave and heartbeat",
+    async (_label, forgotten) => {
+      const t = setup();
+      t.signIn(ACCOUNT);
+      t.runtime.startSession({
+        target: { type: "new" },
+        saveMode: "saved",
+        draft: draftOf(content("私密草稿")),
+      });
+      let register: () => void = () => {};
+      const registered = t.uploads.client.registerItem.getMockImplementation()!;
+      t.uploads.client.registerItem.mockImplementationOnce(async (command) => {
+        await new Promise<void>((resolve) => {
+          register = resolve;
+        });
+        return registered(command);
+      });
+      await t.runtime.stageFiles([fileOf(jpeg({}))], "picker");
+      t.runtime.confirmStaging();
+      await settle();
+      expect(t.uploads.client.registerItem).toHaveBeenCalledOnce();
+      t.runtime.edit(content("未保存的修改"));
+      const manager = t.runtime.manager()!;
+      const autosave = t.runtime.autosave()!;
+      const saves =
+        t.client.saveDraft.mock.calls.length +
+        t.client.saveDraftNow.mock.calls.length;
+      const sent = () =>
+        t.client.saveDraft.mock.calls.length +
+        t.client.saveDraftNow.mock.calls.length;
+
+      if (forgotten) {
+        t.runtime.forgetAccount(ACCOUNT);
+        expect(t.runtime.store.get()).toMatchObject({
+          accountId: null,
+          session: null,
+          staging: null,
+        });
+        expect(t.runtime.checkpoint()).toBeNull();
+        expect(t.runtime.manager()).toBeNull();
+        expect(manager.getSnapshot().status).toBe("disposed");
+      }
+      // The registration answer arrives late; autosave and heartbeat run.
+      register();
+      await settle();
+      t.timers.fireAll();
+      await settle();
+      // A save asked of the session's autosave as it was before the end.
+      await autosave.saveNow();
+
+      if (!forgotten) {
+        // For a live account the same moments upload, save and renew.
+        expect(t.transfers[0]!.starts.length).toBeGreaterThan(0);
+        expect(sent()).toBeGreaterThan(saves);
+        expect(t.client.heartbeatSession).toHaveBeenCalled();
+        t.runtime.dispose();
+        return;
+      }
+      expect(t.transfers[0]!.starts).toHaveLength(0);
+      expect(sent()).toBe(saves);
+      expect(t.client.heartbeatSession).not.toHaveBeenCalled();
+      expect(t.recovery.save).not.toHaveBeenCalled();
+      // Still the viewer until the page reloads: it never gets a runtime again.
+      t.runtime.setAccount(ACCOUNT);
+      expect(t.runtime.store.get().accountId).toBeNull();
+      expect(t.runtime.manager()).toBeNull();
+      expect(
+        t.runtime.startSession({ target: { type: "new" }, saveMode: "saved" }),
+      ).toBeNull();
+      // Another account is unaffected.
+      t.signIn(OTHER_ACCOUNT);
+      expect(t.runtime.store.get().accountId).toBe(OTHER_ACCOUNT);
+      expect(t.runtime.manager()).not.toBeNull();
+      t.runtime.dispose();
+    },
+  );
+});

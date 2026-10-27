@@ -102,6 +102,7 @@ describe("community migration family", () => {
         "20261025010000_reporting_appeals.sql",
         "20261026010000_appeal_session_scope.sql",
         "20261026020000_phone_registration_invitations.sql",
+        "20261027010000_account_deletion.sql",
       ],
     );
     expect(files.every((file) => file.sql.includes("community."))).toBe(true);

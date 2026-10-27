@@ -282,6 +282,7 @@ describe("Production PNVS invitation registration on PostgreSQL", () => {
     const before = await authority();
     expect(await runCommunityMigrations(owner, migrations)).toEqual([
       migration,
+      "20261027010000",
     ]);
     expect(await authority()).toEqual(before);
     expect(before.definer).toBe(true);

@@ -9,6 +9,10 @@ import { safeReturnPath } from "./auth-api";
 import { useAuthReturn } from "./auth-return";
 import { authorClient, AuthorRequestError } from "../authors/author-data";
 
+/** account-switching-v1: `?intent=add-account` signs in another account. */
+const addAccountIntent = () =>
+  new URLSearchParams(window.location.search).get("intent") === "add-account";
+
 export const AuthPage = ({
   mode,
   returnTo,
@@ -21,10 +25,12 @@ export const AuthPage = ({
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
   const [revision, setRevision] = useState(0);
+  const [addAccount, setAddAccount] = useState(false);
   useEffect(() => {
     let live = true;
     const controller = new AbortController();
     setFailed(false);
+    setAddAccount(addAccountIntent());
     // The existing /me relay clears only a refused session cookie. Do not
     // submit an auth write with a known stale cookie, or sign out on transport failure.
     void authorClient
@@ -96,9 +102,10 @@ export const AuthPage = ({
       onChannelChange={(channel) => {
         if (context) context.inputs.channel = channel;
       }}
+      {...(addAccount ? { addAccount } : {})}
       onModeChange={(next) =>
         router.replace(
-          `${next === "register" ? "/register" : "/login"}?return=${encodeURIComponent(safeReturnPath(returnTo))}`,
+          `${next === "register" ? "/register" : "/login"}?return=${encodeURIComponent(safeReturnPath(returnTo))}${addAccount ? "&intent=add-account" : ""}`,
           { scroll: true },
         )
       }

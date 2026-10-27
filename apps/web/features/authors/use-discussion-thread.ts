@@ -8,6 +8,7 @@ import type {
 } from "@moya/contracts";
 import { useAuthEntry, useAuthReturnView } from "../auth/auth-return";
 import type { CommentViewerState } from "../comments/comment-section";
+import { DELETED_AUTHOR_NAME } from "../comments/comment-types";
 import type {
   CommentItem,
   CommentReply,
@@ -21,28 +22,28 @@ import { publishCommentCount } from "./content-state-bus";
 import { useDiscussionAvatars } from "./discussion-avatars";
 import { useOwnWorkAudience } from "./own-work-audience";
 
+/** A deleted author (account-deletion-v1) keeps the text, not a profile. */
+const presentAuthor = (
+  author: DiscussionReply["author"],
+): CommentUserPresentation =>
+  author.deleted === true
+    ? { id: author.id, name: DELETED_AUTHOR_NAME, deleted: true }
+    : {
+        id: author.id,
+        name: author.displayName,
+        studioName: author.studioName,
+      };
+
 export const row = (r: DiscussionReply): CommentReply => ({
   id: r.id,
   text: r.text,
-  user: {
-    id: r.author.id,
-    name: r.author.displayName,
-    studioName: r.author.studioName,
-  },
+  user: presentAuthor(r.author),
   createdAtLabel: new Date(r.createdAt).toLocaleString(),
   createdAt: r.createdAt,
   likeCount: r.likeCount,
   liked: r.liked,
   deleted: r.deleted,
-  ...(r.replyTo
-    ? {
-        replyToUser: {
-          id: r.replyTo.id,
-          name: r.replyTo.displayName,
-          studioName: r.replyTo.studioName,
-        },
-      }
-    : {}),
+  ...(r.replyTo ? { replyToUser: presentAuthor(r.replyTo) } : {}),
 });
 
 export const rootRow = (r: DiscussionComment): CommentItem => ({
@@ -556,6 +557,20 @@ export function useDiscussionThread({
   ) => {
     if (sendLock.current || !author.viewer || author.checking || composerClosed)
       return false;
+    // account-switching-v1: the composer shows, and keeps, only the draft of
+    // the account this view confirmed. When another tab's switch has already
+    // made a different account the client's confirmed one and this view has
+    // not followed yet, the draft is not sent at all, never as that account.
+    // Nothing awaits between this check and the request that names it.
+    if (authorClient.account() !== author.viewer.id) {
+      const message =
+        authorClient.account() === null
+          ? "账户状态暂时无法确认，这条内容未发送，请稍后重试。"
+          : "当前账户已切换，这条内容未发送。";
+      if (colophon) setActionError({ id: null, message });
+      else setError(message);
+      return false;
+    }
     sendLock.current = true;
     const run = epoch.current;
     setSubmitting(true);

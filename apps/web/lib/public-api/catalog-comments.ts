@@ -89,7 +89,15 @@ const readInit = (signal?: AbortSignal, token?: string): RequestInit => ({
   ...(signal === undefined ? {} : { signal }),
 });
 
-const writeInit = (token: string, body: string): RequestInit => ({
+/**
+ * account-switching-v1: `account` is the confirmed account the browser wrote
+ * for; the Backend refuses the write when the session now belongs to another.
+ */
+const writeInit = (
+  token: string,
+  body: string,
+  account?: string,
+): RequestInit => ({
   method: "POST",
   cache: "no-store",
   redirect: "error",
@@ -98,6 +106,7 @@ const writeInit = (token: string, body: string): RequestInit => ({
     Accept: "application/json",
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
+    ...(account === undefined ? {} : { "x-author-account": account }),
   },
   body,
 });
@@ -151,11 +160,12 @@ const submit = async <Item>(
   token: string,
   body: unknown,
   parse: (candidate: unknown) => Item | null,
+  account?: string,
 ): Promise<CommentSubmissionTransportResult<Item>> => {
   try {
     const response = await context.fetch(
       url.toString(),
-      writeInit(token, JSON.stringify(body)),
+      writeInit(token, JSON.stringify(body), account),
     );
     if (response.status === 401) return { state: "unauthenticated" };
     if (response.status === 404) return { state: "not-found" };
@@ -220,6 +230,7 @@ export const createCatalogComment = async (
   catalogId: string,
   token: string,
   body: unknown,
+  account?: string,
 ): Promise<CommentSubmissionTransportResult<CatalogComment>> => {
   const request = createCatalogCommentRequestSchema.safeParse(body);
   if (!request.success) return { state: "invalid-input" };
@@ -229,6 +240,7 @@ export const createCatalogComment = async (
     token,
     request.data,
     parseWith<CatalogComment>(catalogCommentSchema),
+    account,
   );
 };
 
@@ -238,6 +250,7 @@ export const createCatalogCommentReply = async (
   commentId: string,
   token: string,
   body: unknown,
+  account?: string,
 ): Promise<CommentSubmissionTransportResult<CatalogCommentReply>> => {
   const request = createCatalogCommentReplyRequestSchema.safeParse(body);
   if (!request.success) return { state: "invalid-input" };
@@ -247,5 +260,6 @@ export const createCatalogCommentReply = async (
     token,
     request.data,
     parseWith<CatalogCommentReply>(catalogCommentReplySchema),
+    account,
   );
 };

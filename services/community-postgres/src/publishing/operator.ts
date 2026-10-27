@@ -36,6 +36,7 @@ import type {
   WorkSubmissionModerationResult,
 } from "@moya/contracts/internal/community-operator";
 import type {
+  PublicUserStatus,
   PublishingCommandIdentity,
   PublishingOperatorPort,
 } from "@moya/api";
@@ -156,7 +157,7 @@ interface SubmissionRow extends QueryResultRow, RevisionAuthorshipColumns {
   author_id: string;
   handle: string;
   display_name: string;
-  author_status: "active" | "suspended";
+  author_status: PublicUserStatus;
   title: string;
   body: string;
   cover_item_id: string | null;

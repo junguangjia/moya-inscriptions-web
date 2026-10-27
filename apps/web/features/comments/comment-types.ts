@@ -1,5 +1,13 @@
+/** The name every deleted author is shown under (account-deletion-v1). */
+export const DELETED_AUTHOR_NAME = "已注销用户";
+
 export interface CommentUserPresentation {
   readonly avatarSrc?: string | null;
+  /**
+   * account-deletion-v1: the author's account was deleted. The text stays;
+   * the author is shown as `DELETED_AUTHOR_NAME` and no profile is opened.
+   */
+  readonly deleted?: boolean;
   readonly id: string;
   readonly name: string;
   readonly studioName?: string | undefined;

@@ -34,6 +34,21 @@ const describeFailure = (error: unknown): string => {
 };
 
 /**
+ * account-switching-v1: a draft is written as the account the view shows.
+ * When another tab's switch has already made a different account the client's
+ * confirmed one and this view has not followed yet, the draft is not sent at
+ * all, never as that account. Nothing awaits between this check and the send
+ * that names the confirmed account.
+ */
+const sendsAs = (account: string | undefined): boolean =>
+  account !== undefined && authorClient.account() === account;
+/** Why a draft was not sent: another confirmed account, or none confirmed yet. */
+const unsentMessage = (): string =>
+  authorClient.account() === null
+    ? "账户状态暂时无法确认，这条私信未发送，请稍后重试。"
+    : "当前账户已切换，这条私信未发送。";
+
+/**
  * Polls while the document is visible; pauses in a background tab and backs
  * off after failures. Polling only refreshes: it never fabricates a sent
  * result and never replaces business endpoints.
@@ -178,6 +193,7 @@ export type ConversationViewState =
 
 export const useConversation = (id: string | null, enabled: boolean) => {
   const author = useAuthors();
+  const viewerId = author.viewer?.id;
   const [state, setState] = useState<ConversationViewState>({
     state: "loading",
   });
@@ -303,6 +319,7 @@ export const useConversation = (id: string | null, enabled: boolean) => {
       text: string,
     ): Promise<{ ok: true } | { ok: false; message: string }> => {
       if (!id) return { ok: false, message: "对话不可用" };
+      if (!sendsAs(viewerId)) return { ok: false, message: unsentMessage() };
       try {
         await authorClient.messages.send({
           requestId: requestIdentity(),
@@ -319,7 +336,7 @@ export const useConversation = (id: string | null, enabled: boolean) => {
         return { ok: false, message: describeFailure(error) };
       }
     },
-    [id, poll],
+    [id, poll, viewerId],
   );
   return {
     state,
@@ -352,12 +369,15 @@ export const usePolledUnreadConversationCount = (): number => {
   return count;
 };
 
+/** `account`: the account the composer shows, which the draft was written as. */
 export const startConversationWith = async (
   recipientId: string,
   text: string,
+  account: string | undefined,
 ): Promise<
   { ok: true; conversationId: string } | { ok: false; message: string }
 > => {
+  if (!sendsAs(account)) return { ok: false, message: unsentMessage() };
   try {
     const message = await authorClient.messages.send({
       requestId: requestIdentity(),

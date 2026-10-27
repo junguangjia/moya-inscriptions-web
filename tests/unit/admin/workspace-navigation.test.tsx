@@ -317,3 +317,22 @@ it("opens desktop navigation after a bounded preference wait even when Payload s
   await vi.advanceTimersByTimeAsync(650);
   expect(runtime.setNavOpen).toHaveBeenCalledWith(true);
 });
+
+it("finishes desktop initialization after Payload applies an old closed preference", async () => {
+  vi.useFakeTimers();
+  let finish!: (value: { open: boolean }) => void;
+  const preference = new Promise<{ open: boolean }>((resolve) => {
+    finish = resolve;
+  });
+  runtime.getPreference.mockReturnValue(preference);
+  render(createElement(WorkspaceNavigation));
+  // Native NavProvider awaits its getNavPreference adapter before setNavOpen.
+  const nativePreference = (async () => {
+    const value = await (async () => (await preference).open)();
+    runtime.setNavOpen(value);
+  })();
+  finish({ open: false });
+  await nativePreference;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(runtime.setNavOpen).toHaveBeenLastCalledWith(true);
+});

@@ -14,7 +14,19 @@ const {
   setFeedLayoutPreference,
   session,
   presentation,
+  AuthorRequestError,
+  identity,
+  accountsList,
+  switcherProps,
 } = vi.hoisted(() => ({
+  AuthorRequestError: class AuthorRequestError extends Error {
+    constructor(
+      readonly status: number,
+      message: string,
+    ) {
+      super(message);
+    }
+  },
   authRequest: vi.fn(),
   feedbackSubmit: vi.fn(),
   people: vi.fn(),
@@ -24,6 +36,9 @@ const {
   setFeedLayoutPreference: vi.fn(),
   session: { id: "user-00000000000000000000000000000001" },
   presentation: { platform: "phone" },
+  identity: { guest: false },
+  accountsList: vi.fn(),
+  switcherProps: [] as Record<string, unknown>[],
 }));
 vi.mock("../auth/auth-api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../auth/auth-api")>()),
@@ -33,9 +48,41 @@ vi.mock("../../lib/public-api/feedback-client", () => ({
   feedbackClient: { submit: feedbackSubmit },
   feedbackImageLimits: { maxImages: 3, maxBytes: 10 * 1024 * 1024 },
 }));
-vi.mock("./author-data", () => ({ authorClient: { people, command } }));
+vi.mock("./author-data", () => ({
+  authorClient: { people, command },
+  AuthorRequestError,
+}));
 vi.mock("./author-context", () => ({
-  useAuthors: () => ({ signInHref: "/login", viewer: session, mutate }),
+  useAuthors: () => ({
+    signInHref: "/login",
+    viewer: identity.guest ? null : session,
+    mutate,
+  }),
+}));
+// account-switching-v1: the switcher has its own suite; here only its place.
+vi.mock("./account-data", () => ({
+  communityAccountsClient: { list: accountsList },
+}));
+vi.mock("./account-switcher", () => ({
+  AccountSwitcher: (props: Record<string, unknown>) => {
+    switcherProps.push(props);
+    return (
+      <div data-account-switcher-stub="">
+        <button
+          type="button"
+          onClick={() => (props.onBusyChange as (busy: boolean) => void)(true)}
+        >
+          模拟忙碌
+        </button>
+        <button
+          type="button"
+          onClick={() => (props.onSessionChange as () => void)()}
+        >
+          模拟切换
+        </button>
+      </div>
+    );
+  },
 }));
 vi.mock("../product-shell/product-shell", () => ({
   useProductShell: () => ({
@@ -78,6 +125,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   session.id = profile.id;
   presentation.platform = "phone";
+  identity.guest = false;
+  switcherProps.length = 0;
+  accountsList.mockResolvedValue({ state: "unavailable" });
   people.mockResolvedValue({ items: [], page: 1, pageSize: 20, total: 0 });
   command.mockResolvedValue({});
   authRequest.mockResolvedValue({ status: 503, body: null });
@@ -424,6 +474,57 @@ describe("grouped My settings", () => {
     await act(async () => pending.resolve({}));
     expect(people).toHaveBeenCalledTimes(2);
     expect(node.textContent).toContain("暂无已屏蔽账户");
+  });
+  it("reloads the true list when an unblock is refused", async () => {
+    // r3: the account was deleted after the list was read. Its block stays in
+    // force, the Backend refuses to lift it, and it is no longer listed.
+    command
+      .mockRejectedValueOnce(
+        new AuthorRequestError(
+          409,
+          "A block on a deleted account stays in force",
+        ),
+      )
+      .mockRejectedValueOnce(new Error("暂时无法完成，请重试"));
+    people
+      .mockResolvedValueOnce({
+        items: [person],
+        page: 1,
+        pageSize: 20,
+        total: 1,
+      })
+      .mockResolvedValueOnce({ items: [], page: 1, pageSize: 20, total: 0 })
+      .mockResolvedValueOnce({
+        items: [person],
+        page: 1,
+        pageSize: 20,
+        total: 1,
+      })
+      .mockResolvedValueOnce({
+        items: [person],
+        page: 1,
+        pageSize: 20,
+        total: 1,
+      });
+    const { node } = await render();
+    await click(node, "已屏蔽账户");
+    await click(node, "解除屏蔽");
+    expect(people).toHaveBeenCalledTimes(2);
+    expect(people).toHaveBeenLastCalledWith(profile.id, "blocks", 1);
+    expect(node.querySelector("[role=alert]")?.textContent).toBe(
+      "该账号已注销，屏蔽将继续有效",
+    );
+    expect(node.textContent).not.toContain("@synthetic-blocked");
+    expect(node.textContent).toContain("暂无已屏蔽账户");
+    // Any other refusal reloads as well and keeps its own message.
+    await click(node, "重试");
+    await click(node, "解除屏蔽");
+    expect(people).toHaveBeenCalledTimes(4);
+    expect(node.querySelector("[role=alert]")?.textContent).toBe(
+      "暂时无法完成，请重试",
+    );
+    expect(node.textContent).toContain("@synthetic-blocked");
+    expect(mutate).not.toHaveBeenCalled();
   });
   it("requires a failed post-unblock refresh to recover before paging again", async () => {
     people
@@ -1161,6 +1262,102 @@ describe("feedback in settings navigation", () => {
       await click(node, "返回");
       expect(confirm).toHaveBeenCalledOnce();
       expect(onClose).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe("切换账号 in settings (account-switching-v1)", () => {
+  const held = {
+    id: "user-00000000000000000000000000000002",
+    handle: "synthetic-held",
+    displayName: "已添加账户",
+    state: "ready",
+  };
+  it("offers 切换账号 in the 账户 group and passes the shown account", async () => {
+    const { node } = await render();
+    expect(
+      button(node, "切换账号").closest("section")?.querySelector("h3")
+        ?.textContent,
+    ).toBe("账户");
+    await click(node, "切换账号");
+    expect(node.querySelector("dialog")?.getAttribute("aria-label")).toBe(
+      "切换账号",
+    );
+    expect(node.querySelector("[data-account-switcher-stub]")).not.toBeNull();
+    expect(switcherProps.at(-1)).toMatchObject({
+      viewerId: profile.id,
+      initialView: undefined,
+      unsavedSettings: null,
+    });
+    // A signed-in owner's switcher reads the accounts itself, when opened.
+    expect(accountsList).not.toHaveBeenCalled();
+  });
+  it("tells the switcher what unsaved settings a switch would lose", async () => {
+    const { node } = await render();
+    const rootState = window.history.state;
+    await click(node, "列表隐私");
+    await edit(node);
+    await pop(rootState);
+    await click(node, "切换账号");
+    expect(switcherProps.at(-1)?.unsavedSettings).toBe(
+      "列表隐私有未保存的更改",
+    );
+  });
+  it("keeps settings open while the switcher is busy", async () => {
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
+    const go = vi.spyOn(window.history, "go").mockImplementation(() => {});
+    const { node } = await render();
+    await click(node, "切换账号");
+    await click(node, "模拟忙碌");
+    back.mockClear();
+    go.mockClear();
+    await click(node, "返回");
+    expect(back).not.toHaveBeenCalled();
+    expect(go).not.toHaveBeenCalled();
+  });
+  it("closes settings for the reload once the session changed", async () => {
+    vi.spyOn(window.history, "back").mockImplementation(() => {});
+    const go = vi.spyOn(window.history, "go").mockImplementation(() => {});
+    const { node } = await render();
+    const rootState = window.history.state;
+    await click(node, "列表隐私");
+    await edit(node);
+    await pop(rootState);
+    await click(node, "切换账号");
+    go.mockClear();
+    const confirm = vi.spyOn(window, "confirm");
+    await click(node, "模拟切换");
+    // The switcher already asked about unsaved work; settings do not ask again.
+    expect(confirm).not.toHaveBeenCalled();
+    expect(go).toHaveBeenCalledWith(-2);
+  });
+  it("offers 切换账号 to a signed-out browser that still holds accounts", async () => {
+    identity.guest = true;
+    const view = { current: null, others: [held], limit: 3 };
+    accountsList.mockResolvedValue({ state: "ready", view });
+    const { node } = await render(null);
+    expect(accountsList).toHaveBeenCalledOnce();
+    expect(node.textContent).toContain("登录后管理账户设置");
+    await click(node, "切换账号");
+    expect(switcherProps.at(-1)).toMatchObject({
+      viewerId: null,
+      initialView: view,
+    });
+    // The read is reused, so its one-time 需重新登录 reports are not lost.
+    expect(accountsList).toHaveBeenCalledOnce();
+  });
+  it.each([
+    { state: "ready", view: { current: null, others: [], limit: 3 } },
+    { state: "unavailable" },
+  ])(
+    "leaves 切换账号 out for a signed-out browser without held accounts ($state)",
+    async (result) => {
+      identity.guest = true;
+      accountsList.mockResolvedValue(result);
+      const { node } = await render(null);
+      expect(accountsList).toHaveBeenCalledOnce();
+      expect(node.textContent).toContain("登录后管理账户设置");
+      expect(node.textContent).not.toContain("切换账号");
     },
   );
 });

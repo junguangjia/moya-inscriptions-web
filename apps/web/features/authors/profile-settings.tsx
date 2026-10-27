@@ -8,11 +8,12 @@ import {
   useRef,
   useState,
 } from "react";
+import type { RefObject } from "react";
 import type { AuthorProfile } from "@moya/contracts";
 import { useAuthReturn, useAuthReturnView } from "../auth/auth-return";
 import { AuthorDialog } from "./author-dialog";
 import type { AuthorDialogNavigationHandle } from "./author-dialog";
-import { authorClient } from "./author-data";
+import { authorClient, AuthorRequestError } from "./author-data";
 import { useAuthors } from "./author-context";
 import { requestIdentity } from "../shell/request-identity";
 import { useProductShell } from "../product-shell/product-shell";
@@ -20,6 +21,17 @@ import { ArticleAgentConnections } from "../editorial-content/article-authoring/
 import { useArticleAvailability } from "../editorial-content/article-authoring/article-availability";
 import { AccountSecurity } from "../auth/account-security";
 import type { AccountSecurityHandle } from "../auth/account-security";
+import { AccountSwitcher } from "./account-switcher";
+import { communityAccountsClient } from "./account-data";
+import type { CommunityAccountsView } from "./account-data";
+import {
+  AccountDeletion,
+  AccountDeletionEntry,
+} from "../auth/account-deletion";
+import type { AccountDeletionHandle } from "../auth/account-deletion";
+import { useGlobalUploadProgress } from "../publishing/publishing-provider";
+import { useEndAccountEditing } from "../publishing/ui/editor/editor-session-provider";
+import { forgetDeletedAccount } from "./account-local-data";
 import {
   SettingsFeedbackForm,
   useSettingsFeedback,
@@ -38,8 +50,10 @@ type Page =
   | "blocks"
   | "security"
   | "factor"
+  | "accounts"
   | "reports"
-  | "feedback";
+  | "feedback"
+  | "deletion";
 const titles: Record<Page, string> = {
   root: "设置",
   display: "外观",
@@ -47,8 +61,10 @@ const titles: Record<Page, string> = {
   blocks: "已屏蔽账户",
   security: "账号与安全",
   factor: "验证登录方式",
+  accounts: "切换账号",
   reports: "我的举报与申诉",
   feedback: "反馈与建议",
+  deletion: "注销账号",
 };
 const themeLabels = {
   system: "跟随系统",
@@ -66,6 +82,7 @@ const pageIcons = {
   privacy: "lock-keyhole",
   blocks: "ban",
   security: "shield-check",
+  accounts: "users-round",
   reports: "shield-check",
   feedback: "mail",
 } as const;
@@ -182,6 +199,86 @@ const motionTiming = (element: HTMLElement | null) => {
 };
 const reducedMotion = () =>
   window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+/** Child pages whose private state is never restored after an auth journey. */
+const restorablePage = (value: Page): Page =>
+  value === "factor" || value === "deletion" ? "security" : value;
+
+/**
+ * account-deletion-v1: mounted only on its own page, inside the product's
+ * PublishingProvider, so the composer's unfinished work and a pending avatar
+ * save are known before the account is ended. While the deletion's outcome is
+ * pending or shown, Session rechecks wait, so neither this page nor the Session
+ * a same-key retry presents is torn down by a revoked-Session answer. While
+ * an attempt is unconfirmed, the dialog asks the page before Back leaves it.
+ */
+const DeletionPage = ({
+  owner,
+  settingsDirty,
+  navigationRef,
+  onBusyChange,
+  onCancel,
+  onFinished,
+}: {
+  owner: string;
+  settingsDirty: boolean;
+  navigationRef: RefObject<AccountDeletionHandle | null>;
+  onBusyChange: (busy: boolean) => void;
+  onCancel: () => void;
+  onFinished: () => void;
+}) => {
+  const progress = useGlobalUploadProgress();
+  const { avatarSave, holdSession } = useAuthors();
+  const endEditing = useEndAccountEditing();
+  const release = useRef<(() => void) | null>(null);
+  const holdWhilePending = useCallback(
+    (pending: boolean) => {
+      if (pending) release.current ??= holdSession();
+      else {
+        release.current?.();
+        release.current = null;
+      }
+    },
+    [holdSession],
+  );
+  useEffect(
+    () => () => {
+      release.current?.();
+      release.current = null;
+    },
+    [],
+  );
+  const forget = useCallback(
+    async (accountId: string) => {
+      // Nothing of the ended account may write its local data again in this
+      // tab (a live composer, its uploads or autosave), then the data goes.
+      endEditing(accountId);
+      await forgetDeletedAccount(accountId);
+    },
+    [endEditing],
+  );
+  const unfinished = [
+    ...(progress.active || progress.backgroundPublication === true
+      ? ["作品图片仍在上传、处理或发布中。"]
+      : []),
+    ...(progress.hasUnsavedChanges ? ["正在编辑的作品还有未保存的更改。"] : []),
+    ...(avatarSave?.accountId === owner && !avatarSave.failed
+      ? ["新头像还没有保存完成。"]
+      : []),
+    ...(settingsDirty ? ["设置里还有未保存的更改或未发送的反馈。"] : []),
+  ];
+  return (
+    <AccountDeletion
+      expectedViewerId={owner}
+      unfinishedWork={unfinished}
+      navigationRef={navigationRef}
+      onBusyChange={onBusyChange}
+      onPendingChange={holdWhilePending}
+      onCancel={onCancel}
+      onDeleted={forget}
+      onFinished={onFinished}
+    />
+  );
+};
 
 export const ProfileSettings = ({
   profile,
@@ -219,8 +316,7 @@ export const ProfileSettings = ({
     } => {
       // Navigation is public presentation state. Account data and factor proofs
       // stay in their existing account-scoped components and are reloaded.
-      const current =
-        pageRef.current === "factor" ? "security" : pageRef.current;
+      const current = restorablePage(pageRef.current);
       return {
         page: current,
         positions: {
@@ -232,9 +328,7 @@ export const ProfileSettings = ({
   );
   const restoredPage: Page =
     authReturnView && Object.hasOwn(titles, authReturnView.page)
-      ? authReturnView.page === "factor"
-        ? "security"
-        : authReturnView.page
+      ? restorablePage(authReturnView.page)
       : "root";
   const [page, setPage] = useState<Page>(restoredPage),
     [direction, setDirection] = useState<"forward" | "back" | "none">("none");
@@ -254,6 +348,17 @@ export const ProfileSettings = ({
     busyRef = useRef(false);
   const [securityBusy, setSecurityBusy] = useState(false),
     securityBusyRef = useRef(false);
+  const [accountsBusy, setAccountsBusy] = useState(false),
+    accountsBusyRef = useRef(false);
+  // account-switching-v1: a signed-out browser still lists the accounts it
+  // holds; whether there are any decides if 切换账号 is offered.
+  const viewerId = author.viewer?.id ?? null;
+  const guestConfirmed =
+    viewerId === null && !author.checking && !author.sessionError;
+  const [guestAccounts, setGuestAccounts] =
+    useState<CommunityAccountsView | null>(null);
+  const [guestProbed, setGuestProbed] = useState(false);
+  const guestProbe = useRef(false);
   const [factorTitle, setFactorTitle] = useState("");
   const [signedOut, setSignedOut] = useState(false);
   const [editRequested, setEditRequested] = useState(false),
@@ -261,7 +366,8 @@ export const ProfileSettings = ({
   const closingRef = useRef(false),
     closeTimer = useRef<number | null>(null);
   const navigation = useRef<AuthorDialogNavigationHandle>(null),
-    security = useRef<AccountSecurityHandle>(null);
+    security = useRef<AccountSecurityHandle>(null),
+    deletion = useRef<AccountDeletionHandle>(null);
   const viewport = useRef<HTMLDivElement>(null),
     scroller = useRef<HTMLDivElement>(null),
     title = useRef<HTMLSpanElement>(null);
@@ -291,7 +397,8 @@ export const ProfileSettings = ({
   latest.current = { onClose, onEdit, editRequested, signedOut };
   const privacyDirty = JSON.stringify(saved) !== JSON.stringify(privacy);
   const dirty = privacyDirty || feedback.dirty;
-  const blocked = busy || securityBusy || feedback.pending || closing;
+  const blocked =
+    busy || securityBusy || accountsBusy || feedback.pending || closing;
   const remember = () => {
     if (scroller.current)
       scrollPositions.current[pageRef.current] = scroller.current.scrollTop;
@@ -316,6 +423,10 @@ export const ProfileSettings = ({
     },
     [owner],
   );
+  const handleAccountsBusy = useCallback((value: boolean) => {
+    accountsBusyRef.current = value;
+    setAccountsBusy(value);
+  }, []);
   const handleFlow = useCallback(
     (value: string | null) => {
       if (ownerRef.current !== owner) return;
@@ -369,6 +480,32 @@ export const ProfileSettings = ({
     };
   }, []);
   useEffect(() => {
+    if (viewerId !== null) {
+      guestProbe.current = false;
+      setGuestAccounts(null);
+      setGuestProbed(false);
+      return;
+    }
+    // Read once per signed-out view; a focus recheck does not read again.
+    if (!guestConfirmed || guestProbe.current) return;
+    guestProbe.current = true;
+    const controller = new AbortController();
+    let finished = false;
+    void communityAccountsClient
+      .list(controller.signal)
+      .then((result) => {
+        finished = true;
+        setGuestAccounts(result.state === "ready" ? result.view : null);
+        setGuestProbed(true);
+      })
+      .catch(() => undefined);
+    return () => {
+      if (finished) return;
+      guestProbe.current = false;
+      controller.abort();
+    };
+  }, [guestConfirmed, viewerId]);
+  useEffect(() => {
     blocksRun.current++;
     mutationRun.current++;
     blocksPending.current = false;
@@ -383,6 +520,8 @@ export const ProfileSettings = ({
     setBusy(false);
     securityBusyRef.current = false;
     setSecurityBusy(false);
+    accountsBusyRef.current = false;
+    setAccountsBusy(false);
     // /me may re-key this component after the checking/guest first mount.
     // Preserve the controlled source's public page; private state above resets.
     if (!authReturn?.isRestoring()) show("root", true);
@@ -549,6 +688,7 @@ export const ProfileSettings = ({
   const canBack = () =>
     !busyRef.current &&
     !securityBusyRef.current &&
+    !accountsBusyRef.current &&
     !feedback.isPending() &&
     !closingRef.current;
   const back = () => {
@@ -625,9 +765,19 @@ export const ProfileSettings = ({
       author.mutate();
       await loadBlocks();
     } catch (reason) {
+      if (!valid()) return;
+      // Any refusal reloads the true list. An account deleted after the list
+      // was read is no longer listed, yet its block stays in force
+      // (account-deletion-v1 r3): lifting it is refused with a conflict, the
+      // only one this command meets from this page.
+      await loadBlocks();
       if (valid())
         setBlocksError(
-          reason instanceof Error ? reason.message : "解除失败，请重试。",
+          reason instanceof AuthorRequestError && reason.status === 409
+            ? "该账号已注销，屏蔽将继续有效"
+            : reason instanceof Error
+              ? reason.message
+              : "解除失败，请重试。",
         );
     } finally {
       if (valid()) setMutationBusy(false);
@@ -655,17 +805,16 @@ export const ProfileSettings = ({
       <SettingsIcon className={styles.chevron} name="chevron-right" />
     </button>
   );
-  const guest = (
-    <div className={styles.rows}>
-      <a className={styles.row} href={author.signInHref}>
-        <span className={styles.rowIcon}>
-          <SettingsIcon name="shield-check" />
-        </span>
-        <span className={styles.rowText}>登录后管理账户设置</span>
-        <SettingsIcon className={styles.chevron} name="chevron-right" />
-      </a>
-    </div>
+  const guestSignIn = (
+    <a className={styles.row} href={author.signInHref}>
+      <span className={styles.rowIcon}>
+        <SettingsIcon name="shield-check" />
+      </span>
+      <span className={styles.rowText}>登录后管理账户设置</span>
+      <SettingsIcon className={styles.chevron} name="chevron-right" />
+    </a>
   );
+  const guest = <div className={styles.rows}>{guestSignIn}</div>;
   return (
     <AuthorDialog
       title={page === "factor" ? factorTitle : titles[page]}
@@ -679,7 +828,13 @@ export const ProfileSettings = ({
       guardChildBack={false}
       dismissible={!blocked}
       closeRequested={editRequested || signedOut}
-      navigationDepth={page === "root" ? 0 : page === "factor" ? 2 : 1}
+      leaveGuard={() =>
+        pageRef.current === "deletion" &&
+        (deletion.current?.requestLeave() ?? false)
+      }
+      navigationDepth={
+        page === "root" ? 0 : page === "factor" || page === "deletion" ? 2 : 1
+      }
       navigationRef={navigation}
       onBack={(depth) => {
         if (depth < 2 && pageRef.current === "factor")
@@ -727,6 +882,7 @@ export const ProfileSettings = ({
                       <h3>账户</h3>
                       <div className={styles.rows}>
                         {row("账号与安全", "security", "手机号、邮箱换绑")}
+                        {row("切换账号", "accounts", "添加、切换或退出账户")}
                         {row("我的举报与申诉", "reports")}
                         {onEdit && (
                           <button
@@ -758,7 +914,12 @@ export const ProfileSettings = ({
                 ) : (
                   <section className={styles.group}>
                     <h3>账户</h3>
-                    {guest}
+                    <div className={styles.rows}>
+                      {guestSignIn}
+                      {guestAccounts !== null &&
+                        guestAccounts.others.length > 0 &&
+                        row("切换账号", "accounts", "这台设备上已添加的账户")}
+                    </div>
                   </section>
                 )}
                 <section className={styles.group}>
@@ -829,6 +990,28 @@ export const ProfileSettings = ({
               </>
             )}
             {page === "reports" && <MyReportingCases />}
+            {page === "accounts" &&
+              (viewerId === null && !guestProbed ? (
+                <p className={styles.status} role="status">
+                  正在读取账户…
+                </p>
+              ) : (
+                <AccountSwitcher
+                  viewerId={viewerId}
+                  initialView={viewerId === null ? guestAccounts : undefined}
+                  unsavedSettings={
+                    privacyDirty
+                      ? "列表隐私有未保存的更改"
+                      : feedback.dirty
+                        ? "反馈还没有提交"
+                        : null
+                  }
+                  onBusyChange={handleAccountsBusy}
+                  // Like a sign-out: close, then reload as the account that
+                  // is current now (or signed out).
+                  onSessionChange={() => setSignedOut(true)}
+                />
+              ))}
             {page === "privacy" &&
               (ownProfile ? (
                 <>
@@ -970,7 +1153,26 @@ export const ProfileSettings = ({
                   {articleAuthoring && page === "security" ? (
                     <ArticleAgentConnections />
                   ) : null}
+                  {page === "security" && (
+                    <AccountDeletionEntry
+                      disabled={blocked}
+                      onOpen={() => show("deletion")}
+                    />
+                  )}
                 </>
+              ) : (
+                guest
+              ))}
+            {page === "deletion" &&
+              (ownProfile ? (
+                <DeletionPage
+                  owner={owner!}
+                  settingsDirty={dirty}
+                  navigationRef={deletion}
+                  onBusyChange={handleSecurityBusy}
+                  onCancel={back}
+                  onFinished={() => setSignedOut(true)}
+                />
               ) : (
                 guest
               ))}

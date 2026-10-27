@@ -342,6 +342,23 @@ const webCommunityServerImports: ReadonlyMap<string, string> = new Map([
     path.join(webRoot, "app", "api", "community", "me", "route.ts"),
     "{fetchServerCurrentUser}",
   ],
+  // account-switching-v1: the held accounts and the switch between them.
+  [
+    path.join(webRoot, "app", "api", "community", "accounts", "route.ts"),
+    "{relayServerCommunityAccounts}",
+  ],
+  [
+    path.join(
+      webRoot,
+      "app",
+      "api",
+      "community",
+      "accounts",
+      "switch",
+      "route.ts",
+    ),
+    "{relayServerCommunityAccounts}",
+  ],
   [
     path.join(
       webRoot,

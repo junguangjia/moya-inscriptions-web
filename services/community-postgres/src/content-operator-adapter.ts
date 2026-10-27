@@ -16,7 +16,11 @@ import { asCommunityOperationError } from "./availability.js";
 import { assertExecutionFence } from "./execution-fence.js";
 import { createHash, randomUUID } from "node:crypto";
 import { CommunityConflictError, CommunityNotFoundError } from "@moya/api";
-import type { CommunityContentOperatorPort, ExecutionFence } from "@moya/api";
+import type {
+  CommunityContentOperatorPort,
+  ExecutionFence,
+  PublicUserStatus,
+} from "@moya/api";
 import {
   operatorWorkSchema,
   operatorWorkPageSchema,
@@ -47,7 +51,7 @@ interface WorkRow extends QueryResultRow {
   text: string;
   author_id: string;
   display_name: string;
-  author_status: "active" | "suspended";
+  author_status: PublicUserStatus;
   operator_state: "visible" | "hidden" | "removed";
   deleted_at: Date | null;
   version: number;
@@ -289,14 +293,23 @@ export class PostgresCommunityContentOperatorAdapter implements CommunityContent
       { type: "user", id: input.id },
       input,
       async (db) => {
-        if (
-          !(
-            await db.query("SELECT 1 FROM community.public_users WHERE id=$1", [
-              input.id,
-            ])
-          ).rowCount
-        )
-          throw new CommunityNotFoundError();
+        const user = (
+          await db.query<{ status: PublicUserStatus }>(
+            // FOR KEY SHARE waits for an account deletion in progress (its
+            // row lock is FOR UPDATE), so an enable can never land after the
+            // deletion disabled the row, yet the operator lock held here
+            // never queues behind the user's own commands (FOR NO KEY UPDATE).
+            "SELECT status FROM community.public_users WHERE id=$1 FOR KEY SHARE",
+            [input.id],
+          )
+        ).rows[0];
+        if (user === undefined) throw new CommunityNotFoundError();
+        // A deleted account (account-deletion-v1) is never recommended again;
+        // withdrawing an earlier recommendation stays possible.
+        if (input.enabled && user.status === "deleted")
+          throw new CommunityConflictError(
+            "A deleted account is not recommended",
+          );
         const row = (
           await db.query(
             "SELECT version FROM community.featured_users WHERE user_id=$1 FOR UPDATE",

@@ -5,6 +5,7 @@ import type {
   ModerationEventAction,
   ModerationEventSubjectKind,
   OperatorCommentKind,
+  OperatorUser,
   OperatorWork,
   OperatorWorkSubmission,
   PublicationPolicy,
@@ -346,6 +347,18 @@ export const jobKindLabels: Record<PublishingJobKind, string> = {
   reconcile_publication: "核对公开媒体",
   sweep_published: "清理历史公开媒体",
   profile_render: "生成头像与封面小图",
+  purge_deleted_account: "清除已注销账号的作品与图片",
+};
+
+/**
+ * Public-user account states, one label each wherever Admin shows a user or
+ * an author. `deleted` (account-deletion-v1) is terminal: no suspend,
+ * reinstate or recommendation is offered for it.
+ */
+export const userStatusLabels: Record<OperatorUser["status"], string> = {
+  active: "正常",
+  suspended: "已停用",
+  deleted: "已注销",
 };
 
 export const jobStateLabels: Record<PublishingJobState, string> = {

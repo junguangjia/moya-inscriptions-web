@@ -27,7 +27,11 @@ const reply = {
   createdAt: "2026-09-12T06:00:00.000Z",
 };
 
-const writeRequest = (body: unknown, cookie?: string) => {
+const writeRequest = (
+  body: unknown,
+  cookie?: string,
+  extra: Record<string, string> = {},
+) => {
   const payload = JSON.stringify(body);
   return new Request(url, {
     method: "POST",
@@ -35,6 +39,7 @@ const writeRequest = (body: unknown, cookie?: string) => {
       "content-type": "application/json",
       "content-length": String(new TextEncoder().encode(payload).byteLength),
       ...(cookie === undefined ? {} : { cookie }),
+      ...extra,
     },
     body: payload,
   });
@@ -120,7 +125,62 @@ describe("same-origin reply bridge", () => {
       commentId,
       opaqueSession,
       { text: "回复正文", replyTo: reply.id },
+      undefined,
     );
+  });
+
+  // account-switching-v1: same-origin writes only, bound to the asserted account.
+  it("forwards the asserted account and refuses cross-site or malformed writes", async () => {
+    createReplyMock.mockResolvedValue({
+      state: "success",
+      item: reply,
+      awaitingApproval: false,
+    });
+    const account = `user-${"b".repeat(32)}`;
+    const accepted = await POST(
+      writeRequest({ text: "回复正文" }, `yoyi-session=${opaqueSession}`, {
+        host: "localhost",
+        origin: "http://localhost",
+        "x-author-account": account,
+      }),
+      context,
+    );
+    expect(accepted.status).toBe(201);
+    expect(createReplyMock).toHaveBeenCalledWith(
+      catalogId,
+      commentId,
+      opaqueSession,
+      { text: "回复正文" },
+      account,
+    );
+    createReplyMock.mockClear();
+    for (const headers of [
+      { host: "localhost", origin: "https://foreign.invalid" },
+      { "sec-fetch-site": "cross-site" },
+    ])
+      expect(
+        (
+          await POST(
+            writeRequest(
+              { text: "回复正文" },
+              `yoyi-session=${opaqueSession}`,
+              headers,
+            ),
+            context,
+          )
+        ).status,
+      ).toBe(403);
+    expect(
+      (
+        await POST(
+          writeRequest({ text: "回复正文" }, `yoyi-session=${opaqueSession}`, {
+            "x-author-account": "not-a-user",
+          }),
+          context,
+        )
+      ).status,
+    ).toBe(422);
+    expect(createReplyMock).not.toHaveBeenCalled();
   });
 
   it.each([

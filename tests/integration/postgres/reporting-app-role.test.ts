@@ -125,11 +125,13 @@ const mutable: Record<(typeof tables)[number], readonly string[]> = {
   ],
   profile_ip_locations: ["label", "observed_at"],
 };
+// Account deletion (account-deletion-v1) erases the account's location row.
 const deletable = new Set([
   "report_cases",
   "report_evidence",
   "report_receipts",
   "report_restriction_heads",
+  "profile_ip_locations",
 ]);
 class EvidenceStore implements CommunityReportingEvidenceStore {
   readonly files = new Map<string, { bytes: Uint8Array; mimeType: string }>();
@@ -524,7 +526,7 @@ describe("complete reporting runtime through the canonical non-owner App role", 
     );
   });
 
-  it("pins the exact ten-table read/write plan, four DELETE permissions, role attributes and reapply stability", async () => {
+  it("pins the exact ten-table read/write plan, five DELETE permissions, role attributes and reapply stability", async () => {
     expect(
       (
         await app!.query(
