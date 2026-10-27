@@ -13,7 +13,7 @@ import type { AuthorProfile } from "@moya/contracts";
 import { useAuthReturn, useAuthReturnView } from "../auth/auth-return";
 import { AuthorDialog } from "./author-dialog";
 import type { AuthorDialogNavigationHandle } from "./author-dialog";
-import { authorClient } from "./author-data";
+import { authorClient, AuthorRequestError } from "./author-data";
 import { useAuthors } from "./author-context";
 import { requestIdentity } from "../shell/request-identity";
 import { useProductShell } from "../product-shell/product-shell";
@@ -714,9 +714,19 @@ export const ProfileSettings = ({
       author.mutate();
       await loadBlocks();
     } catch (reason) {
+      if (!valid()) return;
+      // Any refusal reloads the true list. An account deleted after the list
+      // was read is no longer listed, yet its block stays in force
+      // (account-deletion-v1 r3): lifting it is refused with a conflict, the
+      // only one this command meets from this page.
+      await loadBlocks();
       if (valid())
         setBlocksError(
-          reason instanceof Error ? reason.message : "解除失败，请重试。",
+          reason instanceof AuthorRequestError && reason.status === 409
+            ? "该账号已注销，屏蔽将继续有效"
+            : reason instanceof Error
+              ? reason.message
+              : "解除失败，请重试。",
         );
     } finally {
       if (valid()) setMutationBusy(false);

@@ -281,10 +281,11 @@ const purgeReceipts: PurgeStep = async (context, limit) =>
   ).rowCount ?? 0;
 
 /**
- * The deletion's relation statements once more: follows naming the account
- * and the blocks it set. Another user's follow that found the account still
- * active can wait for the deletion's row lock and commit just after it.
- * Blocks other users set against the account stay in force (r3).
+ * The deletion's relation statements once more, as a safeguard: follows
+ * naming the account and the blocks it set. Follow and block commands read
+ * the account under a key-share lock after their pair lock, so one that
+ * waited on the deletion is refused and none should remain. Blocks other
+ * users set against the account stay in force (r3).
  */
 const purgeRelations: PurgeStep = async (context, limit) => {
   const follows =

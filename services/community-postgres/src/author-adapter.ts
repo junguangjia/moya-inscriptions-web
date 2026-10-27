@@ -149,7 +149,7 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
     });
     try {
       await db.query("BEGIN");
-      await this.active(db, actor, true);
+      await this.active(db, actor, "actor");
       const fingerprint = createHash("sha256")
         .update(JSON.stringify([action, subject, input]))
         .digest("hex");
@@ -186,25 +186,36 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
     }
   }
 
+  /**
+   * `lock` "actor" locks the actor's own row (FOR NO KEY UPDATE) so its
+   * commands serialize. "target" reads another account after the pair lock
+   * with FOR KEY SHARE, the lock the relation foreign keys take anyway
+   * (account-deletion-v1): it waits for the FOR UPDATE row lock an account
+   * deletion in progress holds and then sees the committed status; it never
+   * conflicts with that account's own command lock, which is taken before
+   * its pair lock, so two commands on one pair cannot deadlock.
+   */
   private async active(
     db: PoolClient,
     id: string,
-    lock = false,
+    lock?: "actor" | "target",
   ): Promise<void> {
     const r = await db.query(
-      `SELECT id FROM community.public_users WHERE id=$1 AND status='active'${lock ? " FOR NO KEY UPDATE" : ""}`,
+      `SELECT id FROM community.public_users WHERE id=$1 AND status='active'${lock === "actor" ? " FOR NO KEY UPDATE" : lock === "target" ? " FOR KEY SHARE" : ""}`,
       [id],
     );
     if (r.rowCount !== 1) throw new CommunityNotFoundError();
   }
+  /** `lock` reads the account as a command target (see `active`). */
   private async accessible(
     db: PoolClient,
     viewer: string | null,
     target: string,
+    lock = false,
   ): Promise<UserRow> {
     const row = (
       await db.query<UserRow>(
-        `SELECT u.* FROM community.public_users u WHERE id=$1 AND status='active' AND community.accounts_can_interact($2,id)`,
+        `SELECT u.* FROM community.public_users u WHERE id=$1 AND status='active' AND community.accounts_can_interact($2,id)${lock ? " FOR KEY SHARE" : ""}`,
         [target, viewer],
       )
     ).rows[0];
@@ -561,7 +572,9 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
       async (db) => {
         // Pair advisory lock prevents a concurrent block from racing a new follow.
         await this.lockPair(db, actor, input.targetId);
-        await this.accessible(db, actor, input.targetId);
+        // Read as a target: a follow that waited on the account's deletion is
+        // refused instead of committing after it.
+        await this.accessible(db, actor, input.targetId, true);
         if (input.enabled)
           await db.query(
             "INSERT INTO community.follows(follower_id,followed_id) VALUES($1,$2) ON CONFLICT DO NOTHING",
@@ -591,15 +604,16 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
       input,
       async (db) => {
         await this.lockPair(db, actor, input.targetId);
-        if (input.enabled) await this.active(db, input.targetId);
+        // Both directions read the account as a target (see `active`), so a
+        // block that waited on its deletion is refused.
+        if (input.enabled) await this.active(db, input.targetId, "target");
         else {
           // A block set against an account that was later deleted stays in
           // force (account-deletion-v1 r3): it keeps the account's retained
-          // comments hidden and could never be set again. FOR SHARE waits for
-          // a deletion in progress.
+          // comments hidden and could never be set again.
           const target = (
             await db.query<{ status: string }>(
-              "SELECT status FROM community.public_users WHERE id=$1 FOR SHARE",
+              "SELECT status FROM community.public_users WHERE id=$1 FOR KEY SHARE",
               [input.targetId],
             )
           ).rows[0];

@@ -79,8 +79,9 @@ export const eraseAccount = async (
   // retained comments and replies stay hidden from them; their 已屏蔽账户
   // lists no longer show it. Other users' likes and favorites of its works
   // are theirs and resolve to nothing once the works are gone, as for any
-  // deleted work. Another user's follow that waits on this row lock commits
-  // after this transaction; the background purge removes it again.
+  // deleted work. Another user's follow or block that waits on this row lock
+  // reads the account again afterwards and is refused; the background purge
+  // still removes these relations once more as a safeguard.
   await client.query(
     "DELETE FROM community.follows WHERE follower_id=$1 OR followed_id=$1",
     [userId],

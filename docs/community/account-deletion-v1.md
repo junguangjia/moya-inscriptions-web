@@ -121,12 +121,13 @@ which kept them; the migration lets the draft-terminal trigger admit exactly
 that erasure, only for an owner whose account is `deleted`), cancels
 unreferenced media (the existing `purge_item`/`purge_blob` jobs delete private
 objects), tombstones every legacy, avatar and background image with its profile
-renditions, and scrubs author command receipt payloads. Last, it removes again
-every follow naming the account and every block the account set: another user's
-follow that found the account still active waits on the deletion's row lock and
-commits just after it (blocks other users set against the account stay, r3). It
-then marks the record `completed`. A job that fails five real attempts stops in
-`failed` like other purge jobs and is retried by an operator.
+renditions, and scrubs author command receipt payloads. Last, as a safeguard, it
+removes again every follow naming the account and every block the account set
+(blocks other users set against the account stay, r3); follow and block commands
+read their target under a key-share lock after the pair lock, so one that waited
+on the deletion is refused and none should remain. It then marks the record
+`completed`. A job that fails five real attempts stops in `failed` like other
+purge jobs and is retried by an operator.
 
 ## Retained data and known limitations
 
@@ -151,13 +152,14 @@ then marks the record `completed`. A job that fails five real attempts stops in
   retained comments and replies stay hidden from them; those blocks are no
   longer listed in their 已屏蔽账户 and cannot be lifted there or through the
   API (unblocking a deleted account answers a conflict, because the block could
-  never be set again). An Owner recommendation is likewise refused for a deleted
-  account; both checks read the account under a share lock, so they wait for a
-  deletion in progress.
-- A follow of the account that commits only after the purge has completed (a
-  request that checked the account before the deletion and wrote after the
-  purge) stays; every people list and count shows active accounts only, so it is
-  never shown.
+  never be set again; Web shows 该账号已注销，屏蔽将继续有效 and reloads the
+  list). An Admin recommendation is likewise refused for a deleted account.
+  Follow, block, unblock, recommendation and a direct-message send (sender and
+  recipient) read the account under a key-share lock (`FOR KEY SHARE`): it waits
+  for a deletion in progress, whose row lock is `FOR UPDATE`, so a follow, block
+  or message that waited is refused instead of committing after the deletion,
+  and it does not conflict with the account's own command lock
+  (`FOR NO KEY UPDATE`), so it forms no cycle with the pair lock.
 - Article agent connections (`community.article_authoring_connections`) and
   their grants, token wrappers and provider records are not revoked. The revoke
   path runs as the separate Article control role; the App role that runs the

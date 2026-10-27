@@ -147,13 +147,24 @@ export class PostgresDirectMessageAdapter implements DirectMessagePort {
     }
   }
 
+  /**
+   * `lock` true takes the account's command lock; "key-share" only waits for
+   * an account deletion in progress (it holds FOR UPDATE) without conflicting
+   * with the account's own commands.
+   */
   private async active(
     db: PoolClient,
     id: string,
-    lock = false,
+    lock: boolean | "key-share" = false,
   ): Promise<void> {
+    const clause =
+      lock === "key-share"
+        ? " FOR KEY SHARE"
+        : lock
+          ? " FOR NO KEY UPDATE"
+          : "";
     const r = await db.query(
-      `SELECT id FROM community.public_users WHERE id=$1 AND status='active'${lock ? " FOR NO KEY UPDATE" : ""}`,
+      `SELECT id FROM community.public_users WHERE id=$1 AND status='active'${clause}`,
       [id],
     );
     if (r.rowCount !== 1) throw new CommunityNotFoundError();
@@ -277,7 +288,9 @@ export class PostgresDirectMessageAdapter implements DirectMessagePort {
     const text = input.text.trim();
     if (text.length === 0 || [...text].length > 2000) fail("dm_text_invalid");
     return this.run(true, async (db) => {
-      await this.active(db, actor);
+      // account-deletion-v1: a send that raced the sender's deletion waits for
+      // it and is then refused, so no message is dated after the deletion.
+      await this.active(db, actor, "key-share");
       // Resolve the other party first (needed for the pair lock), then lock,
       // then re-derive everything under the lock.
       let other: string;
@@ -305,7 +318,9 @@ export class PostgresDirectMessageAdapter implements DirectMessagePort {
           // blocked while this transaction waited.
           const recipient = (
             await db.query<{ status: string; allowed: boolean }>(
-              "SELECT u.status, community.accounts_can_interact($1,$2) AS allowed FROM community.public_users u WHERE u.id=$2",
+              // FOR KEY SHARE also waits for the recipient's deletion in
+              // progress, so it reads the committed status.
+              "SELECT u.status, community.accounts_can_interact($1,$2) AS allowed FROM community.public_users u WHERE u.id=$2 FOR KEY SHARE",
               [actor, other],
             )
           ).rows[0];

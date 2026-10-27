@@ -41,8 +41,8 @@ import type {
  * profile images and receipts are erased with the existing purge
  * machinery queued for the bytes; feedback, comments and other accounts
  * stay untouched; a second run changes nothing; batches are bounded and an
- * interrupted batch rolls back whole and resumes; a follow another user
- * committed just after the deletion goes, while blocks other users set
+ * interrupted batch rolls back whole and resumes; as a safeguard, a follow
+ * written just after the deletion goes, while blocks other users set
  * against the account stay (r3). The deletion itself
  * (account-deletion.test.ts) is only mirrored here as its committed state:
  * status `deleted`, a pending deletion record and the queued job. Every
@@ -1177,9 +1177,10 @@ describe("deleted account purge under the real App role", () => {
         "INSERT INTO community.blocks(blocker_id,blocked_id) VALUES($1,$2)",
         [from, to],
       );
-    // Another user's follow as the App role runs it: the unlocked target
-    // check still finds the account active, and the insert, which waited on
-    // the deletion's row lock, commits after the deletion.
+    // A follow written by the App role without the follow command's locked
+    // target read (account-deletion.test.ts shows that command refused): an
+    // unlocked check still finds the account active, and the insert commits
+    // after the deletion.
     const late = await db.app.connect();
     try {
       await late.query("BEGIN");

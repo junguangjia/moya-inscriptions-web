@@ -17,6 +17,7 @@ import {
   PostgresAuthorCommunityAdapter,
   PostgresCommunityAuthAdapter,
   PostgresCommunityCommentAdapter,
+  PostgresCommunityContentOperatorAdapter,
   PostgresCommunityIdentityAdapter,
   PostgresDirectMessageAdapter,
 } from "@moya/community-postgres";
@@ -48,8 +49,11 @@ import type { PublicUserId } from "@moya/contracts";
  * leaves an interrupted request untouched, keeps direct-message history and
  * comments for the other participants (still hidden from whoever blocked the
  * account: those blocks stay, r3), and frees the email and phone for an
- * unrelated registration. Every account, contact, code and token here is
- * synthetic; the codes stay in test memory.
+ * unrelated registration. A follow, block, unblock or recommendation that
+ * waited on a deletion in progress is refused, and an unblock never waits on
+ * the counterpart's own command lock (no lock cycle with the pair lock).
+ * Every account, contact, code and token here is synthetic; the codes stay in
+ * test memory.
  */
 
 const target = requireSyntheticTestDatabaseUrl();
@@ -60,7 +64,9 @@ const keys = {
   encryptionKey: Buffer.alloc(32, 42),
   otpKey: Buffer.alloc(32, 43),
 };
-const source = "synthetic-deletion-pg";
+// One synthetic request source per test, each within the per-source send limit.
+let sources = 0;
+const source = () => `synthetic-deletion-pg-${sources}`;
 const codes: string[] = [];
 const delivery = (): AuthDeliveryPorts => ({
   sendEmail: async (input) => {
@@ -99,7 +105,7 @@ const send = async (
   const sent = await service.sendChallenge({
     ...input,
     idempotencyKey: key(),
-    source,
+    source: source(),
   } as ChallengeInput);
   if (!sent.ok || sent.value.continuationToken === undefined)
     throw new Error(sent.ok ? "missing continuation" : sent.reason);
@@ -168,6 +174,45 @@ const count = async (sql: string, values: readonly unknown[]) =>
   Number(
     (await db.setup.query<{ n: string }>(sql, [...values])).rows[0]?.n ?? 0,
   );
+/** An active account written directly: a bystander needs no sign-in. */
+const bystander = async () => {
+  const id = `user-${hex32()}`;
+  await db.setup.query(
+    "INSERT INTO community.public_users(id,handle,display_name) VALUES($1,$2,'合成旁观账号')",
+    [id, `bystander-${hex32().slice(0, 16)}`],
+  );
+  return id;
+};
+/** Settles without throwing, so a refusal is asserted after its lock wait. */
+const settle = <T>(promise: Promise<T>) =>
+  promise.then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
+/**
+ * Resolves once `n` sessions of this synthetic database wait on a lock, or
+ * once one of `pending` settled (a command that never had to wait).
+ */
+const lockWaiters = async (n: number, ...pending: Promise<unknown>[]) => {
+  let settled = false;
+  for (const promise of pending)
+    void promise.then(() => {
+      settled = true;
+    });
+  const deadline = Date.now() + 10_000;
+  while (!settled && Date.now() < deadline) {
+    if (
+      (await count(
+        `SELECT count(DISTINCT l.pid) AS n FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid
+         WHERE NOT l.granted AND a.datname=current_database()`,
+        [],
+      )) >= n
+    )
+      return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  if (!settled) throw new Error(`fewer than ${n} lock waiters`);
+};
 const userRow = async (id: string) =>
   (
     await db.setup.query(
@@ -183,8 +228,12 @@ beforeAll(async () => {
   db = await createCatalogScaleDatabase({
     target,
     label: "acctera",
+    // Room for a deletion held open plus every command the race tests park
+    // behind it (the default pool of five would queue them instead).
     openPool: (url) =>
-      createPostgresPool(parsePostgresConfig({ DATABASE_URL: url })),
+      createPostgresPool(
+        parsePostgresConfig({ DATABASE_URL: url, DATABASE_POOL_MAX: "10" }),
+      ),
   });
   service = serviceOver(new PostgresCommunityAuthAdapter(db.app));
 }, 60000);
@@ -193,6 +242,7 @@ afterAll(async () => {
 });
 afterEach(() => {
   codes.length = 0;
+  sources += 1;
 });
 
 describe("account deletion under the real App role", () => {
@@ -876,5 +926,190 @@ describe("account deletion under the real App role", () => {
       ],
     ] as const)
       expect(await count(sql, [owner]), sql).toBe(expected);
+  });
+
+  it("refuses a follow, block, unblock, recommendation or direct message that waited on the deletion", async () => {
+    const registered = await register("erase-waited@example.invalid");
+    const owner = registered.profile.id;
+    const [follower, blocker, shielder, writer] = [
+      await bystander(),
+      await bystander(),
+      await bystander(),
+      await bystander(),
+    ];
+    await db.setup.query(
+      "INSERT INTO community.blocks(blocker_id,blocked_id) VALUES($1,$2)",
+      [shielder, owner],
+    );
+    // The deletion stops before its last statement: it holds the account's
+    // row lock (FOR UPDATE) and has already erased it, uncommitted.
+    let reached!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const adapter = new PostgresCommunityAuthAdapter(db.app);
+    const deletion = serviceOver({
+      transaction: (work) =>
+        adapter.transaction((tx) =>
+          work({
+            ...tx,
+            insertAudit: async (row) => {
+              if (row.action === "account_delete") {
+                reached();
+                await released;
+              }
+              await tx.insertAudit(row);
+            },
+          }),
+        ),
+    }).deleteAccount({
+      sessionToken: registered.token,
+      reauthToken: await reauthenticate(registered.token),
+      idempotencyKey: key(),
+      expectedAccountId: owner,
+    });
+    await paused;
+    const authors = new PostgresAuthorCommunityAdapter(db.app);
+    const operator = new PostgresCommunityContentOperatorAdapter(db.app);
+    const messages = new PostgresDirectMessageAdapter(db.app);
+    const waited = [
+      authors.follow(follower, {
+        requestId: randomUUID(),
+        targetId: owner,
+        enabled: true,
+      }),
+      authors.block(blocker, {
+        requestId: randomUUID(),
+        targetId: owner,
+        enabled: true,
+      }),
+      authors.block(shielder, {
+        requestId: randomUUID(),
+        targetId: owner,
+        enabled: false,
+      }),
+      operator.recommendUser("synthetic-operator", {
+        requestId: randomUUID(),
+        id: owner,
+        enabled: true,
+        expectedVersion: 0,
+      }),
+      // A message from the account (another device) and one to it.
+      messages.send(owner, {
+        requestId: randomUUID(),
+        recipientId: writer,
+        text: "注销前开始发送的私信",
+      }),
+      messages.send(writer, {
+        requestId: randomUUID(),
+        recipientId: owner,
+        text: "发给正在注销的账号",
+      }),
+    ].map((command) => settle<unknown>(command));
+    // Each one reads the account under its key-share lock and waits.
+    await lockWaiters(6, ...waited);
+    release();
+    expect(await deletion).toMatchObject({
+      ok: true,
+      value: { outcome: "deleted" },
+    });
+    expect(await Promise.all(waited)).toEqual([
+      { ok: false, error: expect.any(CommunityNotFoundError) },
+      { ok: false, error: expect.any(CommunityNotFoundError) },
+      { ok: false, error: expect.any(CommunityConflictError) },
+      { ok: false, error: expect.any(CommunityConflictError) },
+      { ok: false, error: expect.any(CommunityNotFoundError) },
+      { ok: false, error: expect.any(CommunityInputError) },
+    ]);
+    // Nothing committed after the deletion: no follow and no new block of
+    // the account, the earlier shield stays in force (r3), no recommendation.
+    for (const [sql, expected] of [
+      [
+        "SELECT count(*) AS n FROM community.follows WHERE follower_id=$1 OR followed_id=$1",
+        0,
+      ],
+      ["SELECT count(*) AS n FROM community.blocks WHERE blocked_id=$1", 1],
+      [
+        "SELECT count(*) AS n FROM community.featured_users WHERE user_id=$1",
+        0,
+      ],
+      [
+        `SELECT count(*) AS n FROM community.dm_messages m
+         JOIN community.dm_conversations c ON c.id=m.conversation_id
+         WHERE c.user_low=$1 OR c.user_high=$1`,
+        0,
+      ],
+    ] as const)
+      expect(await count(sql, [owner]), sql).toBe(expected);
+    expect(
+      await count(
+        "SELECT count(*) AS n FROM community.blocks WHERE blocker_id=$1 AND blocked_id=$2",
+        [shielder, owner],
+      ),
+    ).toBe(1);
+  });
+
+  it("lets an unblock pass the counterpart's own command lock without a deadlock", async () => {
+    const shielder = await bystander();
+    const counterpart = await bystander();
+    await db.setup.query(
+      "INSERT INTO community.blocks(blocker_id,blocked_id) VALUES($1,$2)",
+      [shielder, counterpart],
+    );
+    const authors = new PostgresAuthorCommunityAdapter(db.app);
+    // The counterpart's own command, in the order author commands and
+    // discussion writes take their locks: its row, then the pair lock.
+    const other = await db.app.connect();
+    // Holds the block row, so the unblock stops inside its transaction
+    // while it holds the pair lock.
+    const holder = await db.setup.connect();
+    try {
+      await other.query("BEGIN");
+      await other.query(
+        "SELECT id FROM community.public_users WHERE id=$1 AND status='active' FOR NO KEY UPDATE",
+        [counterpart],
+      );
+      await holder.query("BEGIN");
+      await holder.query(
+        "SELECT 1 FROM community.blocks WHERE blocker_id=$1 AND blocked_id=$2 FOR UPDATE",
+        [shielder, counterpart],
+      );
+      const unblocked = settle(
+        authors.block(shielder, {
+          requestId: randomUUID(),
+          targetId: counterpart,
+          enabled: false,
+        }),
+      );
+      await lockWaiters(1, unblocked);
+      const paired = settle(
+        other.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
+          [shielder, counterpart].sort().join(":"),
+        ]),
+      );
+      // The counterpart now waits for the pair lock the unblock holds. With a
+      // share lock on the counterpart's row the unblock would wait for the
+      // counterpart in turn, and PostgreSQL would abort one side (40P01).
+      await lockWaiters(2, unblocked, paired);
+      await holder.query("COMMIT");
+      expect(await unblocked).toEqual({ ok: true, value: undefined });
+      expect(await paired).toMatchObject({ ok: true });
+      await other.query("COMMIT");
+    } finally {
+      await other.query("ROLLBACK").catch(() => undefined);
+      await holder.query("ROLLBACK").catch(() => undefined);
+      other.release();
+      holder.release();
+    }
+    expect(
+      await count(
+        "SELECT count(*) AS n FROM community.blocks WHERE blocker_id=$1 AND blocked_id=$2",
+        [shielder, counterpart],
+      ),
+    ).toBe(0);
   });
 });
