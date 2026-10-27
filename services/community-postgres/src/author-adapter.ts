@@ -592,6 +592,22 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
       async (db) => {
         await this.lockPair(db, actor, input.targetId);
         if (input.enabled) await this.active(db, input.targetId);
+        else {
+          // A block set against an account that was later deleted stays in
+          // force (account-deletion-v1 r3): it keeps the account's retained
+          // comments hidden and could never be set again. FOR SHARE waits for
+          // a deletion in progress.
+          const target = (
+            await db.query<{ status: string }>(
+              "SELECT status FROM community.public_users WHERE id=$1 FOR SHARE",
+              [input.targetId],
+            )
+          ).rows[0];
+          if (target?.status === "deleted")
+            throw new CommunityConflictError(
+              "A block on a deleted account stays in force",
+            );
+        }
         if (input.enabled) {
           await db.query(
             "INSERT INTO community.blocks(blocker_id,blocked_id) VALUES($1,$2) ON CONFLICT DO NOTHING",

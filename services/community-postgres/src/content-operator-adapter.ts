@@ -295,7 +295,9 @@ export class PostgresCommunityContentOperatorAdapter implements CommunityContent
       async (db) => {
         const user = (
           await db.query<{ status: PublicUserStatus }>(
-            "SELECT status FROM community.public_users WHERE id=$1",
+            // FOR SHARE waits for an account deletion in progress, so an
+            // enable can never land after the deletion disabled the row.
+            "SELECT status FROM community.public_users WHERE id=$1 FOR SHARE",
             [input.id],
           )
         ).rows[0];

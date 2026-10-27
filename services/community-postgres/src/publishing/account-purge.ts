@@ -48,6 +48,7 @@ export interface AccountPurgeLimits {
   readonly items: number;
   readonly images: number;
   readonly receipts: number;
+  readonly relations: number;
 }
 
 /**
@@ -62,6 +63,7 @@ export const ACCOUNT_PURGE_LIMITS: AccountPurgeLimits = Object.freeze({
   items: 100,
   images: 50,
   receipts: 500,
+  relations: 500,
 });
 
 const RECEIPT_TOMBSTONE = '{"permanentlyDeleted":true}';
@@ -278,7 +280,45 @@ const purgeReceipts: PurgeStep = async (context, limit) =>
     )
   ).rowCount ?? 0;
 
-/** Steps in dependency order: holders go before the media they hold. */
+/**
+ * The deletion's relation statements once more: follows naming the account
+ * and the blocks it set. Another user's follow that found the account still
+ * active can wait for the deletion's row lock and commit just after it.
+ * Blocks other users set against the account stay in force (r3).
+ */
+const purgeRelations: PurgeStep = async (context, limit) => {
+  const follows =
+    (
+      await context.db.query(
+        `WITH doomed AS MATERIALIZED (
+           SELECT follower_id,followed_id FROM community.follows
+           WHERE follower_id=$1 OR followed_id=$1
+           LIMIT $2
+         )
+         DELETE FROM community.follows f USING doomed
+         WHERE f.follower_id=doomed.follower_id AND f.followed_id=doomed.followed_id`,
+        [context.accountId, limit],
+      )
+    ).rowCount ?? 0;
+  if (follows === limit) return follows;
+  const blocks =
+    (
+      await context.db.query(
+        `WITH doomed AS MATERIALIZED (
+           SELECT blocked_id FROM community.blocks WHERE blocker_id=$1 LIMIT $2
+         )
+         DELETE FROM community.blocks b USING doomed
+         WHERE b.blocker_id=$1 AND b.blocked_id=doomed.blocked_id`,
+        [context.accountId, limit - follows],
+      )
+    ).rowCount ?? 0;
+  return follows + blocks;
+};
+
+/**
+ * Steps in dependency order: holders go before the media they hold. The
+ * relations go last, right before the record completes.
+ */
 const PURGE_STEPS: readonly (readonly [keyof AccountPurgeLimits, PurgeStep])[] =
   [
     ["works", purgeWorks],
@@ -288,6 +328,7 @@ const PURGE_STEPS: readonly (readonly [keyof AccountPurgeLimits, PurgeStep])[] =
     ["items", purgeItems],
     ["images", purgeImages],
     ["receipts", purgeReceipts],
+    ["relations", purgeRelations],
   ];
 
 /** WorkPublishingPort.purgeDeletedAccount */

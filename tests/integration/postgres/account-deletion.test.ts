@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   CommunityAuthService,
+  CommunityConflictError,
   CommunityInputError,
   CommunityNotFoundError,
   CommunitySessionService,
@@ -11,12 +12,15 @@ import {
   parsePostgresConfig,
 } from "@moya/catalog-postgres";
 import {
+  createArticleDelegationGuards,
+  PostgresArticleAuthoringAdapter,
   PostgresAuthorCommunityAdapter,
   PostgresCommunityAuthAdapter,
   PostgresCommunityCommentAdapter,
   PostgresCommunityIdentityAdapter,
   PostgresDirectMessageAdapter,
 } from "@moya/community-postgres";
+import { emptyArticleDocument } from "@moya/contracts/schemas";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -26,6 +30,7 @@ import {
 import { requireSyntheticTestDatabaseUrl } from "./synthetic-test-database.js";
 
 import type {
+  ArticleAuthoringActor,
   AuthDeliveryPorts,
   CommunityAuthPort,
   CommunityAuthServiceOptions,
@@ -527,6 +532,31 @@ describe("account deletion under the real App role", () => {
         )
       ).items,
     ).toEqual([]);
+    // The shield cannot be lifted either: a block on a deleted account could
+    // never be set again, so unblocking is refused and the row stays.
+    await expect(
+      authors.block(watcher, {
+        requestId: randomUUID(),
+        targetId: owner,
+        enabled: false,
+      }),
+    ).rejects.toBeInstanceOf(CommunityConflictError);
+    expect(
+      await count(
+        "SELECT count(*) AS n FROM community.blocks WHERE blocker_id=$1 AND blocked_id=$2",
+        [watcher, owner],
+      ),
+    ).toBe(1);
+    expect(
+      [
+        ...(
+          await comments.readDiscussion(discussion, watcher, {
+            page: 1,
+            pageSize: 20,
+          })
+        ).items,
+      ].map((item) => item.id),
+    ).not.toContain(ownerComment.id);
     // The counterpart keeps the history and cannot write again.
     const conversation = (
       await messages.listConversations(peer, { pageSize: 20 })
@@ -641,6 +671,104 @@ describe("account deletion under the real App role", () => {
       "SELECT count(*) AS n FROM community.auth_audit_events WHERE user_id=$1 AND action='account_delete'",
     ])
       expect(await count(sql, [owner]), sql).toBe(1);
+  });
+
+  it("leaves an Article agent connection authorized but unusable", async () => {
+    const registered = await register("erase-article@example.invalid");
+    const owner = registered.profile.id as PublicUserId;
+    // An authorized connection with its current grant, written as the setup
+    // role: the App role can neither write nor revoke these rows.
+    const connection = `article-connection-${hex32()}`;
+    const grant = `article-grant-${hex32()}`;
+    const client = `synthetic-article-client-${hex32()}`;
+    const authority = {
+      issuer: "https://issuer.example.invalid",
+      resource: "https://resource.example.invalid",
+      environment: "development",
+    } as const;
+    await db.setup.query(
+      `INSERT INTO community.article_authoring_connections
+         (id,owner_id,client_id,environment,generation,status,consented_at,updated_at)
+       VALUES($1,$2,$3,'development',1,'authorized',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`,
+      [connection, owner, client],
+    );
+    await db.setup.query(
+      `INSERT INTO community.article_authoring_grants
+         (grant_id,connection_id,generation,human_subject,oauth_client_id,issuer,resource,scopes,consented_at)
+       VALUES($1,$2,1,$3,$4,$5,$6,ARRAY['artvenn:article:draft'],CURRENT_TIMESTAMP)`,
+      [grant, connection, owner, client, authority.issuer, authority.resource],
+    );
+    await db.setup.query(
+      "UPDATE community.article_authoring_connections SET current_grant_id=$2 WHERE id=$1",
+      [connection, grant],
+    );
+    const now = new Date();
+    const delegated: ArticleAuthoringActor = {
+      source: "delegated",
+      userId: owner,
+      connectionId: connection,
+      generation: 1,
+      grantId: grant,
+      expiresAt: new Date(now.getTime() + 600_000).toISOString(),
+      scopes: ["artvenn:article:draft"],
+    };
+    const guards = createArticleDelegationGuards(authority);
+    // Admitted while the account is live (as the setup role, which may read
+    // the connection tables in this App-role fixture).
+    await expect(
+      guards.assertActor(db.setup, delegated, "draft-write", null, now),
+    ).resolves.toBeUndefined();
+
+    expect(
+      await service.deleteAccount({
+        sessionToken: registered.token,
+        reauthToken: await reauthenticate(registered.token),
+        idempotencyKey: key(),
+        expectedAccountId: owner,
+      }),
+    ).toMatchObject({ ok: true, value: { outcome: "deleted" } });
+
+    // Left as it was (documented), yet refused: the guard and every Article
+    // transaction require an active owner first.
+    expect(
+      (
+        await db.setup.query(
+          "SELECT status,generation,revoked_at,current_grant_id FROM community.article_authoring_connections WHERE id=$1",
+          [connection],
+        )
+      ).rows,
+    ).toEqual([
+      {
+        status: "authorized",
+        generation: "1",
+        revoked_at: null,
+        current_grant_id: grant,
+      },
+    ]);
+    await expect(
+      guards.assertActor(db.setup, delegated, "draft-write", null, now),
+    ).rejects.toBeInstanceOf(CommunityNotFoundError);
+    const articles = new PostgresArticleAuthoringAdapter(db.app, {
+      assertDelegatedActor: guards.assertActor,
+    });
+    await expect(
+      articles.create(
+        delegated,
+        {
+          requestId: randomUUID(),
+          title: "合成代理文章",
+          coverRefId: null,
+          document: emptyArticleDocument(),
+        },
+        now,
+      ),
+    ).rejects.toBeInstanceOf(CommunityNotFoundError);
+    expect(
+      await count(
+        "SELECT count(*) AS n FROM community.article_documents WHERE owner_id=$1",
+        [owner],
+      ),
+    ).toBe(0);
   });
 
   it("leaves an interrupted request untouched and retryable", async () => {

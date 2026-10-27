@@ -41,7 +41,9 @@ import type {
  * profile images and receipts are erased with the existing purge
  * machinery queued for the bytes; feedback, comments and other accounts
  * stay untouched; a second run changes nothing; batches are bounded and an
- * interrupted batch rolls back whole and resumes. The deletion itself
+ * interrupted batch rolls back whole and resumes; a follow another user
+ * committed just after the deletion goes, while blocks other users set
+ * against the account stay (r3). The deletion itself
  * (account-deletion.test.ts) is only mirrored here as its committed state:
  * status `deleted`, a pending deletion record and the queued job. Every
  * account, image and key is synthetic.
@@ -1143,5 +1145,95 @@ describe("deleted account purge under the real App role", () => {
       purge_state: "completed",
       purge_completed_at: at(60),
     });
+  });
+
+  it("removes a follow that committed after the deletion and keeps the blocks others set", async () => {
+    const subject = await createUser();
+    const follower = await createUser();
+    const followed = await createUser();
+    const blocker = await createUser();
+    const relations = async () =>
+      (
+        await query(
+          `SELECT
+             (SELECT count(*)::int FROM community.follows WHERE follower_id=$1) AS following,
+             (SELECT count(*)::int FROM community.follows WHERE followed_id=$1) AS followers,
+             (SELECT count(*)::int FROM community.blocks WHERE blocker_id=$1) AS blocking,
+             (SELECT count(*)::int FROM community.blocks WHERE blocked_id=$1) AS "blockedBy",
+             (SELECT count(*)::int FROM community.follows WHERE follower_id=$2 AND followed_id=$3) AS "othersFollow",
+             (SELECT count(*)::int FROM community.blocks WHERE blocker_id=$4 AND blocked_id=$2) AS "othersBlock"`,
+          [subject, follower, followed, blocker],
+        )
+      )[0];
+    await db.setup.query(
+      "INSERT INTO community.follows(follower_id,followed_id) VALUES($1,$2)",
+      [follower, followed],
+    );
+    for (const [from, to] of [
+      [blocker, subject],
+      [blocker, follower],
+    ])
+      await db.setup.query(
+        "INSERT INTO community.blocks(blocker_id,blocked_id) VALUES($1,$2)",
+        [from, to],
+      );
+    // Another user's follow as the App role runs it: the unlocked target
+    // check still finds the account active, and the insert, which waited on
+    // the deletion's row lock, commits after the deletion.
+    const late = await db.app.connect();
+    try {
+      await late.query("BEGIN");
+      expect(
+        (
+          await late.query(
+            "SELECT id FROM community.public_users WHERE id=$1 AND status='active'",
+            [subject],
+          )
+        ).rowCount,
+      ).toBe(1);
+      await markDeleted(subject, at(70));
+      await late.query(
+        "INSERT INTO community.follows(follower_id,followed_id) VALUES($1,$2)",
+        [follower, subject],
+      );
+      await late.query("COMMIT");
+    } catch (error) {
+      await late.query("ROLLBACK");
+      throw error;
+    } finally {
+      late.release();
+    }
+    // Stand-ins for the account's own rows, as if written after the deletion.
+    await db.setup.query(
+      "INSERT INTO community.follows(follower_id,followed_id) VALUES($1,$2)",
+      [subject, followed],
+    );
+    await db.setup.query(
+      "INSERT INTO community.blocks(blocker_id,blocked_id) VALUES($1,$2)",
+      [subject, followed],
+    );
+    expect(await relations()).toEqual({
+      following: 1,
+      followers: 1,
+      blocking: 1,
+      blockedBy: 1,
+      othersFollow: 1,
+      othersBlock: 1,
+    });
+
+    expect(await adapter.purgeDeletedAccount(subject, at(71))).toEqual({
+      status: "purged",
+      cancelledComponentIds: [],
+    });
+    // r3: the block set against the account stays; other accounts' rows too.
+    expect(await relations()).toEqual({
+      following: 0,
+      followers: 0,
+      blocking: 0,
+      blockedBy: 1,
+      othersFollow: 1,
+      othersBlock: 1,
+    });
+    expect((await deletionOf(subject))?.purge_state).toBe("completed");
   });
 });

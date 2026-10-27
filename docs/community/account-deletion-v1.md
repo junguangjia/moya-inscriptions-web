@@ -121,9 +121,12 @@ which kept them; the migration lets the draft-terminal trigger admit exactly
 that erasure, only for an owner whose account is `deleted`), cancels
 unreferenced media (the existing `purge_item`/`purge_blob` jobs delete private
 objects), tombstones every legacy, avatar and background image with its profile
-renditions, and scrubs author command receipt payloads. It then marks the record
-`completed`. A job that fails five real attempts stops in `failed` like other
-purge jobs and is retried by an operator.
+renditions, and scrubs author command receipt payloads. Last, it removes again
+every follow naming the account and every block the account set: another user's
+follow that found the account still active waits on the deletion's row lock and
+commits just after it (blocks other users set against the account stay, r3). It
+then marks the record `completed`. A job that fails five real attempts stops in
+`failed` like other purge jobs and is retried by an operator.
 
 ## Retained data and known limitations
 
@@ -146,7 +149,25 @@ purge jobs and is retried by an operator.
   draft-terminal trigger still refuses every other change of a deleted draft.
 - Blocks other users set against the deleted account stay in force (r3), so its
   retained comments and replies stay hidden from them; those blocks are no
-  longer listed in their 已屏蔽账户 and cannot be lifted there.
+  longer listed in their 已屏蔽账户 and cannot be lifted there or through the
+  API (unblocking a deleted account answers a conflict, because the block could
+  never be set again). An Owner recommendation is likewise refused for a deleted
+  account; both checks read the account under a share lock, so they wait for a
+  deletion in progress.
+- A follow of the account that commits only after the purge has completed (a
+  request that checked the account before the deletion and wrote after the
+  purge) stays; every people list and count shows active accounts only, so it is
+  never shown.
+- Article agent connections (`community.article_authoring_connections`) and
+  their grants, token wrappers and provider records are not revoked. The revoke
+  path runs as the separate Article control role; the App role that runs the
+  deletion and the purge cannot revoke (a connection's status, generation and
+  `revoked_at` and a wrapper's invalidation are granted only to the Article
+  control and issuer roles), and granting that is a change outside this task.
+  They stay `authorized` but cannot be used: every Article transaction first
+  locks the owner as an active account (the actor lock and the delegation
+  guard), and the issuer refuses a token for a grant whose owner is not active
+  (`invalid_grant`).
 - Challenge and handoff rows created without a user id (sign-in, registration,
   `register_confirm`) for a contact that was unlinked or replaced before the
   deletion, or that carry a digest from an earlier lookup-key version, are not

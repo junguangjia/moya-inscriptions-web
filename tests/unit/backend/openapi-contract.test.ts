@@ -623,6 +623,11 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
     );
     expect(deletion.operationId).toBe("deleteOwnAccount");
     expect(deletion.security).toEqual([{ session: [] }]);
+    // r3: only the blocks the account set go; blocks against it stay.
+    expect(deletion.description).toContain(
+      "the blocks it set (blocks other users set against it stay in force)",
+    );
+    expect(deletion.description).not.toMatch(/follows, blocks/u);
     expect(
       ((deletion.parameters ?? []) as unknown[]).map(asObject),
     ).toMatchObject([
