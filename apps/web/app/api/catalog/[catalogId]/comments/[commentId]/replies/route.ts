@@ -1,5 +1,9 @@
 import { readCommunitySessionToken } from "../../../../../../../lib/public-api/community-session-cookie";
 import {
+  assertedAccountOf,
+  isSameOriginWrite,
+} from "../../../../../../../lib/public-api/same-origin-write";
+import {
   createServerCatalogCommentReply,
   fetchServerCatalogCommentReplyPage,
 } from "../../../../../../../lib/public-api/server";
@@ -97,11 +101,17 @@ export const GET = async (
   }
 };
 
-/** The session credential stays in the HttpOnly cookie; Web only relays it. */
+/**
+ * The session credential stays in the HttpOnly cookie; Web only relays it.
+ * account-switching-v1: same-origin writes only, bound to the asserted account.
+ */
 export const POST = async (
   request: Request,
   context: ReplyRouteContext,
 ): Promise<Response> => {
+  if (!isSameOriginWrite(request)) return emptyResponse(403);
+  const asserted = assertedAccountOf(request);
+  if (!asserted.valid) return emptyResponse(422);
   const token = readCommunitySessionToken(request.headers.get("cookie"));
   if (token === undefined) return emptyResponse(401);
   const body = await readBoundedJson(request);
@@ -113,6 +123,7 @@ export const POST = async (
       commentId,
       token,
       body,
+      asserted.account,
     );
     switch (result.state) {
       case "success":

@@ -430,7 +430,11 @@ const ConversationView = ({
         autoFocus={target.conversationId === undefined}
         onSend={async (text) => {
           if (isNew) {
-            const result = await startConversationWith(participant.id, text);
+            const result = await startConversationWith(
+              participant.id,
+              text,
+              author.viewer?.id,
+            );
             if (result.ok)
               setResolution({ state: "ready", id: result.conversationId });
             return result.ok ? { ok: true } : result;

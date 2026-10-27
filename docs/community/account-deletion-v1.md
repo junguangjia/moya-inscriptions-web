@@ -37,16 +37,18 @@ session, the header `x-author-account` naming the confirmed account, and
 existing `reauthenticate` challenge (single use, bound to the session, ten
 minutes). Success answers `200 { outcome: "deleted", deletedAt }`,
 `private, no-store`; the relay then clears `yoyi-session` and
-`yoyi-appeal-session`. A 200 whose body the relay cannot use (cut off, not JSON,
-outside the contract) answers 502 and keeps both cookies, so the page's same-key
-retry still presents the revoked session and reaches the replay. Failures reuse
-existing reasons: `AUTH_UNAUTHENTICATED` (401: missing or foreign account,
-invalid session, a retry with another key or session), `AUTH_ACCOUNT_SUSPENDED`
-(401), `AUTH_PROOF_REJECTED` (422), `AUTH_CHANNEL_UNAVAILABLE` (503,
-password-only profile). An exact retry with the same key and the same, now
-revoked, session answers the original success. In a closed beta the operation is
-open in the product-access gate, like sign-out, so that retry still reaches its
-replay check; the first request still needs a live session.
+`yoyi-appeal-session` and lets go of this browser's saved copies of the account
+in `yoyi-saved-sessions` (#352; a copy whose end it cannot confirm stays). A 200
+whose body the relay cannot use (cut off, not JSON, outside the contract)
+answers 502 and keeps both cookies, so the page's same-key retry still presents
+the revoked session and reaches the replay. Failures reuse existing reasons:
+`AUTH_UNAUTHENTICATED` (401: missing or foreign account, invalid session, a
+retry with another key or session), `AUTH_ACCOUNT_SUSPENDED` (401),
+`AUTH_PROOF_REJECTED` (422), `AUTH_CHANNEL_UNAVAILABLE` (503, password-only
+profile). An exact retry with the same key and the same, now revoked, session
+answers the original success. In a closed beta the operation is open in the
+product-access gate, like sign-out, so that retry still reaches its replay
+check; the first request still needs a live session.
 
 The Web page keeps the idempotency key until a definitive answer. It
 says 账号没有被注销 only for a refusal that proves the account is still live:

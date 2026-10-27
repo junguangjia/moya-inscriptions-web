@@ -424,3 +424,33 @@ describe("shared private author transport without AbortSignal.any", () => {
     await expect(pending).rejects.toMatchObject({ status: 401 });
   });
 });
+
+// account-switching-v1: direct-message reads are bound to the confirmed account.
+describe("direct-message reads", () => {
+  it("name the confirmed account and are not sent before one is confirmed", async () => {
+    vi.stubGlobal("window", new EventTarget());
+    const fetch = vi.fn(async (url: string) =>
+      Response.json(
+        url.endsWith("/unread")
+          ? { unreadConversations: 0 }
+          : { items: [], nextCursor: null },
+      ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    await expect(authorClient.messages.unread()).rejects.toMatchObject({
+      status: 401,
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    const account = `user-${"a".repeat(32)}`;
+    authorClient.setAccount(account);
+    await authorClient.messages.unread();
+    await authorClient.messages.list();
+    const calls = fetch.mock.calls as unknown as [string, RequestInit][];
+    expect(calls.map(([url]) => url)).toEqual([
+      "/api/community/messages/unread",
+      "/api/community/messages?pageSize=20",
+    ]);
+    for (const [, init] of calls)
+      expect(init.headers).toMatchObject({ "x-author-account": account });
+  });
+});

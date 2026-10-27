@@ -557,6 +557,20 @@ export function useDiscussionThread({
   ) => {
     if (sendLock.current || !author.viewer || author.checking || composerClosed)
       return false;
+    // account-switching-v1: the composer shows, and keeps, only the draft of
+    // the account this view confirmed. When another tab's switch has already
+    // made a different account the client's confirmed one and this view has
+    // not followed yet, the draft is not sent at all, never as that account.
+    // Nothing awaits between this check and the request that names it.
+    if (authorClient.account() !== author.viewer.id) {
+      const message =
+        authorClient.account() === null
+          ? "账户状态暂时无法确认，这条内容未发送，请稍后重试。"
+          : "当前账户已切换，这条内容未发送。";
+      if (colophon) setActionError({ id: null, message });
+      else setError(message);
+      return false;
+    }
     sendLock.current = true;
     const run = epoch.current;
     setSubmitting(true);

@@ -117,14 +117,14 @@ export const handleAuthorRequest = async (
       );
       return;
     }
+    // account-switching-v1: a present account assertion that no longer names
+    // the session's account is refused on reads (private direct messages) as
+    // on writes, so a tab that has not seen a switch never reads or writes as
+    // the other account.
     const requireActor = () => {
       if (viewer === null) throw new Unauthorized();
       const expected = request.headers["x-author-account"];
-      if (
-        request.method !== "GET" &&
-        expected !== undefined &&
-        expected !== viewer
-      )
+      if (expected !== undefined && expected !== viewer)
         throw new Unauthorized();
       return viewer;
     };

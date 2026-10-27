@@ -9,6 +9,11 @@ vi.mock("./auth-api", async (importOriginal) => {
   return { ...original, authRequest: request };
 });
 
+const { announce } = vi.hoisted(() => ({ announce: vi.fn() }));
+vi.mock("../authors/session-change", () => ({
+  announceCommunitySessionChange: announce,
+}));
+
 vi.mock("./registration-avatar", () => ({
   RegistrationAvatar: ({ onComplete }: { onComplete: () => void }) => (
     <button data-registration-avatar="" onClick={onComplete}>
@@ -99,6 +104,7 @@ describe("AuthFlow", () => {
   beforeEach(() => {
     vi.stubEnv("NODE_ENV", "development");
     request.mockReset();
+    announce.mockReset();
     onReturn.mockReset();
     onModeChange.mockReset();
     request.mockImplementation(async (path: string): Promise<Response> => {
@@ -1401,5 +1407,130 @@ describe("AuthFlow", () => {
       purpose: "password_reset",
     });
     expect(bodies("challenges")[0]).not.toHaveProperty("invitationCode");
+  });
+
+  describe("add-account mode (account-switching-v1)", () => {
+    const limit = (status = 409, reason = "AUTH_ACCOUNT_LIMIT"): Response => ({
+      status,
+      body: {
+        error: {
+          code: status === 409 ? "CONFLICT" : "SERVICE_UNAVAILABLE",
+          message: reason,
+        },
+      },
+    });
+
+    it("keeps the ordinary flow free of the add-account header", async () => {
+      await render({}, false);
+      expect(calls("capabilities")[0]).toEqual(["capabilities"]);
+      expect(container.querySelector("h1")?.textContent).toBe("登录");
+    });
+
+    it("titles the page 添加账号 and names the mode on every request", async () => {
+      await render({ addAccount: true }, false);
+      expect(container.querySelector("h1")?.textContent).toBe("添加账号");
+      expect(container.textContent).toContain("当前账户仍可在“切换账号”中切回");
+      expect(calls("capabilities")[0]).toEqual([
+        "capabilities",
+        { addAccount: true },
+      ]);
+      expect(
+        container
+          .querySelector("footer a[href^='/register']")
+          ?.getAttribute("href"),
+      ).toBe("/register?return=%2F%3Fcatalog%3Dfixture&intent=add-account");
+      await setInput(input("input[type='email']"), "tester@example.com");
+      await setInput(
+        input("input[autocomplete='current-password']"),
+        syntheticPassword,
+      );
+      request.mockResolvedValueOnce({
+        status: 200,
+        body: { outcome: "signed_in", session: syntheticSession },
+      });
+      await click("登录");
+      expect(calls("passwords/login")[0]![1]).toMatchObject({
+        addAccount: true,
+      });
+      // Other tabs recheck their identity; this flow returns to its source.
+      expect(announce).toHaveBeenCalledOnce();
+      expect(onReturn).toHaveBeenCalledTimes(1);
+    });
+
+    it("sends the add-account header through code sign-in as well", async () => {
+      await render({ addAccount: true });
+      await startCode();
+      await enterCode();
+      await submit();
+      expect(calls("challenges")[0]![1]).toMatchObject({ addAccount: true });
+      expect(bodies("challenges")[0]!.purpose).toBe("sign_in");
+      expect(calls("challenges/verify")[0]![1]).toMatchObject({
+        addAccount: true,
+      });
+      expect(announce).toHaveBeenCalledOnce();
+      expect(onReturn).toHaveBeenCalledTimes(1);
+    });
+
+    it("explains a refused fourth account and never claims success", async () => {
+      await render({ addAccount: true }, false);
+      await setInput(input("input[type='email']"), "tester@example.com");
+      await setInput(
+        input("input[autocomplete='current-password']"),
+        syntheticPassword,
+      );
+      request.mockResolvedValueOnce(limit());
+      await click("登录");
+      expect(container.querySelector("[role=alert]")?.textContent).toContain(
+        "这台设备最多同时登录 3 个账户",
+      );
+      expect(announce).not.toHaveBeenCalled();
+      expect(onReturn).not.toHaveBeenCalled();
+    });
+
+    it("returns a limit refused at verification to the first step", async () => {
+      await render({ addAccount: true });
+      await startCode();
+      await enterCode();
+      request.mockResolvedValueOnce(limit());
+      await submit();
+      expect(
+        container.querySelector("main")?.getAttribute("data-auth-step"),
+      ).toBe("identifier");
+      expect(container.textContent).toContain("请先在“切换账号”中移除一个账户");
+      expect(onReturn).not.toHaveBeenCalled();
+    });
+
+    it("explains when the held accounts cannot be checked", async () => {
+      await render({ addAccount: true }, false);
+      await setInput(input("input[type='email']"), "tester@example.com");
+      await setInput(
+        input("input[autocomplete='current-password']"),
+        syntheticPassword,
+      );
+      request.mockResolvedValueOnce(
+        limit(503, "AUTH_ACCOUNT_STATE_UNAVAILABLE"),
+      );
+      await click("登录");
+      expect(container.querySelector("[role=alert]")?.textContent).toContain(
+        "暂时无法确认这台设备上已登录的账户",
+      );
+      expect(onReturn).not.toHaveBeenCalled();
+    });
+
+    it("announces a registration completed in add-account mode", async () => {
+      props = { ...props, addAccount: true, mode: "register" };
+      await startProfile();
+      await setInput(input("input[autocomplete='nickname']"), "合成新账户");
+      await act(async () =>
+        container
+          .querySelector<HTMLInputElement>("input[type='checkbox']")
+          ?.click(),
+      );
+      await click("创建账户");
+      expect(calls("registrations")[0]![1]).toMatchObject({
+        addAccount: true,
+      });
+      expect(announce).toHaveBeenCalledOnce();
+    });
   });
 });

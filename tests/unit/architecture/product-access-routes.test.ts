@@ -56,6 +56,9 @@ const routes: Readonly<Record<string, string>> = {
   "api/community/publishing/uploads/[componentId]/route.ts": "session",
   "api/community/auth/[...path]/route.ts": "bootstrap",
   "api/community/me/route.ts": "bootstrap",
+  // account-switching-v1: the held accounts and the switch between them.
+  "api/community/accounts/route.ts": "bootstrap",
+  "api/community/accounts/switch/route.ts": "bootstrap",
   "login/page.tsx": "bootstrap",
   "register/page.tsx": "bootstrap",
   "editorial-preview/[id]/page.tsx": "operator",
@@ -91,7 +94,7 @@ const proof: Readonly<Record<string, RegExp>> = {
   session:
     /\breadCommunitySessionToken\(|\brelay(?:ServerAuthorCommunity|NotificationStream|ServerPublishingMedia|ServerPublishingUpload|ServerProfileMedia)\b/u,
   bootstrap:
-    /\brelayServerCommunityAuth\b|\bfetchServerCurrentUser\b|<AuthPage\b|<AppealLogin\b/u,
+    /\brelayServerCommunity(?:Auth|Accounts)\b|\bfetchServerCurrentUser\b|<AuthPage\b|<AppealLogin\b/u,
   operator: /\bfetchServerEditorialPreview\(/u,
   development: /NODE_ENV\s*!==\s*"development"/u,
   asset: /kind: "(?:demo-assets|design-tokens|ui-styles|ui-assets)"/u,

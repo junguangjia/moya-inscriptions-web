@@ -16,6 +16,7 @@ const {
   enterAuth,
   returnView,
   context,
+  client,
 } = vi.hoisted(() => ({
   profile: vi.fn(),
   discussion: vi.fn(),
@@ -38,9 +39,22 @@ const {
     cache: new Map<string, unknown>(),
     signInHref: "/login",
   },
+  // The client's confirmed account; unset, it follows the view's.
+  client: { account: undefined as string | null | undefined },
 }));
 vi.mock("./author-data", () => ({
-  authorClient: { profile, discussion, replies, send, command, locate },
+  authorClient: {
+    profile,
+    discussion,
+    replies,
+    send,
+    command,
+    locate,
+    account: () =>
+      client.account === undefined
+        ? (context.viewer?.id ?? null)
+        : client.account,
+  },
   AuthorRequestError: class extends Error {},
 }));
 vi.mock("./author-context", () => ({
@@ -135,6 +149,7 @@ const ids = (rows: readonly { id: string }[]) => rows.map((r) => r.id);
 
 beforeEach(() => {
   vi.resetAllMocks();
+  client.account = undefined;
   Object.assign(context, {
     viewer: { id: "owner", displayName: "自己" },
     checking: false,
@@ -619,5 +634,61 @@ describe("useDiscussionThread detail mode", () => {
     expect(thread.error).toBe("操作失败");
     expect(thread.actionError).toBeNull();
     expect(thread.readError).toBeNull();
+  });
+});
+
+/*
+ * account-switching-v1: another tab can make a different account the client's
+ * confirmed one before this view follows. A draft written as the account this
+ * view shows is then never sent, in either mode, and never as the other one.
+ */
+describe("useDiscussionThread account binding", () => {
+  it.each(["colophon", "detail"] as const)(
+    "refuses a %s send once the client confirmed another account, and sends again once they agree",
+    async (mode) => {
+      await (mode === "colophon" ? colophon() : render());
+      client.account = `user-${"b".repeat(32)}`;
+      let sent: boolean | undefined;
+      await act(async () => {
+        sent = await thread.sendComment("写给自己的账户");
+      });
+      expect(sent).toBe(false);
+      expect(send).not.toHaveBeenCalled();
+      const message = "当前账户已切换，这条内容未发送。";
+      if (mode === "colophon")
+        expect(thread.actionError).toEqual({ id: null, message });
+      else expect(thread.error).toBe(message);
+      expect(thread.submitting).toBe(false);
+      // The view caught up (or the account came back): the send goes out.
+      client.account = undefined;
+      send.mockResolvedValueOnce({
+        id: "posted",
+        rootId: "posted",
+        item: reply("posted"),
+        awaitingApproval: true,
+      });
+      await act(async () => {
+        sent = await thread.sendReply(
+          { rootCommentId: "latest", user: { id: "other", name: "他" } },
+          "回一句",
+        );
+      });
+      expect(sent).toBe(true);
+      expect(send).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("says the account is unconfirmed, not switched, when a failed recheck cleared it", async () => {
+    await render();
+    client.account = null;
+    let sent: boolean | undefined;
+    await act(async () => {
+      sent = await thread.sendComment("写给自己的账户");
+    });
+    expect(sent).toBe(false);
+    expect(send).not.toHaveBeenCalled();
+    expect(thread.error).toBe(
+      "账户状态暂时无法确认，这条内容未发送，请稍后重试。",
+    );
   });
 });

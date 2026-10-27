@@ -16,11 +16,31 @@ import {
 } from "@moya/contracts/schemas";
 import { localCatalogFileUrl } from "../../features/detail/local-catalog-media";
 import {
+  accountOfSession,
+  appendSessionCookies,
+  completeAccountAddition,
+  holdsSavedSessions,
+  listCommunityAccounts,
+  parseAccountTarget,
+  releaseSavedSessionsOf,
+  removeCommunityAccount,
+  revokeCommunitySession,
+  signOutAllCommunityAccounts,
+  startAccountAddition,
+  switchCommunityAccount,
+} from "./community-accounts";
+import type { AccountAddition } from "./community-accounts";
+import {
   isSecureRequest,
   readCommunitySessionToken,
   serializeClearedCommunitySessionCookie,
   serializeCommunitySessionCookie,
 } from "./community-session-cookie";
+import {
+  assertedAccountOf,
+  isSameOriginRead,
+  isSameOriginWrite,
+} from "./same-origin-write";
 
 import { fetchCatalogSearchPage } from "./catalog-search";
 import type { CatalogSearchTransportResult } from "./catalog-search";
@@ -246,10 +266,12 @@ export const fetchServerCatalogCommentReplyPage = async (
   }
 };
 
+/** `account`: the confirmed account the browser wrote for (account-switching-v1). */
 export const createServerCatalogComment = async (
   catalogId: string,
   token: string,
   body: unknown,
+  account?: string,
 ): Promise<
   CommentSubmissionTransportResult<CatalogComment> | AccessDeniedTransportResult
 > => {
@@ -258,7 +280,13 @@ export const createServerCatalogComment = async (
     return await withVisitorSession(
       token,
       (fetch) =>
-        createCatalogComment({ baseUrl, fetch }, catalogId, token, body),
+        createCatalogComment(
+          { baseUrl, fetch },
+          catalogId,
+          token,
+          body,
+          account,
+        ),
       true,
     );
   } catch {
@@ -271,6 +299,7 @@ export const createServerCatalogCommentReply = async (
   commentId: string,
   token: string,
   body: unknown,
+  account?: string,
 ): Promise<
   | CommentSubmissionTransportResult<CatalogCommentReply>
   | AccessDeniedTransportResult
@@ -286,6 +315,7 @@ export const createServerCatalogCommentReply = async (
           commentId,
           token,
           body,
+          account,
         ),
       true,
     );
@@ -422,6 +452,8 @@ export const relayServerAuthorCommunity = async (
     );
   const articleAuthoring =
     suffix === "article-authoring" || suffix.startsWith("article-authoring/");
+  const directMessages =
+    suffix === "messages" || suffix.startsWith("messages/");
   if (request.method === "PUT" && !articleAuthoring) return fail(405);
   try {
     if (
@@ -453,10 +485,14 @@ export const relayServerAuthorCommunity = async (
       accept: "application/json, image/png",
     };
     if (token !== undefined) outgoing.Authorization = `Bearer ${token}`;
-    // Bind private inbox reads to the UI's confirmed account when another tab changed the cookie.
+    // Bind private inbox reads to the UI's confirmed account when another tab
+    // changed the cookie (account-switching-v1: direct messages too).
     if (
       request.method === "GET" &&
-      (suffix === "notifications" || articleAuthoring || reporting)
+      (suffix === "notifications" ||
+        articleAuthoring ||
+        reporting ||
+        directMessages)
     ) {
       const expected = request.headers.get("x-author-account");
       if (expected) {
@@ -1430,8 +1466,91 @@ export const relayServerProfileMedia = async (
 };
 
 /**
+ * account-switching-v1: the account routes this browser uses to see and swap
+ * its held accounts. The list only reads `me` with each held session and sets
+ * no cookie; ending a session needs the authentication ingress and lives in
+ * the auth relay. Both answer only this origin's own pages.
+ */
+export const relayServerCommunityAccounts = async (
+  request: Request,
+  operation: "list" | "switch",
+): Promise<Response> => {
+  const headers = {
+    "cache-control": "private, no-store",
+    vary: "Cookie",
+    "x-content-type-options": "nosniff",
+  };
+  const fail = (status: number) => new Response(null, { status, headers });
+  if (request.method !== (operation === "list" ? "GET" : "POST"))
+    return fail(405);
+  if (!(operation === "list" ? isSameOriginRead : isSameOriginWrite)(request))
+    return fail(403);
+  try {
+    const context = {
+      baseUrl: parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL),
+      fetch: globalThis.fetch,
+      now: Date.now(),
+    };
+    if (operation === "list")
+      return await listCommunityAccounts(context, request);
+    if (request.headers.get("content-type") !== "application/json")
+      return fail(422);
+    const body = await request.text();
+    if (body.length > accountTargetBodyLimit) return fail(413);
+    const accountId = parseAccountTarget(body);
+    if (accountId === null) return fail(422);
+    return await switchCommunityAccount(context, request, accountId);
+  } catch {
+    return fail(503);
+  }
+};
+
+const accountTargetBodyLimit = 1_024;
+/** account-switching-v1: the sign-in flow's add-account mode names itself. */
+const accountIntentHeader = "x-yoyi-account-intent";
+/** In add-account mode these never carry the current account's session. */
+const identifierOperations: ReadonlySet<string> = new Set([
+  "challenges",
+  "challenges/verify",
+  "passwords/login",
+  "passwords/reset",
+  "registrations",
+]);
+
+const challengePurposeOf = (body: string | undefined): unknown => {
+  try {
+    const value: unknown = JSON.parse(body ?? "");
+    return typeof value === "object" && value !== null && "purpose" in value
+      ? value.purpose
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const grantedUserOf = (profile: unknown): string | null =>
+  typeof profile === "object" &&
+  profile !== null &&
+  "id" in profile &&
+  typeof profile.id === "string" &&
+  /^user-[0-9a-f]{32}$/u.test(profile.id)
+    ? profile.id
+    : null;
+
+/**
  * Same-origin authentication relay. A session token returned by the Backend is
  * stored in the HttpOnly cookie and removed before the body reaches the browser.
+ *
+ * account-switching-v1: with `x-yoyi-account-intent: add` the sign-in and
+ * registration steps run for another account. They carry no current session
+ * (so a challenge never records the current account), refuse a fourth account
+ * before the Backend is asked, and a granted session becomes current while the
+ * previous account joins `yoyi-saved-sessions`. `accounts/remove` and
+ * `accounts/sign-out-all` end held sessions here, where the Backend's trusted
+ * authentication source is available. Without the header a sign-in, a
+ * sign-out and a confirmed account deletion only let go of the saved sessions
+ * of the account they sign in, sign out or delete (signing each out first),
+ * and a browser holding none gets the answer it always got.
  */
 export const relayServerCommunityAuth = async (
   request: Request,
@@ -1465,21 +1584,34 @@ export const relayServerCommunityAuth = async (
   if (!incoming.pathname.startsWith(prefix)) return fail(404);
   const suffix = incoming.pathname.slice(prefix.length);
   const deletion = suffix === "account/deletion";
+  const accountOperation =
+    suffix === "accounts/remove" || suffix === "accounts/sign-out-all";
   if (
-    (suffix === "sign-out" || suffix === "appeals/sign-out" || deletion) &&
+    (suffix === "sign-out" ||
+      suffix === "appeals/sign-out" ||
+      accountOperation ||
+      deletion) &&
     request.method !== "POST"
   )
     return fail(405);
-  // account-deletion-v1: deletion names the account the UI confirmed. The
+  const intent = request.headers.get(accountIntentHeader);
+  if (intent !== null && intent !== "add") return fail(422);
+  // A sign-out names the account the page shows; the Backend refuses it when
+  // another tab has made a different account current meanwhile.
+  // account-deletion-v1: deletion must name the account the UI confirmed. The
   // Backend refuses one that is not the Session's; a missing or malformed
   // header never leaves Web.
-  const account = deletion ? request.headers.get("x-author-account") : null;
-  if (deletion && (account === null || !/^user-[0-9a-f]{32}$/u.test(account)))
+  const asserted =
+    suffix === "sign-out" || deletion
+      ? assertedAccountOf(request)
+      : { valid: true };
+  if (!asserted.valid || (deletion && asserted.account === undefined))
     return fail(422);
+  const appeal = suffix.startsWith("appeals/");
   try {
     const base = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
     const target = new URL(`v1/community/auth/${suffix}`, base);
-    const token = suffix.startsWith("appeals/")
+    const token = appeal
       ? readAppealSessionToken(request.headers.get("cookie"))
       : readCommunitySessionToken(request.headers.get("cookie"));
     const sourceHeaders =
@@ -1487,18 +1619,90 @@ export const relayServerCommunityAuth = async (
         ? trustedAuthSourceHeaders(request)
         : {};
     if (sourceHeaders === null) return fail(403);
+    const accounts = {
+      baseUrl: base,
+      fetch: globalThis.fetch,
+      authSource: sourceHeaders,
+      now: Date.now(),
+    };
+    let body: string | undefined;
+    if (request.method === "POST") {
+      body = await request.text();
+      if (body.length > 16_384) return fail(413);
+    }
+    if (suffix === "accounts/sign-out-all")
+      return await signOutAllCommunityAccounts(accounts, request);
+    if (suffix === "accounts/remove") {
+      if (body!.length > accountTargetBodyLimit) return fail(413);
+      const accountId = parseAccountTarget(body!);
+      if (accountId === null) return fail(422);
+      return await removeCommunityAccount(accounts, request, accountId);
+    }
+    const adding = intent === "add" && identifierOperations.has(suffix);
+    const purpose =
+      adding && suffix === "challenges" ? challengePurposeOf(body) : undefined;
+    const signInChallenge = purpose === "sign_in" || purpose === "register";
+    // A factor challenge (link, replace, reauthenticate) stays bound to the
+    // current account even when the header is present.
+    const anonymous =
+      adding &&
+      (suffix !== "challenges" ||
+        signInChallenge ||
+        purpose === "password_reset");
+    const forwardedToken = anonymous ? undefined : token;
     const outgoing: Record<string, string> = {
       accept: "application/json",
       ...sourceHeaders,
     };
-    if (token !== undefined) outgoing.authorization = `Bearer ${token}`;
-    if (account !== null) outgoing["x-author-account"] = account;
-    let body: string | undefined;
-    if (request.method === "POST") {
-      outgoing["content-type"] = "application/json";
-      body = await request.text();
-      if (body.length > 16_384) return fail(413);
+    if (forwardedToken !== undefined)
+      outgoing.authorization = `Bearer ${forwardedToken}`;
+    if (asserted.account !== undefined)
+      outgoing["x-author-account"] = asserted.account;
+    if (body !== undefined) outgoing["content-type"] = "application/json";
+    let addition: AccountAddition | undefined;
+    if (
+      anonymous &&
+      (signInChallenge ||
+        suffix === "challenges/verify" ||
+        suffix === "passwords/login" ||
+        suffix === "registrations")
+    ) {
+      // A verification may finish a password reset as well as a sign-in, so
+      // only its granted session is checked against the account limit.
+      const started = await startAccountAddition(
+        accounts,
+        request,
+        suffix !== "challenges/verify",
+      );
+      if (!started.ok)
+        return Response.json(
+          {
+            error: {
+              code: started.status === 409 ? "CONFLICT" : "SERVICE_UNAVAILABLE",
+              message: started.reason,
+              requestId: crypto.randomUUID(),
+            },
+          },
+          {
+            status: started.status,
+            headers: appendSessionCookies(
+              new Headers(headers),
+              started.cookies,
+            ),
+          },
+        );
+      addition = started.addition;
     }
+    // 退出登录 also lets go of this browser's saved sessions of the account
+    // it signs out. Which account that is: the page's assertion (the Backend
+    // refuses a mismatch), or else `me` before the session ends. A browser
+    // that holds no saved session needs neither.
+    const signingOut =
+      suffix === "sign-out" &&
+      token !== undefined &&
+      holdsSavedSessions(request)
+        ? (asserted.account ?? (await accountOfSession(accounts, token)))
+        : null;
     const upstream = await fetch(target, {
       method: request.method,
       headers: outgoing,
@@ -1507,17 +1711,45 @@ export const relayServerCommunityAuth = async (
       signal: AbortSignal.timeout(15_000),
       ...(body === undefined ? {} : { body }),
     });
-    if (suffix === "sign-out" || suffix === "appeals/sign-out") {
-      const secure = isSecureRequest(request);
+    const secure = isSecureRequest(request);
+    if (suffix === "appeals/sign-out")
       return new Response(null, {
         status: upstream.status,
         headers: {
           ...headers,
-          "set-cookie":
-            suffix === "appeals/sign-out"
-              ? serializeClearedAppealSessionCookie(secure)
-              : serializeClearedCommunitySessionCookie(secure),
+          "set-cookie": serializeClearedAppealSessionCookie(secure),
         },
+      });
+    if (suffix === "sign-out") {
+      // The browser lets its current session go only once the Backend has
+      // ended it, or no longer accepts it at all (`me` refuses it too). Any
+      // other answer (unavailable, a mismatch with the account another tab
+      // made current, a refused assertion) leaves the session and its cookie
+      // in place, so 退出登录 can be retried and never leaves a live session
+      // this browser can no longer end. Other held accounts stay listed.
+      await upstream.body?.cancel().catch(() => undefined);
+      const signedOut =
+        upstream.ok ||
+        forwardedToken === undefined ||
+        (upstream.status === 401 &&
+          (await communitySessionRefused(base, forwardedToken)));
+      // Once this browser is signed out of the account, its saved copies of
+      // that account go too (a copy the Backend still accepts would otherwise
+      // be switchable after the page leaves); unconfirmed ones stay held.
+      const released =
+        signedOut && signingOut !== null
+          ? await releaseSavedSessionsOf(accounts, request, signingOut)
+          : {};
+      return new Response(null, {
+        // A session the Backend no longer accepts is already over: this
+        // browser is signed out, so the page leaves as on a confirmed one.
+        status: signedOut && !upstream.ok ? 204 : upstream.status,
+        headers: appendSessionCookies(new Headers(headers), {
+          ...(signedOut
+            ? { active: serializeClearedCommunitySessionCookie(secure) }
+            : {}),
+          ...released,
+        }),
       });
     }
     if (deletion && upstream.status === 200) {
@@ -1535,13 +1767,19 @@ export const relayServerCommunityAuth = async (
       if (!json) await cancelQuietly(upstream.body);
       const result = authAccountDeletionResultSchema.safeParse(payload);
       if (!result.success) return fail(502);
-      // This browser keeps neither its ordinary nor its appeal cookie.
-      const secure = isSecureRequest(request);
-      const cleared = new Headers(headers);
-      cleared.append(
-        "set-cookie",
-        serializeClearedCommunitySessionCookie(secure),
-      );
+      // This browser keeps neither its ordinary nor its appeal cookie, and
+      // lets go of its saved copies of the deleted account: the deletion
+      // revoked every Session of it, so each copy's sign-out is refused and
+      // the copy leaves the list. A copy whose sign-out cannot be confirmed
+      // (unavailable) stays held, as after 退出登录.
+      const released =
+        asserted.account === undefined
+          ? {}
+          : await releaseSavedSessionsOf(accounts, request, asserted.account);
+      const cleared = appendSessionCookies(new Headers(headers), {
+        active: serializeClearedCommunitySessionCookie(secure),
+        ...released,
+      });
       cleared.append("set-cookie", serializeClearedAppealSessionCookie(secure));
       return Response.json(result.data, { status: 200, headers: cleared });
     }
@@ -1561,17 +1799,27 @@ export const relayServerCommunityAuth = async (
       )
         return fail(503);
     }
-    const secure = isSecureRequest(request);
-    let setCookie: string | undefined;
+    let cookies: { active?: string; saved?: string } = {
+      ...addition?.cookies,
+    };
+    let appealCookie: string | undefined;
+    // An appeal session is not the ordinary one: refusing it never signs the
+    // ordinary account out. In add-account mode a password reset (for the
+    // account being added) leaves the current account signed in.
     if (
       (suffix === "passwords/reset" &&
+        !adding &&
         upstream.status === 200 &&
         authPasswordResetResultSchema.safeParse(payload).success) ||
       (upstream.status === 401 &&
-        token !== undefined &&
-        (await communitySessionRefused(base, token)))
+        !appeal &&
+        forwardedToken !== undefined &&
+        (await communitySessionRefused(base, forwardedToken)))
     )
-      setCookie = serializeClearedCommunitySessionCookie(secure);
+      cookies = {
+        ...cookies,
+        active: serializeClearedCommunitySessionCookie(secure),
+      };
     if (
       typeof payload === "object" &&
       payload !== null &&
@@ -1586,20 +1834,71 @@ export const relayServerCommunityAuth = async (
         typeof session.token === "string" &&
         typeof session.expiresAt === "string"
       ) {
-        setCookie = (
-          suffix.startsWith("appeals/")
-            ? serializeAppealSessionCookie
-            : serializeCommunitySessionCookie
-        )(session.token, new Date(session.expiresAt), secure);
+        const grant = {
+          token: session.token,
+          expiresAt: new Date(session.expiresAt),
+        };
         delete session.token;
+        if (appeal)
+          appealCookie = serializeAppealSessionCookie(
+            grant.token,
+            grant.expiresAt,
+            secure,
+          );
+        else if (addition === undefined) {
+          const userId =
+            "profile" in session ? grantedUserOf(session.profile) : null;
+          cookies = {
+            ...cookies,
+            active: serializeCommunitySessionCookie(
+              grant.token,
+              grant.expiresAt,
+              secure,
+            ),
+            ...(userId === null
+              ? {}
+              : await releaseSavedSessionsOf(accounts, request, userId)),
+          };
+        } else {
+          const userId =
+            "profile" in session ? grantedUserOf(session.profile) : null;
+          if (userId === null) {
+            await revokeCommunitySession(accounts, grant.token);
+            return fail(502);
+          }
+          const completed = await completeAccountAddition(
+            accounts,
+            addition,
+            grant,
+            userId,
+          );
+          if (!completed.accepted)
+            return Response.json(
+              {
+                error: {
+                  code: "CONFLICT",
+                  message: "AUTH_ACCOUNT_LIMIT",
+                  requestId: crypto.randomUUID(),
+                },
+              },
+              {
+                status: 409,
+                headers: appendSessionCookies(
+                  new Headers(headers),
+                  completed.cookies,
+                ),
+              },
+            );
+          cookies = completed.cookies;
+        }
       }
     }
+    const responseHeaders = appendSessionCookies(new Headers(headers), cookies);
+    if (appealCookie !== undefined)
+      responseHeaders.append("set-cookie", appealCookie);
     return Response.json(payload, {
       status: upstream.status,
-      headers: {
-        ...headers,
-        ...(setCookie === undefined ? {} : { "set-cookie": setCookie }),
-      },
+      headers: responseHeaders,
     });
   } catch {
     return fail(503);

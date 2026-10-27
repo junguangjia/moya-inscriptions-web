@@ -139,7 +139,11 @@ const parsePage = (
     parseCommentPageQuery(query, fallbackPageSize),
   );
 
-/** Resolves the session owner; undefined means the request is unauthenticated. */
+/**
+ * Resolves the session owner; undefined means the request is unauthenticated.
+ * account-switching-v1: a present `x-author-account` must still name that
+ * owner, so a comment written for one account is never posted as another.
+ */
 const identify = async (
   request: IncomingMessage,
   response: ServerResponse,
@@ -150,6 +154,11 @@ const identify = async (
     token === undefined ? null : await sessionService.identify(token);
   if (profile === null) {
     sendApiError(response, "UNAUTHENTICATED", "A valid session is required");
+    return undefined;
+  }
+  const asserted = request.headers["x-author-account"];
+  if (asserted !== undefined && asserted !== profile.id) {
+    sendApiError(response, "UNAUTHENTICATED", "Account changed");
     return undefined;
   }
   return profile.id;

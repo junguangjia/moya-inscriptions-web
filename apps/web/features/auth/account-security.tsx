@@ -9,6 +9,7 @@ import type { AuthAccountView } from "./auth-api";
 
 import styles from "./account-security.module.css";
 import { SettingsIcon } from "../settings/settings-icons";
+import { announceCommunitySessionChange } from "../authors/session-change";
 
 type Channel = "email" | "phone";
 type Action = "link" | "replace" | "unlink";
@@ -587,15 +588,26 @@ export const AccountSecurity = ({
             onClick={() => {
               if (busyRef.current || guardSignOut?.() === false) return;
               void run(async (valid) => {
+                // account-switching-v1: name the account this page shows, so
+                // a sign-out never ends an account another tab made current.
                 const result = await authRequest("sign-out", {
                   method: "POST",
                   body: {},
+                  ...(expectedViewerId === undefined
+                    ? {}
+                    : { account: expectedViewerId }),
                 });
                 if (!valid()) return;
                 if (result.status >= 200 && result.status < 300) {
+                  announceCommunitySessionChange();
                   if (onSignedOut) onSignedOut();
                   else window.location.assign("/");
-                } else setError("退出未能确认，请重试。");
+                } else
+                  setError(
+                    result.status === 409
+                      ? "当前账户已在其他页面切换，请刷新页面后再退出。"
+                      : "退出未能确认，请重试。",
+                  );
               });
             }}
           >
