@@ -411,6 +411,17 @@ export type PublishingPurgePlan =
 /** `purgeTrashedWork` outcome; `not_due` also covers a restored work. */
 export type PublishingTrashPurge = "purged" | "not_due" | "missing";
 
+/**
+ * `purgeDeletedAccount` outcome (account-deletion-v1). `partial`: one bounded
+ * batch committed and more of the account remains (the job runs again).
+ * `purged`: nothing is left to erase and the deletion record says so, after
+ * this run or an earlier one. `missing`: no deleted account with a deletion
+ * record; nothing changed.
+ */
+export interface PublishingAccountPurge extends PublishingStoppedUploads {
+  readonly status: "purged" | "partial" | "missing";
+}
+
 /** Settings and account capacity reads, and capacity reconciliation. */
 export interface PublishingSettingsOperations {
   /**
@@ -914,6 +925,27 @@ export interface PublishingWorkOperations {
    * deletion (reservations released, purge at `now`).
    */
   purgeTrashedWork(workId: string, now: Date): Promise<PublishingTrashPurge>;
+  /**
+   * Job `purge_deleted_account` (account-deletion-v1): one bounded batch of
+   * a deleted account's erasure, in one transaction under the account's row
+   * lock, only while the account is `deleted` and its deletion record is
+   * pending. In order: every work that still holds content (trashed and
+   * trash-purged ones too) is erased as `deleteWork` erases it; the active
+   * publishing sessions are discarded; the drafts with their conflict copies
+   * and snapshots are removed as `deleteDraft` removes them; the article
+   * drafts end as an article draft deletion ends them; the account's media
+   * no holder references any more is cancelled (purge at `now`); every
+   * profile and legacy image is erased (empty bytes) with its renditions
+   * released; and every author command receipt payload becomes the
+   * content-free tombstone. A step that reaches its batch bound ends the run
+   * as `partial`; the run that finds nothing left records the completion.
+   * Media held by feedback or a published article revision stays (retained
+   * by decision). Idempotent: an interrupted run rolls back whole.
+   */
+  purgeDeletedAccount(
+    accountId: string,
+    now: Date,
+  ): Promise<PublishingAccountPurge>;
 }
 
 /** Private derivative read authorization (P13, S04). */

@@ -379,4 +379,10 @@ export const requiredCommunityMigrations: readonly RequiredCommunityMigration[] 
       checksum:
         "0fe727a146b52b58fe9268b77b74dea140260509b226caeec63571acab6ecc85",
     }),
+    Object.freeze({
+      migrationId: "20261027010000",
+      filename: "20261027010000_account_deletion.sql",
+      checksum:
+        "06f8c363b7480e275e7dcd49a97a5a297987bb4ed9b3b3d4c8c87a882920282b",
+    }),
   ]);

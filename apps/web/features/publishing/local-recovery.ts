@@ -303,6 +303,33 @@ export const createIndexedDbBackend = (
   };
 };
 
+/**
+ * account-deletion-v1: removes every record of an ended account from this
+ * browser, whatever its draft. Other accounts' records are untouched.
+ */
+export const clearAccountRecovery = async (
+  backend: RecoveryBackend,
+  accountId: string,
+): Promise<void> => {
+  if (!ACCOUNT_PATTERN.test(accountId)) return;
+  for (const value of await backend.list([accountId])) {
+    const record = value as { draftId?: unknown; itemKey?: unknown } | null;
+    if (
+      typeof record?.draftId === "string" &&
+      typeof record.itemKey === "string"
+    )
+      await backend.delete([accountId, record.draftId, record.itemKey]);
+  }
+};
+
+/** The browser form of `clearAccountRecovery`; nothing to do without IndexedDB. */
+export const clearBrowserAccountRecovery = async (
+  accountId: string,
+): Promise<void> => {
+  if (typeof indexedDB === "undefined") return;
+  await clearAccountRecovery(createIndexedDbBackend(indexedDB), accountId);
+};
+
 /** The browser store, or null where IndexedDB or storage estimates are missing. */
 export const createBrowserRecoveryStore = (): LocalRecoveryStore | null => {
   if (typeof indexedDB === "undefined" || typeof navigator === "undefined")

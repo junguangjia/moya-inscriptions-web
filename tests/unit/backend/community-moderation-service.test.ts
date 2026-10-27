@@ -350,6 +350,18 @@ describe("CommunityModerationService", () => {
     ]);
   });
 
+  it("refuses to suspend or reinstate a deleted account and records nothing", async () => {
+    const harness = createHarness();
+    const id = fixtureUsers.active.id;
+    harness.identityPort.setStatus(id, "deleted");
+    for (const action of ["suspend", "reinstate"] as const)
+      await expect(
+        harness.moderation.moderateUser(id, { action }),
+      ).rejects.toMatchObject({ name: "CommunityConflictError" });
+    expect(harness.identityPort.users.get(id)?.status).toBe("deleted");
+    expect(harness.commentPort.events).toHaveLength(0);
+  });
+
   it("leaves the user status unchanged when the audit row cannot be written", async () => {
     const harness = createHarness();
     const id = fixtureUsers.active.id;

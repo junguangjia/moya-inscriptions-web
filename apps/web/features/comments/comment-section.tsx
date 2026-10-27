@@ -114,7 +114,8 @@ interface RowInteractions {
 const RowContext = createContext<RowInteractions>({ actor: "" });
 const AuthorName = ({ user }: { user: CommentUserPresentation }) => {
   const actions = useContext(RowContext);
-  return actions.open ? (
+  // A deleted author (account-deletion-v1) has no profile to open.
+  return actions.open && user.deleted !== true ? (
     <button
       className={styles.userName}
       type="button"
@@ -173,7 +174,24 @@ const BodyReport = ({
 };
 const Avatar = ({ user }: { readonly user: CommentUserPresentation }) => {
   const actions = useContext(RowContext);
-  return (
+  const face = (
+    <span
+      aria-label={`${user.name}的头像`}
+      className={styles.avatarContent}
+      data-comment-avatar=""
+      role="img"
+    >
+      {user.avatarSrc === undefined || user.avatarSrc === null ? (
+        user.name.trim().slice(0, 1) || "访"
+      ) : (
+        <img alt="" src={user.avatarSrc} loading="lazy" decoding="async" />
+      )}
+    </span>
+  );
+  // A deleted author (account-deletion-v1) has no profile to open.
+  return user.deleted === true ? (
+    <span className={styles.avatar}>{face}</span>
+  ) : (
     <button
       type="button"
       className={styles.avatar}
@@ -181,18 +199,7 @@ const Avatar = ({ user }: { readonly user: CommentUserPresentation }) => {
       aria-label={`打开${user.name}的主页`}
       onClick={(e) => actions.open?.(user.id, e.currentTarget)}
     >
-      <span
-        aria-label={`${user.name}的头像`}
-        className={styles.avatarContent}
-        data-comment-avatar=""
-        role="img"
-      >
-        {user.avatarSrc === undefined || user.avatarSrc === null ? (
-          user.name.trim().slice(0, 1) || "访"
-        ) : (
-          <img alt="" src={user.avatarSrc} loading="lazy" decoding="async" />
-        )}
-      </span>
+      {face}
     </button>
   );
 };

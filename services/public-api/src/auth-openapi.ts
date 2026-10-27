@@ -170,4 +170,40 @@ export const authPaths = {
       },
     },
   },
+  "/v1/community/auth/account/deletion": {
+    post: {
+      operationId: "deleteOwnAccount",
+      summary: "Permanently delete the signed-in public account",
+      description:
+        "account-deletion-v1. Takes effect at once and cannot be undone. Requires the Session, x-author-account naming the Session's account and a single-use reauthenticate proof of a bound phone or email issued to this Session. One transaction revokes every Session, closes auth receipts, removes every login identity and the password credential (the phone and email are free to register again), anonymizes the profile (the handle stays reserved), removes the account's follows in both directions, the blocks it set (blocks other users set against it stay in force), its likes, favorites and comment likes, and withdraws its public content; works and media are purged in the background. Comments, replies and direct messages keep their text under the anonymized name. An exact retry with the same idempotency key returns the same result after the Session was revoked.",
+      security: [{ session: [] }],
+      parameters: [
+        {
+          name: "x-author-account",
+          in: "header",
+          required: true,
+          schema: { type: "string", pattern: "^user-[0-9a-f]{32}$" },
+          description:
+            "The account the client confirmed. A missing or different account is refused and nothing changes.",
+        },
+      ],
+      requestBody: commandBody("AuthAccountDeletionRequest"),
+      responses: {
+        "200": json(
+          "The account is deleted. No credential in the body.",
+          "AuthAccountDeletionResult",
+        ),
+        "401": failure(
+          "No valid Session of the confirmed active account, or a deleted account's non-matching retry. ApiErrorCode UNAUTHENTICATED.",
+        ),
+        "422": failure(
+          "Missing, expired, consumed or foreign re-verification proof. ApiErrorCode INVALID_INPUT.",
+        ),
+        "500": failure("Internal service error. ApiErrorCode INTERNAL_ERROR."),
+        "503": failure(
+          "Re-verification is unavailable in this profile, or the service is unavailable. ApiErrorCode SERVICE_UNAVAILABLE.",
+        ),
+      },
+    },
+  },
 };

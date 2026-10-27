@@ -8,11 +8,12 @@ import {
   useRef,
   useState,
 } from "react";
+import type { RefObject } from "react";
 import type { AuthorProfile } from "@moya/contracts";
 import { useAuthReturn, useAuthReturnView } from "../auth/auth-return";
 import { AuthorDialog } from "./author-dialog";
 import type { AuthorDialogNavigationHandle } from "./author-dialog";
-import { authorClient } from "./author-data";
+import { authorClient, AuthorRequestError } from "./author-data";
 import { useAuthors } from "./author-context";
 import { requestIdentity } from "../shell/request-identity";
 import { useProductShell } from "../product-shell/product-shell";
@@ -20,6 +21,14 @@ import { ArticleAgentConnections } from "../editorial-content/article-authoring/
 import { useArticleAvailability } from "../editorial-content/article-authoring/article-availability";
 import { AccountSecurity } from "../auth/account-security";
 import type { AccountSecurityHandle } from "../auth/account-security";
+import {
+  AccountDeletion,
+  AccountDeletionEntry,
+} from "../auth/account-deletion";
+import type { AccountDeletionHandle } from "../auth/account-deletion";
+import { useGlobalUploadProgress } from "../publishing/publishing-provider";
+import { useEndAccountEditing } from "../publishing/ui/editor/editor-session-provider";
+import { forgetDeletedAccount } from "./account-local-data";
 import {
   SettingsFeedbackForm,
   useSettingsFeedback,
@@ -39,7 +48,8 @@ type Page =
   | "security"
   | "factor"
   | "reports"
-  | "feedback";
+  | "feedback"
+  | "deletion";
 const titles: Record<Page, string> = {
   root: "设置",
   display: "外观",
@@ -49,6 +59,7 @@ const titles: Record<Page, string> = {
   factor: "验证登录方式",
   reports: "我的举报与申诉",
   feedback: "反馈与建议",
+  deletion: "注销账号",
 };
 const themeLabels = {
   system: "跟随系统",
@@ -182,6 +193,86 @@ const motionTiming = (element: HTMLElement | null) => {
 };
 const reducedMotion = () =>
   window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+/** Child pages whose private state is never restored after an auth journey. */
+const restorablePage = (value: Page): Page =>
+  value === "factor" || value === "deletion" ? "security" : value;
+
+/**
+ * account-deletion-v1: mounted only on its own page, inside the product's
+ * PublishingProvider, so the composer's unfinished work and a pending avatar
+ * save are known before the account is ended. While the deletion's outcome is
+ * pending or shown, Session rechecks wait, so neither this page nor the Session
+ * a same-key retry presents is torn down by a revoked-Session answer. While
+ * an attempt is unconfirmed, the dialog asks the page before Back leaves it.
+ */
+const DeletionPage = ({
+  owner,
+  settingsDirty,
+  navigationRef,
+  onBusyChange,
+  onCancel,
+  onFinished,
+}: {
+  owner: string;
+  settingsDirty: boolean;
+  navigationRef: RefObject<AccountDeletionHandle | null>;
+  onBusyChange: (busy: boolean) => void;
+  onCancel: () => void;
+  onFinished: () => void;
+}) => {
+  const progress = useGlobalUploadProgress();
+  const { avatarSave, holdSession } = useAuthors();
+  const endEditing = useEndAccountEditing();
+  const release = useRef<(() => void) | null>(null);
+  const holdWhilePending = useCallback(
+    (pending: boolean) => {
+      if (pending) release.current ??= holdSession();
+      else {
+        release.current?.();
+        release.current = null;
+      }
+    },
+    [holdSession],
+  );
+  useEffect(
+    () => () => {
+      release.current?.();
+      release.current = null;
+    },
+    [],
+  );
+  const forget = useCallback(
+    async (accountId: string) => {
+      // Nothing of the ended account may write its local data again in this
+      // tab (a live composer, its uploads or autosave), then the data goes.
+      endEditing(accountId);
+      await forgetDeletedAccount(accountId);
+    },
+    [endEditing],
+  );
+  const unfinished = [
+    ...(progress.active || progress.backgroundPublication === true
+      ? ["作品图片仍在上传、处理或发布中。"]
+      : []),
+    ...(progress.hasUnsavedChanges ? ["正在编辑的作品还有未保存的更改。"] : []),
+    ...(avatarSave?.accountId === owner && !avatarSave.failed
+      ? ["新头像还没有保存完成。"]
+      : []),
+    ...(settingsDirty ? ["设置里还有未保存的更改或未发送的反馈。"] : []),
+  ];
+  return (
+    <AccountDeletion
+      expectedViewerId={owner}
+      unfinishedWork={unfinished}
+      navigationRef={navigationRef}
+      onBusyChange={onBusyChange}
+      onPendingChange={holdWhilePending}
+      onCancel={onCancel}
+      onDeleted={forget}
+      onFinished={onFinished}
+    />
+  );
+};
 
 export const ProfileSettings = ({
   profile,
@@ -219,8 +310,7 @@ export const ProfileSettings = ({
     } => {
       // Navigation is public presentation state. Account data and factor proofs
       // stay in their existing account-scoped components and are reloaded.
-      const current =
-        pageRef.current === "factor" ? "security" : pageRef.current;
+      const current = restorablePage(pageRef.current);
       return {
         page: current,
         positions: {
@@ -232,9 +322,7 @@ export const ProfileSettings = ({
   );
   const restoredPage: Page =
     authReturnView && Object.hasOwn(titles, authReturnView.page)
-      ? authReturnView.page === "factor"
-        ? "security"
-        : authReturnView.page
+      ? restorablePage(authReturnView.page)
       : "root";
   const [page, setPage] = useState<Page>(restoredPage),
     [direction, setDirection] = useState<"forward" | "back" | "none">("none");
@@ -261,7 +349,8 @@ export const ProfileSettings = ({
   const closingRef = useRef(false),
     closeTimer = useRef<number | null>(null);
   const navigation = useRef<AuthorDialogNavigationHandle>(null),
-    security = useRef<AccountSecurityHandle>(null);
+    security = useRef<AccountSecurityHandle>(null),
+    deletion = useRef<AccountDeletionHandle>(null);
   const viewport = useRef<HTMLDivElement>(null),
     scroller = useRef<HTMLDivElement>(null),
     title = useRef<HTMLSpanElement>(null);
@@ -625,9 +714,19 @@ export const ProfileSettings = ({
       author.mutate();
       await loadBlocks();
     } catch (reason) {
+      if (!valid()) return;
+      // Any refusal reloads the true list. An account deleted after the list
+      // was read is no longer listed, yet its block stays in force
+      // (account-deletion-v1 r3): lifting it is refused with a conflict, the
+      // only one this command meets from this page.
+      await loadBlocks();
       if (valid())
         setBlocksError(
-          reason instanceof Error ? reason.message : "解除失败，请重试。",
+          reason instanceof AuthorRequestError && reason.status === 409
+            ? "该账号已注销，屏蔽将继续有效"
+            : reason instanceof Error
+              ? reason.message
+              : "解除失败，请重试。",
         );
     } finally {
       if (valid()) setMutationBusy(false);
@@ -679,7 +778,13 @@ export const ProfileSettings = ({
       guardChildBack={false}
       dismissible={!blocked}
       closeRequested={editRequested || signedOut}
-      navigationDepth={page === "root" ? 0 : page === "factor" ? 2 : 1}
+      leaveGuard={() =>
+        pageRef.current === "deletion" &&
+        (deletion.current?.requestLeave() ?? false)
+      }
+      navigationDepth={
+        page === "root" ? 0 : page === "factor" || page === "deletion" ? 2 : 1
+      }
       navigationRef={navigation}
       onBack={(depth) => {
         if (depth < 2 && pageRef.current === "factor")
@@ -970,7 +1075,26 @@ export const ProfileSettings = ({
                   {articleAuthoring && page === "security" ? (
                     <ArticleAgentConnections />
                   ) : null}
+                  {page === "security" && (
+                    <AccountDeletionEntry
+                      disabled={blocked}
+                      onOpen={() => show("deletion")}
+                    />
+                  )}
                 </>
+              ) : (
+                guest
+              ))}
+            {page === "deletion" &&
+              (ownProfile ? (
+                <DeletionPage
+                  owner={owner!}
+                  settingsDirty={dirty}
+                  navigationRef={deletion}
+                  onBusyChange={handleSecurityBusy}
+                  onCancel={back}
+                  onFinished={() => setSignedOut(true)}
+                />
               ) : (
                 guest
               ))}

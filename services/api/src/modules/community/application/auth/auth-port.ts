@@ -26,7 +26,8 @@ export interface StoredUser {
   readonly displayName: string;
   readonly studioName?: string;
   readonly studioNameSuffix?: string;
-  readonly status: "active" | "suspended";
+  /** `deleted` is terminal (account-deletion-v1); it never signs in or appeals. */
+  readonly status: "active" | "suspended" | "deleted";
 }
 
 export interface StoredIdentity {
@@ -117,6 +118,18 @@ export interface StoredPasswordResetReceipt {
   readonly payloadHash: string;
   readonly credentialVersion: number;
   readonly closedAt: string | null;
+}
+
+/**
+ * The record of one deleted account (account-deletion-v1). The request key
+ * hash and the requesting Session id let an exact retry return the first
+ * result after that Session was revoked; neither is a credential.
+ */
+export interface StoredAccountDeletion {
+  readonly userId: string;
+  readonly requestKeyHash: string;
+  readonly sessionId: string;
+  readonly deletedAt: string;
 }
 
 export interface LockedAuthSession {
@@ -260,6 +273,23 @@ export interface AuthUnitOfWork {
   ): Promise<"ok" | "conflict">;
   revokeAllSessions(userId: string, atIso: string): Promise<void>;
   closeUserReceipts(userId: string, atIso: string): Promise<void>;
+  findAccountDeletion(userId: string): Promise<StoredAccountDeletion | null>;
+  /**
+   * Ends a locked, active account in the caller's transaction
+   * (account-deletion-v1): the terminal status and the anonymized profile
+   * (the handle stays reserved), every login identity, the password
+   * credential and the contact ciphertext of its auth history, the account's
+   * own relations, the deletion record, withdrawal of its public media copies
+   * and the queued background purge of its works and media. Sessions,
+   * receipts and proofs are the caller's to close first.
+   */
+  eraseAccount(input: {
+    readonly userId: string;
+    readonly atIso: string;
+    readonly displayName: string;
+    readonly requestKeyHash: string;
+    readonly sessionId: string;
+  }): Promise<void>;
 }
 
 export interface CommunityAuthPort {

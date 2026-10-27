@@ -23,6 +23,7 @@ import type {
   CommentAuthor,
   PublicUserProfile,
 } from "@moya/contracts";
+import { DELETED_AUTHOR_NAME } from "./comment-types";
 import type {
   CommentItem,
   CommentReply,
@@ -58,12 +59,20 @@ export const formatCommentTimeLabel = (
 
 export const toCommentUserPresentation = (
   author: CommentAuthor | PublicUserProfile,
-): CommentUserPresentation => ({
-  avatarSrc: null,
-  id: author.id,
-  name: author.displayName,
-  studioName: author.studioName,
-});
+): CommentUserPresentation =>
+  "deleted" in author && author.deleted === true
+    ? {
+        avatarSrc: null,
+        deleted: true,
+        id: author.id,
+        name: DELETED_AUTHOR_NAME,
+      }
+    : {
+        avatarSrc: null,
+        id: author.id,
+        name: author.displayName,
+        studioName: author.studioName,
+      };
 
 export const toCommentReplyPresentation = (
   reply: CatalogCommentReply,

@@ -56,7 +56,9 @@ export const productAccessPath = "/v1/community/access";
  * Everything a closed beta leaves reachable without an admitted session. None
  * of it serves product content: readiness, the session owner's own identity,
  * the access answer, and the operations that obtain or end a session (each
- * keeps its own existing rules, such as closed registration).
+ * keeps its own existing rules, such as closed registration). Account deletion
+ * ends every session of its account, so its exact retry, which carries the
+ * already revoked session, still reaches its own replay check.
  */
 const openPaths: ReadonlySet<string> = new Set([
   "/health",
@@ -74,6 +76,7 @@ const openAuthOperations: ReadonlySet<string> = new Set([
   "POST passwords/reset",
   "POST registrations",
   "POST sign-out",
+  "POST account/deletion",
   "POST appeals/login",
   "POST appeals/challenges",
   "POST appeals/verify",

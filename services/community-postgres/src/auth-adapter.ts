@@ -1,3 +1,8 @@
+import {
+  eraseAccount,
+  findAccountDeletionSql,
+  type AccountDeletionRow,
+} from "./account-deletion.js";
 import { asCommunityOperationError } from "./availability.js";
 
 import type {
@@ -958,6 +963,26 @@ export class PostgresCommunityAuthAdapter implements CommunityAuthPort {
           "UPDATE community.auth_password_reset_receipts SET closed_at=$2 WHERE user_id=$1 AND closed_at IS NULL",
           [id, at],
         );
+      },
+      findAccountDeletion: async (userId) => {
+        const [row] = await query<AccountDeletionRow>(findAccountDeletionSql, [
+          userId,
+        ]);
+        return row === undefined
+          ? null
+          : {
+              userId: row.user_id,
+              requestKeyHash: row.request_key_hash,
+              sessionId: row.session_id,
+              deletedAt: iso(row.deleted_at),
+            };
+      },
+      eraseAccount: async (input) => {
+        try {
+          await eraseAccount(client, input);
+        } catch (error) {
+          throw asCommunityOperationError(error, "query");
+        }
       },
       countUsers: async () => {
         const rows = await query<{ count: string }>(

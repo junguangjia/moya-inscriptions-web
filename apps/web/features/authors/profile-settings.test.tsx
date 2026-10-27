@@ -14,7 +14,16 @@ const {
   setFeedLayoutPreference,
   session,
   presentation,
+  AuthorRequestError,
 } = vi.hoisted(() => ({
+  AuthorRequestError: class AuthorRequestError extends Error {
+    constructor(
+      readonly status: number,
+      message: string,
+    ) {
+      super(message);
+    }
+  },
   authRequest: vi.fn(),
   feedbackSubmit: vi.fn(),
   people: vi.fn(),
@@ -33,7 +42,10 @@ vi.mock("../../lib/public-api/feedback-client", () => ({
   feedbackClient: { submit: feedbackSubmit },
   feedbackImageLimits: { maxImages: 3, maxBytes: 10 * 1024 * 1024 },
 }));
-vi.mock("./author-data", () => ({ authorClient: { people, command } }));
+vi.mock("./author-data", () => ({
+  authorClient: { people, command },
+  AuthorRequestError,
+}));
 vi.mock("./author-context", () => ({
   useAuthors: () => ({ signInHref: "/login", viewer: session, mutate }),
 }));
@@ -424,6 +436,57 @@ describe("grouped My settings", () => {
     await act(async () => pending.resolve({}));
     expect(people).toHaveBeenCalledTimes(2);
     expect(node.textContent).toContain("暂无已屏蔽账户");
+  });
+  it("reloads the true list when an unblock is refused", async () => {
+    // r3: the account was deleted after the list was read. Its block stays in
+    // force, the Backend refuses to lift it, and it is no longer listed.
+    command
+      .mockRejectedValueOnce(
+        new AuthorRequestError(
+          409,
+          "A block on a deleted account stays in force",
+        ),
+      )
+      .mockRejectedValueOnce(new Error("暂时无法完成，请重试"));
+    people
+      .mockResolvedValueOnce({
+        items: [person],
+        page: 1,
+        pageSize: 20,
+        total: 1,
+      })
+      .mockResolvedValueOnce({ items: [], page: 1, pageSize: 20, total: 0 })
+      .mockResolvedValueOnce({
+        items: [person],
+        page: 1,
+        pageSize: 20,
+        total: 1,
+      })
+      .mockResolvedValueOnce({
+        items: [person],
+        page: 1,
+        pageSize: 20,
+        total: 1,
+      });
+    const { node } = await render();
+    await click(node, "已屏蔽账户");
+    await click(node, "解除屏蔽");
+    expect(people).toHaveBeenCalledTimes(2);
+    expect(people).toHaveBeenLastCalledWith(profile.id, "blocks", 1);
+    expect(node.querySelector("[role=alert]")?.textContent).toBe(
+      "该账号已注销，屏蔽将继续有效",
+    );
+    expect(node.textContent).not.toContain("@synthetic-blocked");
+    expect(node.textContent).toContain("暂无已屏蔽账户");
+    // Any other refusal reloads as well and keeps its own message.
+    await click(node, "重试");
+    await click(node, "解除屏蔽");
+    expect(people).toHaveBeenCalledTimes(4);
+    expect(node.querySelector("[role=alert]")?.textContent).toBe(
+      "暂时无法完成，请重试",
+    );
+    expect(node.textContent).toContain("@synthetic-blocked");
+    expect(mutate).not.toHaveBeenCalled();
   });
   it("requires a failed post-unblock refresh to recover before paging again", async () => {
     people

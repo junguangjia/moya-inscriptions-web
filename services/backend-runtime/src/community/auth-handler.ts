@@ -1,5 +1,7 @@
 import { isCommunityStoreUnavailableError } from "@moya/api";
 import {
+  authAccountDeletionRequestSchema,
+  authAccountDeletionResultSchema,
   authAccountSecuritySchema,
   authCapabilitiesSchema,
   authChallengeAcceptedSchema,
@@ -12,6 +14,7 @@ import {
   authUnlinkRequestSchema,
   authVerifyRequestSchema,
   publicUserDisplayNameSchema,
+  publicUserIdSchema,
   publicUserProfileSchema,
 } from "@moya/contracts/schemas";
 
@@ -431,6 +434,40 @@ export const handleCommunityAuth = async (
           session: sessionBody(result.value.session),
           account: authAccountSecuritySchema.parse(result.value.account),
         },
+        noStore,
+      );
+      return;
+    }
+    if (path === "account/deletion") {
+      // account-deletion-v1: the confirmed account must own the Session. A
+      // missing or malformed assertion is refused here, one naming another
+      // account by the service, both before anything changes.
+      const asserted = request.headers["x-author-account"];
+      if (
+        typeof asserted !== "string" ||
+        !publicUserIdSchema.safeParse(asserted).success
+      ) {
+        sendFailure(response, "AUTH_UNAUTHENTICATED");
+        return;
+      }
+      const parsed = authAccountDeletionRequestSchema.safeParse(body);
+      if (!parsed.success) {
+        sendApiError(response, "INVALID_INPUT", "AUTH_PROOF_REJECTED");
+        return;
+      }
+      const result = await service.deleteAccount({
+        ...parsed.data,
+        sessionToken: token,
+        expectedAccountId: asserted,
+      });
+      if (!result.ok) {
+        sendFailure(response, result.reason);
+        return;
+      }
+      sendJson(
+        response,
+        200,
+        authAccountDeletionResultSchema.parse(result.value),
         noStore,
       );
       return;

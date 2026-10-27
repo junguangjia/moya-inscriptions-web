@@ -442,6 +442,8 @@ export class PublishingRuntime {
   readonly store: ExternalStore<RuntimeSnapshot>;
   private readonly services: PublishingServices;
   private readonly accounts = new Map<string, AccountRuntime>();
+  /** Deleted accounts (see `forgetAccount`): never given a runtime again. */
+  private readonly ended = new Set<string>();
   private accountId: string | null = null;
   private readonly timers: UploadTimers;
   private selectionTail: Promise<void> = Promise.resolve();
@@ -463,8 +465,10 @@ export class PublishingRuntime {
   /**
    * The confirmed viewer. Every other account's manager and session pauses;
    * nothing of theirs is visible or resumed while another account is active.
+   * A deleted account counts as a guest.
    */
-  setAccount(accountId: string | null): void {
+  setAccount(viewer: string | null): void {
+    const accountId = viewer !== null && this.ended.has(viewer) ? null : viewer;
     if (accountId === this.accountId) return;
     this.cancelSelectionReads();
     for (const [id, account] of this.accounts)
@@ -551,6 +555,38 @@ export class PublishingRuntime {
         this.pumpPublication(account, account.session);
       });
       void this.loadLimits(accountId);
+    }
+    this.publish();
+  }
+
+  /**
+   * account-deletion-v1: the account was deleted. Its uploads, preprocessing,
+   * autosave, heartbeat and publication stop for good and late answers are
+   * fenced, so nothing of it is sent or stored on this browser again (a local
+   * copy still being written is removed). The runtime drops the account and
+   * treats it as a guest from now on, even while it is still the viewer.
+   */
+  forgetAccount(accountId: string): void {
+    this.ended.add(accountId);
+    if (this.accountId === accountId) {
+      this.cancelSelectionReads();
+      this.accountId = null;
+    }
+    const account = this.accounts.get(accountId);
+    if (account) {
+      this.accounts.delete(accountId);
+      const session = account.session;
+      if (session) {
+        session.closed = true;
+        session.pendingPublication = null;
+        session.unsubscribe();
+        this.stopHeartbeat(session);
+        session.autosave?.dispose();
+        session.readiness.dispose();
+        session.submission.dispose();
+      }
+      account.completed?.dispose();
+      account.manager.dispose();
     }
     this.publish();
   }

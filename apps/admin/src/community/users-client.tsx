@@ -4,7 +4,7 @@ import type {
   OperatorUser,
   OperatorUserPage,
 } from "@moya/contracts/internal/community-operator";
-import { call, describeFailure, formatTime } from "./api";
+import { call, describeFailure, formatTime, userStatusLabels } from "./api";
 import { BulkActions } from "./bulk-actions";
 import styles from "./community.module.css";
 
@@ -209,18 +209,24 @@ export const CommunityUsers = ({
                     加入于 {formatTime(u.createdAt)}
                   </span>
                 </td>
-                <td>{u.status === "active" ? "正常" : "已停用"}</td>
+                <td>{userStatusLabels[u.status]}</td>
                 <td>{u.submittedWorks}</td>
                 <td>
-                  <button
-                    type="button"
-                    className={styles.actionButton}
-                    aria-pressed={u.recommended}
-                    disabled={blocked}
-                    onClick={() => onRecommend(u)}
-                  >
-                    {u.recommended ? "已推荐用户" : "推荐用户"}
-                  </button>
+                  {/* A deleted account is never recommended again; only an
+                      earlier recommendation can still be withdrawn. */}
+                  {u.status === "deleted" && !u.recommended ? (
+                    <span className={styles.secondary}>不可推荐</span>
+                  ) : (
+                    <button
+                      type="button"
+                      className={styles.actionButton}
+                      aria-pressed={u.recommended}
+                      disabled={blocked}
+                      onClick={() => onRecommend(u)}
+                    >
+                      {u.recommended ? "已推荐用户" : "推荐用户"}
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}

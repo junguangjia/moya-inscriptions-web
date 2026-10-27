@@ -207,9 +207,19 @@ A controlled rotation is an explicit offline data migration, not startup work:
    distinctions unchanged.
 
 The owner-level user DELETE/CASCADE hypothesis reproduces a last-identity
-rejection, but there is no implemented account-closing/hard-delete path. The
-existing account lifecycle is suspension/reinstatement and session revocation.
-No account-delete feature, broad cascade or last-factor relaxation is added.
+rejection, and there is still no hard-delete path or broad cascade. Account
+deletion (`account-deletion-v1`, migration `20261027010000_account_deletion`)
+keeps the `public_users` row as a terminal `deleted` tombstone. The
+last-identity trigger allows removing identities only for a `deleted` owner; for
+every other account the last-factor rule is unchanged. The same migration
+replaces `community.reject_deleted_article_update()` (same identity, owner and
+privileges) so the account purge can empty an article draft the author had
+deleted, only while the owner is `deleted`. That release adds runtime DELETE on
+`user_password_credentials`, `auth_challenges`, `auth_handoffs` and
+`profile_ip_locations`, and SELECT, INSERT and UPDATE(purge_state,
+purge_completed_at) on `account_deletions`; `public_users` keeps no DELETE.
+Apply the migration, re-apply the runtime grants, then start the new builds (see
+[`docs/community/account-deletion-v1.md`](../community/account-deletion-v1.md)).
 
 ## Readiness and verification
 

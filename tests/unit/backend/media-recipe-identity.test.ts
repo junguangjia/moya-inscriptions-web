@@ -61,6 +61,13 @@ const profileMigration = await readFile(
   ),
   "utf8",
 );
+const accountDeletionMigration = await readFile(
+  new URL(
+    "../../../database/community-migrations/20261027010000_account_deletion.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 describe("rendition recipe identity, version 1", () => {
   it("records the registry's roles and identity form only", () => {
@@ -242,8 +249,15 @@ describe("rendition recipe identity, version 1", () => {
       ...RENDITION_ROLES,
     ]);
     expect(listed("publishing_jobs_kind_valid", profileMigration)).toEqual(
-      publishingJobKindSchema.options,
+      publishingJobKindSchema.options.filter(
+        (kind) => kind !== "purge_deleted_account",
+      ),
     );
+    // Migration 20261027010000 (account-deletion-v1) restates the complete
+    // job kind list with the account purge.
+    expect(
+      listed("publishing_jobs_kind_valid", accountDeletionMigration),
+    ).toEqual(publishingJobKindSchema.options);
     const profileRoles =
       /CONSTRAINT media_renditions_profile_roles CHECK[^;]*?\brole\s+IN\s*\(([^)]*)\)/u.exec(
         profileMigration,

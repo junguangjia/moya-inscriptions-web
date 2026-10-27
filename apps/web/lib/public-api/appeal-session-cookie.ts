@@ -1,5 +1,6 @@
 import {
   readCommunitySessionToken,
+  serializeClearedCommunitySessionCookie,
   serializeCommunitySessionCookie,
 } from "./community-session-cookie";
 const name = "yoyi-appeal-session";
@@ -22,6 +23,11 @@ export const serializeAppealSessionCookie = (
   secure: boolean,
 ): string =>
   serializeCommunitySessionCookie(token, expiresAt, secure).replace(
+    /^yoyi-session=/u,
+    `${name}=`,
+  );
+export const serializeClearedAppealSessionCookie = (secure: boolean): string =>
+  serializeClearedCommunitySessionCookie(secure).replace(
     /^yoyi-session=/u,
     `${name}=`,
   );

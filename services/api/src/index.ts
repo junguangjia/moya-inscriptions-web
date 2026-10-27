@@ -274,6 +274,7 @@ export type {
 } from "./modules/community/application/ports/profile-media-asset-port.js";
 export type {
   ProfileRenditionReadTarget,
+  PublishingAccountPurge,
   PublishingBlobUnlink,
   PublishingCleanupCounts,
   PublishingCommandIdentity,

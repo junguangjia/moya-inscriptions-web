@@ -289,6 +289,23 @@ export const authUnlinkRequestSchema = z.strictObject({
   idempotencyKey: idempotencyKeySchema,
 });
 
+/**
+ * account-deletion-v1: ends the signed-in account at once; nothing undoes it.
+ * The request names no account: the Session and the `x-author-account`
+ * header bind it, and the single-use re-verification token proves a fresh
+ * OTP of a bound contact. An exact retry with the same idempotency key
+ * returns the same result after the Session was revoked.
+ */
+export const authAccountDeletionRequestSchema = z.strictObject({
+  reauthToken: continuationTokenSchema,
+  idempotencyKey: idempotencyKeySchema,
+});
+
+export const authAccountDeletionResultSchema = z.strictObject({
+  outcome: z.literal("deleted"),
+  deletedAt: z.iso.datetime({ offset: false }),
+});
+
 export type AuthChannel = z.infer<typeof authChannelSchema>;
 export type AuthChannelState = z.infer<typeof authChannelStateSchema>;
 export type AuthFactor = z.infer<typeof authFactorSchema>;
@@ -307,3 +324,9 @@ export type AuthFactorCompleteRequest = z.infer<
   typeof authFactorCompleteRequestSchema
 >;
 export type AuthUnlinkRequest = z.infer<typeof authUnlinkRequestSchema>;
+export type AuthAccountDeletionRequest = z.infer<
+  typeof authAccountDeletionRequestSchema
+>;
+export type AuthAccountDeletionResult = z.infer<
+  typeof authAccountDeletionResultSchema
+>;

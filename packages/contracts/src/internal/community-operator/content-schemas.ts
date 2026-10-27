@@ -39,7 +39,7 @@ export const operatorUserSchema = z.strictObject({
   handle: z.string(),
   displayName: z.string(),
   bio: z.string(),
-  status: z.enum(["active", "suspended"]),
+  status: z.enum(["active", "suspended", "deleted"]),
   createdAt: z.iso.datetime(),
   submittedWorks: z.number().int().nonnegative(),
   recommended: z.boolean(),
@@ -63,7 +63,7 @@ export const operatorWorkSchema = z.strictObject({
   text: z.string(),
   authorId: z.string(),
   authorName: z.string(),
-  authorStatus: z.enum(["active", "suspended"]),
+  authorStatus: z.enum(["active", "suspended", "deleted"]),
   state: z.enum(["visible", "hidden", "removed"]),
   authorDeleted: z.boolean(),
   version,
@@ -306,7 +306,7 @@ export const operatorDmConversationSchema = z.strictObject({
       z.strictObject({
         id: userId,
         displayName: z.string(),
-        status: z.enum(["active", "suspended"]),
+        status: z.enum(["active", "suspended", "deleted"]),
       }),
     )
     .length(2),

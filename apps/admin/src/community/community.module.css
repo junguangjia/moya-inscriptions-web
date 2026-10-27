@@ -280,7 +280,8 @@
   color: var(--yoyi-color-text-primary);
 }
 
-.chip[data-state="hidden"] {
+.chip[data-state="hidden"],
+.chip[data-state="deleted"] {
   background: var(--yoyi-color-background-muted);
   color: var(--yoyi-color-text-secondary);
 }
