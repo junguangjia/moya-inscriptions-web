@@ -26,7 +26,7 @@
   "geographyPolicy": "cn-province-map-v2",
   "localizationPatch": {
     "file": "chinese-workspace.patch",
-    "sha256": "7bf49c82e4984c7b0aeab8d39260f1c6d395fbf680ffb5578bc8d5f8f5f74f7a",
+    "sha256": "916b3f583c79cdcbb5fc081b55d7e1c50a3b6378df6f6dbaa8bad5b5701b7ea6",
     "scope": "Chinese UI/display search; contextual municipal names; derived China province groups; China map and expandable geography lists; no stored key changes",
     "upstreamHashes": "upstream-chinese.sha256 (after pool patch)",
     "patchedHashes": "patched-chinese.sha256",
@@ -36,7 +36,7 @@
     "cityEntries": 14144,
     "globalCityEntries": 13397,
     "regionEntries": 1320,
-    "identitySha256": "8837add35d5511240fa319a0fe75c3ce392a066c08e3b21cb91d22d58c12d17c"
+    "identitySha256": "5c9fbafa4c53345e3abc61d09168557d217f85177e0d1162391d7bfbc8eccc1d"
   },
   "postgresTlsPatch": {
     "file": "pg-tls-host.patch",
@@ -62,5 +62,25 @@
     "noticeSha256": "9c7d4778ad5c927ebb19371132f4b4943147f28f13eca7c60b1bd1a6852d79e1",
     "officialReference": "https://www.mfa.gov.cn/ziliao_674904/zgdt/202607/t20260722_11989560.shtml",
     "officialReviewNumberAssignedToDataV": false
+  },
+  "archiveShell": {
+    "mode": "/admin/analytics-workspace only",
+    "assetsManifest": "archive-assets.json",
+    "manifestSha256": "fe237aca231056972ba5a3533f88b5a3cd96f69df26ad306e7303180a1eb6683",
+    "snapshots": {
+      "archive-theme.css": {
+        "sha256": "62c0496afbbd07112fce0fe8127a640665d33fe9468a2500930651bc27341478",
+        "target": "src/app/archive-theme.css"
+      },
+      "archive-navigation.json": {
+        "sha256": "ff1f9d243b15fb124103483cf14145a029c0c919fa68b26a9c9d12a46f09339c",
+        "target": "src/data/archive-navigation.json"
+      },
+      "archive-icons.svg": {
+        "sha256": "8d39d4a06bb7d863d2b954454b1d8e414e1d8a642245716f2e4343854b48f863",
+        "target": "public/archive-icons.svg"
+      }
+    },
+    "scope": "canonical Admin navigation/theme only; native analysis/auth/2FA/query permissions preserved"
   }
 }

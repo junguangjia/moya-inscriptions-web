@@ -14,10 +14,12 @@ const id = "[0-9a-f-]{36}";
 const teamDetail = new RegExp(`^/api/teams/${id}$`, "iu");
 const teamWebsites = new RegExp(`^/api/teams/${id}/websites$`, "iu");
 const teamBoards = new RegExp(`^/api/teams/${id}/boards$`, "iu");
+const teamLinks = new RegExp(`^/api/teams/${id}/links$`, "iu");
+const teamPixels = new RegExp(`^/api/teams/${id}/pixels$`, "iu");
 const userWebsites = new RegExp(`^/api/users/${id}/websites$`, "iu");
 const websiteDetail = new RegExp(`^/api/websites/${id}$`, "iu");
 const teamPage = new RegExp(
-  `^/teams/${id}(?:/(?:websites|boards)(?:/[^/]+)*)?/?$`,
+  `^/teams/${id}(?:/(?:websites|boards|links|pixels)(?:/[^/]+)*)?/?$`,
   "iu",
 );
 const pick = (value: unknown, keys: readonly string[]) =>
@@ -111,6 +113,8 @@ export const createAnalyticsProxy =
         !isTeamDetail &&
         !isWebsiteList &&
         !teamBoards.test(suffix) &&
+        !teamLinks.test(suffix) &&
+        !teamPixels.test(suffix) &&
         suffix !== "/api/2fa/status" &&
         !["/api/me", "/api/me/teams", "/api/me/websites"].includes(suffix))
     )

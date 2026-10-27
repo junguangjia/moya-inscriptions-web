@@ -73,11 +73,1232 @@
 +    "max-length": "最多 {n} 个字符",
 +    "api-key-created": "请立即复制接口密钥，关闭后将无法再次查看。",
 +    "no-api-keys": "你尚未创建接口密钥。"
+--- /dev/null
++++ b/src/app/(main)/App.archive.test.tsx
+@@ -0,0 +1,104 @@
++import { cleanup, render, screen } from '@testing-library/react';
++import { afterEach, beforeEach, expect, test, vi } from 'vitest';
++
++const runtime = vi.hoisted(() => ({
++  private: true,
++  loading: false,
++  error: undefined as unknown,
++  teamError: undefined as unknown,
++  config: { cloudMode: false } as { cloudMode: boolean } | undefined,
++  user: { id: 'synthetic-user', username: 'SYNTHETIC_SERVICE_VIEWER' } as object | null,
++  twoFactor: { isRequired: false, isEnabled: false },
++  replace: vi.fn(),
++  twoFactorQuery: vi.fn(),
++}));
++vi.mock('@/lib/archive-admin', () => ({
++  get archiveAdminMode() {
++    return runtime.private;
++  },
++}));
++vi.mock('@/components/hooks', () => ({
++  useLoginQuery: () => ({ user: runtime.user, isLoading: runtime.loading, error: runtime.error }),
++  useConfig: () => runtime.config,
++  useNavigation: () => ({
++    pathname: '/teams/synthetic/websites/synthetic',
++    teamId: 'synthetic-team',
++    router: { replace: runtime.replace },
++  }),
++  useTeamQuery: () => ({ isLoading: false, error: runtime.teamError }),
++  useTwoFactorStatusQuery: (enabled: boolean) => {
++    runtime.twoFactorQuery(enabled);
++    return { data: runtime.twoFactor };
++  },
++}));
++vi.mock('./ArchiveShell', () => ({
++  ArchiveShell: ({ children }: any) => <div data-archive-shell>{children}</div>,
++  ArchiveServiceError: () => <p role="alert">分析服务暂时不可用</p>,
++}));
++vi.mock('@/app/(main)/SideNav', () => ({ SideNav: () => <div>PROVIDER_SIDE_NAV</div> }));
++vi.mock('@/app/(main)/TopNav', () => ({ TopNav: () => <div>PROVIDER_ACCOUNT_SITE_PICKERS</div> }));
++vi.mock('@/app/(main)/MobileNav', () => ({ MobileNav: () => <div>PROVIDER_MOBILE_NAV</div> }));
++vi.mock('@/components/modals/TwoFactorSetupModal', () => ({
++  TwoFactorSetupModal: () => <div role="dialog" aria-label="必须完成双重验证" />,
++}));
++vi.mock('./UpdateNotice', () => ({ UpdateNotice: () => null }));
++vi.mock('next/script', () => ({ default: () => null }));
++vi.mock('@/lib/storage', () => ({ removeItem: vi.fn(), setItem: vi.fn() }));
++import { App } from './App';
++
++beforeEach(() => {
++  runtime.private = true;
++  runtime.loading = false;
++  runtime.error = undefined;
++  runtime.teamError = undefined;
++  runtime.config = { cloudMode: false };
++  runtime.user = { id: 'synthetic-user', username: 'SYNTHETIC_SERVICE_VIEWER' };
++  runtime.twoFactor = { isRequired: false, isEnabled: false };
++  runtime.replace.mockClear();
++  runtime.twoFactorQuery.mockClear();
++});
++afterEach(cleanup);
++test('private chrome keeps the original analysis children and hides provider identity/navigation', () => {
++  const { container } = render(
++    <App>
++      <section>原分析内容</section>
++    </App>,
++  );
++  expect(container.querySelector('[data-archive-shell]')).not.toBeNull();
++  expect(screen.getByText('原分析内容')).toBeDefined();
++  expect(screen.queryByText(/PROVIDER_/)).toBeNull();
++  expect(screen.queryByText('SYNTHETIC_SERVICE_VIEWER')).toBeNull();
++  expect(container.querySelector('iframe')).toBeNull();
++  expect(runtime.twoFactorQuery).toHaveBeenCalledWith(true);
++});
++test('private service/auth failure is recoverable even while config is missing', () => {
++  runtime.config = undefined;
++  runtime.error = new Error('synthetic-service-failure');
++  render(<App>受保护内容</App>);
++  expect(screen.getByRole('alert')).toBeDefined();
++  expect(screen.queryByText('受保护内容')).toBeNull();
++  expect(runtime.replace).not.toHaveBeenCalled();
++});
++test('private team failure never redirects to the provider personal dashboard', () => {
++  runtime.teamError = new Error('synthetic-team-failure');
++  render(<App>受保护内容</App>);
++  expect(screen.getByRole('alert')).toBeDefined();
++  expect(runtime.replace).not.toHaveBeenCalled();
++});
++test('two-factor requirement remains enforced in private chrome', () => {
++  runtime.twoFactor.isRequired = true;
++  render(
++    <App>
++      <div>原分析内容</div>
++    </App>,
++  );
++  expect(screen.getByRole('dialog', { name: '必须完成双重验证' })).toBeDefined();
++  expect(screen.getByText('原分析内容').closest('[aria-hidden="true"]')).not.toBeNull();
++});
++test('other base paths keep the original provider chrome', () => {
++  runtime.private = false;
++  const { container } = render(<App>原分析内容</App>);
++  expect(container.querySelector('[data-archive-shell]')).toBeNull();
++  expect(screen.getByText('PROVIDER_SIDE_NAV')).toBeDefined();
++  expect(screen.getByText('PROVIDER_ACCOUNT_SITE_PICKERS')).toBeDefined();
++});
 --- a/src/app/(main)/App.tsx
 +++ b/src/app/(main)/App.tsx
-@@ -44 +44 @@
+@@ -18,0 +19,2 @@
++import { ArchiveShell, ArchiveServiceError } from './ArchiveShell';
++import { archiveAdminMode } from '@/lib/archive-admin';
+@@ -26,0 +29 @@
++  const keepPreviousTeam = archiveAdminMode && pathname === '/dashboard';
+@@ -31 +34 @@
+-    } else {
++    } else if (!keepPreviousTeam) {
+@@ -34 +37 @@
+-  }, [teamId]);
++  }, [teamId, keepPreviousTeam]);
+@@ -39 +42 @@
+-      router.replace('/');
++      if (!archiveAdminMode) router.replace('/');
+@@ -42,0 +46,7 @@
++  if (archiveAdminMode && (error || (teamId && teamError)))
++    return (
++      <ArchiveShell showAnalysisNavigation={false}>
++        <ArchiveServiceError />
++      </ArchiveShell>
++    );
++
+@@ -44 +54,9 @@
 -    return <Loading placement="absolute" />;
-+    return <Loading aria-label="加载中" placement="absolute" />;
++    return archiveAdminMode ? (
++      <ArchiveShell showAnalysisNavigation={false}>
++        <p role="status" style={{ padding: 'var(--yoyi-space-8)' }}>
++          正在读取分析服务…
++        </p>
++      </ArchiveShell>
++    ) : (
++      <Loading aria-label="加载中" placement="absolute" />
++    );
+@@ -55 +73,5 @@
+-    return null;
++    return archiveAdminMode ? (
++      <ArchiveShell showAnalysisNavigation={false}>
++        <ArchiveServiceError />
++      </ArchiveShell>
++    ) : null;
+@@ -62,5 +84,5 @@
+-  return (
+-    <Grid
+-      columns={{ base: '1fr', lg: 'auto 1fr' }}
+-      rows={{ base: 'auto 1fr', lg: '1fr' }}
+-      height="screen"
++  const content = (
++    <Column
++      alignItems="center"
++      aria-hidden={needsTwoFactorSetup || undefined}
++      style={needsTwoFactorSetup ? { pointerEvents: 'none' } : undefined}
+@@ -68,16 +90,5 @@
+-      <Row display={{ base: 'flex', lg: 'none' }} alignItems="center" gap padding="3">
+-        <MobileNav />
+-      </Row>
+-      <Column display={{ base: 'none', lg: 'flex' }} minHeight="0" style={{ overflow: 'hidden' }}>
+-        <SideNav />
+-      </Column>
+-      <Column overflowX="hidden" minHeight="0" position="relative">
+-        <TopNav />
+-        <Column
+-          alignItems="center"
+-          aria-hidden={needsTwoFactorSetup || undefined}
+-          style={needsTwoFactorSetup ? { pointerEvents: 'none' } : undefined}
+-        >
+-          {children}
+-        </Column>
+-      </Column>
++      {children}
++    </Column>
++  );
++  const extras = (
++    <>
+@@ -105,0 +117,27 @@
++    </>
++  );
++  if (archiveAdminMode)
++    return (
++      <>
++        <ArchiveShell>{content}</ArchiveShell>
++        {extras}
++      </>
++    );
++
++  return (
++    <Grid
++      columns={{ base: '1fr', lg: 'auto 1fr' }}
++      rows={{ base: 'auto 1fr', lg: '1fr' }}
++      height="screen"
++    >
++      <Row display={{ base: 'flex', lg: 'none' }} alignItems="center" gap padding="3">
++        <MobileNav />
++      </Row>
++      <Column display={{ base: 'none', lg: 'flex' }} minHeight="0" style={{ overflow: 'hidden' }}>
++        <SideNav />
++      </Column>
++      <Column overflowX="hidden" minHeight="0" position="relative">
++        <TopNav />
++        {content}
++      </Column>
++      {extras}
+--- /dev/null
++++ b/src/app/(main)/ArchiveContextNav.test.tsx
+@@ -0,0 +1,93 @@
++import { cleanup, fireEvent, render, screen } from '@testing-library/react';
++import { afterEach, beforeEach, expect, test, vi } from 'vitest';
++const state = vi.hoisted(() => ({
++  pathname: '/teams/synthetic/websites/site',
++  websiteId: 'site' as string | undefined,
++  boardId: undefined as string | undefined,
++  linkId: undefined as string | undefined,
++  pixelId: undefined as string | undefined,
++  push: vi.fn(),
++  renderUrl: vi.fn((path: string) => `/teams/synthetic${path}`),
++}));
++vi.mock('@/components/hooks', () => ({
++  useNavigation: () => ({ ...state, teamId: 'synthetic-team', router: { push: state.push } }),
++  useMessages: () => ({
++    t: (value: string) => value,
++    labels: {
++      dashboard: '仪表盘',
++      boards: '看板',
++      websites: '网站',
++      links: '链接',
++      pixels: '像素',
++    },
++  }),
++}));
++const Selector = ({ id, teamId, onChange, label }: any) => (
++  <select
++    aria-label={label}
++    value={id}
++    data-team={teamId}
++    onChange={event => onChange(event.currentTarget.value)}
++  >
++    <option value={id}>当前业务对象</option>
++    <option value="other">另一个业务对象</option>
++  </select>
++);
++vi.mock('@/components/input/WebsiteSelect', () => ({
++  WebsiteSelect: (props: any) => <Selector {...props} id={props.websiteId} />,
++}));
++vi.mock('@/components/input/BoardSelect', () => ({
++  BoardSelect: (props: any) => <Selector {...props} id={props.boardId} />,
++}));
++vi.mock('@/components/input/LinkSelect', () => ({
++  LinkSelect: (props: any) => <Selector {...props} id={props.linkId} />,
++}));
++vi.mock('@/components/input/PixelSelect', () => ({
++  PixelSelect: (props: any) => <Selector {...props} id={props.pixelId} />,
++}));
++vi.mock('./websites/[websiteId]/ArchiveReportNav', () => ({
++  ArchiveReportNav: () => <span>全部18网站分析</span>,
++}));
++import { ArchiveContextNav } from './ArchiveContextNav';
++beforeEach(() => {
++  state.pathname = '/teams/synthetic/websites/site';
++  state.websiteId = 'site';
++  state.boardId = undefined;
++  state.linkId = undefined;
++  state.pixelId = undefined;
++  state.push.mockClear();
++  state.renderUrl.mockClear();
++});
++afterEach(cleanup);
++test('all five original business destinations remain reachable with a bare personal dashboard', () => {
++  render(<ArchiveContextNav />);
++  const selector = screen.getByRole('combobox', { name: '分析内容' });
++  expect(selector.querySelectorAll('option')).toHaveLength(5);
++  expect(selector).toHaveValue('websites');
++  fireEvent.change(selector, { target: { value: 'dashboard' } });
++  expect(state.push).toHaveBeenCalledWith('/dashboard');
++  fireEvent.change(selector, { target: { value: 'links' } });
++  expect(state.push).toHaveBeenCalledWith('/teams/synthetic/links');
++  expect(state.renderUrl).toHaveBeenCalledWith('/links', false);
++  expect(screen.getByText('全部18网站分析')).toBeDefined();
++});
++test.each([
++  ['websiteId', 'websites', '统计站点'],
++  ['boardId', 'boards', '统计看板'],
++  ['linkId', 'links', '统计链接'],
++  ['pixelId', 'pixels', '统计像素'],
++] as const)(
++  'reuses the original %s selector inside the current team without account selection',
++  (key, route, label) => {
++    state.websiteId = undefined;
++    state[key] = 'current';
++    state.pathname = `/teams/synthetic/${route}/current`;
++    render(<ArchiveContextNav />);
++    const selector = screen.getByRole('combobox', { name: label });
++    expect(selector).toHaveAttribute('data-team', 'synthetic-team');
++    fireEvent.change(selector, { target: { value: 'other' } });
++    expect(state.push).toHaveBeenCalledWith(`/teams/synthetic/${route}/other`);
++    expect(state.renderUrl).toHaveBeenCalledWith(`/${route}/other`, false);
++    if (key !== 'websiteId') expect(screen.queryByText('全部18网站分析')).toBeNull();
++  },
++);
+--- /dev/null
++++ b/src/app/(main)/ArchiveContextNav.tsx
+@@ -0,0 +1,110 @@
++'use client';
++import { useId } from 'react';
++import { useMessages, useNavigation } from '@/components/hooks';
++import { WebsiteSelect } from '@/components/input/WebsiteSelect';
++import { BoardSelect } from '@/components/input/BoardSelect';
++import { LinkSelect } from '@/components/input/LinkSelect';
++import { PixelSelect } from '@/components/input/PixelSelect';
++import { analysisPages } from '@/lib/analysis-navigation';
++import { archiveAdminMode } from '@/lib/archive-admin';
++import { LAST_TEAM_CONFIG } from '@/lib/constants';
++import { getItem } from '@/lib/storage';
++import { ArchiveReportNav } from './websites/[websiteId]/ArchiveReportNav';
++import styles from './ArchiveShell.module.css';
++
++export function ArchiveContextNav() {
++  const id = useId();
++  const { pathname, router, renderUrl, websiteId, boardId, linkId, pixelId, teamId } =
++    useNavigation();
++  const { t, labels } = useMessages();
++  const selected =
++    analysisPages.find(item => new RegExp(`/${item.id}(?:/|$)`).test(pathname))?.id || 'websites';
++  const analysisUrl = (path: string) => {
++    if (archiveAdminMode && !teamId) {
++      const previous = getItem(LAST_TEAM_CONFIG);
++      if (
++        typeof previous === 'string' &&
++        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(previous)
++      )
++        return `/teams/${previous.toLowerCase()}${path}`;
++    }
++    return renderUrl(path, false);
++  };
++  const navigate = (path: string, value: string | number | null) => {
++    if (value !== null && value !== undefined && value !== '')
++      router.push(analysisUrl(`${path}/${value}`));
++  };
++  const buttonProps = { style: { minWidth: 0, maxWidth: '100%' } };
++  return (
++    <nav className={styles.contextBar} aria-label="分析内容与数据范围">
++      <div className={styles.contextRow}>
++        <label htmlFor={id}>分析内容</label>
++        <select
++          id={id}
++          aria-label="分析内容"
++          value={selected}
++          onChange={event => {
++            const page = analysisPages.find(item => item.id === event.currentTarget.value);
++            if (page) router.push(page.id === 'dashboard' ? page.path : analysisUrl(page.path));
++          }}
++        >
++          {analysisPages.map(page => (
++            <option key={page.id} value={page.id}>
++              {t(labels[page.id])}
++            </option>
++          ))}
++        </select>
++        {websiteId && (
++          <div className={styles.scopeSelect}>
++            <WebsiteSelect
++              websiteId={websiteId}
++              teamId={teamId}
++              label="统计站点"
++              aria-label="统计站点"
++              buttonProps={buttonProps}
++              onChange={value => navigate('/websites', value)}
++            />
++          </div>
++        )}
++        {boardId && (
++          <div className={styles.scopeSelect}>
++            <BoardSelect
++              boardId={boardId}
++              teamId={teamId}
++              label="统计看板"
++              aria-label="统计看板"
++              buttonProps={buttonProps}
++              onChange={value => navigate('/boards', value)}
++            />
++          </div>
++        )}
++        {linkId && (
++          <div className={styles.scopeSelect}>
++            <LinkSelect
++              linkId={linkId}
++              teamId={teamId}
++              label="统计链接"
++              aria-label="统计链接"
++              buttonProps={buttonProps}
++              onChange={value => navigate('/links', value)}
++            />
++          </div>
++        )}
++        {pixelId && (
++          <div className={styles.scopeSelect}>
++            <PixelSelect
++              pixelId={pixelId}
++              teamId={teamId}
++              label="统计像素"
++              aria-label="统计像素"
++              buttonProps={buttonProps}
++              onChange={value => navigate('/pixels', value)}
++            />
++          </div>
++        )}
++        {websiteId && <ArchiveReportNav websiteId={websiteId} />}
++        <span className={styles.readOnly}>只读分析</span>
++      </div>
++    </nav>
++  );
++}
+--- /dev/null
++++ b/src/app/(main)/ArchiveContinuousNavigation.test.tsx
+@@ -0,0 +1,144 @@
++import { cleanup, fireEvent, render, screen } from '@testing-library/react';
++import { afterEach, beforeEach, expect, test, vi } from 'vitest';
++import { LAST_TEAM_CONFIG } from '@/lib/constants';
++import { getItem, setItem } from '@/lib/storage';
++
++const team = '10000000-0000-4000-8000-000000000001';
++const site = '20000000-0000-4000-8000-000000000001';
++const state = vi.hoisted(() => ({
++  private: true,
++  pathname: '',
++  teamError: undefined as unknown,
++  pushed: [] as string[],
++}));
++const navigate = () => {
++  const [, teamId] = state.pathname.match(/\/teams\/([a-f0-9-]+)/) || [];
++  return {
++    pathname: state.pathname,
++    teamId,
++    router: {
++      push: (path: string) => {
++        state.pushed.push(path);
++        state.pathname = path;
++      },
++      replace: vi.fn(),
++    },
++    renderUrl: (path: string) => (teamId ? `/teams/${teamId}${path}` : path),
++  };
++};
++vi.mock('@/lib/archive-admin', () => ({
++  get archiveAdminMode() {
++    return state.private;
++  },
++}));
++vi.mock('@/components/hooks', () => ({
++  useNavigation: () => navigate(),
++  useLoginQuery: () => ({ user: { id: 'synthetic-reader' }, isLoading: false }),
++  useConfig: () => ({ cloudMode: false }),
++  useTeamQuery: () => ({ isLoading: false, error: state.teamError }),
++  useTwoFactorStatusQuery: () => ({ data: { isRequired: false, isEnabled: false } }),
++  useMessages: () => ({
++    t: (value: string) => value,
++    labels: {
++      dashboard: '仪表盘',
++      boards: '看板',
++      websites: '网站',
++      links: '链接',
++      pixels: '像素',
++    },
++  }),
++}));
++vi.mock('./ArchiveShell', async () => {
++  const { ArchiveContextNav } = await import('./ArchiveContextNav');
++  return {
++    ArchiveShell: ({ children, showAnalysisNavigation = true }: any) => (
++      <div>
++        {showAnalysisNavigation && <ArchiveContextNav />}
++        {children}
++      </div>
++    ),
++    ArchiveServiceError: () => <p role="alert">服务暂时不可用</p>,
++  };
++});
++vi.mock('@/app/(main)/SideNav', () => ({ SideNav: () => null }));
++vi.mock('@/app/(main)/TopNav', () => ({ TopNav: () => null }));
++vi.mock('@/app/(main)/MobileNav', () => ({ MobileNav: () => null }));
++vi.mock('./UpdateNotice', () => ({ UpdateNotice: () => null }));
++vi.mock('@/components/modals/TwoFactorSetupModal', () => ({ TwoFactorSetupModal: () => null }));
++vi.mock('next/script', () => ({ default: () => null }));
++import { App } from './App';
++
++beforeEach(() => {
++  localStorage.clear();
++  state.private = true;
++  state.pathname = `/teams/${team}/websites/${site}`;
++  state.teamError = undefined;
++  state.pushed = [];
++});
++afterEach(cleanup);
++const page = () => (
++  <App>
++    <p>原分析内容</p>
++  </App>
++);
++
++test.each(['websites', 'boards', 'links', 'pixels'])(
++  'same-session team → bare Dashboard → %s returns to the existing team',
++  target => {
++    const view = render(page());
++    expect(getItem(LAST_TEAM_CONFIG)).toBe(team);
++    fireEvent.change(screen.getByRole('combobox', { name: '分析内容' }), {
++      target: { value: 'dashboard' },
++    });
++    view.rerender(page());
++    expect(state.pathname).toBe('/dashboard');
++    expect(getItem(LAST_TEAM_CONFIG)).toBe(team);
++    fireEvent.change(screen.getByRole('combobox', { name: '分析内容' }), {
++      target: { value: target },
++    });
++    view.rerender(page());
++    expect(state.pushed).toEqual(['/dashboard', `/teams/${team}/${target}`]);
++    expect(state.pathname).toBe(`/teams/${team}/${target}`);
++    expect(getItem(LAST_TEAM_CONFIG)).toBe(team);
++  },
++);
++
++test('only full UUID strings are reused and normalized to lowercase', () => {
++  state.pathname = '/dashboard';
++  const previous = 'ABCDEF00-1111-4222-8333-444444444444';
++  setItem(LAST_TEAM_CONFIG, previous);
++  render(page());
++  fireEvent.change(screen.getByRole('combobox', { name: '分析内容' }), {
++    target: { value: 'websites' },
++  });
++  expect(state.pushed.at(-1)).toBe(`/teams/${previous.toLowerCase()}/websites`);
++});
++
++test.each([null, 42, { id: team }, '../../settings', ` ${team}`, `${team}/other`])(
++  'invalid old team preference %j never changes the route scope',
++  previous => {
++    state.pathname = '/dashboard';
++    localStorage.setItem(LAST_TEAM_CONFIG, JSON.stringify(previous));
++    render(page());
++    fireEvent.change(screen.getByRole('combobox', { name: '分析内容' }), {
++      target: { value: 'websites' },
++    });
++    expect(state.pushed.at(-1)).toBe('/websites');
++  },
++);
++
++test('non-archive personal navigation keeps the original cleanup', () => {
++  state.private = false;
++  const view = render(page());
++  expect(getItem(LAST_TEAM_CONFIG)).toBe(team);
++  state.pathname = '/dashboard';
++  view.rerender(page());
++  expect(getItem(LAST_TEAM_CONFIG)).toBeFalsy();
++});
++
++test('a rejected team still clears its preference in archive mode', () => {
++  state.teamError = new Error('synthetic-team-unavailable');
++  render(page());
++  expect(getItem(LAST_TEAM_CONFIG)).toBeFalsy();
++  expect(screen.getByRole('alert')).toBeDefined();
++});
+--- /dev/null
++++ b/src/app/(main)/ArchiveShell.module.css
+@@ -0,0 +1,309 @@
++.shell {
++  min-height: 100dvh;
++  color: var(--yoyi-color-text-primary);
++  background: var(--yoyi-color-background-page);
++  font-family: var(--yoyi-font-interface);
++}
++.sidebar {
++  position: fixed;
++  inset-block: 0;
++  inset-inline-start: 0;
++  width: 220px;
++  display: flex;
++  flex-direction: column;
++  overflow-y: auto;
++  border-inline-end: 1px solid var(--yoyi-color-border-subtle);
++  background: var(--yoyi-color-background-surface);
++  padding-bottom: var(--yoyi-space-5);
++  z-index: 40;
++}
++.main {
++  min-width: 0;
++  margin-inline-start: 220px;
++}
++.brand {
++  display: flex;
++  align-items: center;
++  gap: var(--yoyi-space-4);
++  padding: var(--yoyi-space-10) var(--yoyi-space-6) var(--yoyi-space-8);
++  color: var(--yoyi-color-text-primary);
++  text-decoration: none;
++  font: 600 var(--yoyi-type-section-title-size) var(--yoyi-font-editorial);
++}
++.brand small {
++  display: block;
++  margin-top: var(--yoyi-space-2);
++  font: 400 var(--yoyi-type-caption-size) var(--yoyi-font-interface);
++  color: var(--yoyi-color-text-secondary);
++  letter-spacing: 0.08em;
++}
++.brandMark {
++  display: block;
++  flex-shrink: 0;
++  width: 32px;
++  height: 32px;
++  mask-position: center;
++  mask-size: contain;
++  mask-repeat: no-repeat;
++  -webkit-mask-position: center;
++  -webkit-mask-size: contain;
++  -webkit-mask-repeat: no-repeat;
++  background: currentColor;
++}
++.links {
++  display: grid;
++  gap: var(--yoyi-space-2);
++  padding: 0 var(--yoyi-space-4);
++}
++.link,
++.account {
++  display: flex;
++  align-items: center;
++  gap: var(--yoyi-space-4);
++  min-height: 46px;
++  padding: var(--yoyi-space-4) var(--yoyi-space-5);
++  color: var(--yoyi-color-text-secondary);
++  text-decoration: none;
++  border-radius: var(--yoyi-radius-md);
++  font-size: var(--yoyi-type-body-small-size);
++}
++.link:hover,
++.account:hover {
++  color: var(--yoyi-color-text-primary);
++  background: var(--yoyi-color-background-muted);
++}
++.link[aria-current="page"] {
++  color: var(--yoyi-color-text-primary);
++  background: var(--yoyi-color-seal-red-muted);
++  font-weight: 600;
++}
++.mark {
++  width: 5px;
++  height: 5px;
++  margin-inline-start: auto;
++  border-radius: var(--yoyi-radius-full);
++  background: currentColor;
++}
++.footer {
++  margin: auto var(--yoyi-space-6) 0;
++  padding-top: var(--yoyi-space-7);
++  display: grid;
++  gap: var(--yoyi-space-3);
++}
++.account {
++  padding-inline: 0;
++}
++.icon {
++  width: 20px;
++  height: 20px;
++  flex-shrink: 0;
++}
++.iconButton {
++  display: inline-flex;
++  width: 40px;
++  height: 40px;
++  justify-content: center;
++  align-items: center;
++  color: var(--yoyi-color-text-secondary);
++  border: 1px solid var(--yoyi-color-border-default);
++  background: var(--yoyi-color-background-elevated);
++  border-radius: var(--yoyi-radius-md);
++  cursor: pointer;
++}
++.bar {
++  display: flex;
++  position: sticky;
++  top: 0;
++  z-index: 30;
++  align-items: center;
++  gap: var(--yoyi-space-5);
++  min-height: 64px;
++  padding-inline: var(--yoyi-space-6);
++  border-bottom: 1px solid var(--yoyi-color-border-subtle);
++  background: var(--yoyi-color-background-surface);
++}
++.workspaceName {
++  display: inline-flex;
++  align-items: center;
++  gap: var(--yoyi-space-3);
++  color: var(--yoyi-color-text-secondary);
++  white-space: nowrap;
++  font-size: var(--yoyi-type-navigation-size);
++}
++.dataLinks {
++  display: flex;
++  align-items: stretch;
++  gap: var(--yoyi-space-5);
++  min-width: 0;
++  overflow-x: auto;
++}
++.dataLinks a {
++  display: inline-flex;
++  align-items: center;
++  min-height: 64px;
++  white-space: nowrap;
++  color: var(--yoyi-color-text-secondary);
++  text-decoration: none;
++  border-bottom: 2px solid transparent;
++  font-size: var(--yoyi-type-navigation-size);
++}
++.dataLinks a[aria-current="page"] {
++  color: var(--yoyi-color-text-primary);
++  border-color: var(--yoyi-color-seal-red);
++  font-weight: 600;
++}
++.content {
++  min-width: 0;
++  padding-block: var(--yoyi-space-5);
++}
++.menuButton {
++  display: none;
++}
++.skip {
++  position: fixed;
++  left: var(--yoyi-space-4);
++  top: var(--yoyi-space-4);
++  z-index: 1000;
++  transform: translateY(-200%);
++  color: var(--yoyi-color-text-primary);
++  background: var(--yoyi-color-background-elevated);
++  padding: var(--yoyi-space-3);
++}
++.skip:focus {
++  transform: none;
++}
++.mobileDialog {
++  height: 100%;
++  width: 100%;
++  max-width: 100%;
++  background: var(--yoyi-color-background-surface);
++}
++.mobileNav {
++  display: flex;
++  flex-direction: column;
++  min-height: 100%;
++  position: relative;
++  padding-bottom: var(--yoyi-space-5);
++}
++.closeButton {
++  position: absolute;
++  top: var(--yoyi-space-4);
++  right: var(--yoyi-space-4);
++}
++.serviceState {
++  padding: var(--yoyi-space-8);
++}
++.serviceState h1 {
++  font: 600 var(--yoyi-type-page-title-size) var(--yoyi-font-editorial);
++  margin-bottom: var(--yoyi-space-4);
++}
++.serviceState div {
++  display: flex;
++  flex-wrap: wrap;
++  gap: var(--yoyi-space-5);
++  margin-top: var(--yoyi-space-5);
++}
++.serviceState button {
++  padding: var(--yoyi-space-3) var(--yoyi-space-5);
++  border: 1px solid var(--yoyi-color-border-default);
++  border-radius: var(--yoyi-radius-md);
++  background: var(--yoyi-color-background-elevated);
++}
++.serviceState a {
++  color: var(--yoyi-color-text-primary);
++}
++.reportNavigation {
++  display: flex;
++  flex-wrap: wrap;
++  align-items: center;
++  gap: var(--yoyi-space-4);
++  padding-block: var(--yoyi-space-4);
++  min-width: 0;
++}
++.reportNavigation label {
++  font-weight: 600;
++  white-space: nowrap;
++}
++.reportNavigation select {
++  min-height: 44px;
++  width: min(100%, 320px);
++  max-width: 100%;
++  padding: var(--yoyi-space-3) var(--yoyi-space-4);
++  border: 1px solid var(--yoyi-color-border-default);
++  border-radius: var(--yoyi-radius-md);
++  color: var(--yoyi-color-text-primary);
++  background: var(--yoyi-color-background-elevated);
++  font: inherit;
++}
++@media (max-width: 1024px) {
++  .sidebar {
++    display: none;
++  }
++  .main {
++    margin-inline-start: 0;
++  }
++  .menuButton {
++    display: inline-flex;
++  }
++  .bar {
++    padding-inline: var(--yoyi-space-4);
++    gap: var(--yoyi-space-3);
++  }
++  .workspaceName {
++    display: none;
++  }
++  .dataLinks {
++    gap: var(--yoyi-space-4);
++  }
++}
++.contextBar {
++  max-width: 1320px;
++  margin-inline: auto;
++  padding-inline: var(--yoyi-space-6);
++  padding-block: var(--yoyi-space-4);
++}
++.scopeSelect {
++  min-width: 0;
++  max-width: 100%;
++  width: 280px;
++  flex: 0 1 280px;
++}
++@media (max-width: 640px) {
++  .contextBar {
++    padding-inline: var(--yoyi-space-3);
++  }
++  .scopeSelect {
++    width: 100%;
++    flex-basis: 100%;
++  }
++}
++.contextRow {
++  display: flex;
++  flex-wrap: wrap;
++  align-items: end;
++  gap: var(--yoyi-space-4);
++  min-width: 0;
++}
++.contextRow > label {
++  align-self: center;
++  font-weight: 600;
++}
++.contextRow > select {
++  min-height: 44px;
++  max-width: 100%;
++  padding: var(--yoyi-space-3) var(--yoyi-space-4);
++  border: 1px solid var(--yoyi-color-border-default);
++  border-radius: var(--yoyi-radius-md);
++  color: var(--yoyi-color-text-primary);
++  background: var(--yoyi-color-background-elevated);
++  font: inherit;
++}
++.contextRow .reportNavigation {
++  padding-block: 0;
++}
++.readOnly {
++  align-self: center;
++  white-space: nowrap;
++  color: var(--yoyi-color-text-secondary);
++  font-size: var(--yoyi-type-caption-size);
++}
+--- /dev/null
++++ b/src/app/(main)/ArchiveShell.test.tsx
+@@ -0,0 +1,112 @@
++import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
++import { afterEach, beforeEach, expect, test, vi } from 'vitest';
++const runtime = vi.hoisted(() => ({
++  boardId: undefined as string | undefined,
++  pathname: '/teams/synthetic/websites/site',
++  setTheme: vi.fn(),
++  push: vi.fn(),
++  renderUrl: vi.fn((path: string) => `/teams/synthetic${path}`),
++}));
++vi.mock('@/components/hooks', () => ({
++  useNavigation: () => ({
++    boardId: runtime.boardId,
++    pathname: runtime.pathname,
++    teamId: 'synthetic-team',
++    router: { push: runtime.push },
++    renderUrl: runtime.renderUrl,
++  }),
++}));
++vi.mock('@umami/react-zen', async importOriginal => ({
++  ...(await importOriginal<typeof import('@umami/react-zen')>()),
++  useTheme: () => ({ theme: 'light', setTheme: runtime.setTheme }),
++}));
++vi.mock('./ArchiveContextNav', () => ({
++  ArchiveContextNav: () => <nav aria-label="分析内容与数据范围">全部原分析入口</nav>,
++}));
++import { ArchiveShell } from './ArchiveShell';
++import { archiveNavigation, readArchiveTheme, resolveArchiveTheme } from '@/lib/archive-admin';
++beforeEach(() => {
++  runtime.boardId = undefined;
++  runtime.pathname = '/teams/synthetic/websites/site';
++  runtime.setTheme.mockClear();
++  runtime.push.mockClear();
++  runtime.renderUrl.mockClear();
++  // biome-ignore lint/suspicious/noDocumentCookie: Reviewed synthetic browser preference/session fixture.
++  document.cookie = 'payload-theme=light; Path=/';
++});
++afterEach(cleanup);
++test('one backend shell reuses eight canonical workspace links and Payload account', () => {
++  const { container } = render(
++    <ArchiveShell>
++      <p>全部原分析</p>
++    </ArchiveShell>,
++  );
++  const nav = screen.getByRole('navigation', { name: '工作区' });
++  expect(within(nav).getAllByRole('link')).toHaveLength(8);
++  expect(within(nav).getByRole('link', { name: '数据' })).toHaveAttribute('aria-current', 'page');
++  expect(screen.getByRole('link', { name: '个人账号' })).toHaveAttribute('href', '/admin/account');
++  expect(screen.getByRole('navigation', { name: '数据页面' }).querySelectorAll('a')).toHaveLength(
++    archiveNavigation.dataLinks.length,
++  );
++  expect(container.querySelector('iframe')).toBeNull();
++  expect(screen.getByText('全部原分析')).toBeDefined();
++});
++test('the separate Board keeps all Data sibling links and its own active tab', () => {
++  runtime.boardId = 'synthetic-board';
++  render(<ArchiveShell>原看板组件</ArchiveShell>);
++  const nav = screen.getByRole('navigation', { name: '数据页面' });
++  expect(within(nav).getByRole('link', { name: '统计看板' })).toHaveAttribute(
++    'aria-current',
++    'page',
++  );
++  expect(within(nav).getByRole('link', { name: '访问分析' })).toHaveAttribute(
++    'href',
++    '/admin/analytics',
++  );
++});
++
++test('the original team Board list also keeps the Board sibling active', () => {
++  runtime.pathname = '/teams/synthetic/boards';
++  render(<ArchiveShell>原看板列表</ArchiveShell>);
++  const nav = screen.getByRole('navigation', { name: '数据页面' });
++  expect(within(nav).getByRole('link', { name: '统计看板' })).toHaveAttribute(
++    'aria-current',
++    'page',
++  );
++  expect(within(nav).getByRole('link', { name: '访问分析' })).not.toHaveAttribute('aria-current');
++});
++test('theme changes sync only the shared non-authorizing theme preference', () => {
++  const sessionCookieFixture = {
++    name: 'fixture-cms-session',
++    value: 'REPLACE_ME_SYNTHETIC_COOKIE',
++  };
++  // biome-ignore lint/suspicious/noDocumentCookie: Reviewed synthetic browser preference/session fixture.
++  document.cookie = `${sessionCookieFixture.name}=${sessionCookieFixture.value}; Path=/`;
++  render(<ArchiveShell>原分析内容</ArchiveShell>);
++  fireEvent.click(screen.getByRole('button', { name: '切换深色界面' }));
++  expect(readArchiveTheme()).toBe('dark');
++  expect(runtime.setTheme).toHaveBeenCalledWith('dark');
++  expect(document.cookie).toContain(`${sessionCookieFixture.name}=${sessionCookieFixture.value}`);
++});
++test('Payload automatic theme follows the system rather than stale provider preference', () => {
++  // biome-ignore lint/suspicious/noDocumentCookie: Reviewed synthetic browser preference/session fixture.
++  document.cookie = 'payload-theme=; Max-Age=0; Path=/';
++  localStorage.setItem('theme', 'dark');
++  expect(resolveArchiveTheme()).toBe('light');
++  localStorage.removeItem('theme');
++});
++test('mobile menu is a native controlled dialog that closes without leaving analysis', async () => {
++  render(<ArchiveShell>原分析内容</ArchiveShell>);
++  const open = screen.getByRole('button', { name: '打开管理后台导航' });
++  fireEvent.click(open);
++  const dialog = await screen.findByRole('dialog', { name: '管理后台导航' });
++  expect(
++    within(dialog)
++      .getAllByRole('link')
++      .filter(link => link.closest('nav[aria-label="工作区"]')),
++  ).toHaveLength(8);
++  fireEvent.click(within(dialog).getByRole('button', { name: '关闭管理后台导航' }));
++  await waitFor(() => expect(screen.queryByRole('dialog', { name: '管理后台导航' })).toBeNull());
++  await waitFor(() => expect(open).toHaveFocus());
++  expect(screen.getByText('原分析内容')).toBeDefined();
++});
+--- /dev/null
++++ b/src/app/(main)/ArchiveShell.tsx
+@@ -0,0 +1,179 @@
++'use client';
++import { Dialog, Modal, useTheme } from '@umami/react-zen';
++import { type ReactNode, useRef, useState } from 'react';
++import { ControlledDialog } from '@/components/common/ControlledDialog';
++import { useNavigation } from '@/components/hooks';
++import { ArchiveContextNav } from './ArchiveContextNav';
++import { archiveIconsHref, archiveNavigation, saveArchiveTheme } from '@/lib/archive-admin';
++import styles from './ArchiveShell.module.css';
++
++export function ArchiveIcon({ name }: { name: string }) {
++  return (
++    <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" className={styles.icon}>
++      <use href={`${archiveIconsHref}#${name}`} />
++    </svg>
++  );
++}
++
++function ShellNavigation({ onNavigate }: { onNavigate?: () => void }) {
++  return (
++    <>
++      <a
++        href={archiveNavigation.homeHref}
++        className={styles.brand}
++        onClick={onNavigate}
++        aria-label="由艺管理后台工作台"
++      >
++        <span
++          className={styles.brandMark}
++          style={{
++            maskImage: `url(${archiveNavigation.brandAssetHref})`,
++            WebkitMaskImage: `url(${archiveNavigation.brandAssetHref})`,
++          }}
++        />
++        <span>
++          {archiveNavigation.brandLabel}
++          <small>{archiveNavigation.caption}</small>
++        </span>
++      </a>
++      <nav aria-label="工作区" className={styles.links}>
++        {archiveNavigation.items.map(item => (
++          <a
++            key={item.id}
++            href={item.href}
++            className={styles.link}
++            aria-current={item.id === 'analytics' ? 'page' : undefined}
++            onClick={onNavigate}
++          >
++            <ArchiveIcon name={item.icon} />
++            <span>{item.label}</span>
++            {item.id === 'analytics' && <span className={styles.mark} aria-hidden="true" />}
++          </a>
++        ))}
++      </nav>
++    </>
++  );
++}
++
++export function ArchiveShell({
++  children,
++  showAnalysisNavigation = true,
++}: {
++  children: ReactNode;
++  showAnalysisNavigation?: boolean;
++}) {
++  const [menuOpen, setMenuOpen] = useState(false);
++  const { boardId, pathname } = useNavigation();
++  const activeDataHref =
++    boardId || /\/boards(?:\/|$)/u.test(pathname)
++      ? archiveNavigation.dataLinks.find(item => item.href.endsWith('/board'))?.href
++      : archiveNavigation.dataLinks[0]?.href;
++  const { theme, setTheme } = useTheme();
++  const menuButton = useRef<HTMLButtonElement>(null);
++  const changeMenu = (open: boolean) => {
++    setMenuOpen(open);
++    if (!open) requestAnimationFrame(() => menuButton.current?.focus());
++  };
++  const close = () => changeMenu(false);
++  const toggleTheme = () => {
++    const next = theme === 'dark' ? 'light' : 'dark';
++    saveArchiveTheme(next);
++    setTheme(next);
++  };
++  const footer = (
++    <div className={styles.footer}>
++      <a href={archiveNavigation.accountHref} className={styles.account}>
++        <ArchiveIcon name="user" />
++        <span>个人账号</span>
++      </a>
++      <button
++        type="button"
++        className={styles.iconButton}
++        onClick={toggleTheme}
++        aria-label={theme === 'dark' ? '切换浅色界面' : '切换深色界面'}
++        title={theme === 'dark' ? '切换浅色界面' : '切换深色界面'}
++      >
++        <ArchiveIcon name={theme === 'dark' ? 'theme-light' : 'theme-dark'} />
++      </button>
++    </div>
++  );
++  return (
++    <div className={styles.shell} data-archive-shell>
++      <a className={styles.skip} href="#archive-analysis-main">
++        跳到分析内容
++      </a>
++      <aside className={styles.sidebar} aria-label="管理后台导航">
++        <ShellNavigation />
++        {footer}
++      </aside>
++      <div className={styles.main}>
++        <header className={styles.bar}>
++          <button
++            type="button"
++            ref={menuButton}
++            className={`${styles.iconButton} ${styles.menuButton}`}
++            onClick={() => setMenuOpen(true)}
++            aria-label="打开管理后台导航"
++            title="打开管理后台导航"
++            aria-expanded={menuOpen}
++          >
++            <ArchiveIcon name="menu" />
++          </button>
++          <span className={styles.workspaceName}>
++            <ArchiveIcon name="layout-double" />
++            数据
++          </span>
++          <nav aria-label="数据页面" className={styles.dataLinks}>
++            {archiveNavigation.dataLinks.map(item => (
++              <a
++                href={item.href}
++                key={item.href}
++                aria-current={item.href === activeDataHref ? 'page' : undefined}
++              >
++                {item.label}
++              </a>
++            ))}
++          </nav>
++        </header>
++        <main id="archive-analysis-main" className={styles.content}>
++          {showAnalysisNavigation && <ArchiveContextNav />}
++          {children}
++        </main>
++      </div>
++      <ControlledDialog>
++        <Modal isOpen={menuOpen} onOpenChange={changeMenu} placement="fullscreen">
++          <Dialog title="管理后台导航" className={styles.mobileDialog}>
++            <div className={styles.mobileNav}>
++              <button
++                type="button"
++                className={`${styles.iconButton} ${styles.closeButton}`}
++                onClick={close}
++                aria-label="关闭管理后台导航"
++                title="关闭管理后台导航"
++              >
++                <ArchiveIcon name="close" />
++              </button>
++              <ShellNavigation onNavigate={close} />
++              {footer}
++            </div>
++          </Dialog>
++        </Modal>
++      </ControlledDialog>
++    </div>
++  );
++}
++
++export function ArchiveServiceError() {
++  return (
++    <section className={styles.serviceState} role="alert">
++      <h1>访问分析暂时不可用</h1>
++      <p>请稍后重试，或返回后台确认登录状态。</p>
++      <div>
++        <button type="button" onClick={() => window.location.reload()}>
++          重试
++        </button>
++        <a href={archiveNavigation.homeHref}>返回工作台</a>
++      </div>
++    </section>
++  );
++}
+--- a/src/app/(main)/SideNav.tsx
++++ b/src/app/(main)/SideNav.tsx
+@@ -28,0 +29 @@
++import { analysisPages } from '@/lib/analysis-navigation';
+@@ -35,36 +36,10 @@
+-  const links = [
+-    ...(!teamId
+-      ? [
+-          {
+-            id: 'dashboard',
+-            label: t(labels.dashboard),
+-            path: '/dashboard',
+-            icon: <PanelsLeftBottom />,
+-          },
+-        ]
+-      : []),
+-    {
+-      id: 'boards',
+-      label: t(labels.boards),
+-      path: '/boards',
+-      icon: <LayoutDashboard />,
+-    },
+-    {
+-      id: 'websites',
+-      label: t(labels.websites),
+-      path: '/websites',
+-      icon: <Globe />,
+-    },
+-    {
+-      id: 'links',
+-      label: t(labels.links),
+-      path: '/links',
+-      icon: <LinkIcon />,
+-    },
+-    {
+-      id: 'pixels',
+-      label: t(labels.pixels),
+-      path: '/pixels',
+-      icon: <Grid2x2 />,
+-    },
+-  ];
++  const icons = {
++    dashboard: <PanelsLeftBottom />,
++    boards: <LayoutDashboard />,
++    websites: <Globe />,
++    links: <LinkIcon />,
++    pixels: <Grid2x2 />,
++  };
++  const links = analysisPages
++    .filter(item => !teamId || item.id !== 'dashboard')
++    .map(item => ({ ...item, label: t(labels[item.id]), icon: icons[item.id] }));
 --- a/src/app/(main)/boards/BoardCloneButton.tsx
 +++ b/src/app/(main)/boards/BoardCloneButton.tsx
 @@ -23,3 +23,3 @@
@@ -131,7 +1352,7 @@
 +              <Empty message="所选项目已不可用。" />
 --- /dev/null
 +++ b/src/app/(main)/boards/[boardId]/BoardViewHeader.test.tsx
-@@ -0,0 +1,113 @@
+@@ -0,0 +1,131 @@
 +import { cleanup, render, screen } from '@testing-library/react';
 +import type { ReactNode } from 'react';
 +import { afterEach, beforeEach, expect, test, vi } from 'vitest';
@@ -145,7 +1366,13 @@
 +    parameters: { websiteId: 'synthetic-website' },
 +  },
 +  websiteName: '合成数据 · 中国省级访问与内容行为示例网站',
++  private: false,
 +  renderUrl: vi.fn((url: string) => `/teams/synthetic${url}`),
++}));
++vi.mock('@/lib/archive-admin', () => ({
++  get archiveAdminMode() {
++    return state.private;
++  },
 +}));
 +vi.mock('@/components/common/LinkButton', () => ({
 +  LinkButton: ({ href, children }: { href: string; children: ReactNode }) => (
@@ -183,6 +1410,7 @@
 +const legacyDescription =
 +  'Umami 原生中国省级地图、省市排行与内容行为看板；IP 仅表示近似网络出口，本人、测试与开发活动在采集前排除。';
 +beforeEach(() => {
++  state.private = false;
 +  state.board.name = 'ArtVenn: 中国省市与内容行为';
 +  state.board.description = legacyDescription;
 +  state.renderUrl.mockClear();
@@ -245,16 +1473,31 @@
 +  expect(container.querySelector('[data-page-header]')?.getAttribute('style')).toBeNull();
 +  expect(container.querySelector('style')?.textContent).toContain('grid-template-columns: 1fr 1fr');
 +});
++
++test('private Board keeps its read header without offering blocked design/edit/clone writes', () => {
++  state.private = true;
++  render(<BoardViewHeader />);
++  expect(screen.getByRole('heading', { name: 'ArtVenn: 中国省市与内容行为' })).toBeDefined();
++  expect(screen.getByTitle(state.websiteName)).toBeDefined();
++  expect(screen.getByText('只读看板 · 可筛选、查看详情与导出')).toBeDefined();
++  expect(screen.queryByRole('link', { name: '设计' })).toBeNull();
++  expect(screen.queryByRole('link', { name: '编辑' })).toBeNull();
++  expect(screen.queryByRole('button', { name: '复制' })).toBeNull();
++});
 --- a/src/app/(main)/boards/[boardId]/BoardViewHeader.tsx
 +++ b/src/app/(main)/boards/[boardId]/BoardViewHeader.tsx
-@@ -23,0 +24,6 @@
+@@ -1 +1,2 @@
+-import { Row } from '@umami/react-zen';
++import { Row, Text } from '@umami/react-zen';
++import { archiveAdminMode } from '@/lib/archive-admin';
+@@ -23,0 +25,6 @@
 +  const description =
 +    board?.name === 'ArtVenn: 中国省市与内容行为' &&
 +    board?.description ===
 +      'Umami 原生中国省级地图、省市排行与内容行为看板；IP 仅表示近似网络出口，本人、测试与开发活动在采集前排除。'
 +      ? '查看省市分布、访问趋势和内容互动。IP 位置仅供参考。'
 +      : board?.description;
-@@ -26,2 +32,8 @@
+@@ -26,2 +33,8 @@
 -    <PageHeader title={board?.name} description={board?.description}>
 -      <Row alignItems="center" gap>
 +    <PageHeader title={board?.name} description={description} wrapActions>
@@ -265,11 +1508,14 @@
 +        aria-label="看板操作"
 +        style={{ flexWrap: 'wrap', minWidth: 0, maxWidth: '100%', whiteSpace: 'nowrap' }}
 +      >
-@@ -30,4 +42,4 @@
+@@ -29,5 +42,6 @@
+-        {showActions && board?.id && (
 -            <>
 -              <LinkButton href={renderUrl(`/boards/${board.id}/design`, false)}>
 -                <IconLabel icon={<LayoutDashboard />}>{t(labels.design)}</IconLabel>
 -              </LinkButton>
++        {archiveAdminMode && <Text color="muted">只读看板 · 可筛选、查看详情与导出</Text>}
++        {showActions && !archiveAdminMode && board?.id && (
 +          <>
 +            <LinkButton href={renderUrl(`/boards/${board.id}/design`, false)}>
 +              <IconLabel icon={<LayoutDashboard />}>{t(labels.design)}</IconLabel>
@@ -308,6 +1554,15 @@
 @@ -103 +103 @@
 -    return <Loading placement="absolute" />;
 +    return <Loading aria-label="加载中" placement="absolute" />;
+--- a/src/app/(main)/layout.tsx
++++ b/src/app/(main)/layout.tsx
+@@ -0,0 +1 @@
++import { archiveAdminMode } from '@/lib/archive-admin';
+@@ -15,2 +16,2 @@
+-    template: '%s | Umami',
+-    default: 'Umami',
++    template: archiveAdminMode ? '%s | 由艺管理后台' : '%s | Umami',
++    default: archiveAdminMode ? '访问分析' : 'Umami',
 --- a/src/app/(main)/settings/preferences/LanguageSetting.tsx
 +++ b/src/app/(main)/settings/preferences/LanguageSetting.tsx
 @@ -11,8 +11 @@
@@ -436,6 +1691,191 @@
 @@ -50 +50 @@
 -          <div>Average Revenue Per User</div>
 +          <div>每用户平均收入</div>
+--- /dev/null
++++ b/src/app/(main)/websites/[websiteId]/ArchiveReportNav.test.tsx
+@@ -0,0 +1,55 @@
++import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
++import { afterEach, beforeEach, expect, test, vi } from 'vitest';
++const state = vi.hoisted(() => ({ pathname: '', push: vi.fn() }));
++const navigation = () => ({
++  pathname: state.pathname,
++  teamId: 'synthetic-team',
++  router: { push: state.push },
++  renderUrl: (path: string, values: Record<string, string> | false) => {
++    const params =
++      values === false ? {} : { date: '7day', country: 'eq.CN', event: 'eq.favorite', ...values };
++    const query = new URLSearchParams();
++    for (const [key, value] of Object.entries(params))
++      if (typeof value === 'string') query.set(key, value);
++    return `/teams/synthetic${path}${query.size ? `?${query}` : ''}`;
++  },
++});
++vi.mock('@/components/hooks/useNavigation', () => ({ useNavigation: () => navigation() }));
++vi.mock('@/components/hooks/useMessages', () => ({
++  useMessages: () => ({
++    t: (value: string) => value,
++    labels: new Proxy({}, { get: (_target, key) => String(key) }),
++  }),
++}));
++vi.mock('@/components/hooks', async () => ({
++  useNavigation: () => navigation(),
++  useWebsiteNavItems: (await import('@/components/hooks/useWebsiteNavItems')).useWebsiteNavItems,
++}));
++import { ArchiveReportNav } from './ArchiveReportNav';
++beforeEach(() => {
++  state.pathname = '/teams/synthetic/websites/site/events';
++  state.push.mockReset();
++});
++afterEach(cleanup);
++test('uses all eighteen original report routes in four same-level groups', () => {
++  render(<ArchiveReportNav websiteId="site" />);
++  expect(
++    within(screen.getByRole('combobox', { name: '分析页面' })).getAllByRole('option'),
++  ).toHaveLength(18);
++  expect(document.querySelectorAll('optgroup')).toHaveLength(4);
++  expect(screen.getByRole('combobox', { name: '分析页面' })).toHaveValue('events');
++  fireEvent.change(screen.getByRole('combobox', { name: '分析页面' }), {
++    target: { value: 'journeys' },
++  });
++  expect(state.push).toHaveBeenCalledWith(
++    '/teams/synthetic/websites/site/journeys?date=7day&country=eq.CN',
++  );
++});
++test('session and replay detail routes keep their owning report selected', () => {
++  state.pathname = '/teams/synthetic/websites/site/sessions/synthetic-record';
++  const view = render(<ArchiveReportNav websiteId="site" />);
++  expect(screen.getByRole('combobox', { name: '分析页面' })).toHaveValue('sessions');
++  state.pathname = '/teams/synthetic/websites/site/replays/synthetic-record';
++  view.rerender(<ArchiveReportNav websiteId="site" />);
++  expect(screen.getByRole('combobox', { name: '分析页面' })).toHaveValue('replays');
++});
+--- /dev/null
++++ b/src/app/(main)/websites/[websiteId]/ArchiveReportNav.tsx
+@@ -0,0 +1,44 @@
++'use client';
++import { useId } from 'react';
++import { useNavigation, useWebsiteNavItems } from '@/components/hooks';
++import styles from '../../ArchiveShell.module.css';
++
++/** Reuse the authoritative native groups/routes; no second report inventory. */
++export function ArchiveReportNav({ websiteId }: { websiteId: string }) {
++  const id = useId();
++  const { router, pathname } = useNavigation();
++  const { items, selectedKey } = useWebsiteNavItems(websiteId);
++  const selected =
++    selectedKey ||
++    (pathname.includes('/sessions/')
++      ? 'sessions'
++      : pathname.includes('/replays/')
++        ? 'replays'
++        : 'overview');
++  return (
++    <nav className={styles.reportNavigation} aria-label="分析功能">
++      <label htmlFor={id}>分析页面</label>
++      <select
++        id={id}
++        aria-label="分析页面"
++        value={selected}
++        onChange={event => {
++          const item = items
++            .flatMap(group => group.items)
++            .find(item => item.id === event.currentTarget.value);
++          if (item) router.push(item.path);
++        }}
++      >
++        {items.map(group => (
++          <optgroup label={group.label} key={group.label}>
++            {group.items.map(item => (
++              <option key={item.id} value={item.id}>
++                {item.label}
++              </option>
++            ))}
++          </optgroup>
++        ))}
++      </select>
++    </nav>
++  );
++}
+--- /dev/null
++++ b/src/app/(main)/websites/[websiteId]/WebsiteHeader.archive.test.tsx
+@@ -0,0 +1,56 @@
++import { cleanup, render, screen } from '@testing-library/react';
++import type { ReactNode } from 'react';
++import { afterEach, expect, test, vi } from 'vitest';
++const state = vi.hoisted(() => ({ private: true }));
++vi.mock('@/lib/archive-admin', () => ({
++  get archiveAdminMode() {
++    return state.private;
++  },
++}));
++vi.mock('@/components/hooks', () => ({
++  useWebsite: () => ({
++    id: 'synthetic-site',
++    name: 'ArtVenn 合成测试',
++    domain: 'synthetic.example',
++  }),
++  useNavigation: () => ({
++    pathname: '/teams/synthetic/websites/synthetic-site',
++    renderUrl: (path: string) => `/teams/synthetic${path}`,
++  }),
++  useMessages: () => ({ t: (value: string) => value, labels: { edit: '编辑' } }),
++}));
++vi.mock('@/components/common/LinkButton', () => ({
++  LinkButton: ({ href, children }: { href: string; children: ReactNode }) => (
++    <a href={href}>{children}</a>
++  ),
++}));
++vi.mock('@/components/common/Favicon', () => ({ Favicon: () => <span>PROVIDER_FAVICON</span> }));
++vi.mock('@/components/metrics/ActiveUsers', () => ({
++  ActiveUsers: ({ websiteId, allowLink }: { websiteId: string; allowLink: boolean }) => (
++    <span data-site={websiteId} data-links={String(allowLink)}>
++      原活跃访客
++    </span>
++  ),
++}));
++vi.mock('@/components/icons', () => ({ Edit: () => null }));
++import { WebsiteHeader } from './WebsiteHeader';
++afterEach(cleanup);
++test('private fixed-site header keeps active visitor navigation without provider settings/account controls', () => {
++  state.private = true;
++  render(<WebsiteHeader showActions={false} />);
++  expect(screen.getByRole('heading', { name: '访问分析' })).toBeDefined();
++  expect(screen.getByText('ArtVenn 合成测试 · 只读分析')).toBeDefined();
++  expect(screen.getByText('原活跃访客')).toHaveAttribute('data-site', 'synthetic-site');
++  expect(screen.getByText('原活跃访客')).toHaveAttribute('data-links', 'true');
++  expect(screen.queryByRole('link', { name: '编辑' })).toBeNull();
++  expect(screen.queryByText('PROVIDER_FAVICON')).toBeNull();
++});
++test('other deployments keep the original website header actions', () => {
++  state.private = false;
++  render(<WebsiteHeader showActions />);
++  expect(screen.getByRole('heading', { name: 'ArtVenn 合成测试' })).toBeDefined();
++  expect(screen.getByRole('link', { name: '编辑' })).toHaveAttribute(
++    'href',
++    '/teams/synthetic/websites/synthetic-site/settings',
++  );
++});
+--- a/src/app/(main)/websites/[websiteId]/WebsiteHeader.tsx
++++ b/src/app/(main)/websites/[websiteId]/WebsiteHeader.tsx
+@@ -1 +1 @@
+-import { Icon, Row, Text } from '@umami/react-zen';
++import { Row } from '@umami/react-zen';
+@@ -7,0 +8 @@
++import { archiveAdminMode } from '@/lib/archive-admin';
+@@ -29,2 +30,4 @@
+-      title={website.name}
+-      icon={<Favicon domain={website.domain} />}
++      title={archiveAdminMode ? '访问分析' : website.name}
++      description={archiveAdminMode ? `${website.name} · 只读分析` : undefined}
++      wrapActions={archiveAdminMode}
++      icon={archiveAdminMode ? undefined : <Favicon domain={website.domain} />}
+--- a/src/app/(main)/websites/[websiteId]/WebsiteLayout.tsx
++++ b/src/app/(main)/websites/[websiteId]/WebsiteLayout.tsx
+@@ -6,0 +7 @@
++import { archiveAdminMode } from '@/lib/archive-admin';
+@@ -12 +13 @@
+-        <WebsiteHeader showActions />
++        <WebsiteHeader showActions={!archiveAdminMode} />
 --- a/src/app/(main)/websites/[websiteId]/events/EventProperties.tsx
 +++ b/src/app/(main)/websites/[websiteId]/events/EventProperties.tsx
 @@ -1,0 +2 @@
@@ -470,6 +1910,15 @@
 @@ -106 +109 @@
 -const PropertiesButton = props => {
 +const PropertiesButton = (props) => {
+--- a/src/app/(main)/websites/[websiteId]/layout.tsx
++++ b/src/app/(main)/websites/[websiteId]/layout.tsx
+@@ -0,0 +1 @@
++import { archiveAdminMode } from '@/lib/archive-admin';
+@@ -31,2 +32,2 @@
+-    template: '%s | Umami',
+-    default: 'Websites | Umami',
++    template: archiveAdminMode ? '%s | 由艺管理后台' : '%s | Umami',
++    default: archiveAdminMode ? '访问分析' : 'Websites | Umami',
 --- a/src/app/(main)/websites/[websiteId]/realtime/RealtimeLog.tsx
 +++ b/src/app/(main)/websites/[websiteId]/realtime/RealtimeLog.tsx
 @@ -0,0 +1 @@
@@ -507,6 +1956,20 @@
 @@ -62 +62 @@
 -        <Info label="Linked sessions" icon={<Network />}>
 +        <Info label="关联会话" icon={<Network />}>
+--- a/src/app/Providers.tsx
++++ b/src/app/Providers.tsx
+@@ -5 +5,2 @@
+-import { useEffect } from 'react';
++import { useEffect, useState } from 'react';
++import { archiveAdminMode, resolveArchiveTheme } from '@/lib/archive-admin';
+@@ -35,0 +37,4 @@
++  const [theme, setTheme] = useState<'light' | 'dark' | undefined>();
++  useEffect(() => {
++    if (archiveAdminMode) setTheme(resolveArchiveTheme());
++  }, []);
+@@ -37 +42 @@
+-    <ZenProvider>
++    <ZenProvider theme={theme}>
 --- /dev/null
 +++ b/src/app/api/websites/[websiteId]/metrics/artvenn-display.test.ts
 @@ -0,0 +1,109 @@
@@ -665,11 +2128,77 @@
 +          return displayName ? { ...row, displayName } : row;
 +        }),
 +      );
+--- /dev/null
++++ b/src/app/archive-admin.css
+@@ -0,0 +1,44 @@
++/* Private Admin adapter: consume canonical Yoyi tokens, never redefine them. */
++:root[data-archive-admin="true"],
++:root[data-archive-admin="true"][data-theme],
++:root[data-archive-admin="true"].dark {
++  --zen-font-family: var(--yoyi-font-interface);
++  --zen-primary: var(--yoyi-color-seal-red);
++  --zen-primary-fg: var(--yoyi-color-text-inverse);
++  --zen-surface: var(--yoyi-color-background-elevated);
++  --zen-surface-raised: var(--yoyi-color-background-page);
++  --zen-surface-sunken: var(--yoyi-color-background-muted);
++  --zen-surface-overlay: var(--yoyi-color-background-elevated);
++  --zen-surface-inverted: var(--yoyi-color-background-inverse);
++  --zen-surface-disabled: var(--yoyi-color-background-muted);
++  --zen-fg: var(--yoyi-color-text-primary);
++  --zen-fg-muted: var(--yoyi-color-text-secondary);
++  --zen-fg-disabled: var(--yoyi-color-text-disabled);
++  --zen-border: var(--yoyi-color-border-default);
++  --zen-border-muted: var(--yoyi-color-border-subtle);
++  --zen-border-strong: var(--yoyi-color-border-strong);
++  --zen-interactive-bg: var(--yoyi-color-background-muted);
++  --zen-interactive-bg-hover: var(--yoyi-color-seal-red-muted);
++  --zen-interactive-bg-pressed: var(--yoyi-color-border-default);
++  --zen-focus-ring: var(--yoyi-color-focus-ring);
++  --zen-focus-offset: var(--yoyi-color-background-elevated);
++  --zen-status-info: var(--yoyi-color-info);
++  --zen-status-success: var(--yoyi-color-success);
++  --zen-status-warning: var(--yoyi-color-warning);
++  --zen-status-error: var(--yoyi-color-error);
++}
++
++html[data-archive-admin="true"] body {
++  font-family: var(--yoyi-font-interface);
++  color: var(--yoyi-color-text-primary);
++  background: var(--yoyi-color-background-page);
++}
++
++html[data-archive-admin="true"] :is(h1, h2) {
++  font-family: var(--yoyi-font-editorial);
++}
++
++html[data-archive-admin="true"] :where(a, button, input, select, textarea, summary):focus-visible {
++  outline: 2px solid var(--yoyi-color-focus-ring);
++  outline-offset: 3px;
++}
 --- a/src/app/layout.tsx
 +++ b/src/app/layout.tsx
-@@ -26 +26 @@
+@@ -8,0 +9,3 @@
++import './archive-theme.css';
++import './archive-admin.css';
++import { archiveAdminMode, archiveNavigation } from '@/lib/archive-admin';
+@@ -26 +29,5 @@
 -    <html lang="en" className={`${inter.className} ${inter.variable}`}>
-+    <html lang="zh-CN" className={`${inter.className} ${inter.variable}`}>
++    <html
++      lang="zh-CN"
++      className={`${inter.className} ${inter.variable}`}
++      data-archive-admin={archiveAdminMode ? 'true' : undefined}
++    >
+@@ -28 +35,4 @@
+-        <link rel="icon" href="/favicon.ico" />
++        <link
++          rel="icon"
++          href={archiveAdminMode ? archiveNavigation.brandAssetHref : '/favicon.ico'}
++        />
+@@ -54,2 +64,2 @@
+-      template: '%s | Umami',
+-      default: 'Umami',
++      template: archiveAdminMode ? '%s | 由艺管理后台' : '%s | Umami',
++      default: archiveAdminMode ? '访问分析' : 'Umami',
 --- a/src/components/charts/BarChart.tsx
 +++ b/src/components/charts/BarChart.tsx
 @@ -0,0 +1 @@
@@ -1215,6 +2744,34 @@
 @@ -211 +211 @@
 -                    <Text weight={theme === 'dark' ? 'bold' : undefined}>Dark</Text>
 +                    <Text weight={theme === 'dark' ? 'bold' : undefined}>深色</Text>
+--- a/src/components/input/WebsiteSelect.tsx
++++ b/src/components/input/WebsiteSelect.tsx
+@@ -1 +1,2 @@
+-import { Icon, ListItem, Row, Select, type SelectProps, Text } from '@umami/react-zen';
++import { Column, Icon, ListItem, Row, Select, type SelectProps, Text } from '@umami/react-zen';
++import { archiveAdminMode } from '@/lib/archive-admin';
+@@ -36 +37 @@
+-  const listItems: { id: string; name: string }[] = data?.data || [];
++  const listItems: { id: string; name: string; domain?: string }[] = data?.data || [];
+@@ -109 +110 @@
+-      {listItems.map(({ id, name }) => (
++      {listItems.map(({ id, name, domain }) => (
+@@ -111 +112,14 @@
+-          {name}
++          {archiveAdminMode ? (
++            <Column gap="1" minWidth="0">
++              <Text truncate title={name}>
++                {name}
++              </Text>
++              {domain && (
++                <Text size="sm" color="muted" truncate title={domain}>
++                  {domain}
++                </Text>
++              )}
++            </Column>
++          ) : (
++            name
++          )}
 --- a/src/components/input/WebsiteValueComboBox.tsx
 +++ b/src/components/input/WebsiteValueComboBox.tsx
 @@ -7 +7 @@
@@ -1246,7 +2803,7 @@
 +                {getChineseEventName(text)}
 --- /dev/null
 +++ b/src/components/metrics/MetricLabel.test.tsx
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,120 @@
 +import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 +import type { ReactNode } from 'react';
 +import { afterEach, beforeEach, expect, test, vi } from 'vitest';
@@ -1352,6 +2909,21 @@
 +  expect(state.selected?.searchParams.get('city')).toBe('eq.Beijing');
 +  expect(state.selected?.searchParams.get('region')).toBeNull();
 +});
++
++test.each([
++  { match: 'any', path: 'eq./foo' },
++  { segment: 'synthetic-saved-segment' },
++  { cohort: 'synthetic-saved-cohort' },
++])('city links preserve uncertain/OR context without adding an auxiliary country: %j', query => {
++  state.query = { startAt: '1000', ...query };
++  render(<MetricLabel type="city" data={{ label: 'Beijing', country: 'CN', region: 'CN-BJ' }} />);
++  fireEvent.click(screen.getByRole('link', { name: 'Beijing' }));
++  expect(state.selected?.searchParams.get('city')).toBe('eq.Beijing');
++  expect(state.selected?.searchParams.get('country')).toBeNull();
++  for (const [key, value] of Object.entries(query))
++    expect(state.selected?.searchParams.get(key)).toBe(value);
++  expect(state.selected?.searchParams.get('match')).not.toBe('all');
++});
 --- a/src/components/metrics/MetricLabel.tsx
 +++ b/src/components/metrics/MetricLabel.tsx
 @@ -0,0 +1,2 @@
@@ -1400,9 +2972,14 @@
 +}
 --- /dev/null
 +++ b/src/components/metrics/MetricsExpandedTable.accessibility.test.tsx
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,125 @@
 +import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-+import { afterEach, expect, test, vi } from 'vitest';
++import { afterEach, beforeEach, expect, test, vi } from 'vitest';
++import Papa from 'papaparse';
++const runtime = vi.hoisted(() => ({
++  data: [] as Record<string, unknown>[],
++  requests: [] as Record<string, unknown>[],
++}));
 +
 +// Keep real react-zen Button/SearchField/Tooltip and the real DownloadButton.
 +vi.mock('@/components/hooks', () => ({
@@ -1419,7 +2996,10 @@
 +  }),
 +  useNavigation: () => ({ query: {} }),
 +  useDateParameters: () => ({ startAt: 1000, endAt: 9000 }),
-+  useWebsiteExpandedMetricsQuery: () => ({ data: [], isLoading: false, isFetching: false }),
++  useWebsiteExpandedMetricsQuery: (_id: string, params: Record<string, unknown>) => {
++    runtime.requests.push(params);
++    return { data: runtime.data, isLoading: false, isFetching: false };
++  },
 +}));
 +vi.mock('@/components/common/LoadingPanel', () => ({
 +  LoadingPanel: ({ children }: any) => children,
@@ -1436,7 +3016,14 @@
 +}));
 +
 +import { MetricsExpandedTable } from './MetricsExpandedTable';
-+afterEach(cleanup);
++beforeEach(() => {
++  runtime.data = [];
++  runtime.requests = [];
++});
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
 +
 +test('expanded toolbar close and download have real accessible names and visible hover titles', () => {
 +  const onClose = vi.fn();
@@ -1445,8 +3032,8 @@
 +  expect(close).toHaveAttribute('title', '关闭');
 +  fireEvent.click(close);
 +  expect(onClose).toHaveBeenCalledTimes(1);
-+  const download = screen.getByRole('button', { name: '下载' });
-+  expect(download).toHaveAttribute('title', '下载');
++  const download = screen.getByRole('button', { name: '下载当前筛选下最多500项' });
++  expect(download).toHaveAttribute('title', '下载当前筛选下最多500项');
 +  expect(download).toBeDisabled();
 +  expect(screen.getByRole('searchbox', { name: '搜索' })).toBeDefined();
 +});
@@ -1454,7 +3041,62 @@
 +test('toolbar visibility flags and absent close handler retain their behavior', () => {
 +  render(<MetricsExpandedTable websiteId="synthetic-website" type="city" allowDownload={false} />);
 +  expect(screen.queryByRole('button', { name: '关闭' })).toBeNull();
-+  expect(screen.queryByRole('button', { name: '下载' })).toBeNull();
++  expect(screen.queryByRole('button', { name: /^下载/ })).toBeNull();
++});
++
++test('169 matching cities export every original column and row even while page two displays only 69', async () => {
++  runtime.data = Array.from({ length: 169 }, (_, index) => ({
++    name: `synthetic-city-${index + 1}`,
++    visitors: index + 1,
++    visits: index + 2,
++    pageviews: index + 3,
++    bounces: 0,
++    totaltime: index + 4,
++    country: 'CN',
++    region: null,
++    displayName: `合成城市${index + 1}`,
++  }));
++  let captured: Blob | undefined;
++  const OriginalURL = URL;
++  class FixtureURL extends OriginalURL {
++    static createObjectURL(value: Blob | MediaSource): string {
++      if (!(value instanceof Blob)) throw new Error('EXPECTED_CSV_BLOB');
++      captured = value;
++      return 'blob:synthetic-download';
++    }
++    static revokeObjectURL(_value: string) {}
++  }
++  vi.stubGlobal('URL', FixtureURL);
++  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
++  render(<MetricsExpandedTable websiteId="synthetic-website" type="city" />);
++  expect(screen.getAllByText(/^synthetic-city-/)).toHaveLength(100);
++  fireEvent.click(screen.getByRole('button', { name: '下一页' }));
++  expect(screen.getAllByText(/^synthetic-city-/)).toHaveLength(69);
++  expect(runtime.requests.at(-1)).toMatchObject({ limit: 500, offset: 0 });
++  fireEvent.click(screen.getByRole('button', { name: '下载当前筛选下最多500项' }));
++  const csvBlob = captured;
++  if (!csvBlob) throw new Error('CSV_NOT_CREATED');
++  const csv = await new Promise<string>((resolve, reject) => {
++    const reader = new FileReader();
++    reader.onload = () => resolve(String(reader.result));
++    reader.onerror = () => reject(new Error('CSV_READ_FAILED'));
++    reader.readAsText(csvBlob);
++  });
++  const parsed = Papa.parse(csv, { header: true, skipEmptyLines: true });
++  expect(parsed.data).toHaveLength(169);
++  expect(parsed.data[168]?.name).toBe('synthetic-city-169');
++  expect(parsed.meta.fields).toEqual([
++    'name',
++    'visitors',
++    'visits',
++    'pageviews',
++    'bounces',
++    'totaltime',
++    'country',
++    'region',
++    'displayName',
++  ]);
++  expect(screen.getByText(/下载包含当前筛选下最多500项/)).toBeDefined();
 +});
 --- a/src/components/metrics/MetricsExpandedTable.tsx
 +++ b/src/components/metrics/MetricsExpandedTable.tsx
@@ -1466,32 +3108,53 @@
 +  useNavigation,
 +  useWebsiteExpandedMetricsQuery,
 +} from '@/components/hooks';
-@@ -9,0 +15 @@
+@@ -9 +14,11 @@
+-import { Button, Column, DataColumn, DataTable, Icon, Row, SearchField } from '@umami/react-zen';
++import {
++  Button,
++  Column,
++  DataColumn,
++  DataTable,
++  Icon,
++  Row,
++  SearchField,
++  Text,
++} from '@umami/react-zen';
 +import { GEOGRAPHY_PAGE_SIZE } from '@/lib/artvenn-china-map';
-@@ -37,0 +44,6 @@
+@@ -37,0 +53,6 @@
 +  const { query } = useNavigation();
 +  const { startAt, endAt } = useDateParameters();
 +  const geographic = type === 'city' || type === 'region';
 +  const scope = JSON.stringify({ websiteId, type, params, query, startAt, endAt, search });
 +  const [page, setPage] = useState({ scope, offset: 0 });
 +  const offset = page.scope === scope ? page.offset : 0;
-@@ -44,0 +57 @@
-+    ...(geographic ? { limit: GEOGRAPHY_PAGE_SIZE, offset } : {}),
-@@ -53,0 +67,2 @@
+@@ -44,0 +66 @@
++    ...(geographic ? { limit: 500, offset: 0 } : {}),
+@@ -47 +69,3 @@
+-  const items = data?.map(({ name, ...props }) => ({ label: name, ...props }));
++  const displayed = geographic ? data?.slice(offset, offset + GEOGRAPHY_PAGE_SIZE) : data;
++  const items = displayed?.map(({ name, ...props }) => ({ label: name, ...props }));
++  const downloadLabel = geographic ? '下载当前筛选下最多500项' : '下载';
+@@ -53,0 +78,2 @@
 +            placeholder="搜索"
 +            aria-label="搜索"
-@@ -62 +77,3 @@
+@@ -62 +88,8 @@
 -          {allowDownload && <DownloadButton filename={type} data={data} />}
 +          {allowDownload && (
-+            <DownloadButton filename={type} data={data} aria-label="下载" title="下载" />
++            <DownloadButton
++              filename={type}
++              data={data}
++              aria-label={downloadLabel}
++              title={downloadLabel}
++            />
 +          )}
-@@ -64 +81 @@
+@@ -64 +97 @@
 -            <Button onPress={onClose} variant="quiet">
 +            <Button onPress={onClose} variant="quiet" aria-label="关闭" title="关闭">
-@@ -77,0 +95,2 @@
+@@ -77,0 +111,2 @@
 +        minHeight="0"
 +        flexGrow={1}
-@@ -139,0 +159,21 @@
+@@ -139,0 +175,26 @@
 +      {geographic && data && (
 +        <Row justifyContent="space-between" alignItems="center" gap paddingTop="3">
 +          <Button
@@ -1506,12 +3169,17 @@
 +          </span>
 +          <Button
 +            variant="quiet"
-+            isDisabled={isFetching || data.length < GEOGRAPHY_PAGE_SIZE}
++            isDisabled={isFetching || offset + GEOGRAPHY_PAGE_SIZE >= data.length}
 +            onPress={() => setPage({ scope, offset: offset + GEOGRAPHY_PAGE_SIZE })}
 +          >
 +            下一页
 +          </Button>
 +        </Row>
++      )}
++      {geographic && allowDownload && data && (
++        <Text size="sm" color="muted">
++          下载包含当前筛选下最多500项；达到上限时可缩小日期或筛选范围。
++        </Text>
 +      )}
 --- a/src/components/metrics/MetricsTable.tsx
 +++ b/src/components/metrics/MetricsTable.tsx
@@ -2241,7 +3909,7 @@
 +      </Column>
 --- /dev/null
 +++ b/src/components/metrics/artvenn-geography-lists.test.tsx
-@@ -0,0 +1,144 @@
+@@ -0,0 +1,145 @@
 +import { createElement, type ReactNode, useState } from 'react';
 +import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 +import { afterEach, beforeEach, expect, test, vi } from 'vitest';
@@ -2358,7 +4026,7 @@
 +  expect(screen.getByRole('textbox', { name: '搜索' })).toBeDefined();
 +  expect(runtime.requests.find(request => request.expanded).params).toMatchObject({
 +    type: 'region',
-+    limit: 100,
++    limit: 500,
 +    offset: 0,
 +    country: 'eq.CN',
 +  });
@@ -2374,7 +4042,8 @@
 +  expect(screen.getAllByRole('listitem')).toHaveLength(100);
 +  fireEvent.click(screen.getByRole('button', { name: '下一页' }));
 +  expect(screen.getAllByRole('listitem')).toHaveLength(37);
-+  expect(runtime.requests.at(-1).params.offset).toBe(100);
++  expect(runtime.requests.at(-1).params.offset).toBe(0);
++  expect(runtime.requests.at(-1).params.limit).toBe(500);
 +  fireEvent.change(screen.getByRole('textbox', { name: '搜索' }), {
 +    target: { value: 'synthetic-city-137' },
 +  });
@@ -2413,6 +4082,55 @@
 @@ -153 +153 @@
 -          <MetricCard label="Median" value={stats?.median ?? 0} formatValue={formatLongNumber} />
 +          <MetricCard label="中位数" value={stats?.median ?? 0} formatValue={formatLongNumber} />
+--- /dev/null
++++ b/src/lib/analysis-navigation.ts
+@@ -0,0 +1,8 @@
++/** Business destinations shared by the original sidebar and private shell. */
++export const analysisPages = [
++  { id: 'dashboard', path: '/dashboard' },
++  { id: 'boards', path: '/boards' },
++  { id: 'websites', path: '/websites' },
++  { id: 'links', path: '/links' },
++  { id: 'pixels', path: '/pixels' },
++] as const;
+--- /dev/null
++++ b/src/lib/archive-admin.ts
+@@ -0,0 +1,35 @@
++import navigation from '../data/archive-navigation.json';
++
++export const archiveAdminMode = process.env.basePath === '/admin/analytics-workspace';
++export const archiveNavigation = navigation;
++export const archiveAssets = {
++  theme: '62c0496afbbd07112fce0fe8127a640665d33fe9468a2500930651bc27341478',
++  navigation: 'ff1f9d243b15fb124103483cf14145a029c0c919fa68b26a9c9d12a46f09339c',
++  icons: '8d39d4a06bb7d863d2b954454b1d8e414e1d8a642245716f2e4343854b48f863',
++} as const;
++export const archiveIconsHref = `${process.env.basePath || ''}/archive-icons.svg?v=${archiveAssets.icons}`;
++
++/** This preference cookie has no authentication or authorization meaning. */
++export function readArchiveTheme(): 'light' | 'dark' | undefined {
++  if (typeof document === 'undefined') return undefined;
++  const name = `${archiveNavigation.themeCookieName}=`;
++  const value = document.cookie
++    .split(';')
++    .map(part => part.trim())
++    .find(part => part.startsWith(name))
++    ?.slice(name.length);
++  return value === 'light' || value === 'dark' ? value : undefined;
++}
++
++export function saveArchiveTheme(theme: 'light' | 'dark') {
++  // biome-ignore lint/suspicious/noDocumentCookie: Match Payload's existing non-authorizing theme preference.
++  document.cookie = `${archiveNavigation.themeCookieName}=${theme}; Max-Age=31536000; Path=/; SameSite=Lax`;
++}
++
++export function resolveArchiveTheme(): 'light' | 'dark' | undefined {
++  if (typeof window === 'undefined') return undefined;
++  return (
++    readArchiveTheme() ??
++    (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
++  );
++}
 --- /dev/null
 +++ b/src/lib/artvenn-china-map.test.ts
 @@ -0,0 +1,194 @@
@@ -2612,7 +4330,7 @@
 +});
 --- /dev/null
 +++ b/src/lib/artvenn-china-map.ts
-@@ -0,0 +1,165 @@
+@@ -0,0 +1,173 @@
 +/** Display-only metadata. Source geometry and persisted GeoIP keys stay unchanged. */
 +export const CHINA_PROVINCES = [
 +  [110000, 'CN-BJ', '北京市'],
@@ -2765,6 +4483,14 @@
 +
 +/** Keep a clicked native city bucket inside its source-country display scope. */
 +export function cityFilterParameters(country: string | undefined, query: Record<string, string>) {
++  // Adding a country to an OR group broadens it; saved definitions may restore
++  // an OR match server-side even when the URL itself has no match parameter.
++  if (
++    (query.match !== undefined && query.match !== 'all') ||
++    query.segment !== undefined ||
++    query.cohort !== undefined
++  )
++    return {};
 +  if (!country || !/^[A-Z]{2}$/.test(country)) return {};
 +  const cleared = Object.fromEntries(
 +    Object.keys(query)
@@ -3194,7 +4920,7 @@
 +        and ${expression} != ''
 --- /dev/null
 +++ b/src/queries/sql/sessions/artvenn-geography-context.test.ts
-@@ -0,0 +1,182 @@
+@@ -0,0 +1,222 @@
 +import { DatabaseSync } from 'node:sqlite';
 +import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 +
@@ -3211,7 +4937,7 @@
 +    getTimestampDiffSQL: () => '0',
 +    parseFilters: (filters: Record<string, any>) => {
 +      const queryParams = {};
-+      const clauses = ['city', 'country', 'region']
++      const clauses = ['city', 'country', 'region', 'path']
 +        .filter(key => filters[key])
 +        .map(key => {
 +          queryParams[`selected${key}`] = String(filters[key]).replace(/^eq\./, '');
@@ -3220,11 +4946,15 @@
 +              ? "(case when session.country in ('TW','HK','MO') then 'CN' else session.country end)"
 +              : key === 'region'
 +                ? "(case when session.country = 'TW' then 'CN-TW' when session.country = 'HK' then 'CN-HK' when session.country = 'MO' then 'CN-MO' else session.region end)"
-+                : 'session.city';
-+          return `and ${column} = {{selected${key}}}`;
++                : key === 'path'
++                  ? 'website_event.url_path'
++                  : 'session.city';
++          return `${column} = {{selected${key}}}`;
 +        });
 +      return {
-+        filterQuery: clauses.join(' '),
++        filterQuery: clauses.length
++          ? `and (${clauses.join(filters.match === 'any' ? ' or ' : ' and ')})`
++          : '',
 +        joinSessionQuery: 'join session on session.session_id = website_event.session_id',
 +        cohortQuery: '',
 +        excludeBounceQuery: '',
@@ -3241,7 +4971,7 @@
 +beforeEach(() => {
 +  database = new DatabaseSync(':memory:');
 +  database.exec(
-+    'create table session(session_id text, country text, region text, city text); create table website_event(website_id text, session_id text, visit_id text, created_at text, event_type integer);',
++    'create table session(session_id text, country text, region text, city text); create table website_event(website_id text, session_id text, visit_id text, created_at text, event_type integer, url_path text);',
 +  );
 +  runtime.rawQuery.mockImplementation((sql: string, params: Record<string, any>) => {
 +    const values: string[] = [];
@@ -3260,7 +4990,9 @@
 +const insert = (id: string, country: string, region: string | null, city: string) => {
 +  database.prepare('insert into session values(?,?,?,?)').run(id, country, region, city);
 +  database
-+    .prepare('insert into website_event values(?,?,?,?,?)')
++    .prepare(
++      'insert into website_event(website_id,session_id,visit_id,created_at,event_type) values(?,?,?,?,?)',
++    )
 +    .run('synthetic-website', id, `${id}-visit`, '2026-01-07', 1);
 +};
 +const filters = { startDate: new Date('2026-01-01'), endDate: new Date('2026-02-01') };
@@ -3376,6 +5108,40 @@
 +    region: 'CN-BJ',
 +  });
 +  expect(database.prepare('select * from session order by session_id').all()).toEqual(before);
++});
++
++test('a city click preserves original path OR city results without including country-only Shanghai rows', async () => {
++  insert('synthetic-path-hit', 'CN', 'CN-SH', 'Shanghai');
++  insert('synthetic-city-hit', 'CN', 'CN-BJ', 'Beijing');
++  insert('synthetic-country-only', 'CN', 'CN-SH', 'Shanghai');
++  insert('synthetic-foreign-name', 'US', 'US-WA', 'Beijing');
++  database
++    .prepare('update website_event set url_path = ? where session_id = ?')
++    .run('/foo', 'synthetic-path-hit');
++  database
++    .prepare('update website_event set url_path = ? where session_id != ?')
++    .run('/other', 'synthetic-path-hit');
++  const query = { path: 'eq./foo', match: 'any' } as const;
++  const original = await getSessionMetrics(
++    'synthetic-website',
++    { type: 'city' },
++    { ...filters, ...query, city: 'eq.Beijing' },
++  );
++  const clicked = await getSessionMetrics(
++    'synthetic-website',
++    { type: 'city' },
++    { ...filters, ...query, ...cityFilterParameters('CN', query), city: 'eq.Beijing' },
++  );
++  expect(clicked).toEqual(original);
++  expect(clicked.find(row => row.x === 'Shanghai')).toMatchObject({ y: 1 });
++  expect(clicked.find(row => row.country === 'US')).toMatchObject({ x: 'Beijing', y: 1 });
++  const hiddenOr = cityFilterParameters('CN', { segment: 'synthetic-saved-segment' });
++  const resolved = await getSessionMetrics(
++    'synthetic-website',
++    { type: 'city' },
++    { ...filters, ...query, ...hiddenOr, city: 'eq.Beijing' },
++  );
++  expect(resolved).toEqual(original);
 +});
 --- a/src/queries/sql/sessions/getSessionExpandedMetrics.ts
 +++ b/src/queries/sql/sessions/getSessionExpandedMetrics.ts

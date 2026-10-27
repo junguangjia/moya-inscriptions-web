@@ -104,7 +104,6 @@
     "./media-snapshot-picker": "./src/media/MediaSnapshotPicker.tsx",
     "./workspace-navigation-guard": "./src/workspace/use-navigation-guard.ts",
     "./login-intro": "./src/branding/LoginIntro.tsx",
-    "./login.css": "./src/branding/login.css",
-    "./analytics-native": "./src/analytics/native.tsx"
+    "./login.css": "./src/branding/login.css"
   }
 }

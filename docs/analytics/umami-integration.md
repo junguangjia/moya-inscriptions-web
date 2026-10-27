@@ -1,14 +1,18 @@
 # Umami 私有分析工作台部署与验收包
 
-#330 r4 changes the presentation to a native Payload Owner page: summary, trend,
-a China province map including Taiwan, province/city rankings, and a simplified
-foreign-country list. Umami remains the existing collection and aggregation
-service; Admin reads its fixed APIs and does not run statistics SQL.
-Administrators use the existing CMS session, with no embedded application,
-second login, account/site picker, or dashboard editor. Legacy proxy URLs remain
-compatible but are no longer the primary interface. This is a development/review
-change; source files, synthetic tests and local images do not establish
-production deployment or Owner visual acceptance.
+#330 preserves the complete existing website analysis interface: all 18 analysis
+sections, 26 expanded dimensions, filters, exports and event/session/report
+details. The original views run as a top-level, same-origin Admin surface with
+the shared archive navigation and theme; the complete app is never nested in an
+iframe. The existing CMS Owner session authorizes the private gateway. The
+configured website is automatically entered in its actual team scope, so
+administrators do not choose provider accounts or personal/team workspaces. The
+existing view-only service identity reads all website analysis sections;
+provisioning administrator credentials are not used by the UI. Payload retains
+native IP records and collection-status pages. No statistics engine, account,
+data collection, database schema or permission expansion is introduced. This
+remains a development/review change, not production deployment or Owner visual
+acceptance.
 
 ## 固定版本与运行边界
 
@@ -140,20 +144,31 @@ cache。漏斗是同一访客会话中的事件顺序；默认没有强制相同
 中文原生工作台固定 `zh-CN`，同步加载词典，不受旧浏览器语言或 URL
 locale 覆盖；日期、图例、漏斗、筛选标签与事件名称均使用中文显示。原始事件名和筛选键不变，保留协议/品牌/用户内容原值。中文省市和事件搜索反查原始键，候选最多 5 个，与原生选择器上限一致。省份指标查询在现有语句里增加固定 CASE 表达式。筛选候选值用当前窗口内活动事件的 EXISTS 判断活跃访客，避免只按首次出现时间漏掉回访者；仍是按需一次查询、最多 10 条候选，无额外数据库往返。站点/日期索引仍适用，但地域尾列未保证可直接下推索引，需上线后测量，不能据此承诺零开销。
 
-## Native Admin reports and legacy proxy
+## Complete analysis gateway and shared Admin shell
 
-The native `/api/analytics/report` GET endpoint checks the existing Owner role
-before any upstream access. It accepts only validated report resources, dates,
-geography, search and pagination. Website and service identity are fixed on the
-server; browser URLs, site/Board IDs and authentication headers are not report
-inputs. Responses contain only validated aggregate read models from
-`@moya/contracts/admin-analytics`, with private/no-store caching and no upstream
-tokens, cookies, redirects or raw error bodies. Native readiness does not depend
-on `UMAMI_BOARD_ID`. Collection, IP retention, exclusions, database schema and
-permissions remain unchanged.
+The complete original analysis views remain responsible for query controls and
+rendering. Presentation changes are limited to the unified shell, automatic
+fixed team/site entry, shared canonical theme/navigation/icons and the requested
+China province map. Personal/team and service-account selectors are not shown.
+Report configuration writes, account/site management, collection and sharing
+retain their existing restrictions. No-data capabilities remain honest empty
+states; this UI change does not enable replay, heatmap, revenue or performance
+collection.
 
-The following reverse-proxy details apply to retained legacy bookmarks, not the
-new primary Admin interface.
+Original global Dashboard, Boards, Websites, Links and Pixels entry points and
+their readable details remain reachable through a clear analysis-content
+selector. Website/Board/Link/Pixel choices are business data scopes, not login
+identities. Their existing service-role/team permissions and honest empty states
+remain. Only the old team Link/Pixel page aliases and corresponding list GET
+routing gaps are closed; no account, Share, collection or configuration-write
+surface is opened.
+
+The main entry is `/admin/analytics`; the configured Board remains
+`/admin/analytics/board`; IP and collector status remain `/admin/analytics/ips`
+and `/admin/analytics/status`. The main entry uses a document navigation to the
+protected analysis surface so two application routers are not nested. Only the
+existing Owner role reaches the upstream. Service credentials and bearer
+material stay on the server.
 
 Admin 运行配置只持有 `UMAMI_ORIGIN`、`UMAMI_WEBSITE_ID`、`UMAMI_BOARD_ID`、专用
 `UMAMI_VIEWER_USERNAME/PASSWORD`。所有工作台 HTML、RSC、静态资源和 API 都经过现有 Owner 权限检查。代理丢弃客户端 Umami
@@ -171,8 +186,11 @@ reports 接口无需开放。允许 GET/HEAD 与固定 auth
 verify 之外的写接口均拒绝。公网同时拒绝 send/batch/script/replay/heatmap、share、login、账号管理及配置写接口。采集仅由 Backend
 worker 直连 loopback 固定 `/admin/analytics-workspace/api/batch`。
 
-仅旧兼容入口的同源 iframe 已受原生 CSP `frame-ancestors 'self'`
-支持。只读团队身份不会拥有管理员菜单，但原生 Settings/Logout 和部分未使用功能入口仍可能出现；容器外层应说明只读访问并处理无效导航，不能将空页面声称为已配置功能。实际 Owner 入口、匿名 401/403、路径遍历/编码、页面内部导航和权限失败都须本机浏览器验收。
+The primary complete interface is top-level and uses one shared Admin shell.
+Existing browser security headers remain; no iframe is required. The provider
+account chrome is not mounted. Owner entry, anonymous refusals, path encoding,
+full section/detail navigation and unavailable states require browser
+validation.
 
 依据：[原生 auth login](https://github.com/umami-software/umami/blob/ec0ff50388c264ed8ce46f00967e92f7e71476ae/src/app/api/auth/login/route.ts)、[原生 Board API](https://github.com/umami-software/umami/blob/ec0ff50388c264ed8ce46f00967e92f7e71476ae/src/app/api/boards/route.ts)、[原生漏斗 API](https://github.com/umami-software/umami/blob/ec0ff50388c264ed8ce46f00967e92f7e71476ae/src/app/api/websites/%5BwebsiteId%5D/funnels/route.ts)。
 

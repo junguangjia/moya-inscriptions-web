@@ -71,7 +71,7 @@ test("every local Docker COPY input is in the exact build-context whitelist", as
       .filter((line) => /^COPY /u.test(line) && !/ --from=/u.test(line))
       .flatMap((line) => line.split(/\s+/u).slice(1, -1)),
   );
-  assert.equal(sources.size, 13);
+  assert.equal(sources.size, 17);
   const checkWhitelist = (candidate) => {
     assert.equal(candidate[0], "**");
     assert.ok(

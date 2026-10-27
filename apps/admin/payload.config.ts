@@ -92,6 +92,21 @@ export default buildConfig({
           path: "/analytics",
           exact: true,
         },
+        analyticsIps: {
+          Component: "/src/analytics/View#AnalyticsIpView",
+          path: "/analytics/ips",
+          exact: true,
+        },
+        analyticsBoard: {
+          Component: "/src/analytics/View#AnalyticsBoardView",
+          path: "/analytics/board",
+          exact: true,
+        },
+        analyticsStatus: {
+          Component: "/src/analytics/View#AnalyticsStatusView",
+          path: "/analytics/status",
+          exact: true,
+        },
         editorialWorkflow: {
           Component: "/src/owner-workflow/View#OwnerWorkflowView",
           path: "/editorial-workflow",

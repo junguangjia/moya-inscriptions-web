@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "sources": {
+    "packages/design-tokens/src/theme.css": "62c0496afbbd07112fce0fe8127a640665d33fe9468a2500930651bc27341478",
+    "apps/admin/src/workspace/routes.ts": "ebb9561633c28f139fb1744ffa362f4d3c46c49e197d69f10c1574aa601e06c1",
+    "packages/ui/src/assets/icons/home.svg": "e9273d0ad3923611970593046872ef21439c8bd666a498179f09833d7019c5ec",
+    "packages/ui/src/assets/icons/inscriptions.svg": "671209be8eeb555d45c39c202a0bc11b6104ee8a315211e0262e8b9fc7cc2b86",
+    "packages/ui/src/assets/icons/discussion.svg": "3fad72aa0e3478b758a0c51a61f55aed6831e4e06c9b7a6373b9f2797df7ac45",
+    "packages/ui/src/assets/icons/user.svg": "1bb75bbbdfcb4211b527f634f4662ca7d731eb3193b2f3034e00f7471cb3262c",
+    "packages/ui/src/assets/icons/layout-double.svg": "ef608390926b97634d3802166f8951dd64c57ca0d4ca629635790c8e9c469fea",
+    "packages/ui/src/assets/icons/edit.svg": "0ffbf87003f7550d3382a364bef15e381b99f01fe6cc363dfc6a3e925adc266d",
+    "packages/ui/src/assets/icons/news.svg": "1cc60687044d3ec3ee689f98bbaf5ec3b26e504a49bd40bf65bddf5b3294e8b7",
+    "packages/ui/src/assets/icons/settings.svg": "aae2909952d313f502fa978215e8ed9705c4bc706b97e8f2368663dc913e567f",
+    "packages/ui/src/assets/icons/menu.svg": "d2b6388b44e64553edcaa20a56825b6cf91f84c8a075a4fb3b928d54387745be",
+    "packages/ui/src/assets/icons/close.svg": "12f27442546b14fbb963a0dcc5fe3bad9830422fc9e858f71ceb1ce67b49173b",
+    "packages/ui/src/assets/icons/theme-light.svg": "853dff77234945c9c7ddf96fa292eefa1c77d3e447499112cd3f6840373d3bf6",
+    "packages/ui/src/assets/icons/theme-dark.svg": "b2404dfb7c97a5f741bf71aad886e517b42f7f7db38f063a8cc1a3cb7ef2b0ee",
+    "packages/ui/src/assets/icons/loading.svg": "7b0cec88bb7361d2543742ef2df15632b14d11583680de1eb53866d55c860321",
+    "packages/ui/src/assets/icons/back.svg": "a3c3c4caa65ef56dce6f4c4c7f6f9a38d907563b89fe1b3ce8fc895129c5b799"
+  },
+  "generated": {
+    "archive-theme.css": {
+      "sha256": "62c0496afbbd07112fce0fe8127a640665d33fe9468a2500930651bc27341478",
+      "target": "src/app/archive-theme.css"
+    },
+    "archive-navigation.json": {
+      "sha256": "ff1f9d243b15fb124103483cf14145a029c0c919fa68b26a9c9d12a46f09339c",
+      "target": "src/data/archive-navigation.json"
+    },
+    "archive-icons.svg": {
+      "sha256": "8d39d4a06bb7d863d2b954454b1d8e414e1d8a642245716f2e4343854b48f863",
+      "target": "public/archive-icons.svg"
+    }
+  }
+}

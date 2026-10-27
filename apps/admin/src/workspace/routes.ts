@@ -62,7 +62,12 @@ export const workspaces = [
     id: "analytics",
     label: "数据",
     icon: "layout-double",
-    pages: [{ label: "访问分析", href: "/admin/analytics" }],
+    pages: [
+      { label: "访问分析", href: "/admin/analytics" },
+      { label: "统计看板", href: "/admin/analytics/board" },
+      { label: "IP 记录", href: "/admin/analytics/ips" },
+      { label: "采集状态", href: "/admin/analytics/status" },
+    ],
   },
   {
     id: "publishing",

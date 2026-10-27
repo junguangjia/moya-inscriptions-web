@@ -9,3 +9,5 @@ apps/apple/
 apps/harmony/
 # Preserve the pinned public boundary asset's original bytes and source hash.
 infra/production/umami/china-provinces.json
+# Generated from the existing canonical UI artwork; keep the bound bytes.
+infra/production/umami/archive-icons.svg

@@ -38,10 +38,6 @@
     "./analytics": {
       "types": "./src/analytics.ts",
       "import": "./dist/analytics.js"
-    },
-    "./admin-analytics": {
-      "types": "./src/admin-analytics.ts",
-      "import": "./dist/admin-analytics.js"
     }
   },
   "scripts": {
