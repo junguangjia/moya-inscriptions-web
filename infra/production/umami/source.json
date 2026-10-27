@@ -26,8 +26,8 @@
   "geographyPolicy": "cn-province-map-v2",
   "localizationPatch": {
     "file": "chinese-workspace.patch",
-    "sha256": "916b3f583c79cdcbb5fc081b55d7e1c50a3b6378df6f6dbaa8bad5b5701b7ea6",
-    "scope": "Chinese UI/display search; contextual municipal names; derived China province groups; China map and expandable geography lists; no stored key changes",
+    "sha256": "121078e6769d0a2d27445155932c976502635daccfa538e901c951a5be3690e8",
+    "scope": "Chinese display and China geography; five composed private Admin analysis groups retaining all native read reports, keys, queries and permissions",
     "upstreamHashes": "upstream-chinese.sha256 (after pool patch)",
     "patchedHashes": "patched-chinese.sha256",
     "generator": "generate-chinese-dictionaries.mjs",
@@ -36,7 +36,7 @@
     "cityEntries": 14144,
     "globalCityEntries": 13397,
     "regionEntries": 1320,
-    "identitySha256": "5c9fbafa4c53345e3abc61d09168557d217f85177e0d1162391d7bfbc8eccc1d"
+    "identitySha256": "827a80e389e92d9624d9ac476f1c87789e25e15bd70e94353cb623fd7f3ab776"
   },
   "postgresTlsPatch": {
     "file": "pg-tls-host.patch",
@@ -81,6 +81,21 @@
         "target": "public/archive-icons.svg"
       }
     },
-    "scope": "canonical Admin navigation/theme only; native analysis/auth/2FA/query permissions preserved"
+    "scope": "Canonical Admin shell and five composed display groups; native read reports, query semantics, auth/2FA and permissions retained",
+    "analysisPresentation": {
+      "groups": {
+        "overview": ["overview", "compare", "performance", "breakdown"],
+        "visitors": ["sessions", "realtime", "replays", "segments", "cohorts"],
+        "interaction": ["events", "heatmaps"],
+        "goals": ["goals", "funnel", "journeys", "retention"],
+        "sources": ["utm", "revenue", "attribution"]
+      },
+      "nativeReadCapabilities": 18,
+      "expandedDimensions": 26,
+      "nativeQueryAndStoredKeysUnchanged": true,
+      "historyPagination": "Native count pagination; composed UI pages reset only when shared conditions change",
+      "geographyExpansion": "Native search before max 500 matching rows; original columns and CSV retained",
+      "weeklyTraffic": "All 168 day/hour values with responsive 24-hour axis"
+    }
   }
 }

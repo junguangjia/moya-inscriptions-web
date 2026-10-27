@@ -1,9 +1,10 @@
 # Umami 私有分析工作台部署与验收包
 
-#330 preserves the complete existing website analysis interface: all 18 analysis
-sections, 26 expanded dimensions, filters, exports and event/session/report
-details. The original views run as a top-level, same-origin Admin surface with
-the shared archive navigation and theme; the complete app is never nested in an
+#330 preserves all 18 existing analysis capabilities, 26 expanded dimensions,
+filters, exports and event/session/report details. Related capabilities are
+composed into five peer sections instead of an 18-page selector. The original
+analysis components run as a top-level, same-origin Admin surface with the
+shared archive navigation and theme; the complete app is never nested in an
 iframe. The existing CMS Owner session authorizes the private gateway. The
 configured website is automatically entered in its actual team scope, so
 administrators do not choose provider accounts or personal/team workspaces. The
@@ -21,7 +22,7 @@ acceptance.
   `dfdc154f23fe52ffd8fbf13c0544ea880e5ef01463f57d06954512b41c50a93a`。默认 standalone 构建使用固定 digest 的 Node
   24 Bookworm Slim/glibc；备用容器目标使用固定 digest 的 Node 22
   Alpine。完整记录在 `infra/production/umami/source.json`。
-- 唯一下游源修改是 `PrismaPg` 主池及可选副本池各
+- 数据库连接池的下游配置保持为 `PrismaPg` 主池及可选副本池各
   `max: 3`。固定 patch 应用前、后都校验整个源文件 SHA256，且禁用 fuzz。官方
   `@prisma/adapter-pg@7.10.0` 构造器接受
   `pg.PoolConfig`。不配置副本 URL；否则总上限成为 6。
@@ -146,22 +147,22 @@ locale 覆盖；日期、图例、漏斗、筛选标签与事件名称均使用�
 
 ## Complete analysis gateway and shared Admin shell
 
-The complete original analysis views remain responsible for query controls and
-rendering. Presentation changes are limited to the unified shell, automatic
-fixed team/site entry, shared canonical theme/navigation/icons and the requested
-China province map. Personal/team and service-account selectors are not shown.
-Report configuration writes, account/site management, collection and sharing
-retain their existing restrictions. No-data capabilities remain honest empty
-states; this UI change does not enable replay, heatmap, revenue or performance
-collection.
+The original analysis components remain responsible for queries and rendering.
+Presentation changes include the unified shell, automatic fixed team/site entry,
+shared canonical theme/navigation/icons, compact related content and the
+requested China province map. Personal/team and service-account selectors are
+not shown. Report configuration writes, account/site management, collection and
+sharing retain their existing restrictions. No-data capabilities remain honest
+empty states; this UI change does not enable replay, heatmap, revenue or
+performance collection.
 
 Original global Dashboard, Boards, Websites, Links and Pixels entry points and
-their readable details remain reachable through a clear analysis-content
-selector. Website/Board/Link/Pixel choices are business data scopes, not login
-identities. Their existing service-role/team permissions and honest empty states
-remain. Only the old team Link/Pixel page aliases and corresponding list GET
-routing gaps are closed; no account, Share, collection or configuration-write
-surface is opened.
+their readable details remain reachable as secondary data resources.
+Website/Board/Link/Pixel choices are business data scopes, not login identities.
+Their existing service-role/team permissions and honest empty states remain.
+Only the old team Link/Pixel page aliases and corresponding list GET routing
+gaps are closed; no account, Share, collection or configuration-write surface is
+opened.
 
 The main entry is `/admin/analytics`; the configured Board remains
 `/admin/analytics/board`; IP and collector status remain `/admin/analytics/ips`
@@ -169,6 +170,41 @@ and `/admin/analytics/status`. The main entry uses a document navigation to the
 protected analysis surface so two application routers are not nested. Only the
 existing Owner role reaches the upstream. Service credentials and bearer
 material stay on the server.
+
+### Compact analysis composition
+
+| Peer section | Existing capabilities                             |
+| ------------ | ------------------------------------------------- |
+| 访问概况     | Overview, comparison, performance and breakdown   |
+| 访客动态     | Sessions, realtime, replays, segments and cohorts |
+| 内容互动     | Events, event properties and heatmaps             |
+| 目标与回访   | Goals, funnels, journeys and retention            |
+| 来源与收益   | UTM, revenue and attribution                      |
+
+Related small summaries and lists share a section. Heavy graphs, recordings and
+property tools open in place and mount only when needed. A shared control bar
+and detail surfaces avoid duplicated forms and modals. Existing URLs still open
+the correct section and capability; valid date, filter, detail and local list
+state retain their original scope. Component-local presentation state does not
+alter statistics, permissions or persisted data.
+
+Realtime retains its independent live window and retention retains its monthly
+controls; neither is silently interpreted as the page's ordinary historical date
+range. Event-property filters keep their event scope. Comparison dimensions and
+the expanded metrics view do not overwrite each other's state.
+
+Ordinary cards and empty states size to their content. Data, controls and
+section headings use the canonical interface font; the brand and main title
+retain the editorial font. Hour labels use unambiguous 24-hour notation and
+avoid wrapping. The map and related geography lists share a padded section
+without cropping the boundary geometry. Geography uses one search and an
+in-place expansion rather than repeated 100-row page changes. Expanded rows and
+CSV retain the original maximum of 500 matching items; a narrower date range or
+filter can reduce that scope. Large record histories retain their existing
+count-aware pagination. When a shared record filter or date range changes,
+composed lists return to the first page while retaining their searches and the
+exact filter values. Merely opening a tool or changing a chart dimension does
+not reset a list. Browser history keeps the previous criteria and page state.
 
 Admin 运行配置只持有 `UMAMI_ORIGIN`、`UMAMI_WEBSITE_ID`、`UMAMI_BOARD_ID`、专用
 `UMAMI_VIEWER_USERNAME/PASSWORD`。所有工作台 HTML、RSC、静态资源和 API 都经过现有 Owner 权限检查。代理丢弃客户端 Umami
