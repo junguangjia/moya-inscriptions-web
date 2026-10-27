@@ -75,7 +75,7 @@
 +    "no-api-keys": "你尚未创建接口密钥。"
 --- /dev/null
 +++ b/src/app/(main)/App.archive.test.tsx
-@@ -0,0 +1,104 @@
+@@ -0,0 +1,144 @@
 +import { cleanup, render, screen } from '@testing-library/react';
 +import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 +
@@ -89,6 +89,7 @@
 +  twoFactor: { isRequired: false, isEnabled: false },
 +  replace: vi.fn(),
 +  twoFactorQuery: vi.fn(),
++  setupModal: vi.fn(),
 +}));
 +vi.mock('@/lib/archive-admin', () => ({
 +  get archiveAdminMode() {
@@ -110,18 +111,26 @@
 +  },
 +}));
 +vi.mock('./ArchiveShell', () => ({
-+  ArchiveShell: ({ children }: any) => <div data-archive-shell>{children}</div>,
++  ArchiveShell: ({ children, showAnalysisNavigation = true }: any) => (
++    <div data-archive-shell data-analysis-navigation={String(showAnalysisNavigation)}>
++      {children}
++    </div>
++  ),
 +  ArchiveServiceError: () => <p role="alert">分析服务暂时不可用</p>,
 +}));
 +vi.mock('@/app/(main)/SideNav', () => ({ SideNav: () => <div>PROVIDER_SIDE_NAV</div> }));
 +vi.mock('@/app/(main)/TopNav', () => ({ TopNav: () => <div>PROVIDER_ACCOUNT_SITE_PICKERS</div> }));
 +vi.mock('@/app/(main)/MobileNav', () => ({ MobileNav: () => <div>PROVIDER_MOBILE_NAV</div> }));
 +vi.mock('@/components/modals/TwoFactorSetupModal', () => ({
-+  TwoFactorSetupModal: () => <div role="dialog" aria-label="必须完成双重验证" />,
++  TwoFactorSetupModal: ({ required }: { required: boolean }) => {
++    runtime.setupModal(required);
++    return <div role="dialog" aria-label="必须完成双重验证" />;
++  },
 +}));
 +vi.mock('./UpdateNotice', () => ({ UpdateNotice: () => null }));
 +vi.mock('next/script', () => ({ default: () => null }));
 +vi.mock('@/lib/storage', () => ({ removeItem: vi.fn(), setItem: vi.fn() }));
++
 +import { App } from './App';
 +
 +beforeEach(() => {
@@ -134,6 +143,7 @@
 +  runtime.twoFactor = { isRequired: false, isEnabled: false };
 +  runtime.replace.mockClear();
 +  runtime.twoFactorQuery.mockClear();
++  runtime.setupModal.mockClear();
 +});
 +afterEach(cleanup);
 +test('private chrome keeps the original analysis children and hides provider identity/navigation', () => {
@@ -163,15 +173,45 @@
 +  expect(screen.getByRole('alert')).toBeDefined();
 +  expect(runtime.replace).not.toHaveBeenCalled();
 +});
-+test('two-factor requirement remains enforced in private chrome', () => {
++test('private required two-factor setup shows a recoverable service error without mounting setup or analysis', () => {
 +  runtime.twoFactor.isRequired = true;
-+  render(
++  const AnalysisContent = vi.fn(() => <div>原分析内容</div>);
++  const { container } = render(
 +    <App>
-+      <div>原分析内容</div>
++      <AnalysisContent />
 +    </App>,
 +  );
++  expect(screen.getByRole('alert')).toBeDefined();
++  expect(screen.queryByRole('dialog')).toBeNull();
++  expect(screen.queryByText('原分析内容')).toBeNull();
++  expect(AnalysisContent).not.toHaveBeenCalled();
++  expect(runtime.setupModal).not.toHaveBeenCalled();
++  expect(runtime.replace).not.toHaveBeenCalled();
++  expect(runtime.twoFactorQuery).toHaveBeenCalledWith(true);
++  expect(container.querySelector('[data-archive-shell]')).toHaveAttribute(
++    'data-analysis-navigation',
++    'false',
++  );
++});
++test('private analysis remains available when required two-factor authentication is enabled', () => {
++  runtime.twoFactor = { isRequired: true, isEnabled: true };
++  render(<App>原分析内容</App>);
++  expect(screen.getByText('原分析内容').closest('[aria-hidden="true"]')).toBeNull();
++  expect(screen.queryByRole('alert')).toBeNull();
++  expect(screen.queryByRole('dialog')).toBeNull();
++  expect(runtime.setupModal).not.toHaveBeenCalled();
++  expect(runtime.twoFactorQuery).toHaveBeenCalledWith(true);
++});
++test('other base paths retain the required setup modal and original content interaction block', () => {
++  runtime.private = false;
++  runtime.twoFactor = { isRequired: true, isEnabled: false };
++  render(<App>原分析内容</App>);
 +  expect(screen.getByRole('dialog', { name: '必须完成双重验证' })).toBeDefined();
-+  expect(screen.getByText('原分析内容').closest('[aria-hidden="true"]')).not.toBeNull();
++  expect(runtime.setupModal).toHaveBeenCalledWith(true);
++  const blockedContent = screen.getByText('原分析内容').closest('[aria-hidden="true"]');
++  expect(blockedContent).not.toBeNull();
++  expect(blockedContent).toHaveStyle({ pointerEvents: 'none' });
++  expect(screen.queryByRole('alert')).toBeNull();
 +});
 +test('other base paths keep the original provider chrome', () => {
 +  runtime.private = false;
@@ -182,9 +222,10 @@
 +});
 --- a/src/app/(main)/App.tsx
 +++ b/src/app/(main)/App.tsx
-@@ -18,0 +19,2 @@
-+import { ArchiveShell, ArchiveServiceError } from './ArchiveShell';
+@@ -15,0 +16 @@
 +import { archiveAdminMode } from '@/lib/archive-admin';
+@@ -17,0 +19 @@
++import { ArchiveServiceError, ArchiveShell } from './ArchiveShell';
 @@ -26,0 +29 @@
 +  const keepPreviousTeam = archiveAdminMode && pathname === '/dashboard';
 @@ -31 +34 @@
@@ -222,18 +263,25 @@
 +        <ArchiveServiceError />
 +      </ArchiveShell>
 +    ) : null;
-@@ -62,5 +84,5 @@
+@@ -62,5 +84,12 @@
 -  return (
 -    <Grid
 -      columns={{ base: '1fr', lg: 'auto 1fr' }}
 -      rows={{ base: 'auto 1fr', lg: '1fr' }}
 -      height="screen"
++  if (archiveAdminMode && needsTwoFactorSetup)
++    return (
++      <ArchiveShell showAnalysisNavigation={false}>
++        <ArchiveServiceError />
++      </ArchiveShell>
++    );
++
 +  const content = (
 +    <Column
 +      alignItems="center"
 +      aria-hidden={needsTwoFactorSetup || undefined}
 +      style={needsTwoFactorSetup ? { pointerEvents: 'none' } : undefined}
-@@ -68,16 +90,5 @@
+@@ -68,16 +97,5 @@
 -      <Row display={{ base: 'flex', lg: 'none' }} alignItems="center" gap padding="3">
 -        <MobileNav />
 -      </Row>
@@ -255,7 +303,7 @@
 +  );
 +  const extras = (
 +    <>
-@@ -105,0 +117,27 @@
+@@ -105,0 +124,27 @@
 +    </>
 +  );
 +  if (archiveAdminMode)
@@ -1876,6 +1924,269 @@
 @@ -80 +80 @@
 -                      {t(labels.day)} {n}
 +                      第 {n} 天
+--- /dev/null
++++ b/src/app/(main)/websites/[websiteId]/(reports)/retention/RetentionPage.archive.test.tsx
+@@ -0,0 +1,195 @@
++import { cleanup, fireEvent, render, screen } from '@testing-library/react';
++import { afterEach, beforeEach, expect, test, vi } from 'vitest';
++import { ArchiveAnalysisContext } from '@/components/hooks/context/ArchiveAnalysisContext';
++import { getDateRangeValue, getMonthDateRangeValue } from '@/lib/date';
++
++const fixture = vi.hoisted(() => ({
++  params: new URLSearchParams(),
++  push: vi.fn(),
++  replace: vi.fn(),
++}));
++vi.mock('next/navigation', () => ({
++  usePathname: () =>
++    '/teams/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/websites/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb/retention',
++  useSearchParams: () => fixture.params,
++  useRouter: () => ({ push: fixture.push, replace: fixture.replace }),
++}));
++vi.mock('@/components/hooks', async () => {
++  const [{ useDateRange }, { useNavigation }] = await Promise.all([
++    import('@/components/hooks/useDateRange'),
++    import('@/components/hooks/useNavigation'),
++  ]);
++  return { useDateRange, useNavigation };
++});
++vi.mock('@/components/input/MonthSelect', () => ({
++  MonthSelect: ({ date, onChange }: { date: Date; onChange: (date: Date) => void }) => (
++    <input
++      type="month"
++      aria-label="测试原月份控件"
++      value={`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`}
++      onChange={event => onChange(new Date(`${event.target.value}-01T12:00:00`))}
++    />
++  ),
++}));
++vi.mock('@/app/(main)/websites/[websiteId]/WebsiteControls', async () => {
++  const { MonthFilter } = await import('@/components/input/MonthFilter');
++  return {
++    WebsiteControls: () => (
++      <div data-test="native-month-controls">
++        <MonthFilter />
++      </div>
++    ),
++  };
++});
++vi.mock('./Retention', () => ({
++  Retention: ({ startDate, endDate }: { startDate: Date; endDate: Date }) => (
++    <output
++      data-test="retention-bounds"
++      data-start={startDate.getTime()}
++      data-end={endDate.getTime()}
++    />
++  ),
++}));
++
++import { useDateRange } from '@/components/hooks';
++import { RetentionPage } from './RetentionPage';
++
++function HistoryProbe() {
++  const {
++    dateRange: { startDate, endDate },
++  } = useDateRange();
++  return (
++    <output
++      data-test="shared-bounds"
++      data-start={startDate.getTime()}
++      data-end={endDate.getTime()}
++    />
++  );
++}
++function Page({ composed = true, show = true }: { composed?: boolean; show?: boolean }) {
++  const body = (
++    <>
++      <HistoryProbe />
++      {show && <RetentionPage websiteId="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" />}
++    </>
++  );
++  return composed ? (
++    <ArchiveAnalysisContext.Provider
++      value={{
++        leaf: 'retention',
++        activeLeaf: 'retention',
++        embedded: true,
++        values: {},
++        setValues: () => undefined,
++      }}
++    >
++      {body}
++    </ArchiveAnalysisContext.Provider>
++  ) : (
++    body
++  );
++}
++const dateRange = getDateRangeValue(new Date(2026, 7, 10), new Date(2026, 7, 16, 23, 59, 59, 999));
++const currentParams = (method: 'push' | 'replace') =>
++  new URL(fixture[method].mock.lastCall?.[0], 'http://localhost').searchParams;
++const month = (value: string) =>
++  fireEvent.change(screen.getByLabelText('测试原月份控件'), { target: { value } });
++const bounds = (name: string) => ({
++  start: screen.getByTestId(name).getAttribute('data-start'),
++  end: screen.getByTestId(name).getAttribute('data-end'),
++});
++beforeEach(() => {
++  fixture.params = new URLSearchParams({
++    date: dateRange,
++    offset: '0',
++    country: 'eq.CN',
++    page: '4',
++  });
++  fixture.push.mockClear();
++  fixture.replace.mockClear();
++});
++afterEach(cleanup);
++test.each([undefined, '2026-13'])(
++  'legacy or invalid private month initializes from the original date range without mutating historical state (%s)',
++  value => {
++    if (value) fixture.params.set('retentionMonth', value);
++    render(<Page />);
++    const next = currentParams('replace');
++    expect(next.get('retentionMonth')).toBe('2026-08');
++    expect(next.get('date')).toBe(dateRange);
++    expect(next.get('offset')).toBe('0');
++    expect(next.get('country')).toBe('eq.CN');
++    expect(next.get('page')).toBe('4');
++    expect(bounds('retention-bounds')).toEqual({
++      start: String(new Date(2026, 7, 1).getTime()),
++      end: String(new Date(2026, 8, 0, 23, 59, 59, 999).getTime()),
++    });
++  },
++);
++test('month changes only the retention presentation key, while shared range and explicit month survive each other', () => {
++  const view = render(<Page />);
++  fixture.params = currentParams('replace');
++  view.rerender(<Page />);
++  fixture.replace.mockClear();
++  const shared = bounds('shared-bounds');
++  month('2026-09');
++  const september = currentParams('push');
++  expect(september.get('date')).toBe(dateRange);
++  expect(september.get('offset')).toBe('0');
++  expect(september.get('country')).toBe('eq.CN');
++  expect(september.get('page')).toBe('4');
++  expect(september.get('retentionMonth')).toBe('2026-09');
++  fixture.params = september;
++  view.rerender(<Page />);
++  expect(bounds('shared-bounds')).toEqual(shared);
++  expect(bounds('retention-bounds').start).toBe(String(new Date(2026, 8, 1).getTime()));
++  fixture.params.set('date', '30day');
++  view.rerender(<Page />);
++  expect(screen.getByRole('group', { name: '回访月份' })).toHaveAttribute(
++    'data-retention-month',
++    '2026-09',
++  );
++  expect(bounds('retention-bounds').start).toBe(String(new Date(2026, 8, 1).getTime()));
++  expect(bounds('shared-bounds')).not.toEqual(shared);
++  expect(fixture.replace).not.toHaveBeenCalled();
++});
++test('normal month URL Back and Forward restore displayed and queried month without altering shared criteria', () => {
++  fixture.params.set('retentionMonth', '2026-08');
++  const original = fixture.params.toString();
++  const view = render(<Page />);
++  month('2026-09');
++  const next = currentParams('push').toString();
++  fixture.params = new URLSearchParams(next);
++  view.rerender(<Page />);
++  expect(screen.getByLabelText('测试原月份控件')).toHaveValue('2026-09');
++  fixture.params = new URLSearchParams(original);
++  view.rerender(<Page />);
++  expect(screen.getByLabelText('测试原月份控件')).toHaveValue('2026-08');
++  expect(bounds('retention-bounds').start).toBe(String(new Date(2026, 7, 1).getTime()));
++  fixture.params = new URLSearchParams(next);
++  view.rerender(<Page />);
++  expect(screen.getByLabelText('测试原月份控件')).toHaveValue('2026-09');
++  expect(bounds('retention-bounds').start).toBe(String(new Date(2026, 8, 1).getTime()));
++  expect(fixture.params.get('date')).toBe(dateRange);
++});
++test('historical range selected before first opening supplies the natural default month', () => {
++  const view = render(<Page show={false} />);
++  fixture.params.set('date', '30day');
++  view.rerender(<Page show={false} />);
++  expect(fixture.replace).not.toHaveBeenCalled();
++  const originalStart = new Date(Number(bounds('shared-bounds').start));
++  view.rerender(<Page />);
++  expect(currentParams('replace').get('retentionMonth')).toBe(
++    `${originalStart.getFullYear()}-${String(originalStart.getMonth() + 1).padStart(2, '0')}`,
++  );
++});
++test('uncomposed native page keeps its original date month control and ignores private display month', () => {
++  fixture.params.set('retentionMonth', '2026-09');
++  render(<Page composed={false} />);
++  expect(screen.getByTestId('native-month-controls')).toBeDefined();
++  expect(bounds('retention-bounds').start).toBe(String(new Date(2026, 7, 1).getTime()));
++  expect(fixture.replace).not.toHaveBeenCalled();
++  month('2026-06');
++  expect(currentParams('push').get('date')).toBe(getMonthDateRangeValue(new Date(2026, 5, 1)));
++  expect(currentParams('push').get('retentionMonth')).toBe('2026-09');
++});
+--- a/src/app/(main)/websites/[websiteId]/(reports)/retention/RetentionPage.tsx
++++ b/src/app/(main)/websites/[websiteId]/(reports)/retention/RetentionPage.tsx
+@@ -2 +2 @@
+-import { Column } from '@umami/react-zen';
++import { Column, Row, Text } from '@umami/react-zen';
+@@ -3,0 +4 @@
++import { useEffect } from 'react';
+@@ -5 +6,3 @@
+-import { useDateRange } from '@/components/hooks';
++import { useDateRange, useNavigation } from '@/components/hooks';
++import { useArchiveAnalysis } from '@/components/hooks/context/ArchiveAnalysisContext';
++import { MonthSelect } from '@/components/input/MonthSelect';
+@@ -6,0 +10,12 @@
++
++function monthValue(date: Date) {
++  return `${String(date.getFullYear()).padStart(4, '0')}-${String(date.getMonth() + 1).padStart(2, '0')}`;
++}
++function readMonth(value?: string) {
++  const match = value?.match(/^(\d{4})-(0[1-9]|1[0-2])$/);
++  if (!match || Number(match[1]) < 1) return undefined;
++  const date = new Date(0);
++  date.setFullYear(Number(match[1]), Number(match[2]) - 1, 1);
++  date.setHours(0, 0, 0, 0);
++  return date;
++}
+@@ -11,0 +27,7 @@
++  const display = useArchiveAnalysis();
++  const composed = !!(display?.embedded && display.leaf === 'retention');
++  const { query, router, updateParams } = useNavigation();
++  const selected = composed ? readMonth(query.retentionMonth) : undefined;
++  const monthStartDate = startOfMonth(selected ?? startDate);
++  const monthEndDate = endOfMonth(monthStartDate);
++  const currentMonth = monthValue(monthStartDate);
+@@ -13,2 +35,7 @@
+-  const monthStartDate = startOfMonth(startDate);
+-  const monthEndDate = endOfMonth(startDate);
++  // Bind the legacy/default month only when this section opens. Shared historical
++  // dates remain untouched, and subsequent month choices have normal URL history.
++  useEffect(() => {
++    if (composed && !readMonth(query.retentionMonth)) {
++      router.replace(updateParams({ retentionMonth: currentMonth }), { scroll: false });
++    }
++  }, [composed, query.retentionMonth, currentMonth, router, updateParams]);
+@@ -18 +45,20 @@
+-      <WebsiteControls websiteId={websiteId} allowDateFilter={false} allowMonthFilter />
++      {composed ? (
++        <Row
++          gap
++          alignItems="center"
++          wrap="wrap"
++          role="group"
++          aria-label="回访月份"
++          data-retention-month={currentMonth}
++        >
++          <Text>回访月份</Text>
++          <MonthSelect
++            date={monthStartDate}
++            onChange={(date: Date) =>
++              router.push(updateParams({ retentionMonth: monthValue(date) }), { scroll: false })
++            }
++          />
++        </Row>
++      ) : (
++        <WebsiteControls websiteId={websiteId} allowDateFilter={false} allowMonthFilter />
++      )}
 --- a/src/app/(main)/websites/[websiteId]/(reports)/revenue/RevenueMetricsBar.tsx
 +++ b/src/app/(main)/websites/[websiteId]/(reports)/revenue/RevenueMetricsBar.tsx
 @@ -38 +38 @@
@@ -2192,7 +2503,7 @@
 +});
 --- /dev/null
 +++ b/src/app/(main)/websites/[websiteId]/ArchiveAnalysis.tsx
-@@ -0,0 +1,269 @@
+@@ -0,0 +1,255 @@
 +'use client';
 +import { type ReactNode, useEffect, useRef, useState } from 'react';
 +import { Panel } from '@/components/common/Panel';
@@ -2350,21 +2661,7 @@
 +                  实时动态采用原有实时统计窗口，不受上方日期及筛选影响。
 +                </p>
 +              )}
-+              {id === 'retention' && (
-+                <>
-+                  <p className={styles.note}>回访情况按所选月份统计。</p>
-+                  <ArchiveAnalysisContext.Provider
-+                    value={{ leaf: id, activeLeaf: capability, embedded: false, values, setValues }}
-+                  >
-+                    <WebsiteControls
-+                      websiteId={websiteId}
-+                      allowFilter={false}
-+                      allowDateFilter={false}
-+                      allowMonthFilter
-+                    />
-+                  </ArchiveAnalysisContext.Provider>
-+                </>
-+              )}
++              {id === 'retention' && <p className={styles.note}>回访情况按独立选择的月份统计。</p>}
 +              <Leaf websiteId={websiteId} />
 +            </div>
 +          </ArchiveAnalysisContext.Provider>

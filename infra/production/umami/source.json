@@ -26,7 +26,7 @@
   "geographyPolicy": "cn-province-map-v2",
   "localizationPatch": {
     "file": "chinese-workspace.patch",
-    "sha256": "1972a4e32fa308e8c33ecd02220670e85b2cc12f7c9dcd745f57a5f145b52bc3",
+    "sha256": "5b25dae8797326c271d96a7fdb863d5314d1738f015a3f717409d8111be344ab",
     "scope": "Chinese display and China geography; five composed private Admin analysis groups retaining all native read reports, keys, queries and permissions",
     "upstreamHashes": "upstream-chinese.sha256 (after pool patch)",
     "patchedHashes": "patched-chinese.sha256",
@@ -36,7 +36,7 @@
     "cityEntries": 14144,
     "globalCityEntries": 13397,
     "regionEntries": 1320,
-    "identitySha256": "fcb4463a3a67860e710a6b7c94fffdca29813bb5a324ee45a9578f0dd7fbbcdd"
+    "identitySha256": "a531b1383b044f9edf62f6e227fbf93d702437526359be557a9065b457c1bd86"
   },
   "postgresTlsPatch": {
     "file": "pg-tls-host.patch",
@@ -95,7 +95,9 @@
       "nativeQueryAndStoredKeysUnchanged": true,
       "historyPagination": "Native count pagination; composed UI pages reset only when shared conditions change",
       "geographyExpansion": "Native search before max 500 matching rows; original columns and CSV retained",
-      "weeklyTraffic": "All 168 day/hour values with responsive 24-hour axis"
+      "weeklyTraffic": "All 168 day/hour values with responsive 24-hour axis",
+      "retentionMonth": "Private embedded month state uses retentionMonth only; legacy date/offset initialize it; shared historical range and native retention query unchanged",
+      "requiredTwoFactorSetup": "Private read-only shell reports unavailable when setup is required and incomplete; native setup and all gateway denial boundaries unchanged"
     }
   }
 }

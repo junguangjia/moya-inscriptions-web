@@ -8,6 +8,7 @@ import type {
   FeaturedPage,
   OperatorWork,
   OperatorUser,
+  OperatorUserPage,
   OperatorWorkPage,
 } from "@moya/contracts/internal/community-operator";
 import type { ContentIdentity } from "@moya/contracts";
@@ -109,6 +110,10 @@ export const CommunityContentClient = () => {
   }, [selectedWork]);
   const detailRequest = useRef(0);
   const [activeUser, setActiveUser] = useState<OperatorUser | null>(null);
+  const activeAuthorId = authorFromURL ?? activeUser?.id;
+  const [authorError, setAuthorError] = useState<string | null>(null);
+  const [authorLoading, setAuthorLoading] = useState(false);
+  const [authorRefresh, setAuthorRefresh] = useState(0);
   const [userReload, setUserReload] = useState(0);
   const [featuredFilter, setFeaturedFilter] = useState<"active" | "all">(
     "active",
@@ -173,6 +178,35 @@ export const CommunityContentClient = () => {
     if (activeUser && activeUser.id !== authorFromURL) setActiveUser(null);
     setSelectedIds(new Set());
   }, [urlQuery, busy, retry, bulkPending]);
+  useEffect(() => {
+    if (tab !== "works" || !authorFromURL) {
+      setAuthorError(null);
+      setAuthorLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    setAuthorError(null);
+    setAuthorLoading(true);
+    void call<OperatorUserPage>(
+      "read-users",
+      { userId: authorFromURL, page: 1, pageSize: 1, search: "" },
+      controller.signal,
+    )
+      .then((page) => {
+        if (controller.signal.aborted) return;
+        const user = page.items.find((item) => item.id === authorFromURL);
+        setActiveUser(user ?? null);
+        if (!user) setAuthorError("找不到该用户，请返回用户列表核对。");
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted)
+          setAuthorError(describeFailure(error).text);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setAuthorLoading(false);
+      });
+    return () => controller.abort();
+  }, [tab, authorFromURL, authorRefresh]);
   const settingsVersion = useRef<number | null>(null);
   const load = useCallback(async () => {
     const epoch = ++request.current;
@@ -184,11 +218,7 @@ export const CommunityContentClient = () => {
       if (tab === "works") {
         const result = await call<OperatorWorkPage>("read-works", {
           ...query,
-          ...(activeUser
-            ? { authorId: activeUser.id }
-            : authorFromURL
-              ? { authorId: authorFromURL }
-              : {}),
+          ...(activeAuthorId ? { authorId: activeAuthorId } : {}),
           pageSize: PAGE_SIZE,
         });
         if (epoch === request.current) {
@@ -223,7 +253,7 @@ export const CommunityContentClient = () => {
     } finally {
       if (epoch === request.current) setLoading(false);
     }
-  }, [tab, query, activeUser, featuredFilter, authorFromURL]);
+  }, [tab, query, activeAuthorId, featuredFilter]);
   useEffect(() => {
     void load();
     return () => {
@@ -490,6 +520,22 @@ export const CommunityContentClient = () => {
               <UiIcon name="back" size="sm" />
               返回用户列表
             </button>
+          ) : null}
+          {tab === "works" && authorFromURL && authorLoading ? (
+            <p role="status">读取用户资料中…</p>
+          ) : null}
+          {tab === "works" && authorFromURL && authorError ? (
+            <div role="alert">
+              {authorError}
+              <button
+                type="button"
+                className={styles.actionButton}
+                disabled={disabled || authorLoading}
+                onClick={() => setAuthorRefresh((value) => value + 1)}
+              >
+                重新读取用户资料
+              </button>
+            </div>
           ) : null}
           {activeUser && tab === "works" ? (
             <section className={styles.userDetail} aria-label="用户详情">

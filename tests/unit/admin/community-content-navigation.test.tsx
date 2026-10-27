@@ -46,7 +46,12 @@ vi.mock("admin/community-api", async (original) => ({
 }));
 
 import { CommunityContentClient } from "admin/community-content-client";
-import { OperatorFailure } from "admin/community-api";
+import {
+  describeFailure,
+  describeFinalFailure,
+  OperatorFailure,
+  outcomeUnknown,
+} from "admin/community-api";
 import { useNavigationGuard } from "admin/workspace-navigation-guard";
 
 const navigate = (query: string) => {
@@ -397,6 +402,134 @@ describe("canonical content workspace URLs", () => {
       screen.getByRole("heading", { level: 1, name: "用户作品" }),
     ).toBeTruthy();
   });
+
+  it("rehydrates the author details on a direct works URL using the existing exact-user read", async () => {
+    const author: OperatorUser = {
+      id: `user-${"d".repeat(32)}`,
+      handle: "synthetic-direct-author",
+      displayName: "直达作者",
+      bio: "合成用户简介",
+      status: "suspended",
+      createdAt: "2026-10-01T00:00:00.000Z",
+      submittedWorks: 2,
+      recommended: false,
+      recommendationVersion: 1,
+    };
+    const read = runtime.call.getMockImplementation()!;
+    runtime.call.mockImplementation((name, input, signal) =>
+      name === "read-users"
+        ? Promise.resolve({ items: [author], total: 1, page: 1, pageSize: 1 })
+        : read(name, input, signal),
+    );
+    navigate(`author=${author.id}&q=碑&page=2&usersQ=书&usersPage=3`);
+    render(createElement(CommunityContentClient));
+    expect(
+      await screen.findByRole("heading", { name: "直达作者" }),
+    ).toBeTruthy();
+    expect(screen.getByText(/@synthetic-direct-author · 已停用/)).toBeTruthy();
+    expect(screen.getByText("合成用户简介")).toBeTruthy();
+    expect(runtime.call).toHaveBeenCalledWith(
+      "read-users",
+      { userId: author.id, page: 1, pageSize: 1, search: "" },
+      expect.any(AbortSignal),
+    );
+    expect(runtime.call).toHaveBeenCalledWith("read-works", {
+      authorId: author.id,
+      page: 2,
+      pageSize: 20,
+      search: "碑",
+    });
+    expect(new URLSearchParams(window.location.search).get("usersPage")).toBe(
+      "3",
+    );
+  });
+
+  it("keeps the works filter when author details fail and lets the reader retry", async () => {
+    const author = `user-${"d".repeat(32)}`;
+    const read = runtime.call.getMockImplementation()!;
+    let attempts = 0;
+    runtime.call.mockImplementation((name, input, signal) => {
+      if (name !== "read-users") return read(name, input, signal);
+      attempts++;
+      return attempts === 1
+        ? Promise.reject(new OperatorFailure("OPERATOR_UNREACHABLE", "", null))
+        : Promise.resolve({ items: [], total: 0, page: 1, pageSize: 1 });
+    });
+    navigate(`author=${author}`);
+    render(createElement(CommunityContentClient));
+    expect(await screen.findByRole("alert")).toHaveProperty(
+      "textContent",
+      expect.stringContaining("暂时无法连接"),
+    );
+    const retry = screen.getByRole("button", { name: "重新读取用户资料" });
+    await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(retry);
+    expect(
+      await screen.findByText("找不到该用户，请返回用户列表核对。"),
+    ).toBeTruthy();
+    expect(new URLSearchParams(window.location.search).get("author")).toBe(
+      author,
+    );
+    expect(
+      runtime.call.mock.calls.every(([name]) => name.startsWith("read-")),
+    ).toBe(true);
+  });
+
+  it("ignores a late author read after browser navigation to another author", async () => {
+    const first = `user-${"d".repeat(32)}`;
+    const second = `user-${"e".repeat(32)}`;
+    let completeFirst!: (result: unknown) => void;
+    const pending = new Promise((resolve) => {
+      completeFirst = resolve;
+    });
+    const read = runtime.call.getMockImplementation()!;
+    runtime.call.mockImplementation((name, input, signal) =>
+      name === "read-users"
+        ? input.userId === first
+          ? pending
+          : Promise.resolve({ items: [], total: 0, page: 1, pageSize: 1 })
+        : read(name, input, signal),
+    );
+    navigate(`author=${first}`);
+    const view = render(createElement(CommunityContentClient));
+    await waitFor(() =>
+      expect(runtime.call).toHaveBeenCalledWith(
+        "read-users",
+        expect.objectContaining({ userId: first }),
+        expect.any(AbortSignal),
+      ),
+    );
+    navigate(`author=${second}`);
+    view.rerender(createElement(CommunityContentClient));
+    await screen.findByText("找不到该用户，请返回用户列表核对。");
+    await act(async () =>
+      completeFirst({ items: [{ id: first, displayName: "旧作者" }] }),
+    );
+    expect(screen.queryByRole("heading", { name: "旧作者" })).toBeNull();
+    expect(
+      runtime.call.mock.calls
+        .filter(([name]) => name === "read-works")
+        .at(-1)?.[1].authorId,
+    ).toBe(second);
+  });
+});
+
+describe("final operation failure presentation", () => {
+  it.each([400, 422])(
+    "does not describe a generic %s refusal as an approval decision",
+    (status) => {
+      const failure = new OperatorFailure("OPERATION_FAILED", "", status);
+      expect(outcomeUnknown(failure)).toBe(false);
+      expect(describeFinalFailure(failure)).toBe(
+        "操作未完成，请检查输入并刷新当前状态后再决定。",
+      );
+      expect(describeFinalFailure(failure)).not.toContain("批准");
+      expect(describeFailure(failure).text).toContain("暂时无法确认操作结果");
+      expect(
+        outcomeUnknown(new OperatorFailure("OPERATION_FAILED", "", 502)),
+      ).toBe(true);
+    },
+  );
 });
 
 describe("pending command navigation protection", () => {

@@ -193,6 +193,12 @@ controls; neither is silently interpreted as the page's ordinary historical date
 range. Event-property filters keep their event scope. Comparison dimensions and
 the expanded metrics view do not overwrite each other's state.
 
+In the grouped view, retention stores its selected calendar month separately in
+`retentionMonth`. Its first month comes from the existing date range for legacy
+links; subsequent month changes leave the historical `date` and `offset`
+unchanged. Editing the shared historical range does not overwrite an already
+selected retention month. Browser history restores both selections.
+
 Ordinary cards and empty states size to their content. Data, controls and
 section headings use the canonical interface font; the brand and main title
 retain the editorial font. Hour labels use unambiguous 24-hour notation and
@@ -221,6 +227,12 @@ body 并注入只读 token。现代网站图表/漏斗/retention 使用 GET，�
 reports 接口无需开放。允许 GET/HEAD 与固定 auth
 verify 之外的写接口均拒绝。公网同时拒绝 send/batch/script/replay/heatmap、share、login、账号管理及配置写接口。采集仅由 Backend
 worker 直连 loopback 固定 `/admin/analytics-workspace/api/batch`。
+
+If the existing service account requires unfinished two-factor setup, the
+private archive shell shows its service-unavailable state instead of an
+unfinishable setup dialog. Account setup remains outside this read-only gateway;
+the original upstream setup flow and the gateway's write restrictions are
+unchanged.
 
 The primary complete interface is top-level and uses one shared Admin shell.
 Existing browser security headers remain; no iframe is required. The provider

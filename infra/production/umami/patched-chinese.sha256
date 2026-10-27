@@ -1,6 +1,6 @@
 aec557ab95648b78b7a37ec728ed45242c571b5f3717271f01af76f272399e51  public/intl/messages/zh-CN.json
-3e625d44b562cb943cd32c332242b0a90ec7b0e484fda86cd91cdb40383657aa  src/app/(main)/App.archive.test.tsx
-77eb553ac598ef0fe4c528b2064b696facc107d6ae169d399d7350b98d2fa19a  src/app/(main)/App.tsx
+beb0fbbdf4492296a7fdc81d91dc5b29c9112d0c72f74a7f8551b8ed0d304841  src/app/(main)/App.archive.test.tsx
+9fd1881d8966557b760c15f4da1281e47b33a858d283321f459700cc81214985  src/app/(main)/App.tsx
 89c730838436df1db15375bb58395e45393eb4be50afe89579d0704a20a8a0f5  src/app/(main)/ArchiveContextNav.test.tsx
 adfce692d7623d8a415fc6b6353c743b3f77a5de01df0ce650d71dbc62b82fc2  src/app/(main)/ArchiveContextNav.tsx
 ba4156145de9de78a1a7203a1fd794da759ca64fad0a9f1ee5afa366044e0e29  src/app/(main)/ArchiveContinuousNavigation.test.tsx
@@ -33,10 +33,12 @@ e95a40ca04c603a7c37915e3783f93ff6afcaae9572557cd12f6bfcc841ecd3d  src/app/(main)
 42e72e313ba6deb7c5f2cc7a79907254d2df046a76658925214448f4497e534a  src/app/(main)/websites/[websiteId]/(reports)/journeys/JourneysPage.tsx
 cff15ee155bd3259ec7d414173e4219083ce3e20dc6b23c2f38ebe1552b2ec65  src/app/(main)/websites/[websiteId]/(reports)/performance/Performance.tsx
 26f53b9eceeafba30a85d1d6e2c78e1f8df233ac3f357b7634f51f2a6af6f997  src/app/(main)/websites/[websiteId]/(reports)/retention/Retention.tsx
+5d08735e1ee1f783aac64ac9c1a164cdcc221324da3b407d661289161b5e5880  src/app/(main)/websites/[websiteId]/(reports)/retention/RetentionPage.archive.test.tsx
+beda5d1aef1f37e199dfb7dce80a5a1a2229b96ef4e8448a5c46019354ada3e5  src/app/(main)/websites/[websiteId]/(reports)/retention/RetentionPage.tsx
 7b6578ac6db08e41947447e9827267597537ac90d7d6ee21769295954d98814a  src/app/(main)/websites/[websiteId]/(reports)/revenue/RevenueMetricsBar.tsx
 f3b9989a1b6821570c10cac86192433d126c9258475a149559b6b0a4e47db750  src/app/(main)/websites/[websiteId]/ArchiveAnalysis.module.css
 55c7f99a29a87ea321769f370911fd25a68e1f0342ec8cb7e56f8ac24647372d  src/app/(main)/websites/[websiteId]/ArchiveAnalysis.test.tsx
-695c7c7f3eb7725324ed72cc5684b7a068b271f0a243b0efb53c111198ce339a  src/app/(main)/websites/[websiteId]/ArchiveAnalysis.tsx
+21b7be36569c2e4733777fe47123c22a3e6ad236343e02b2e09751a359196e2b  src/app/(main)/websites/[websiteId]/ArchiveAnalysis.tsx
 daf722b736185a5fa62f346e6760ca07e6734bfa5ebd4056a193de46fa2c7851  src/app/(main)/websites/[websiteId]/ArchiveGeography.tsx
 5c8d28cc793873e009023b7dc3ef36899a38cd648562f566df9233053b5aa7cb  src/app/(main)/websites/[websiteId]/ArchiveReportNav.test.tsx
 b187da5a715bb9c8cd7334c5db125ef637ee8b285e8e6639d1069f7f43db7aa8  src/app/(main)/websites/[websiteId]/ArchiveReportNav.tsx

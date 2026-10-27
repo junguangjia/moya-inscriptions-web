@@ -6,7 +6,7 @@ import { parseEnv } from "node:util";
 export const UMAMI_VERSION = "3.4.0";
 export const UMAMI_SOURCE_COMMIT = "ec0ff50388c264ed8ce46f00967e92f7e71476ae";
 export const UMAMI_WORKSPACE_IDENTITY =
-  "fcb4463a3a67860e710a6b7c94fffdca29813bb5a324ee45a9578f0dd7fbbcdd";
+  "a531b1383b044f9edf62f6e227fbf93d702437526359be557a9065b457c1bd86";
 export const UMAMI_PG_TLS_HOST_SHA256 =
   "ad0a70c6fc8820bb613a8437c634b6a0a6a04cc3cc36175ab72590d2733c24e6";
 export const UMAMI_GEOGRAPHY_POLICY = "cn-province-map-v2";

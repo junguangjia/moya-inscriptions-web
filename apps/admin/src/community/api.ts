@@ -187,7 +187,7 @@ export const outcomeUnknown = (error: unknown): boolean => {
 export const describeFinalFailure = (error: unknown): string => {
   const { code, text } = describeFailure(error);
   return code === "OPERATION_FAILED"
-    ? "此请求未获批准，未执行操作。请刷新后重新检查。"
+    ? "操作未完成，请检查输入并刷新当前状态后再决定。"
     : text;
 };
 
