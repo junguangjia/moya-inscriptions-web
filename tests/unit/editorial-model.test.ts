@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { Field } from "payload";
 
 import {
   EDITORIAL_FIELD_NAMES,
@@ -13,6 +14,17 @@ import {
 } from "@moya/contracts/internal/editorial";
 import { editorialFields } from "admin/fields";
 import { publicSourceCitationSchema } from "@moya/contracts/schemas";
+
+/** Unnamed Payload layout fields do not introduce a persisted property. */
+const contentFields = (fields: Field[]): Field[] =>
+  fields.flatMap((field) => {
+    if (field.type === "tabs")
+      return field.tabs.flatMap((tab) => contentFields(tab.fields));
+    if (field.type === "collapsible" || field.type === "row")
+      return contentFields(field.fields);
+    return [field];
+  });
+const nativeFields = contentFields(editorialFields);
 
 const identity = {
   catalogId: "synthetic-catalog-001",
@@ -360,7 +372,7 @@ describe("native Chinese Payload fields and bounded automation input", () => {
   it("provides independently allocated valid identities for native new-record forms", async () => {
     const defaults: Record<string, unknown> = {};
     for (const name of ["catalogId", "sourceId"]) {
-      const field = editorialFields.find(
+      const field = nativeFields.find(
         (candidate) => "name" in candidate && candidate.name === name,
       );
       expect(
@@ -391,13 +403,13 @@ describe("native Chinese Payload fields and bounded automation input", () => {
   });
 
   it("covers every content field with native controls and Chinese labels", () => {
-    const names = editorialFields.flatMap((field) =>
+    const names = nativeFields.flatMap((field) =>
       "name" in field && field.type !== "ui" ? [field.name] : [],
     );
     expect(new Set(names)).toEqual(new Set(EDITORIAL_FIELD_NAMES));
     expect(names).toHaveLength(EDITORIAL_FIELD_NAMES.length);
     expect(
-      editorialFields.find(
+      nativeFields.find(
         (field) => "name" in field && field.name === "mediaPicker",
       ),
     ).toMatchObject({
@@ -409,14 +421,14 @@ describe("native Chinese Payload fields and bounded automation input", () => {
         },
       },
     });
-    for (const field of editorialFields) {
+    for (const field of nativeFields) {
       expect(field.type).not.toBe("json");
       expect(field.type).not.toBe("richText");
       if (!("label" in field)) throw new Error("Missing native field label");
       expect(typeof field.label).toBe("string");
       expect(field.label).toMatch(/[\u3400-\u9fff]/);
     }
-    const transcription = editorialFields.find(
+    const transcription = nativeFields.find(
       (field) => "name" in field && field.name === "transcription",
     );
     expect(transcription).toMatchObject({

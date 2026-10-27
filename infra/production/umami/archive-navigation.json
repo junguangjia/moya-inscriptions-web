@@ -1,0 +1,76 @@
+{
+  "brandLabel": "由艺",
+  "caption": "管理后台",
+  "homeHref": "/admin",
+  "brandAssetHref": "/admin/brand.svg",
+  "accountHref": "/admin/account",
+  "themeCookieName": "payload-theme",
+  "items": [
+    {
+      "id": "home",
+      "label": "工作台",
+      "icon": "home",
+      "href": "/admin"
+    },
+    {
+      "id": "content",
+      "label": "内容",
+      "icon": "inscriptions",
+      "href": "/admin/collections/catalogs"
+    },
+    {
+      "id": "review",
+      "label": "审核",
+      "icon": "discussion",
+      "href": "/admin/community-moderation"
+    },
+    {
+      "id": "users",
+      "label": "用户",
+      "icon": "user",
+      "href": "/admin/community-moderation/content?tab=users"
+    },
+    {
+      "id": "analytics",
+      "label": "数据",
+      "icon": "layout-double",
+      "href": "/admin/analytics"
+    },
+    {
+      "id": "publishing",
+      "label": "发布工具",
+      "icon": "edit",
+      "href": "/admin/editorial-workflow"
+    },
+    {
+      "id": "history",
+      "label": "操作记录",
+      "icon": "news",
+      "href": "/admin/community-moderation/history"
+    },
+    {
+      "id": "settings",
+      "label": "设置",
+      "icon": "settings",
+      "href": "/admin/community-moderation/settings"
+    }
+  ],
+  "dataLinks": [
+    {
+      "label": "访问分析",
+      "href": "/admin/analytics"
+    },
+    {
+      "label": "统计看板",
+      "href": "/admin/analytics/board"
+    },
+    {
+      "label": "IP 记录",
+      "href": "/admin/analytics/ips"
+    },
+    {
+      "label": "采集状态",
+      "href": "/admin/analytics/status"
+    }
+  ]
+}

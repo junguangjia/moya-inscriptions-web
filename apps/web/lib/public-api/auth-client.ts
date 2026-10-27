@@ -1,5 +1,12 @@
-import type { AuthCapabilities } from "@moya/contracts";
+import type {
+  AuthAccountDeletionRequest,
+  AuthAccountDeletionResult,
+  AuthAccountSecurity,
+  AuthCapabilities,
+} from "@moya/contracts";
 export type {
+  AuthAccountDeletionResult,
+  AuthAccountSecurity,
   AuthPasswordLoginRequest,
   AuthPasswordResetRequest,
   AuthPasswordResetResult,
@@ -8,6 +15,8 @@ export type {
 } from "@moya/contracts";
 export type { AuthChallengeAccepted as AuthChallengeView } from "@moya/contracts";
 import {
+  authAccountDeletionResultSchema,
+  authAccountSecuritySchema,
   authPasswordSchema,
   authCapabilitiesSchema,
   publicUserProfileSchema,
@@ -104,6 +113,44 @@ export const authRequest = async (
     (init?.addAccount === true || sessionCookieSteps.has(path))
       ? await exclusiveAccountRequest(send)
       : await send();
+  return { status: response.status, body: await read(response) };
+};
+
+/** The signed-in account's own security view, or null outside the contract. */
+export const parseAuthAccount = (body: unknown): AuthAccountSecurity | null => {
+  const parsed = authAccountSecuritySchema.safeParse(body);
+  return parsed.success ? parsed.data : null;
+};
+
+/** A completed account deletion, or null for any other answer. */
+export const parseAccountDeletionResult = (
+  body: unknown,
+): AuthAccountDeletionResult | null => {
+  const parsed = authAccountDeletionResultSchema.safeParse(body);
+  return parsed.success ? parsed.data : null;
+};
+
+/**
+ * account-deletion-v1: ends the signed-in account. `x-author-account` binds the
+ * request to the account this page confirmed, so a Session another tab has
+ * since changed is refused instead of deleting a different account. The relay
+ * clears this browser's Session cookies only on the Backend's success.
+ */
+export const requestAccountDeletion = async (
+  accountId: string,
+  request: AuthAccountDeletionRequest,
+): Promise<{ readonly status: number; readonly body: unknown }> => {
+  const response = await fetch("/api/community/auth/account/deletion", {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      "x-author-account": accountId,
+    },
+    credentials: "same-origin",
+    cache: "no-store",
+    body: JSON.stringify(request),
+  });
   return { status: response.status, body: await read(response) };
 };
 

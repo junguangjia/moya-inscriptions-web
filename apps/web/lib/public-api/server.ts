@@ -1,11 +1,13 @@
 import {
   readAppealSessionToken,
   serializeAppealSessionCookie,
+  serializeClearedAppealSessionCookie,
 } from "./appeal-session-cookie";
 import "server-only";
 import { trustedAuthSourceHeaders } from "./auth-request-source";
 import {
   ARTICLE_DOCUMENT_LIMITS,
+  authAccountDeletionResultSchema,
   authCapabilitiesSchema,
   authPasswordResetResultSchema,
   legacyMediaSrcSchema,
@@ -1581,12 +1583,14 @@ export const relayServerCommunityAuth = async (
   const prefix = "/api/community/auth/";
   if (!incoming.pathname.startsWith(prefix)) return fail(404);
   const suffix = incoming.pathname.slice(prefix.length);
+  const deletion = suffix === "account/deletion";
   const accountOperation =
     suffix === "accounts/remove" || suffix === "accounts/sign-out-all";
   if (
     (suffix === "sign-out" ||
       suffix === "appeals/sign-out" ||
-      accountOperation) &&
+      accountOperation ||
+      deletion) &&
     request.method !== "POST"
   )
     return fail(405);
@@ -1594,9 +1598,15 @@ export const relayServerCommunityAuth = async (
   if (intent !== null && intent !== "add") return fail(422);
   // A sign-out names the account the page shows; the Backend refuses it when
   // another tab has made a different account current meanwhile.
+  // account-deletion-v1: deletion must name the account the UI confirmed. The
+  // Backend refuses one that is not the Session's; a missing or malformed
+  // header never leaves Web.
   const asserted =
-    suffix === "sign-out" ? assertedAccountOf(request) : { valid: true };
-  if (!asserted.valid) return fail(422);
+    suffix === "sign-out" || deletion
+      ? assertedAccountOf(request)
+      : { valid: true };
+  if (!asserted.valid || (deletion && asserted.account === undefined))
+    return fail(422);
   const appeal = suffix.startsWith("appeals/");
   try {
     const base = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
@@ -1707,10 +1717,7 @@ export const relayServerCommunityAuth = async (
         status: upstream.status,
         headers: {
           ...headers,
-          "set-cookie": serializeClearedCommunitySessionCookie(secure).replace(
-            /^yoyi-session=/u,
-            "yoyi-appeal-session=",
-          ),
+          "set-cookie": serializeClearedAppealSessionCookie(secure),
         },
       });
     if (suffix === "sign-out") {
@@ -1744,6 +1751,31 @@ export const relayServerCommunityAuth = async (
           ...released,
         }),
       });
+    }
+    if (deletion && upstream.status === 200) {
+      // The Backend answers 200 only once the account is deleted and every
+      // Session of it revoked. A result outside the contract (e.g. a body cut
+      // off after the commit) is not shown as success and keeps both cookies:
+      // the page's same-key retry must still present the revoked Session to
+      // reach the Backend's replay, whose contract answer clears them.
+      const json = (upstream.headers.get("content-type") ?? "").includes(
+        "application/json",
+      );
+      const payload: unknown = json
+        ? await upstream.json().catch(() => null)
+        : null;
+      if (!json) await cancelQuietly(upstream.body);
+      const result = authAccountDeletionResultSchema.safeParse(payload);
+      if (!result.success) return fail(502);
+      // This browser keeps neither its ordinary nor its appeal cookie.
+      const secure = isSecureRequest(request);
+      const cleared = new Headers(headers);
+      cleared.append(
+        "set-cookie",
+        serializeClearedCommunitySessionCookie(secure),
+      );
+      cleared.append("set-cookie", serializeClearedAppealSessionCookie(secure));
+      return Response.json(result.data, { status: 200, headers: cleared });
     }
     const type = upstream.headers.get("content-type") ?? "";
     if (!type.includes("application/json"))

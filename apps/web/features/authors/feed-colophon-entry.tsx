@@ -288,17 +288,24 @@ const ColophonBody = ({
       className={replyId === undefined ? styles.root : styles.replyBody}
       data-expanded={expanded ? "true" : undefined}
     >
-      <button
-        aria-label={`打开${item.user.name}的主页`}
-        className={styles.author}
-        data-colophon-author=""
-        onClick={(event) =>
-          interactions.openAuthor(item.user.id, event.currentTarget)
-        }
-        type="button"
-      >
-        <ColophonFace className={styles.face} user={item.user} />
-      </button>
+      {item.user.deleted === true ? (
+        // A deleted author (account-deletion-v1) has no profile to open.
+        <span className={styles.author} data-colophon-author="">
+          <ColophonFace className={styles.face} user={item.user} />
+        </span>
+      ) : (
+        <button
+          aria-label={`打开${item.user.name}的主页`}
+          className={styles.author}
+          data-colophon-author=""
+          onClick={(event) =>
+            interactions.openAuthor(item.user.id, event.currentTarget)
+          }
+          type="button"
+        >
+          <ColophonFace className={styles.face} user={item.user} />
+        </button>
+      )}
       <div
         aria-describedby={[
           nameId,

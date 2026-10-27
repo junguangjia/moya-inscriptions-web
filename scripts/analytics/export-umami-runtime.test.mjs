@@ -19,6 +19,8 @@ import { test } from "node:test";
 
 import {
   UMAMI_WORKSPACE_IDENTITY,
+  UMAMI_GEOGRAPHY_POLICY,
+  UMAMI_CHINA_MAP_SHA256,
   UMAMI_PG_TLS_HOST_SHA256,
 } from "./common.mjs";
 
@@ -34,7 +36,8 @@ const labels = {
   "com.artvenn.umami.locale": "zh-CN",
   "com.artvenn.umami.patch-sha256": UMAMI_WORKSPACE_IDENTITY,
   "com.artvenn.umami.pg-tls-host-sha256": UMAMI_PG_TLS_HOST_SHA256,
-  "com.artvenn.umami.geography": "cn-province-v1",
+  "com.artvenn.umami.geography": UMAMI_GEOGRAPHY_POLICY,
+  "com.artvenn.umami.china-map-sha256": UMAMI_CHINA_MAP_SHA256,
   "com.artvenn.umami.geo-sha256":
     "fd112e5b13ca19e8bb0bf2e1902fb0694f6ba1940bef916e0d8d9d9346f4e029",
 };
@@ -98,6 +101,8 @@ else if(command!=='rm')process.exit(13);\n`,
       manifest.archiveSha256,
     );
     assert.equal(manifest.workspaceIdentitySha256, UMAMI_WORKSPACE_IDENTITY);
+    assert.equal(manifest.chinaMapSha256, UMAMI_CHINA_MAP_SHA256);
+    assert.equal(manifest.geographyPolicy, UMAMI_GEOGRAPHY_POLICY);
     assert.equal(manifest.postgresTlsHostSha256, UMAMI_PG_TLS_HOST_SHA256);
     assert.equal(manifest.locale, "zh-CN");
     assert.ok(

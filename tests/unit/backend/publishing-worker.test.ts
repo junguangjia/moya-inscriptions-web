@@ -329,6 +329,10 @@ class FakePort implements PublishingWorkerPort {
     this.items.set(itemId, { state: "failed", failureCode });
   });
   purgeTrashedWork = vi.fn(async () => "purged" as const);
+  purgeDeletedAccount = vi.fn(async () => ({
+    status: "purged" as const,
+    cancelledComponentIds: [] as string[],
+  }));
 
   claimJobs = vi.fn(
     async (

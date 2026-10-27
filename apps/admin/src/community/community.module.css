@@ -1,9 +1,10 @@
 /* Scoped to the Community views; Payload's own buttons and pages are untouched. */
 .workspace {
   display: grid;
-  gap: 16px;
-  padding-bottom: 32px;
-  color: var(--theme-elevation-900, #1a1a1a);
+  gap: var(--yoyi-space-6);
+  padding-bottom: var(--yoyi-space-8);
+  font-family: var(--yoyi-font-interface);
+  color: var(--yoyi-color-text-primary);
 }
 
 .header {
@@ -16,13 +17,14 @@
 
 .title {
   margin: 0;
-  font-size: 22px;
+  font-family: var(--yoyi-font-editorial);
+  font-size: clamp(24px, 2.3vw, 32px);
   line-height: 1.3;
 }
 
 .lead {
   margin: 0;
-  color: #5c5c5c;
+  color: var(--yoyi-color-text-secondary);
   font-size: 13px;
 }
 
@@ -50,10 +52,10 @@
 .option {
   min-height: 40px;
   padding: 0 14px;
-  border: 1px solid #cfcfcf;
+  border: 1px solid var(--yoyi-color-border-default);
   border-radius: 999px;
-  background: #e6e6e6;
-  color: #1a1a1a;
+  background: var(--yoyi-color-background-elevated);
+  color: var(--yoyi-color-text-primary);
   font: inherit;
   font-size: 13px;
   line-height: 1;
@@ -62,21 +64,21 @@
 
 .tab:hover,
 .option:hover {
-  background: #d9d9d9;
+  background: var(--yoyi-color-background-muted);
 }
 
 .tab[aria-selected="true"],
 .option[aria-checked="true"] {
-  border-color: #000;
-  background: #000;
-  color: #fff;
+  border-color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-seal-red);
+  color: var(--archive-accent-text, var(--yoyi-color-text-inverse));
 }
 
 .tab:focus-visible,
 .option:focus-visible,
 .iconButton:focus-visible,
 .rowLink:focus-visible {
-  outline: 2px solid #000;
+  outline: 2px solid var(--yoyi-color-focus-ring);
   outline-offset: 2px;
 }
 
@@ -100,23 +102,23 @@
   display: grid;
   gap: 4px;
   font-size: 12px;
-  color: #5c5c5c;
+  color: var(--yoyi-color-text-secondary);
 }
 
 .filters input,
 .filters select {
   min-height: 36px;
   padding: 0 10px;
-  border: 1px solid #cfcfcf;
+  border: 1px solid var(--yoyi-color-border-default);
   border-radius: 6px;
-  background: #fff;
-  color: #1a1a1a;
+  background: var(--yoyi-color-background-surface);
+  color: var(--yoyi-color-text-primary);
   font: inherit;
   font-size: 13px;
 }
 
 .filters input {
-  min-width: 220px;
+  min-width: min(220px, 100%);
 }
 
 .receipt,
@@ -129,20 +131,32 @@
 
 .receipt[data-tone="success"],
 .notice[data-tone="success"] {
-  background: #e3f4e6;
-  color: #1f5a2b;
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-success) 10%,
+    var(--yoyi-color-background-surface)
+  );
+  color: var(--yoyi-color-text-primary);
 }
 
 .receipt[data-tone="error"],
 .notice[data-tone="error"] {
-  background: #fbe9e7;
-  color: #8a1c0e;
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-error) 10%,
+    var(--yoyi-color-background-surface)
+  );
+  color: var(--yoyi-color-text-primary);
 }
 
 .receipt[data-tone="info"],
 .notice[data-tone="info"] {
-  background: #eef2f7;
-  color: #2c3e50;
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-info) 10%,
+    var(--yoyi-color-background-surface)
+  );
+  color: var(--yoyi-color-text-primary);
 }
 
 .bulkBar {
@@ -151,18 +165,18 @@
   align-items: center;
   gap: 8px 12px;
   padding: 10px 12px;
-  border: 1px solid #cfcfcf;
+  border: 1px solid var(--yoyi-color-border-default);
   border-radius: 6px;
-  background: #f7f7f7;
+  background: var(--yoyi-color-background-muted);
   font-size: 13px;
 }
 
 .bulkBar select {
   min-height: 36px;
   padding: 0 10px;
-  border: 1px solid #cfcfcf;
+  border: 1px solid var(--yoyi-color-border-default);
   border-radius: 6px;
-  background: #fff;
+  background: var(--yoyi-color-background-surface);
   font: inherit;
   font-size: 13px;
 }
@@ -196,13 +210,13 @@
 .table th,
 .table td {
   padding: 8px 10px;
-  border-bottom: 1px solid #e3e3e3;
+  border-bottom: 1px solid var(--yoyi-color-border-subtle);
   vertical-align: top;
   text-align: left;
 }
 
 .table th {
-  color: #5c5c5c;
+  color: var(--yoyi-color-text-secondary);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -212,7 +226,7 @@
 }
 
 .table tr[data-current="true"] td {
-  background: #f3f3f3;
+  background: var(--yoyi-color-background-muted);
 }
 
 .excerpt {
@@ -234,7 +248,7 @@
 
 .secondary {
   display: block;
-  color: #5c5c5c;
+  color: var(--yoyi-color-text-secondary);
   font-size: 12px;
   overflow-wrap: anywhere;
 }
@@ -249,28 +263,45 @@
 }
 
 .chip[data-state="pending"] {
-  background: #fff4d6;
-  color: #6b4b00;
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-warning) 10%,
+    var(--yoyi-color-background-surface)
+  );
+  color: var(--yoyi-color-text-primary);
 }
 
 .chip[data-state="visible"] {
-  background: #e3f4e6;
-  color: #1f5a2b;
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-success) 10%,
+    var(--yoyi-color-background-surface)
+  );
+  color: var(--yoyi-color-text-primary);
 }
 
-.chip[data-state="hidden"] {
-  background: #eeeeee;
-  color: #444;
+.chip[data-state="hidden"],
+.chip[data-state="deleted"] {
+  background: var(--yoyi-color-background-muted);
+  color: var(--yoyi-color-text-secondary);
 }
 
 .chip[data-state="kind"] {
-  background: #eef2f7;
-  color: #2c3e50;
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-info) 10%,
+    var(--yoyi-color-background-surface)
+  );
+  color: var(--yoyi-color-text-primary);
 }
 
 .chip[data-state="suspended"] {
-  background: #fbe9e7;
-  color: #8a1c0e;
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-error) 10%,
+    var(--yoyi-color-background-surface)
+  );
+  color: var(--yoyi-color-text-primary);
 }
 
 .actions {
@@ -284,10 +315,10 @@
 .iconButton {
   min-height: 34px;
   padding: 0 10px;
-  border: 1px solid #cfcfcf;
+  border: 1px solid var(--yoyi-color-border-default);
   border-radius: 6px;
-  background: #fff;
-  color: #1a1a1a;
+  background: var(--yoyi-color-background-surface);
+  color: var(--yoyi-color-text-primary);
   font: inherit;
   font-size: 13px;
   cursor: pointer;
@@ -296,28 +327,28 @@
 
 .actionButton:hover:not(:disabled),
 .iconButton:hover:not(:disabled) {
-  background: #f0f0f0;
+  background: var(--yoyi-color-background-muted);
 }
 
 .actionButton:disabled,
 .iconButton:disabled {
-  color: #8a8a8a;
+  color: var(--yoyi-color-text-tertiary);
   cursor: progress;
 }
 
 .actionButton[data-primary="true"] {
-  border-color: #000;
-  background: #000;
-  color: #fff;
+  border-color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-seal-red);
+  color: var(--archive-accent-text, var(--yoyi-color-text-inverse));
 }
 
 .actionButton[data-primary="true"]:hover:not(:disabled) {
-  background: #222;
+  background: var(--yoyi-color-text-primary);
 }
 
 .actionButton[data-danger="true"] {
-  border-color: #b3261e;
-  color: #8a1c0e;
+  border-color: var(--yoyi-color-error);
+  color: var(--yoyi-color-error);
 }
 
 .more {
@@ -328,9 +359,9 @@
   list-style: none;
   min-height: 34px;
   padding: 0 10px;
-  border: 1px solid #cfcfcf;
+  border: 1px solid var(--yoyi-color-border-default);
   border-radius: 6px;
-  background: #fff;
+  background: var(--yoyi-color-background-surface);
   font-size: 13px;
   line-height: 32px;
   cursor: pointer;
@@ -341,7 +372,7 @@
 }
 
 .more[open] summary {
-  background: #f0f0f0;
+  background: var(--yoyi-color-background-muted);
 }
 
 .moreMenu {
@@ -352,10 +383,11 @@
   min-width: 180px;
   margin-top: 4px;
   padding: 6px;
-  border: 1px solid #cfcfcf;
+  border: 1px solid var(--yoyi-color-border-default);
   border-radius: 6px;
-  background: #fff;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  background: var(--yoyi-color-background-surface);
+  box-shadow: 0 4px 16px
+    color-mix(in srgb, var(--yoyi-color-text-primary) 12%, transparent);
 }
 
 .moreMenu button,
@@ -364,7 +396,7 @@
   border: 0;
   border-radius: 4px;
   background: none;
-  color: #1a1a1a;
+  color: var(--yoyi-color-text-primary);
   font: inherit;
   font-size: 13px;
   text-align: left;
@@ -374,7 +406,7 @@
 
 .moreMenu button:hover,
 .moreMenu a:hover {
-  background: #f0f0f0;
+  background: var(--yoyi-color-background-muted);
 }
 
 .rowNotice {
@@ -385,18 +417,30 @@
 }
 
 .rowNotice[data-tone="success"] {
-  background: #e3f4e6;
-  color: #1f5a2b;
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-success) 10%,
+    var(--yoyi-color-background-surface)
+  );
+  color: var(--yoyi-color-text-primary);
 }
 
 .rowNotice[data-tone="error"] {
-  background: #fbe9e7;
-  color: #8a1c0e;
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-error) 10%,
+    var(--yoyi-color-background-surface)
+  );
+  color: var(--yoyi-color-text-primary);
 }
 
 .rowNotice[data-tone="info"] {
-  background: #eef2f7;
-  color: #2c3e50;
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-info) 10%,
+    var(--yoyi-color-background-surface)
+  );
+  color: var(--yoyi-color-text-primary);
 }
 
 .pager {
@@ -411,9 +455,9 @@
 .pager select {
   min-height: 34px;
   padding: 0 8px;
-  border: 1px solid #cfcfcf;
+  border: 1px solid var(--yoyi-color-border-default);
   border-radius: 6px;
-  background: #fff;
+  background: var(--yoyi-color-background-surface);
   font: inherit;
   font-size: 13px;
 }
@@ -421,30 +465,35 @@
 .state {
   margin: 0;
   padding: 24px 12px;
-  border: 1px dashed #cfcfcf;
+  border: 1px dashed var(--yoyi-color-border-default);
   border-radius: 6px;
-  color: #5c5c5c;
+  color: var(--yoyi-color-text-secondary);
   font-size: 13px;
   text-align: center;
 }
 
 .panel {
   position: sticky;
-  top: 16px;
+  top: calc(var(--archive-workspace-bar-height, 64px) + 16px);
   display: grid;
   align-self: start;
   gap: 12px;
-  max-height: calc(100vh - 32px);
-  overflow: auto;
+  max-height: none;
+  overflow: visible;
   padding: 14px;
-  border: 1px solid #cfcfcf;
+  border: 1px solid var(--yoyi-color-border-default);
   border-radius: 8px;
-  background: #fff;
-  color: #1a1a1a;
+  background: var(--yoyi-color-background-surface);
+  color: var(--yoyi-color-text-primary);
   font-size: 13px;
 }
 
 .panelHeader {
+  position: sticky;
+  top: var(--archive-workspace-bar-height, 64px);
+  z-index: 1;
+  padding-block: 8px;
+  background: var(--yoyi-color-background-surface);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -458,7 +507,7 @@
 
 .panel h3 {
   margin: 0 0 4px;
-  color: #5c5c5c;
+  color: var(--yoyi-color-text-secondary);
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -473,8 +522,8 @@
 
 .contextBox {
   padding: 8px 10px;
-  border-left: 3px solid #cfcfcf;
-  background: #f7f7f7;
+  border-left: 3px solid var(--yoyi-color-border-default);
+  background: var(--yoyi-color-background-muted);
   overflow-wrap: anywhere;
 }
 
@@ -503,10 +552,10 @@
   gap: 10px;
   margin-bottom: 24px;
   padding: 16px;
-  border: 1px solid #cfcfcf;
+  border: 1px solid var(--yoyi-color-border-default);
   border-radius: 8px;
-  background: #fff;
-  color: #1a1a1a;
+  background: var(--yoyi-color-background-surface);
+  color: var(--yoyi-color-text-primary);
 }
 
 .card h2 {
@@ -601,22 +650,22 @@
 .limitField input {
   min-height: 36px;
   padding: 0 10px;
-  border: 1px solid #cfcfcf;
+  border: 1px solid var(--yoyi-color-border-default);
   border-radius: 6px;
-  background: #fff;
-  color: #1a1a1a;
+  background: var(--yoyi-color-background-surface);
+  color: var(--yoyi-color-text-primary);
   font: inherit;
   font-size: 13px;
 }
 
 .limitField input[aria-invalid="true"] {
-  border-color: #b3261e;
+  border-color: var(--yoyi-color-error);
 }
 
 .limitField input:focus-visible,
 .filters input:focus-visible,
 .filters select:focus-visible {
-  outline: 2px solid #000;
+  outline: 2px solid var(--yoyi-color-focus-ring);
   outline-offset: 1px;
 }
 
@@ -641,10 +690,10 @@
   place-items: center;
   aspect-ratio: 1;
   overflow: hidden;
-  border: 1px solid #e3e3e3;
+  border: 1px solid var(--yoyi-color-border-subtle);
   border-radius: 6px;
-  background: #f3f3f3;
-  color: #5c5c5c;
+  background: var(--yoyi-color-background-muted);
+  color: var(--yoyi-color-text-secondary);
   font-size: 12px;
   text-align: center;
 }
@@ -663,8 +712,8 @@
   min-width: 20px;
   padding: 0 5px;
   border-radius: 999px;
-  background: #000;
-  color: #fff;
+  background: var(--yoyi-color-seal-red);
+  color: var(--archive-accent-text, var(--yoyi-color-text-inverse));
   font-size: 11px;
   line-height: 18px;
   text-align: center;
@@ -676,8 +725,12 @@
   bottom: 4px;
   padding: 0 5px;
   border-radius: 4px;
-  background: rgba(0, 0, 0, 0.72);
-  color: #fff;
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-text-primary) 72%,
+    transparent
+  );
+  color: var(--yoyi-color-background-surface);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -689,9 +742,9 @@
   display: inline-block;
   max-width: 100%;
   overflow: hidden;
-  border: 1px solid #e3e3e3;
+  border: 1px solid var(--yoyi-color-border-subtle);
   border-radius: 6px;
-  background: #f3f3f3;
+  background: var(--yoyi-color-background-muted);
   line-height: 0;
 }
 
@@ -704,8 +757,9 @@
 
 .cropMark {
   position: absolute;
-  border: 2px solid #fff;
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
+  border: 2px solid var(--yoyi-color-background-surface);
+  box-shadow: 0 0 0 9999px
+    color-mix(in srgb, var(--yoyi-color-text-primary) 45%, transparent);
   pointer-events: none;
 }
 
@@ -720,8 +774,8 @@
 }
 
 .mediaFrame[data-current="true"] {
-  border-color: #000;
-  box-shadow: 0 0 0 1px #000;
+  border-color: var(--yoyi-color-text-primary);
+  box-shadow: 0 0 0 1px var(--yoyi-color-text-primary);
 }
 
 .previewMedia {
@@ -730,7 +784,7 @@
   max-height: 360px;
   object-fit: contain;
   border-radius: 4px;
-  background: #f3f3f3;
+  background: var(--yoyi-color-background-muted);
 }
 
 .contextBox dt {
@@ -742,14 +796,14 @@
 }
 .tab[aria-pressed="true"],
 .actionButton[aria-pressed="true"] {
-  border-color: #000;
-  background: #000;
-  color: #fff;
+  border-color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-seal-red);
+  color: var(--archive-accent-text, var(--yoyi-color-text-inverse));
 }
 .bulkBar,
 .userDetail {
   padding: 12px;
-  border: 1px solid var(--theme-elevation-200, #ddd);
+  border: 1px solid var(--theme-elevation-200, var(--yoyi-color-border-default));
   border-radius: 6px;
 }
 .bulkBar ul {
@@ -763,13 +817,13 @@
   overflow-wrap: anywhere;
 }
 
-/* Agent operations (Issue #141 r4). Scoped to this view only: aligned label
+/* Agent operations (Issue var(--yoyi-color-success) r4). Scoped to this view only: aligned label
    and field rows, one control height, compact action groups and secondary
    sections, in the Admin's existing monochrome language. */
 .agentSection {
-  border: 1px solid #e3e3e3;
+  border: 1px solid var(--yoyi-color-border-subtle);
   border-radius: 6px;
-  background: #fff;
+  background: var(--yoyi-color-background-surface);
   padding: 0 16px;
   margin-bottom: 16px;
 }
@@ -780,7 +834,7 @@
   font-weight: 600;
 }
 .agentSection[open] > summary {
-  border-bottom: 1px solid #ededed;
+  border-bottom: 1px solid var(--yoyi-color-background-muted);
   margin-bottom: 12px;
 }
 .agentForm {
@@ -802,34 +856,34 @@
   font-size: 13px;
 }
 .agentField > span {
-  color: #4a4a4a;
+  color: var(--yoyi-color-text-secondary);
 }
 .agentField input,
 .agentField select {
   height: 34px;
   padding: 0 10px;
-  border: 1px solid #cfcfcf;
+  border: 1px solid var(--yoyi-color-border-default);
   border-radius: 4px;
-  background: #fff;
+  background: var(--yoyi-color-background-surface);
   font: inherit;
   min-width: 0;
 }
 .agentField input:disabled {
-  background: #f4f4f4;
-  color: #777;
+  background: var(--yoyi-color-background-muted);
+  color: var(--yoyi-color-text-tertiary);
 }
 .agentScopeGroup {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 8px 16px;
-  border: 1px solid #e6e6e6;
+  border: 1px solid var(--yoyi-color-background-elevated);
   border-radius: 4px;
   padding: 12px 14px;
 }
 .agentScopeGroup legend {
   padding: 0 6px;
   font-size: 13px;
-  color: #4a4a4a;
+  color: var(--yoyi-color-text-secondary);
 }
 .agentCheckbox {
   display: flex;
@@ -850,13 +904,13 @@
 .agentHint {
   display: block;
   margin-top: 2px;
-  color: #6b6b6b;
+  color: var(--yoyi-color-text-secondary);
   font-size: 12px;
   line-height: 1.5;
 }
 .agentError {
   margin: 0 0 0 212px;
-  color: #a12121;
+  color: var(--yoyi-color-seal-red);
   font-size: 12px;
 }
 .agentScopes {
@@ -877,7 +931,7 @@
   gap: 2px;
 }
 .agentFacts dt {
-  color: #6b6b6b;
+  color: var(--yoyi-color-text-secondary);
   font-size: 12px;
 }
 .agentFacts dd {
@@ -886,8 +940,8 @@
   line-height: 1.6;
 }
 .agentManifest {
-  border: 1px solid #e6e6e6;
-  border-left: 3px solid #333;
+  border: 1px solid var(--yoyi-color-background-elevated);
+  border-left: 3px solid var(--yoyi-color-text-primary);
   border-radius: 4px;
   padding: 12px 16px;
   margin: 12px 0;
@@ -907,7 +961,7 @@
   display: grid;
   gap: 2px;
   padding: 8px 10px;
-  border: 1px solid #ededed;
+  border: 1px solid var(--yoyi-color-background-muted);
   border-radius: 4px;
   font-size: 13px;
   line-height: 1.6;
@@ -941,13 +995,12 @@
 /* Cases use the existing queue shell; only the case detail has local geometry. */
 .reportPanel {
   max-height: none;
-  position: static;
 }
 .reportSection {
   display: grid;
   gap: 8px;
   padding-top: 12px;
-  border-top: 1px solid #e3e3e3;
+  border-top: 1px solid var(--yoyi-color-border-subtle);
 }
 .reportSection p {
   margin: 0;
@@ -975,25 +1028,91 @@
   max-width: 100%;
   box-sizing: border-box;
   padding: 8px;
-  border: 1px solid #cfcfcf;
+  border: 1px solid var(--yoyi-color-border-default);
   border-radius: 6px;
   font: inherit;
-  background: #fff;
-  color: #1a1a1a;
+  background: var(--yoyi-color-background-surface);
+  color: var(--yoyi-color-text-primary);
 }
 .reportMaterial,
 .reportConfirmation {
   display: grid;
   gap: 8px;
   padding: 10px;
-  border: 1px solid #cfcfcf;
+  border: 1px solid var(--yoyi-color-border-default);
   border-radius: 6px;
 }
 .reportConfirmation {
-  background: #f7f7f7;
+  background: var(--yoyi-color-background-muted);
 }
 .reportHistory {
   display: grid;
   gap: 12px;
   padding-left: 20px;
+}
+
+/* A case stays alongside the queue on desktop and becomes the working view
+   on a narrow screen. The URL keeps the queue filters and selection context. */
+.detailRegion {
+  min-width: 0;
+}
+.detailRegion[hidden] {
+  display: none;
+}
+.detailRegion:focus {
+  outline: none;
+}
+.detailRegion:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 4px;
+}
+.filterDisclosure {
+  min-width: 0;
+}
+.filterDisclosure > summary {
+  cursor: pointer;
+  padding: 8px 0;
+  color: var(--yoyi-color-text-secondary);
+}
+.filterDisclosure .filters {
+  padding-top: 12px;
+}
+.caseDraftNote {
+  margin: 0;
+}
+@media (max-width: 760px) {
+  .layout[data-panel-open="true"] > section:first-child {
+    display: none;
+  }
+  .layout[data-panel-open="true"] > .panel,
+  .layout[data-panel-open="true"] > .detailRegion .panel {
+    position: static;
+    max-height: none;
+    overflow: visible;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .filters {
+    align-items: stretch;
+  }
+  .filters label {
+    flex: 1 1 160px;
+    min-width: 0;
+  }
+  .filters input,
+  .filters select {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+  .timeline li {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .panelHeader {
+    position: sticky;
+    top: var(--archive-workspace-bar-height, 56px);
+    background: var(--yoyi-color-background-surface);
+    padding-block: 8px;
+    z-index: 1;
+  }
 }

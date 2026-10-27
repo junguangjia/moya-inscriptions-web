@@ -45,6 +45,18 @@ try {
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   page.setDefaultTimeout(20_000);
+  const showTechnicalField = async (label, selector) => {
+    // Native Collapsible lazily mounts its fields; retain the original value assertions.
+    if ((await page.locator(selector).count()) === 0) {
+      await page
+        .locator(".collapsible-field")
+        .filter({ hasText: label })
+        .locator(".collapsible__toggle")
+        .first()
+        .click();
+    }
+    await page.locator(selector).waitFor({ state: "attached" });
+  };
   page.on("pageerror", () => {
     clientErrorCount += 1;
   });
@@ -138,6 +150,7 @@ try {
     new URL(page.url()).pathname,
     "/admin/collections/catalogs/create",
   );
+  await showTechnicalField("资料详细信息", 'input[name="catalogId"]');
   const catalogId = await page.locator('input[name="catalogId"]').inputValue();
   const sourceId = await page.locator('input[name="sourceId"]').inputValue();
   assert(catalogId && sourceId && catalogId !== sourceId);
@@ -170,6 +183,7 @@ try {
     ),
   );
   assert.equal(main.title, publishedTitle);
+  await showTechnicalField("版本信息", 'input[name="revision"]');
   await expect(page.locator('input[name="revision"]')).toHaveValue(
     String(published.revision),
   );
@@ -220,23 +234,23 @@ try {
   await page
     .getByRole("checkbox", { name: `选择 ${draftTitle}`, exact: true })
     .check();
-  await page
-    .getByLabel("获准执行的自动化账号")
-    .selectOption(String(account.id));
+  await page.getByLabel("执行账号").selectOption(String(account.id));
   const approvalResponse = page.waitForResponse(
     (response) =>
       new URL(response.url()).pathname === "/api/editorial/approve-batch",
   );
-  await page.getByRole("button", { name: "批准所选批次", exact: true }).click();
+  await page.getByRole("button", { name: "核对并批准…", exact: true }).click();
+  await page.getByRole("button", { name: "确认批准", exact: true }).click();
   const approval = await requestResult(await approvalResponse);
   assert(approval.approvalId && approval.itemCount === 1);
   await page.getByRole("status").filter({ hasText: "已批准批次" }).waitFor();
   completed.push(stage);
 
   stage = "owner-history-restores-draft-only";
-  const row = page.locator("li").filter({
-    has: page.getByRole("checkbox", {
-      name: `选择 ${draftTitle}`,
+  await page.getByRole("tab", { name: "版本恢复", exact: true }).click();
+  const row = page.getByRole("row").filter({
+    has: page.getByRole("link", {
+      name: draftTitle,
       exact: true,
     }),
   });
@@ -244,7 +258,7 @@ try {
     (response) =>
       new URL(response.url()).pathname === "/api/editorial/owner-history",
   );
-  await row.getByRole("button", { name: "历史恢复", exact: true }).click();
+  await row.getByRole("button", { name: "查看历史", exact: true }).click();
   const history = await requestResult(await historyResponse);
   assert.equal(history.id, created.id);
   const oldVersion = history.docs.find(
@@ -252,14 +266,12 @@ try {
       version.revision === published.revision && version.status === "published",
   );
   assert(oldVersion);
-  await page.getByLabel("要恢复的历史内容").selectOption(String(oldVersion.id));
+  await page.getByLabel("历史版本").selectOption(String(oldVersion.id));
   const restoreResponse = page.waitForResponse(
     (response) =>
       new URL(response.url()).pathname === "/api/editorial/restore-draft",
   );
-  await page
-    .getByRole("button", { name: "恢复所选版本为新草稿", exact: true })
-    .click();
+  await page.getByRole("button", { name: "恢复为新草稿", exact: true }).click();
   const restored = await requestResult(await restoreResponse);
   assert.equal(restored.revision, draft.revision + 1);
   const restoredDraft = await requestResult(
@@ -281,9 +293,9 @@ try {
   stage = "native-media-upload-and-draft-preview";
   await page.goto(`${origin}/admin/collections/catalogs/${created.id}`);
   await expect(page.locator('input[name="title"]')).toHaveValue(publishedTitle);
-  await page
-    .getByRole("button", { name: "上传原图并添加", exact: true })
-    .click();
+  // The native unnamed tab changes presentation, not the media field paths.
+  await page.getByRole("button", { name: "图片", exact: true }).click();
+  await page.getByRole("button", { name: "上传原图", exact: true }).click();
   const drawer = page.locator(".doc-drawer");
   await drawer.locator('input[name="alt"]').waitFor({ state: "visible" });
   const image = await sharp({
@@ -358,6 +370,7 @@ try {
   stage = "native-withdrawal-confirmation-and-revision-conflict";
   checkpoint("start-conflict");
   await page.reload();
+  await showTechnicalField("版本信息", 'input[name="revision"]');
   await expect(page.locator('input[name="revision"]')).toHaveValue(
     String(mediaDraft.revision),
   );
@@ -426,6 +439,7 @@ try {
   stage = "native-withdrawal-preserves-latest-draft";
   nativeWithdrawalCode = undefined;
   await page.reload();
+  await showTechnicalField("版本信息", 'input[name="revision"]');
   await expect(page.locator('input[name="revision"]')).toHaveValue(
     String(concurrent.revision),
   );
@@ -442,6 +456,7 @@ try {
     { _status: "draft", revision: mediaDraft.revision },
     { _status: "draft", revision: concurrent.revision },
   ]);
+  await showTechnicalField("版本信息", 'input[name="revision"]');
   await expect(page.locator('input[name="revision"]')).toHaveValue(
     String(concurrent.revision + 1),
   );

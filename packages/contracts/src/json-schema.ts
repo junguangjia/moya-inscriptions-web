@@ -39,6 +39,8 @@ import {
   catalogSearchTransportQuerySchema,
   catalogSearchItemSchema,
   catalogSearchPageSchema,
+  authAccountDeletionRequestSchema,
+  authAccountDeletionResultSchema,
   authAccountSecuritySchema,
   authCapabilitiesSchema,
   authChallengeRequestSchema,
@@ -433,6 +435,8 @@ export const authJsonSchemas = {
   AuthPasswordResetRequest: toJsonSchema(authPasswordResetRequestSchema),
   AuthPasswordResetResult: toJsonSchema(authPasswordResetResultSchema),
   AuthAccountSecurity: toJsonSchema(authAccountSecuritySchema),
+  AuthAccountDeletionRequest: toJsonSchema(authAccountDeletionRequestSchema),
+  AuthAccountDeletionResult: toJsonSchema(authAccountDeletionResultSchema),
 };
 
 export const workPublishingJsonSchemas = {

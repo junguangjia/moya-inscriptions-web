@@ -122,11 +122,11 @@ export class InMemoryCommunityIdentityPort implements CommunityIdentityPort {
   /**
    * Mirrors the adapter: status, session revocation and the audit row move
    * together; a repeated transition returns the unchanged user and records
-   * nothing.
+   * nothing, and a deleted account is never changed.
    */
   async setUserStatus(
     id: PublicUserId,
-    status: PublicUserRecord["status"],
+    status: Exclude<PublicUserRecord["status"], "deleted">,
     at: Date,
     audit?: ModerationEventDraft,
   ): Promise<{
@@ -136,6 +136,7 @@ export class InMemoryCommunityIdentityPort implements CommunityIdentityPort {
     this.assertAvailable();
     const user = this.users.get(id);
     if (user === undefined) return null;
+    if (user.status === "deleted") return { user, revokedSessions: 0 };
     const changed = user.status !== status;
     if (changed && audit !== undefined) {
       if (this.failNextAudit) {

@@ -4,6 +4,7 @@ import type {
   AgentManifestQuery,
   AgentManifestSelection,
   AgentOperationDraft,
+  PublicUserStatus,
 } from "@moya/api";
 import type { ContentIdentity } from "@moya/contracts";
 import type {
@@ -458,7 +459,7 @@ export class PostgresAgentAdministrationAdapter implements AgentAdministrationPo
       id: row.id,
       handle: row.handle,
       displayName: row.display_name,
-      status: row.status as "active" | "suspended",
+      status: row.status as PublicUserStatus,
       matchKind: kinds[row.match_rank] ?? "substring",
     }));
     const total = totals === undefined ? 0 : Number(totals.total);

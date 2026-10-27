@@ -1,0 +1,202 @@
+.panel {
+  display: grid;
+  gap: var(--yoyi-space-5);
+  min-width: 0;
+  color: var(--yoyi-color-text-primary);
+}
+.title {
+  margin: 0;
+  font-size: var(--yoyi-type-body-size);
+}
+.title:focus {
+  outline: none;
+}
+.effects {
+  display: grid;
+  gap: var(--yoyi-space-3);
+  margin: 0;
+  padding: var(--yoyi-space-5) var(--yoyi-space-5) var(--yoyi-space-5)
+    calc(var(--yoyi-space-5) + 1em);
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-surface);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.muted,
+.notice {
+  margin: 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.notice {
+  display: grid;
+  gap: var(--yoyi-space-3);
+  justify-items: start;
+  padding: var(--yoyi-space-4);
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-surface);
+}
+.notice p {
+  margin: 0;
+}
+.warning {
+  margin: 0;
+  padding: var(--yoyi-space-4);
+  border: 1px solid var(--yoyi-color-seal-red);
+  border-radius: var(--yoyi-radius-lg);
+  color: var(--yoyi-color-text-primary);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: var(--yoyi-space-3);
+  min-height: 44px;
+  font-size: var(--yoyi-type-body-small-size);
+  cursor: pointer;
+}
+.check input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--yoyi-color-seal-red);
+}
+.channels,
+.actions {
+  display: grid;
+  gap: var(--yoyi-space-3);
+}
+.form {
+  display: grid;
+  gap: var(--yoyi-space-5);
+}
+.field {
+  display: grid;
+  gap: var(--yoyi-space-3);
+}
+.field input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 52px;
+  padding: var(--yoyi-space-4);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-lg);
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-surface);
+  font: inherit;
+  font-size: max(16px, 1em);
+}
+.panel button {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: var(--yoyi-space-3) var(--yoyi-space-4);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-full);
+  background: var(--yoyi-color-background-surface);
+  color: var(--yoyi-color-text-primary);
+  font: inherit;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.panel button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+/* Continue and cancel stay quiet so nothing nudges toward deletion. */
+.panel .secondary {
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-surface);
+}
+/* The settings primary; the destructive confirmation uses the same seal red. */
+.panel .primary,
+.panel .destructive {
+  color: var(--yoyi-color-background-surface);
+  background: var(--yoyi-color-seal-red);
+  border-color: transparent;
+}
+.panel .destructive {
+  font-weight: 600;
+}
+.panel button:focus-visible,
+.field input:focus-visible,
+.check input:focus-visible,
+.entry:focus-visible {
+  outline: 2px solid var(--yoyi-color-seal-red);
+  outline-offset: 3px;
+}
+.error {
+  margin: 0;
+  color: var(--yoyi-color-seal-red);
+  overflow-wrap: anywhere;
+}
+/* The inline question before leaving an unconfirmed deletion (drafts style). */
+.confirm {
+  display: grid;
+  gap: var(--yoyi-space-3);
+  padding: var(--yoyi-space-4);
+  border: 1px solid var(--yoyi-color-border-default);
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-elevated);
+}
+.confirm:focus-within {
+  border-color: var(--yoyi-color-border-strong);
+}
+.confirmTitle {
+  margin: 0;
+  font-size: var(--yoyi-type-body-size);
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.confirmText {
+  margin: 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--yoyi-space-4);
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 56px;
+  margin-top: var(--yoyi-space-5);
+  padding: var(--yoyi-space-4) var(--yoyi-space-5);
+  border: 0;
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-surface);
+  color: var(--yoyi-color-seal-red);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.entry:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.entry > span {
+  display: grid;
+  gap: var(--yoyi-space-2);
+  min-width: 0;
+}
+.entry strong {
+  font-weight: 600;
+}
+.entry small {
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+}
+.entry > svg {
+  flex: none;
+  color: var(--yoyi-color-text-secondary);
+}

@@ -1559,6 +1559,7 @@ describe("Work publishing composition", () => {
                     "purge_item",
                     "purge_blob",
                     "purge_trashed_work",
+                    "purge_deleted_account",
                     "reconcile_capacity",
                     "catalog_render",
                     "profile_render",

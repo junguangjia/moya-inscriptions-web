@@ -35,7 +35,8 @@ const states = {
   unavailable: "当前不可用",
   pending: "操作进行中",
 } as const;
-const reasons: Record<string, string> = {
+/** Auth refusal copy; account deletion reuses it with its own overrides. */
+export const reasons: Record<string, string> = {
   AUTH_CHANNEL_UNAVAILABLE: "这个登录方式当前不可用。",
   AUTH_INVALID_IDENTIFIER: "请检查邮箱或手机号格式。",
   AUTH_CODE_EXHAUSTED: "尝试次数已用完，请稍后再试。",
@@ -54,7 +55,7 @@ const reasons: Record<string, string> = {
   AUTH_ACCOUNT_SUSPENDED: "当前账户已停用，无法更改登录方式。",
 };
 
-const reasonOf = (body: unknown): string => {
+export const reasonOf = (body: unknown): string => {
   if (typeof body !== "object" || body === null || !("error" in body))
     return "";
   const error = body.error;
@@ -65,7 +66,8 @@ const reasonOf = (body: unknown): string => {
 const messageOf = (body: unknown): string =>
   reasons[reasonOf(body)] ?? "请求失败，请稍后重试。";
 
-const digits = (value: string): string => value.replace(/\D/gu, "").slice(0, 6);
+export const digits = (value: string): string =>
+  value.replace(/\D/gu, "").slice(0, 6);
 
 const proofFor = (
   account: AuthAccountView,

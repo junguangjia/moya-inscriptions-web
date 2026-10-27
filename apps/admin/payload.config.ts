@@ -58,7 +58,7 @@ export default buildConfig({
       importMapFile: path.resolve(dirname, "app/(payload)/admin/importMap.ts"),
     },
     meta: {
-      titleSuffix: "— 由于艺管理端",
+      titleSuffix: "— 由艺管理端",
       icons: {
         icon: [
           { url: "/admin/brand.svg", type: "image/svg+xml", sizes: "any" },
@@ -66,14 +66,45 @@ export default buildConfig({
       },
     },
     components: {
+      beforeLogin: ["/src/branding/LoginIntro#LoginIntro"],
+      Nav: {
+        path: "/src/workspace/Navigation#WorkspaceNavigation",
+        clientProps: {
+          developmentAgentsEnabled: process.env.NODE_ENV === "development",
+        },
+      },
+      header: [
+        {
+          path: "/src/workspace/Navigation#WorkspaceTabs",
+          clientProps: {
+            developmentAgentsEnabled: process.env.NODE_ENV === "development",
+          },
+        },
+      ],
       graphics: {
         Logo: "/src/branding/Brand#AdminLogo",
         Icon: "/src/branding/Brand#AdminIcon",
       },
       views: {
+        dashboard: { Component: "/src/community/View#WorkspaceDashboard" },
         analytics: {
           Component: "/src/analytics/View#AnalyticsView",
           path: "/analytics",
+          exact: true,
+        },
+        analyticsIps: {
+          Component: "/src/analytics/View#AnalyticsIpView",
+          path: "/analytics/ips",
+          exact: true,
+        },
+        analyticsBoard: {
+          Component: "/src/analytics/View#AnalyticsBoardView",
+          path: "/analytics/board",
+          exact: true,
+        },
+        analyticsStatus: {
+          Component: "/src/analytics/View#AnalyticsStatusView",
+          path: "/analytics/status",
           exact: true,
         },
         editorialWorkflow: {
@@ -174,16 +205,6 @@ export default buildConfig({
           exact: true,
         },
       },
-      // Work-oriented groups after the collection groups: 社区 and 自动化工具.
-      afterNavLinks: [
-        {
-          path: "/src/community/NavGroup#CommunityNavGroups",
-          clientProps: {
-            developmentAgentsEnabled: process.env.NODE_ENV === "development",
-          },
-        },
-      ],
-      beforeDashboard: ["/src/community/DashboardCard#CommunityDashboardCard"],
     },
   },
   i18n: { fallbackLanguage: "zh", supportedLanguages: { zh } },
@@ -222,7 +243,7 @@ export default buildConfig({
           },
         },
         useAsTitle: "title",
-        defaultColumns: ["title", "kind", "catalogId", "revision", "_status"],
+        defaultColumns: ["title", "kind", "_status", "updatedAt"],
         group: "内容",
       },
       access: catalogAccess,
@@ -233,16 +254,25 @@ export default buildConfig({
       },
       fields: [
         {
-          name: "lastEditedBy",
-          type: "relationship",
-          relationTo: "users",
-          admin: { readOnly: true, position: "sidebar" },
-        },
-        {
-          name: "revision",
-          type: "number",
-          defaultValue: 0,
-          admin: { readOnly: true, position: "sidebar" },
+          type: "collapsible",
+          label: "版本信息",
+          admin: { initCollapsed: true, position: "sidebar" },
+          fields: [
+            {
+              name: "lastEditedBy",
+              label: "最近编辑人",
+              type: "relationship",
+              relationTo: "users",
+              admin: { readOnly: true },
+            },
+            {
+              name: "revision",
+              label: "修订版本",
+              type: "number",
+              defaultValue: 0,
+              admin: { readOnly: true },
+            },
+          ],
         },
         ...editorialFields,
       ],

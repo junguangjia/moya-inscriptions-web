@@ -1,6 +1,9 @@
 export {
   authRequest,
+  parseAccountDeletionResult,
+  parseAuthAccount,
   parseAuthCapabilities,
+  requestAccountDeletion,
   hasCompletedAuthSession,
   safeReturnPath,
   validAuthPassword,
@@ -8,6 +11,8 @@ export {
   studioNameInput,
 } from "../../lib/public-api/auth-client";
 export type {
+  AuthAccountDeletionResult,
+  AuthAccountSecurity,
   AuthAccountView,
   AuthCapabilitiesView,
   AuthChallengeView,

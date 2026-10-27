@@ -357,7 +357,9 @@ export class CommunityModerationService {
   /**
    * Suspension revokes sessions and refuses new writes; comments keep their
    * state. The audit row commits with the status change, and only when the
-   * status actually changed, so a retried command never records twice.
+   * status actually changed, so a retried command never records twice. A
+   * deleted account (account-deletion-v1) is terminal: the port changes
+   * nothing for it and the command is refused as a conflict.
    */
   async moderateUser(
     id: PublicUserId,
@@ -372,6 +374,10 @@ export class CommunityModerationService {
       this.draft(action, at, { ...(reason === undefined ? {} : { reason }) }),
     );
     if (result === null) throw new CommunityNotFoundError("User was not found");
+    if (result.user.status === "deleted")
+      throw new CommunityConflictError(
+        "A deleted account cannot be suspended or reinstated",
+      );
     return {
       id: result.user.id,
       status: result.user.status,

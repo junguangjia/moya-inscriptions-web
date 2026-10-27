@@ -646,11 +646,17 @@ export const developmentSessionSchema = z.strictObject({
 export const catalogCommentIdSchema =
   platformIdentitySchema().brand<"CatalogCommentId">();
 
-/** The author shape embedded in every comment and reply; no avatar, no status. */
+/**
+ * The author shape embedded in every comment and reply; no avatar, no status.
+ * `deleted` (account-deletion-v1) marks an author whose account was deleted:
+ * the comment keeps its text and the anonymized display name, and the client
+ * links to no profile. Absent for every other author.
+ */
 export const commentAuthorSchema = z.strictObject({
   id: publicUserIdSchema,
   displayName: publicUserDisplayNameSchema,
   studioName: studioNameDisplaySchema.optional(),
+  deleted: z.literal(true).optional(),
 });
 
 /**
@@ -1465,6 +1471,8 @@ export const discardedResultSchema = z.strictObject({
 });
 
 export {
+  authAccountDeletionRequestSchema,
+  authAccountDeletionResultSchema,
   authAccountSecuritySchema,
   authCapabilitiesSchema,
   authChallengeAcceptedSchema,
@@ -1487,6 +1495,8 @@ export {
   authVerifyRequestSchema,
 } from "./auth-schemas.ts";
 export type {
+  AuthAccountDeletionRequest,
+  AuthAccountDeletionResult,
   AuthAccountSecurity,
   AuthCapabilities,
   AuthChallengeAccepted,

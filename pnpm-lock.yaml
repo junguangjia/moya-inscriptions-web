@@ -69,6 +69,9 @@ importers:
       '@moya/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@moya/design-tokens':
+        specifier: workspace:*
+        version: link:../../packages/design-tokens
       '@moya/ui':
         specifier: workspace:*
         version: link:../../packages/ui

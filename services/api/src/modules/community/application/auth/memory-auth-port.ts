@@ -12,6 +12,7 @@ import type {
   StoredPasswordCredential,
   StoredPasswordResetReceipt,
   StoredInvitation,
+  StoredAccountDeletion,
 } from "./auth-port.js";
 
 interface MemorySession extends StoredSession {
@@ -45,6 +46,7 @@ interface MemoryState {
     action: string;
     atIso: string;
   }[];
+  accountDeletions: StoredAccountDeletion[];
 }
 
 const emptyState = (): MemoryState => ({
@@ -63,6 +65,7 @@ const emptyState = (): MemoryState => ({
   sends: [],
   failures: [],
   audits: [],
+  accountDeletions: [],
 });
 
 const after = (left: string, right: string): boolean =>
@@ -103,7 +106,7 @@ export class MemoryCommunityAuthPort implements CommunityAuthPort {
   }
 
   /** Test seam for suspension races. Not part of the application port. */
-  setStatus(userId: string, status: "active" | "suspended"): void {
+  setStatus(userId: string, status: StoredUser["status"]): void {
     const index = this.state.users.findIndex((user) => user.id === userId);
     const current = this.state.users[index];
     if (current !== undefined) this.state.users[index] = { ...current, status };
@@ -573,6 +576,51 @@ export class MemoryCommunityAuthPort implements CommunityAuthPort {
             ? { ...row, closedAt: at }
             : row,
         );
+      },
+      findAccountDeletion: async (userId) =>
+        state.accountDeletions.find((row) => row.userId === userId) ?? null,
+      eraseAccount: async (input) => {
+        // The PostgreSQL adapter's statement order: the status first (a live
+        // account keeps its last identity), then contacts, then the record.
+        const index = state.users.findIndex(
+          (user) => user.id === input.userId && user.status === "active",
+        );
+        const current = state.users[index];
+        if (current === undefined) throw new Error("Account is not active");
+        state.users[index] = {
+          ...current,
+          status: "deleted",
+          displayName: input.displayName,
+          studioName: "",
+          studioNameSuffix: "",
+        };
+        const digests = new Set(
+          state.identities
+            .filter((row) => row.userId === input.userId)
+            .map((row) => row.lookupDigest),
+        );
+        state.challenges = state.challenges.filter(
+          (row) =>
+            row.userId !== input.userId && !digests.has(row.targetDigest),
+        );
+        state.handoffs = state.handoffs.filter(
+          (row) =>
+            row.userId !== input.userId && !digests.has(row.targetDigest),
+        );
+        state.identities = state.identities.filter(
+          (row) => row.userId !== input.userId,
+        );
+        state.credentials = state.credentials.filter(
+          (row) => row.userId !== input.userId,
+        );
+        if (state.accountDeletions.some((row) => row.userId === input.userId))
+          throw new Error("Account deletion already recorded");
+        state.accountDeletions.push({
+          userId: input.userId,
+          requestKeyHash: input.requestKeyHash,
+          sessionId: input.sessionId,
+          deletedAt: input.atIso,
+        });
       },
     };
   }

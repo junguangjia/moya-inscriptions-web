@@ -19,7 +19,11 @@ import {
 
 import { asCommunityOperationError } from "./availability.js";
 
-import type { DirectMessagePort, DirectMessageSendInput } from "@moya/api";
+import type {
+  DirectMessagePort,
+  DirectMessageSendInput,
+  PublicUserStatus,
+} from "@moya/api";
 import type {
   DirectConversation,
   DirectConversationPage,
@@ -76,7 +80,7 @@ interface ConversationRow extends QueryResultRow {
   other_id: string;
   other_name: string;
   other_studio_name: string;
-  other_status: "active" | "suspended";
+  other_status: PublicUserStatus;
   can_interact: boolean;
   unread_count: string | number;
   message_count: string | number;
@@ -143,13 +147,24 @@ export class PostgresDirectMessageAdapter implements DirectMessagePort {
     }
   }
 
+  /**
+   * `lock` true takes the account's command lock; "key-share" only waits for
+   * an account deletion in progress (it holds FOR UPDATE) without conflicting
+   * with the account's own commands.
+   */
   private async active(
     db: PoolClient,
     id: string,
-    lock = false,
+    lock: boolean | "key-share" = false,
   ): Promise<void> {
+    const clause =
+      lock === "key-share"
+        ? " FOR KEY SHARE"
+        : lock
+          ? " FOR NO KEY UPDATE"
+          : "";
     const r = await db.query(
-      `SELECT id FROM community.public_users WHERE id=$1 AND status='active'${lock ? " FOR NO KEY UPDATE" : ""}`,
+      `SELECT id FROM community.public_users WHERE id=$1 AND status='active'${clause}`,
       [id],
     );
     if (r.rowCount !== 1) throw new CommunityNotFoundError();
@@ -273,7 +288,9 @@ export class PostgresDirectMessageAdapter implements DirectMessagePort {
     const text = input.text.trim();
     if (text.length === 0 || [...text].length > 2000) fail("dm_text_invalid");
     return this.run(true, async (db) => {
-      await this.active(db, actor);
+      // account-deletion-v1: a send that raced the sender's deletion waits for
+      // it and is then refused, so no message is dated after the deletion.
+      await this.active(db, actor, "key-share");
       // Resolve the other party first (needed for the pair lock), then lock,
       // then re-derive everything under the lock.
       let other: string;
@@ -301,7 +318,9 @@ export class PostgresDirectMessageAdapter implements DirectMessagePort {
           // blocked while this transaction waited.
           const recipient = (
             await db.query<{ status: string; allowed: boolean }>(
-              "SELECT u.status, community.accounts_can_interact($1,$2) AS allowed FROM community.public_users u WHERE u.id=$2",
+              // FOR KEY SHARE also waits for the recipient's deletion in
+              // progress, so it reads the committed status.
+              "SELECT u.status, community.accounts_can_interact($1,$2) AS allowed FROM community.public_users u WHERE u.id=$2 FOR KEY SHARE",
               [actor, other],
             )
           ).rows[0];
@@ -509,7 +528,8 @@ export class PostgresDirectMessageAdapter implements DirectMessagePort {
     change: (db: PoolClient, row: ConversationRow) => Promise<void>,
   ): Promise<DirectConversation> {
     return this.run(true, async (db) => {
-      await this.active(db, actor);
+      // As in send: a change that raced the actor's deletion waits and fails.
+      await this.active(db, actor, "key-share");
       const pair = (
         await db.query<{ user_low: string; user_high: string }>(
           "SELECT c.user_low, c.user_high FROM community.dm_conversations c JOIN community.dm_participants p ON p.conversation_id=c.id AND p.user_id=$2 WHERE c.id=$1",
@@ -639,7 +659,7 @@ export class PostgresDirectMessageAdapter implements DirectMessagePort {
       await db.query<{
         id: string;
         display_name: string;
-        status: "active" | "suspended";
+        status: PublicUserStatus;
       }>(
         "SELECT id, display_name, status FROM community.public_users WHERE id IN ($1,$2) ORDER BY id",
         [c.user_low, c.user_high],

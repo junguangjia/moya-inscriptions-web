@@ -207,6 +207,7 @@ const MEDIA_KINDS = [
   "purge_item",
   "purge_blob",
   "purge_trashed_work",
+  "purge_deleted_account",
   "reconcile_capacity",
   "catalog_render",
 ];

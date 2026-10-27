@@ -1,0 +1,24 @@
+China province geometry attribution and permitted-purpose notice
+
+Source: DataV.GeoAtlas / AMap, areas_v3 / 2021.5.
+Source URL: https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json
+Provider page: https://datav.aliyun.com/portal/school/atlas/area_selector
+Downloaded SHA-256: 99adfeded5223848bbe37a0a12f8023e11ee12161c7800521c27db42fdeac275
+
+The provider declares this boundary material for learning and exchange. This
+project's Owner has identified the intended project use as non-profit learning
+and exchange. No unrestricted, commercial-use, or open-source license grant is
+asserted for this geometry. Reassess the provider's terms before any different use.
+The Umami application's MIT license does not replace this asset's source terms.
+
+The downloaded geometry is unmodified: 34 named province-level features,
+including Taiwan, Hong Kong and Macau, and one unnamed 100000_JD decorative
+feature. The decorative feature is drawn but is not counted as a 35th province.
+Changes around the data: fitted map projection, visual styling, display-key
+mapping, count shading and interaction. Visitor source country/region/city values
+are not rewritten by the map renderer.
+
+Official standard-map reference, separate from this geometry:
+https://www.mfa.gov.cn/ziliao_674904/zgdt/202607/t20260722_11989560.shtml
+This reference does not grant an official map-review number or approval to the
+DataV geometry. No government map-review number is assigned to this asset here.

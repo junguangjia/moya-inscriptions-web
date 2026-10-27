@@ -1,5 +1,6 @@
 import type {
   AuthRegistrationAgreement,
+  AuthAccountDeletionResult,
   AuthAccountSecurity,
   AuthCapabilities,
   AuthChallengeAccepted,
@@ -68,6 +69,8 @@ const GLOBAL_SENDS = 200;
 const HANDOFF_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const HANDLE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
+/** Every deleted account shows this name (Issue #351 r2); its handle stays reserved. */
+const DELETED_ACCOUNT_DISPLAY_NAME = "已注销用户";
 const DEVELOPMENT_AGREEMENT: AuthRegistrationAgreement = Object.freeze({
   version: "development-invitation-draft-v1",
   title: "开发环境注册说明",
@@ -453,10 +456,7 @@ export class CommunityAuthService {
             if (!this.provenanceOk(identity))
               return fail("AUTH_PROVENANCE_REJECTED");
             const user = await tx.findUser(identity.userId);
-            if (
-              user === null ||
-              (!input.appealOnly && user.status !== "active")
-            )
+            if (user === null || !this.admitted(user, input.appealOnly))
               return fail("AUTH_ACCOUNT_SUSPENDED");
           }
           if (challenge.purpose === "reauthenticate") {
@@ -774,7 +774,8 @@ export class CommunityAuthService {
       )
         return fail("AUTH_UNAUTHENTICATED");
       const user = await tx.findUser(session.userId);
-      if (!user) return fail("AUTH_UNAUTHENTICATED");
+      if (!user || user.status === "deleted")
+        return fail("AUTH_UNAUTHENTICATED");
       return {
         ok: true,
         value: {
@@ -854,8 +855,8 @@ export class CommunityAuthService {
     try {
       matched = await verifyPassword(
         input.password,
-        (user?.status === "active" ||
-          (input.appealOnly === true && user?.status === "suspended")) &&
+        user !== null &&
+          this.admitted(user, input.appealOnly) &&
           (handleLogin || (identity !== null && this.provenanceOk(identity)))
           ? (credential?.verifier ?? null)
           : null,
@@ -870,7 +871,7 @@ export class CommunityAuthService {
       (!handleLogin && identity === null) ||
       user === null ||
       credential === null ||
-      (!input.appealOnly && user.status !== "active") ||
+      !this.admitted(user, input.appealOnly) ||
       (!handleLogin && (identity === null || !this.provenanceOk(identity)))
     )
       return fail("AUTH_INVALID_CREDENTIALS");
@@ -888,7 +889,7 @@ export class CommunityAuthService {
       const currentCredential = await tx.findPasswordCredential(user.id);
       if (
         currentUser === null ||
-        (!input.appealOnly && currentUser.status !== "active") ||
+        !this.admitted(currentUser, input.appealOnly) ||
         (handleLogin
           ? currentProvisioned?.id !== user.id
           : identity === null ||
@@ -1704,6 +1705,101 @@ export class CommunityAuthService {
     });
   }
 
+  /**
+   * account-deletion-v1: ends the signed-in account at once and for good.
+   * The caller's confirmed account must own the Session, and a fresh,
+   * single-use re-verification of a bound phone or email bound to this very
+   * Session authorizes it. One transaction revokes every Session of both
+   * scopes, closes receipts, invalidates proofs and erases the account; an
+   * interruption leaves it untouched. An exact retry (same Session, same
+   * idempotency key) returns the first result although that Session is now
+   * revoked; any other request for the deleted account is unauthenticated.
+   */
+  async deleteAccount(input: {
+    readonly sessionToken: string;
+    readonly reauthToken: string;
+    readonly idempotencyKey: string;
+    readonly expectedAccountId: string;
+  }): Promise<AuthResult<AuthAccountDeletionResult>> {
+    if (this.options.profile === "password-only")
+      return fail("AUTH_CHANNEL_UNAVAILABLE");
+    const at = this.clock();
+    const atIso = at.toISOString();
+    const sessionHash = await hashSessionToken(input.sessionToken);
+    const reauthHash = await hashSessionToken(input.reauthToken);
+    return this.transactional(async (tx) => {
+      // Metadata of any Session, revoked or expired too: an exact retry
+      // presents the Session this deletion revoked.
+      const observed = await tx.findSession(
+        sessionHash,
+        this.requiredSessionEnvironment(),
+      );
+      if (observed === null || observed.userId !== input.expectedAccountId)
+        return fail("AUTH_UNAUTHENTICATED");
+      await tx.lockUser(observed.userId);
+      const requestKeyHash = await this.receiptKey(
+        input.idempotencyKey,
+        observed.userId,
+        "account_deletion",
+      );
+      const recorded = await tx.findAccountDeletion(observed.userId);
+      if (recorded !== null)
+        return recorded.requestKeyHash === requestKeyHash &&
+          recorded.sessionId === observed.id
+          ? {
+              ok: true,
+              value: { outcome: "deleted", deletedAt: recorded.deletedAt },
+            }
+          : fail("AUTH_UNAUTHENTICATED");
+      const user = await tx.findSessionUser(
+        sessionHash,
+        atIso,
+        this.requiredSessionEnvironment(),
+      );
+      if (user === null || user.status === "deleted")
+        return fail("AUTH_UNAUTHENTICATED");
+      if (user.status !== "active") return fail("AUTH_ACCOUNT_SUSPENDED");
+      const reauth = await tx.findHandoff(reauthHash);
+      if (
+        reauth === null ||
+        reauth.purpose !== "reauth" ||
+        reauth.userId !== user.id ||
+        reauth.sessionHash !== sessionHash ||
+        reauth.consumedAt !== null ||
+        !this.handoffModeOk(reauth) ||
+        new Date(reauth.expiresAt).getTime() <= at.getTime()
+      )
+        return fail("AUTH_PROOF_REJECTED");
+      // The proven contact is still bound to this account and usable here.
+      const reauthIdentity = (await tx.listIdentities(user.id)).find(
+        (row) => row.kind === reauth.channel,
+      );
+      if (
+        reauthIdentity === undefined ||
+        reauthIdentity.lookupDigest !== reauth.targetDigest ||
+        !this.provenanceOk(reauthIdentity)
+      )
+        return fail("AUTH_PROOF_REJECTED");
+      if ((await tx.consumeHandoff(reauth.id, atIso)) !== "ok")
+        return fail("AUTH_PROOF_REJECTED");
+      // Password-reset proofs resolve through the identities, so they close
+      // before the erasure removes them.
+      await tx.invalidatePasswordResetProofs(user.id, atIso);
+      await tx.invalidateUserProofs(user.id, atIso);
+      await tx.revokeAllSessions(user.id, atIso);
+      await tx.closeUserReceipts(user.id, atIso);
+      await tx.eraseAccount({
+        userId: user.id,
+        atIso,
+        displayName: DELETED_ACCOUNT_DISPLAY_NAME,
+        requestKeyHash,
+        sessionId: observed.id,
+      });
+      await this.audit(tx, user.id, "account_delete", at);
+      return { ok: true, value: { outcome: "deleted", deletedAt: atIso } };
+    });
+  }
+
   async signOut(
     sessionToken: string,
   ): Promise<AuthResult<{ readonly signedOut: true }>> {
@@ -1954,7 +2050,7 @@ export class CommunityAuthService {
     if (identity === null)
       return this.issueRegistrationHandoff(tx, challenge, at);
     const user = await tx.lockUser(identity.userId);
-    if (user === null || (!input.appealOnly && user.status !== "active"))
+    if (user === null || !this.admitted(user, input.appealOnly))
       return fail("AUTH_ACCOUNT_SUSPENDED");
     if (!this.provenanceOk(identity)) return fail("AUTH_PROVENANCE_REJECTED");
     const session = await this.mint(
@@ -2739,6 +2835,19 @@ export class CommunityAuthService {
     return channel === "email"
       ? this.options.emailMode
       : this.options.phoneMode;
+  }
+
+  /**
+   * Who may sign in: an active account, and for a restricted appeal Session
+   * a suspended one as well. A deleted account (account-deletion-v1) never
+   * signs in or appeals, even while a stale identity or credential row could
+   * still name it.
+   */
+  private admitted(user: StoredUser, appealOnly: boolean | undefined): boolean {
+    return (
+      user.status === "active" ||
+      (appealOnly === true && user.status === "suspended")
+    );
   }
 
   private provenanceOk(identity: StoredIdentity): boolean {

@@ -34,6 +34,7 @@ import {
   articleReferences,
   articleCatalogReferences,
   applyArticleBlockEdits,
+  emptyArticleDocument,
 } from "@moya/contracts/schemas";
 import type {
   ArticleOwnMediaListQuery,
@@ -341,6 +342,104 @@ const pendingCandidateOf = (row: PendingRow): ArticlePendingCandidate =>
     coverRefId: row.cover_ref_id,
     document: documentOf(row.document),
   });
+
+/** What an erased article draft keeps: an empty title, document and cover. */
+const ERASED_ARTICLE = Object.freeze({
+  title: "",
+  coverRefId: null,
+  document: emptyArticleDocument(),
+});
+/** The erased document as a statement value (JSON). */
+export const ERASED_ARTICLE_DOCUMENT = JSON.stringify(ERASED_ARTICLE.document);
+/** The erased content's values: title, document and fingerprint, in order. */
+const erasedArticleValues = () => [
+  ERASED_ARTICLE.title,
+  ERASED_ARTICLE_DOCUMENT,
+  authoredArticleFingerprint(ERASED_ARTICLE),
+];
+
+/**
+ * SQL: article alias `a` still holds content the account purge removes: a
+ * live draft, or one its author deleted that kept its title, document or
+ * cover. `documentParam` binds ERASED_ARTICLE_DOCUMENT.
+ */
+export const articleHoldsContentSql = (documentParam: string) =>
+  `(a.deleted_at IS NULL OR a.title<>'' OR a.cover_ref_id IS NOT NULL
+  OR a.document<>${documentParam}::jsonb)`;
+
+/**
+ * Ends one article's editor lifetime inside the caller's transaction, which
+ * holds the owner's account lock and the document's row lock (an author's
+ * draft deletion, or the account purge of a deleted account,
+ * account-deletion-v1). `deleted_at` is terminal: afterwards only the purge
+ * of a deleted account may empty the row (eraseEndedArticleDraft). An
+ * author's deletion keeps the stored content; the account purge
+ * (`eraseContent`) also empties the title, document and cover in the same
+ * update. Submitted and published revisions are immutable and stay.
+ */
+export const endArticleDraft = async (
+  db: PoolClient,
+  ownerId: string,
+  articleId: string,
+  now: Date,
+  options: { readonly eraseContent?: boolean } = {},
+): Promise<void> => {
+  await db.query(
+    options.eraseContent
+      ? `UPDATE community.article_documents
+         SET deleted_at=$3::timestamptz,version=version+1,updated_at=$3::timestamptz,
+           title=$4,cover_ref_id=NULL,document=$5::jsonb,fingerprint=$6
+         WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL`
+      : `UPDATE community.article_documents
+         SET deleted_at=$3::timestamptz,version=version+1,updated_at=$3::timestamptz
+         WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL`,
+    [
+      articleId,
+      ownerId,
+      now.toISOString(),
+      ...(options.eraseContent ? erasedArticleValues() : []),
+    ],
+  );
+  // Only the private draft holder is released. Publication snapshots,
+  // their media retention refs and public pointers remain authoritative.
+  await releaseHolderRefs(
+    db,
+    [{ holderKind: "article_draft", holderIds: [articleId] }],
+    now,
+  );
+  // Creation/save receipts carried draft content. Reuse the established
+  // content-free tombstone so a replay cannot return the removed draft.
+  await db.query(
+    `UPDATE community.author_command_receipts
+     SET result='{"permanentlyDeleted":true}'::jsonb
+     WHERE actor_id=$1 AND result->>'id'=$2`,
+    [ownerId, articleId],
+  );
+};
+
+/**
+ * account-deletion-v1: empties an article draft its author had already
+ * deleted, which kept its stored content (its holder refs and receipts were
+ * released then). Only the purge of a deleted account calls this, in its
+ * transaction under the owner's row lock and the document's; the
+ * draft-terminal trigger admits exactly this update (canonical empty content,
+ * `deleted_at` and every other column unchanged, one version step) and only
+ * while the owner's account is deleted.
+ */
+export const eraseEndedArticleDraft = async (
+  db: PoolClient,
+  ownerId: string,
+  articleId: string,
+  now: Date,
+): Promise<void> => {
+  await db.query(
+    `UPDATE community.article_documents
+     SET version=version+1,updated_at=$3::timestamptz,
+       title=$4,cover_ref_id=NULL,document=$5::jsonb,fingerprint=$6
+     WHERE id=$1 AND owner_id=$2 AND deleted_at IS NOT NULL`,
+    [articleId, ownerId, now.toISOString(), ...erasedArticleValues()],
+  );
+};
 
 /**
  * Public-user Article persistence, without any Payload actor/CRUD authority.
@@ -688,27 +787,7 @@ export class PostgresArticleAuthoringAdapter
       async (db) => {
         const draft = await this.owned(db, actor, id, "update");
         assertVersion(draft, command.expectedVersion);
-        await db.query(
-          `UPDATE community.article_documents
-           SET deleted_at=$3::timestamptz,version=version+1,updated_at=$3::timestamptz
-           WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL`,
-          [id, actor.userId, now.toISOString()],
-        );
-        // Only the private draft holder is released. Publication snapshots,
-        // their media retention refs and public pointers remain authoritative.
-        await releaseHolderRefs(
-          db,
-          [{ holderKind: "article_draft", holderIds: [id] }],
-          now,
-        );
-        // Creation/save receipts carried draft content. Reuse the established
-        // content-free tombstone so a replay cannot return the removed draft.
-        await db.query(
-          `UPDATE community.author_command_receipts
-           SET result='{"permanentlyDeleted":true}'::jsonb
-           WHERE actor_id=$1 AND result->>'id'=$2`,
-          [actor.userId, id],
-        );
+        await endArticleDraft(db, actor.userId, id, now);
         return {
           id,
           deleted: true as const,

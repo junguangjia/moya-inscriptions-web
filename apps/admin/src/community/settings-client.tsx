@@ -1,7 +1,8 @@
 "use client";
 
+import { workspacePageLabel } from "../workspace/routes";
+
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { SetStepNav } from "@payloadcms/ui";
 
 import {
@@ -78,20 +79,19 @@ export const CommunitySettingsClient = ({
     <div className={styles.workspace}>
       <SetStepNav
         nav={[
-          { label: "社区", url: "/admin/community-moderation" },
-          { label: "发布设置" },
+          { label: "设置", url: "/admin/community-moderation/settings" },
+          { label: "发布规则" },
         ]}
       />
       <header className={styles.header}>
         <div>
-          <h1 className={styles.title}>发布设置</h1>
+          <h1 className={styles.title}>
+            {workspacePageLabel("/admin/community-moderation/settings")}
+          </h1>
           <p className={styles.lead}>
             {workPublishing
-              ? "评论与回复的发布模式和作品发布设置分别保存、互不影响，均由后端执行。"
-              : "全站唯一的发布模式，由后端保存并执行。"}
-            <Link href="/admin/community-moderation">返回审核队列</Link>
-            {" · "}
-            <Link href="/admin">工作台</Link>
+              ? "评论和作品可分别设置发布方式。"
+              : "设置评论的发布方式。"}
           </p>
         </div>
       </header>

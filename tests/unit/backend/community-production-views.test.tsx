@@ -17,21 +17,62 @@ const runtime = await vi.hoisted(async () => {
     link: realpathSync(adminRequire.resolve("next/link")),
     navigation: realpathSync(adminRequire.resolve("next/navigation")),
     user: { collection: "users", role: "owner" },
+    pathname: "/admin",
+    params: new URLSearchParams(),
     call: vi.fn(),
   };
 });
 vi.mock(runtime.ui, () => ({
   useAuth: () => ({ user: runtime.user }),
-  NavGroup: ({ children }: { children: ReactNode }) => children,
+  Link: ({
+    children,
+    prefetch,
+    ...props
+  }: {
+    children: ReactNode;
+    prefetch?: boolean;
+  }) =>
+    createElement(
+      "a",
+      { ...props, "data-prefetch": String(prefetch) },
+      children,
+    ),
+  useNav: () => ({
+    hydrated: true,
+    navOpen: true,
+    navRef: { current: null },
+    shouldAnimate: false,
+    setNavOpen: vi.fn(),
+  }),
+  useTheme: () => ({ theme: "light", setTheme: vi.fn() }),
+  usePreferences: () => ({ getPreference: async () => undefined }),
+  Logout: () => null,
+  NavToggler: () => null,
+  Hamburger: () => null,
 }));
 vi.mock(runtime.templates, () => ({
   DefaultTemplate: ({ children }: { children: ReactNode }) => children,
 }));
 vi.mock(runtime.link, () => ({
-  default: ({ children, ...props }: { children: ReactNode; href: string }) =>
-    createElement("a", props, children),
+  default: ({
+    children,
+    prefetch,
+    ...props
+  }: {
+    children: ReactNode;
+    href: string;
+    prefetch?: boolean;
+  }) =>
+    createElement(
+      "a",
+      { ...props, "data-prefetch": String(prefetch) },
+      children,
+    ),
 }));
-vi.mock(runtime.navigation, () => ({ usePathname: () => "/admin" }));
+vi.mock(runtime.navigation, () => ({
+  usePathname: () => runtime.pathname,
+  useSearchParams: () => runtime.params,
+}));
 vi.mock("../../../apps/admin/src/community/backend", () => ({
   callCommunityOperator: runtime.call,
 }));
@@ -51,7 +92,7 @@ vi.mock("../../../apps/admin/src/community/settings-client", () => ({
       workPublishing ? "publishing-enabled" : "publishing-disabled",
     ),
 }));
-vi.mock("../../../apps/admin/src/community/content-client", () => ({
+vi.mock("admin/community-content-client", () => ({
   CommunityContentClient: () => "content",
 }));
 vi.mock("../../../apps/admin/src/community/feedback-client", () => ({
@@ -97,6 +138,7 @@ import {
 } from "admin/community-views";
 import { CommunityNavGroups } from "admin/community-navigation";
 import { CommunityDashboardCard } from "admin/community-dashboard";
+import { WorkspaceTabs } from "admin/workspace-navigation";
 
 const props = (role: "owner" | "automation"): AdminViewServerProps =>
   ({
@@ -121,6 +163,8 @@ const businessViews = [
 afterEach(() => {
   vi.unstubAllEnvs();
   runtime.user.role = "owner";
+  runtime.pathname = "/admin";
+  runtime.params = new URLSearchParams();
   runtime.call.mockReset();
 });
 
@@ -154,7 +198,31 @@ describe.each(["development", "production"])(
             developmentAgentsEnabled: nodeEnv === "development",
           }),
         );
-      const markup = navigation();
+      const sidebar = navigation();
+      expect(sidebar.match(/data-workspace=/g) ?? []).toHaveLength(8);
+      expect(sidebar).not.toContain("系统与自动化");
+      const markup =
+        sidebar +
+        [
+          "/admin/collections/catalogs",
+          "/admin/community-moderation",
+          "/admin/community-moderation/content?tab=users",
+          "/admin/analytics",
+          "/admin/editorial-workflow",
+          "/admin/community-moderation/history",
+          "/admin/community-moderation/settings",
+        ]
+          .map((href) => {
+            const url = new URL(href, "https://admin.example.test");
+            runtime.pathname = url.pathname;
+            runtime.params = url.searchParams;
+            return renderToStaticMarkup(
+              createElement(WorkspaceTabs, {
+                developmentAgentsEnabled: nodeEnv === "development",
+              }),
+            );
+          })
+          .join("");
       for (const path of [
         "content",
         "work-submissions",
@@ -174,6 +242,7 @@ describe.each(["development", "production"])(
       );
       runtime.user.role = "automation";
       expect(navigation()).toBe("");
+      expect(renderToStaticMarkup(createElement(WorkspaceTabs))).toBe("");
     });
 
     it("reads real pending submissions for the dashboard and keeps non-Owner access empty", async () => {
@@ -214,6 +283,22 @@ describe.each(["development", "production"])(
         } as unknown as ServerProps),
       ).toBe(null);
       expect(runtime.call).not.toHaveBeenCalled();
+    });
+
+    it("represents unavailable dashboard counts as unknown and does not invent empty queues", async () => {
+      vi.stubEnv("NODE_ENV", nodeEnv);
+      runtime.call.mockRejectedValue(
+        new Error("synthetic unavailable backend"),
+      );
+      const card = await CommunityDashboardCard({
+        user: { collection: "users", role: "owner" },
+      } as unknown as ServerProps);
+      const markup = renderToStaticMarkup(card);
+      expect(markup).toContain('data-card-pending="">—');
+      expect(markup).toContain('data-card-pending-work-submissions="">—');
+      expect(markup).not.toContain('data-card-pending="">0');
+      expect(markup).not.toContain('data-card-pending-work-submissions="">0');
+      expect(markup).toContain("部分数据暂时无法读取");
     });
   },
 );

@@ -21,6 +21,7 @@ export const AuthorDialog = ({
   guardChildBack = true,
   dismissible = true,
   closeRequested = false,
+  leaveGuard,
   onClose,
   children,
 }: {
@@ -39,6 +40,12 @@ export const AuthorDialog = ({
   dismissible?: boolean;
   /** Finish this modal's Back transition before a caller changes the parent view. */
   closeRequested?: boolean;
+  /**
+   * Asked before a Back, Escape, swipe or history step leaves the current
+   * view; true keeps the dialog where it is while the caller asks its own
+   * inline question (account-deletion-v1).
+   */
+  leaveGuard?: (() => boolean) | undefined;
   onClose: () => void;
   children: ReactNode;
 }) => {
@@ -47,6 +54,7 @@ export const AuthorDialog = ({
       dirty,
       guardChildBack,
       dismissible,
+      leaveGuard,
       onClose,
       onBack,
       navigationDepth,
@@ -62,12 +70,14 @@ export const AuthorDialog = ({
     dirty,
     guardChildBack,
     dismissible,
+    leaveGuard,
     onClose,
     onBack,
     navigationDepth,
   };
   const allowed = (child = false) =>
     latest.current.dismissible &&
+    !latest.current.leaveGuard?.() &&
     (!latest.current.dirty ||
       (child && !latest.current.guardChildBack) ||
       window.confirm("更改尚未保存，放弃这些更改？"));

@@ -57,9 +57,10 @@ const sessionDto = (row: SessionRow): PublishingSession =>
  * Ends a session with `state` (`discarded` or `expired`): its refs are
  * removed, and the items no other holder references are cancelled with their
  * reservations released and purges enqueued. Works, revisions and drafts are
- * never touched. The session row must already be locked.
+ * never touched. The session row must already be locked (also by the account
+ * purge of a deleted account, account-deletion-v1).
  */
-const endSession = async (
+export const endSession = async (
   db: PublishingDb,
   sessionId: string,
   state: "discarded" | "expired",

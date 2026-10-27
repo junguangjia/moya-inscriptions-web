@@ -16,10 +16,12 @@ export const useDiscussionAvatars = (rows: readonly CommentItem[]) => {
   const ids = JSON.stringify(
     [
       ...new Set(
-        rows.flatMap((row) => [
-          row.user.id,
-          ...row.replies.map((r) => r.user.id),
-        ]),
+        rows.flatMap((row) =>
+          // A deleted author (account-deletion-v1) has no profile to read.
+          [row.user, ...row.replies.map((r) => r.user)]
+            .filter((user) => user.deleted !== true)
+            .map((user) => user.id),
+        ),
       ),
     ]
       .filter((id) => id !== viewerId)

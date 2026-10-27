@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   RECOVERY_MAX_TOTAL_BYTES,
+  clearAccountRecovery,
   createLocalRecoveryStore,
   planDraftRestore,
 } from "./local-recovery";
@@ -162,6 +163,23 @@ const serverItem = (
   ],
   presentation: null,
   media: null,
+});
+
+describe("account deletion (account-deletion-v1)", () => {
+  it("removes every record of the deleted account and nothing else", async () => {
+    const { backend, records } = memoryBackend();
+    const store = createLocalRecoveryStore(backend, plenty);
+    const secondDraft = `work-draft-${"9".repeat(32)}`;
+    await store.save(record());
+    await store.save(record({ itemKey: "k2" }));
+    await store.save(record({ draftId: secondDraft }));
+    await store.save(record({ accountId: otherAccount }));
+    expect(records.size).toBe(4);
+    await clearAccountRecovery(backend, account);
+    expect([...records.keys()]).toEqual([`${otherAccount}|${draftId}|k1`]);
+    await clearAccountRecovery(backend, "guest");
+    expect(records.size).toBe(1);
+  });
 });
 
 describe("restore planning", () => {

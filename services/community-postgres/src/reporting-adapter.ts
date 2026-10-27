@@ -414,8 +414,17 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
       (this.isOfficial(row) && this.options.resolveExternalTarget !== undefined)
     )
       allowedActions.push("hide");
-    if (row.affected_user_id)
-      allowedActions.push("warn", "restrict_comments", "suspend");
+    if (row.affected_user_id) {
+      allowedActions.push("warn", "restrict_comments");
+      // A deleted account (account-deletion-v1) is terminal: never suspended.
+      const affected = (
+        await db.query<{ status: string }>(
+          "SELECT status FROM community.public_users WHERE id=$1",
+          [row.affected_user_id],
+        )
+      ).rows[0];
+      if (affected?.status !== "deleted") allowedActions.push("suspend");
+    }
     const allEvidence = (
       await db.query<EvidenceRow>(
         "SELECT * FROM community.report_evidence WHERE case_id=$1 AND state='ready' ORDER BY created_at,id",
@@ -1670,6 +1679,10 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
       )
     ).rows[0];
     if (!state) throw new CommunityNotFoundError();
+    // A deleted account is terminal (account-deletion-v1): a suspension can
+    // neither apply to it nor later "restore" it, so the decision is refused.
+    if (s.kind === "user_status" && state.state === "deleted")
+      throw new CommunityConflictError("A deleted account cannot be suspended");
     if (s.kind === "thread" ? state.state === null : state.state !== s.hidden)
       await this.writeSubject(db, s, s.hidden);
     const after = (

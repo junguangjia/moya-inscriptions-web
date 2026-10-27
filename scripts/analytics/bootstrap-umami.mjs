@@ -20,7 +20,7 @@ import {
 const names = {
   team: "ArtVenn 数据分析",
   funnel: "ArtVenn: 曝光 → 打开 → 收藏",
-  board: "ArtVenn: 内容行为与省市",
+  board: "ArtVenn: 中国省市与内容行为",
 };
 
 function funnelEvents(environment) {
@@ -74,27 +74,59 @@ export function boardParameters(websiteId, funnelId) {
         columns: [column("metrics", "WebsiteMetricsBar")],
       },
       {
+        id: "china-geography",
+        size: 3,
+        columns: [
+          column(
+            "china-map",
+            "WorldMap",
+            {},
+            {
+              title: "中国省级访问分布",
+              description:
+                "省份可点击筛选城市；IP 表示近似网络出口，缺失位置不猜补。",
+            },
+          ),
+        ],
+      },
+      {
         id: "regions",
         size: 2,
         columns: [
           column(
             "region",
             "MetricsTable",
-            { type: "region", limit: 20, metric: "去重访客" },
+            {
+              type: "region",
+              limit: 34,
+              showMore: true,
+              defaultCountry: "CN",
+              virtualize: true,
+              itemCount: 12,
+              metric: "去重访客",
+            },
             {
               title: "省份 / 地区",
               description:
-                "IP 近似位置；点击省份筛选城市，位置缺失不计入排行。",
+                "默认中国省份；国家筛选仍可切换。可滚动并展开完整排行，位置缺失不计入。",
             },
           ),
           column(
             "city",
             "MetricsTable",
-            { type: "city", limit: 20, metric: "去重访客" },
+            {
+              type: "city",
+              limit: 50,
+              showMore: true,
+              defaultCountry: "CN",
+              virtualize: true,
+              itemCount: 12,
+              metric: "去重访客",
+            },
             {
               title: "城市",
               description:
-                "按所选省份查看；仅统计已解析城市的去重访客，非精确人数。",
+                "按所选省份查看；可展开搜索并逐页查看，仅统计已解析城市的去重访客。",
             },
           ),
         ],
@@ -324,8 +356,7 @@ export async function bootstrapUmami(environment, selected, options = {}) {
     board = await api.request("POST", "/boards", {
       type: "website",
       name: names.board,
-      description:
-        "Umami 原生内容行为与省市看板；IP 仅表示近似网络出口，本人、测试与开发活动在采集前排除。",
+      description: "查看省市分布、访问趋势和内容互动。IP 位置仅供参考。",
       teamId,
       parameters,
     });

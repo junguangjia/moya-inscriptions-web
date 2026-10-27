@@ -160,7 +160,7 @@ export const operatorAuthorSchema = z.strictObject({
   id: publicUserIdSchema,
   handle: publicUserHandleSchema,
   displayName: publicUserDisplayNameSchema,
-  status: z.enum(["active", "suspended"]),
+  status: z.enum(["active", "suspended", "deleted"]),
 });
 
 /**
@@ -372,6 +372,6 @@ export const moderationResultSchema = z.strictObject({
 
 export const userModerationResultSchema = z.strictObject({
   id: publicUserIdSchema,
-  status: z.enum(["active", "suspended"]),
+  status: z.enum(["active", "suspended", "deleted"]),
   revokedSessions: z.number().int().min(0),
 });

@@ -156,6 +156,7 @@ describe("product access covers every Web entry point", () => {
       "POST passwords/reset",
       "POST registrations",
       "POST sign-out",
+      "POST account/deletion",
       "POST appeals/login",
       "POST appeals/challenges",
       "POST appeals/verify",
