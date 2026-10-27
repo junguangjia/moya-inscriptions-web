@@ -89,11 +89,12 @@ export class PostgresCommunityIdentityAdapter implements CommunityIdentityPort {
   /**
    * Status, session revocation and the audit row move together or not at
    * all. The UPDATE matches only a real transition, so a repeated suspend
-   * returns the unchanged user and records nothing.
+   * returns the unchanged user and records nothing. A deleted account is
+   * terminal: the UPDATE never matches it and nothing else is written.
    */
   async setUserStatus(
     id: PublicUserId,
-    status: PublicUserRecord["status"],
+    status: Exclude<PublicUserRecord["status"], "deleted">,
     at: Date,
     audit?: ModerationEventDraft,
   ): Promise<{
@@ -117,6 +118,10 @@ export class PostgresCommunityIdentityAdapter implements CommunityIdentityPort {
         return null;
       }
       const user = mapPublicUserRow(row);
+      if (user.status === "deleted") {
+        await client.query("ROLLBACK");
+        return { user, revokedSessions: 0 };
+      }
       if (row.changed === true && audit !== undefined)
         await client.query(insertModerationEventSql, [
           audit.id,

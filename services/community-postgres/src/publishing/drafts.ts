@@ -817,6 +817,82 @@ export const readDraft = async (
     return draftDto(db, row);
   });
 
+/**
+ * Removes one primary draft with its conflict copies and snapshots inside the
+ * caller's transaction, which holds the owner's account lock and the
+ * draft's row lock (an author's draft deletion, or the account purge of a
+ * deleted account, account-deletion-v1). Refs go in one item lock pass, and
+ * the owner's media no other draft, snapshot, session or revision references
+ * is cancelled for the purge, with its legacy bytes erased.
+ */
+export const eraseDraft = async (
+  db: PublishingDb,
+  ownerId: string,
+  draft: { readonly id: string; readonly content: WorkDraftContent },
+  now: Date,
+): Promise<PublishingDraftDeletion> => {
+  const copies = (
+    await db.query<{ id: string; content: WorkDraftContent }>(
+      "SELECT id,content FROM community.work_drafts WHERE conflict_of=$1 AND owner_id=$2 ORDER BY id FOR UPDATE",
+      [draft.id, ownerId],
+    )
+  ).rows;
+  const draftIds = [draft.id, ...copies.map((copy) => copy.id)];
+  const snapshots = (
+    await db.query<{ id: string; content: WorkDraftContent }>(
+      "SELECT id,content FROM community.work_draft_snapshots WHERE draft_id=ANY($1::text[]) AND owner_id=$2 ORDER BY id FOR UPDATE",
+      [draftIds, ownerId],
+    )
+  ).rows;
+  const snapshotIds = snapshots.map((snapshot) => snapshot.id);
+  const contentIds = [
+    ...contentItemIds(draft.content),
+    ...copies.flatMap((copy) => contentItemIds(copy.content)),
+    ...snapshots.flatMap((snapshot) => contentItemIds(snapshot.content)),
+  ];
+  // Sessions are only created in unsaved mode, so none names the draft.
+  // One item lock pass covers the refs released and the items cancelled.
+  const released = await releaseHolderRefs(
+    db,
+    [
+      { holderKind: "draft", holderIds: draftIds },
+      { holderKind: "snapshot", holderIds: snapshotIds },
+    ],
+    now,
+    contentIds,
+  );
+  await db.query(
+    "DELETE FROM community.work_draft_snapshots WHERE id=ANY($1::text[])",
+    [snapshotIds],
+  );
+  await db.query(
+    "DELETE FROM community.work_drafts WHERE conflict_of=$1 AND owner_id=$2",
+    [draft.id, ownerId],
+  );
+  await db.query("DELETE FROM community.work_drafts WHERE id=$1", [draft.id]);
+  const candidates = [...released, ...contentIds];
+  const owned = (
+    await db.query<{ id: string }>(
+      "SELECT id FROM community.media_items WHERE owner_id=$1 AND id=ANY($2::text[])",
+      [ownerId, [...new Set(candidates)]],
+    )
+  ).rows.map((row) => row.id);
+  // Only media no other draft, snapshot, session or revision references.
+  const { itemIds, cancelledComponentIds } = await cancelItems(db, owned, now, {
+    onlyUnreferenced: true,
+  });
+  await eraseUnreferencedLegacyMedia(db, ownerId, owned, now);
+  return {
+    result: {
+      deleted: true,
+      snapshots: snapshots.length,
+      conflictCopies: copies.length,
+      mediaItems: itemIds.length,
+    },
+    cancelledComponentIds,
+  };
+};
+
 /** WorkPublishingPort.deleteDraft */
 export const deleteDraft = async (
   pool: Pool,
@@ -854,71 +930,7 @@ export const deleteDraft = async (
         if (draft.revision !== command.expectedRevision || unresolvedCopy)
           throw new CommunityConflictError(PUBLISHING_DRAFT_CHANGED);
       }
-      const copies = (
-        await db.query<{ id: string; content: WorkDraftContent }>(
-          "SELECT id,content FROM community.work_drafts WHERE conflict_of=$1 AND owner_id=$2 ORDER BY id FOR UPDATE",
-          [draft.id, actorId],
-        )
-      ).rows;
-      const draftIds = [draft.id, ...copies.map((copy) => copy.id)];
-      const snapshots = (
-        await db.query<{ id: string; content: WorkDraftContent }>(
-          "SELECT id,content FROM community.work_draft_snapshots WHERE draft_id=ANY($1::text[]) AND owner_id=$2 ORDER BY id FOR UPDATE",
-          [draftIds, actorId],
-        )
-      ).rows;
-      const snapshotIds = snapshots.map((snapshot) => snapshot.id);
-      const contentIds = [
-        ...contentItemIds(draft.content),
-        ...copies.flatMap((copy) => contentItemIds(copy.content)),
-        ...snapshots.flatMap((snapshot) => contentItemIds(snapshot.content)),
-      ];
-      // Sessions are only created in unsaved mode, so none names the draft.
-      // One item lock pass covers the refs released and the items cancelled.
-      const released = await releaseHolderRefs(
-        db,
-        [
-          { holderKind: "draft", holderIds: draftIds },
-          { holderKind: "snapshot", holderIds: snapshotIds },
-        ],
-        now,
-        contentIds,
-      );
-      await db.query(
-        "DELETE FROM community.work_draft_snapshots WHERE id=ANY($1::text[])",
-        [snapshotIds],
-      );
-      await db.query(
-        "DELETE FROM community.work_drafts WHERE conflict_of=$1 AND owner_id=$2",
-        [draft.id, actorId],
-      );
-      await db.query("DELETE FROM community.work_drafts WHERE id=$1", [
-        draft.id,
-      ]);
-      const candidates = [...released, ...contentIds];
-      const owned = (
-        await db.query<{ id: string }>(
-          "SELECT id FROM community.media_items WHERE owner_id=$1 AND id=ANY($2::text[])",
-          [actorId, [...new Set(candidates)]],
-        )
-      ).rows.map((row) => row.id);
-      // Only media no other draft, snapshot, session or revision references.
-      const { itemIds, cancelledComponentIds } = await cancelItems(
-        db,
-        owned,
-        now,
-        { onlyUnreferenced: true },
-      );
-      await eraseUnreferencedLegacyMedia(db, actorId, owned, now);
-      return {
-        result: {
-          deleted: true,
-          snapshots: snapshots.length,
-          conflictCopies: copies.length,
-          mediaItems: itemIds.length,
-        },
-        cancelledComponentIds,
-      };
+      return eraseDraft(db, actorId, draft, now);
     },
   );
 

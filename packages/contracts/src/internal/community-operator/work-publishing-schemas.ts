@@ -162,7 +162,7 @@ export const operatorWorkSubmissionSchema = z
       id: strictUserId,
       handle: publicUserHandleSchema,
       displayName: publicUserDisplayNameSchema,
-      status: z.enum(["active", "suspended"]),
+      status: z.enum(["active", "suspended", "deleted"]),
     }),
     title: storedPublishingTextSchema(WORK_TITLE_MAXIMUM),
     body: storedPublishingTextSchema(WORK_BODY_MAXIMUM),
@@ -286,6 +286,7 @@ export const publishingJobKindSchema = z.enum([
   "reconcile_publication",
   "sweep_published",
   "profile_render",
+  "purge_deleted_account",
 ]);
 
 export const publishingJobStateSchema = z.enum([

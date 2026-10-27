@@ -22,6 +22,7 @@ import {
   policyLabels,
   shortId,
   subjectKindLabels,
+  userStatusLabels,
 } from "./api";
 import styles from "./community.module.css";
 import { ModerationReasonInput, readModerationReason } from "./bulk-actions";
@@ -685,22 +686,25 @@ export const CommunityQueueClient = ({
                 查看详情
               </button>
             ) : null}
-            <button
-              disabled={busy || reason === null}
-              onClick={() => {
-                if (reason === null) return;
-                setPendingSuspension({
-                  item,
-                  action: suspended ? "reinstate" : "suspend",
-                  reason,
-                });
-                openModal("community-suspend-confirm");
-              }}
-              role="menuitem"
-              type="button"
-            >
-              {suspended ? "恢复账号" : "停用账号…"}
-            </button>
+            {/* A deleted account is terminal: neither action applies. */}
+            {item.author.status === "deleted" ? null : (
+              <button
+                disabled={busy || reason === null}
+                onClick={() => {
+                  if (reason === null) return;
+                  setPendingSuspension({
+                    item,
+                    action: suspended ? "reinstate" : "suspend",
+                    reason,
+                  });
+                  openModal("community-suspend-confirm");
+                }}
+                role="menuitem"
+                type="button"
+              >
+                {suspended ? "恢复账号" : "停用账号…"}
+              </button>
+            )}
           </div>
         </details>
       </div>
@@ -1040,14 +1044,14 @@ export const CommunityQueueClient = ({
                         {item.author.displayName}
                         <span className={styles.secondary}>
                           @{item.author.handle}{" "}
-                          {item.author.status === "suspended" ? (
+                          {item.author.status === "active" ? null : (
                             <span
                               className={styles.chip}
-                              data-state="suspended"
+                              data-state={item.author.status}
                             >
-                              已停用
+                              {userStatusLabels[item.author.status]}
                             </span>
-                          ) : null}
+                          )}
                         </span>
                       </td>
                       <td>
@@ -1413,15 +1417,14 @@ const DetailBody = ({
         <h3>作者</h3>
         {item.author.displayName}{" "}
         <span className={styles.mono}>@{item.author.handle}</span>{" "}
-        {item.author.status === "suspended" ? (
-          <span className={styles.chip} data-state="suspended">
-            已停用
-          </span>
-        ) : (
-          <span className={styles.chip} data-state="visible">
-            正常
-          </span>
-        )}
+        <span
+          className={styles.chip}
+          data-state={
+            item.author.status === "active" ? "visible" : item.author.status
+          }
+        >
+          {userStatusLabels[item.author.status]}
+        </span>
         <span className={styles.secondary}>
           <span className={styles.mono}>{item.author.id}</span>
         </span>

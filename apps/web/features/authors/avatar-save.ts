@@ -49,6 +49,13 @@ const read = (account: string): PendingAvatar | null => {
     ? { ...job, rejection: CONFLICT }
     : job;
 };
+/**
+ * account-deletion-v1: an ended account's pending avatar can never be saved.
+ * Its intent (the image itself) is removed from this browser; a request still
+ * in flight finds the record gone and never writes it back.
+ */
+export const discardAvatarSave = (account: string): void =>
+  window.localStorage.removeItem(key(account));
 const pngBlob = (png: string) => {
   const bytes = atob(png.slice("data:image/png;base64,".length));
   return new Blob([Uint8Array.from(bytes, (c) => c.charCodeAt(0))], {
@@ -62,6 +69,13 @@ export const useAvatarSave = (options: {
   accountId: string | null;
   checking: boolean;
   sessionError: boolean;
+  /**
+   * account-deletion-v1: the Session is held (AuthorProvider.holdSession). No
+   * save starts and one under way stops before its next request, which a
+   * deletion committed meanwhile would answer with a refused Session (and the
+   * relay with a cleared cookie). It resumes once released.
+   */
+  held: boolean;
   refresh: () => Promise<void>;
   onSaved: (profile: AuthorProfile, selectedAvatarIsCurrent: boolean) => void;
 }) => {
@@ -144,7 +158,7 @@ export const useAvatarSave = (options: {
       message: job.rejection ?? "正在保存头像，返回或刷新后会继续。",
     });
     if (job.rejection || running.current) return;
-    if (options.checking) return;
+    if (options.checking || options.held) return;
     if (options.sessionError || authorClient.account() !== account) {
       schedule();
       return;
@@ -156,7 +170,8 @@ export const useAvatarSave = (options: {
       latest.current.accountId === account &&
       authorClient.account() === account;
     const guard = () => {
-      if (!current()) throw new AuthorRequestError(401, "等待原账户确认");
+      if (!current() || latest.current.held)
+        throw new AuthorRequestError(401, "等待原账户确认");
       if (read(account)?.saveId !== pending.saveId)
         throw Error("头像保存状态已更新");
     };
@@ -255,6 +270,7 @@ export const useAvatarSave = (options: {
     options.accountId,
     options.checking,
     options.sessionError,
+    options.held,
     tick,
     wake,
     schedule,

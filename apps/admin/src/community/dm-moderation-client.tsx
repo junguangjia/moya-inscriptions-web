@@ -3,7 +3,12 @@
 import { useState } from "react";
 import { SetStepNav } from "@payloadcms/ui";
 
-import { call, describeFailure, formatPreciseTime } from "./api";
+import {
+  call,
+  describeFailure,
+  formatPreciseTime,
+  userStatusLabels,
+} from "./api";
 import styles from "./community.module.css";
 
 import type {
@@ -168,7 +173,7 @@ export const DmModerationClient = () => {
             {conversation.participants
               .map(
                 (p) =>
-                  `${p.displayName}（${p.id}，${p.status === "active" ? "正常" : "已停用"}）`,
+                  `${p.displayName}（${p.id}，${userStatusLabels[p.status]}）`,
               )
               .join(" ↔ ")}
             · 状态 {conversation.state === "active" ? "已激活" : "请求中"} ·{" "}

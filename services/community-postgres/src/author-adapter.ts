@@ -631,7 +631,10 @@ export class PostgresAuthorCommunityAdapter implements AuthorCommunityPort {
           : list === "following"
             ? "community.follows r JOIN community.public_users u ON u.id=r.followed_id WHERE r.follower_id=$1"
             : "community.follows r JOIN community.public_users u ON u.id=r.follower_id WHERE r.followed_id=$1";
-      const eligible = `${from}${list === "blocks" ? "" : " AND u.status='active' AND community.accounts_can_interact($2,u.id)"}`;
+      // A deleted account stays blocked (account-deletion-v1 r3: its retained
+      // comments stay hidden from the blocker) but is no longer listed or
+      // counted; a suspended one is listed as before.
+      const eligible = `${from}${list === "blocks" ? " AND u.status<>'deleted'" : " AND u.status='active' AND community.accounts_can_interact($2,u.id)"}`;
       const values = list === "blocks" ? [id] : [id, viewer];
       const total = Number(
         (

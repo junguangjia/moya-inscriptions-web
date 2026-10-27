@@ -3,7 +3,11 @@ import { identifyFiles, addStaticPhotosToStaging } from "./import-grouping";
 import { fileOf, jpeg } from "./parsers/synthetic-media.test-support";
 
 import { RECOVERY_MAX_TOTAL_BYTES } from "./local-recovery";
-import { EditorInterruptionRecovery, recoveryBytes } from "./editor-recovery";
+import {
+  EditorInterruptionRecovery,
+  discardAccountEditorRecovery,
+  recoveryBytes,
+} from "./editor-recovery";
 import { contentOf, createEditorState } from "./ui/editor/editor-session-state";
 
 import type { EditorRecoveryRecord } from "./editor-recovery";
@@ -79,6 +83,41 @@ const setup = () => {
     );
   return { create, disk, backend, text, durable, estimate };
 };
+
+describe("account deletion (account-deletion-v1)", () => {
+  it("removes the deleted account's manifests and every stored record naming it", async () => {
+    const test = setup();
+    await test.create().save(state, checkpoint);
+    await test.create().save({ ...state, accountId: other }, checkpoint);
+    // Another tab's record under its own id, without a manifest here.
+    test.disk.set("other-tab-edit", {
+      ...[...test.disk.values()][0]!,
+      id: "other-tab-edit",
+    });
+    expect(test.disk.size).toBe(3);
+    const removed: IDBValidKey[] = [];
+    await discardAccountEditorRecovery(account, [test.text, test.durable], {
+      entries: async () => [...test.disk.entries()],
+      remove: async (key) => {
+        removed.push(key);
+        test.disk.delete(String(key));
+      },
+    });
+    expect(removed).toHaveLength(2);
+    expect([...test.disk.values()].map((r) => r.accountId)).toEqual([other]);
+    expect(test.text.getItem(`artvenn.editor.interruption.${account}`)).toBe(
+      null,
+    );
+    expect(
+      test.durable.getItem(`artvenn.editor.interruption.${account}`),
+    ).toBeNull();
+    expect(
+      test.durable.getItem(`artvenn.editor.interruption.${other}`),
+    ).not.toBeNull();
+    expect(await test.create().load(account)).toBeNull();
+    expect(await test.create().load(other)).not.toBeNull();
+  });
+});
 
 describe("manual draft interruption recovery", () => {
   it("restores unsaved text locally after recreating the runtime and isolates another account", async () => {

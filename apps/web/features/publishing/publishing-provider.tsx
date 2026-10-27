@@ -151,6 +151,18 @@ const useRuntime = (): PublishingRuntime => {
 const useStore = <T,>(store: ExternalStore<T>): T =>
   useSyncExternalStore(store.subscribe, store.get, store.get);
 
+/**
+ * account-deletion-v1: ends a deleted account's publishing work in this tab
+ * for good (see `PublishingRuntime.forgetAccount`).
+ */
+export const useForgetPublishingAccount = (): ((accountId: string) => void) => {
+  const runtime = useRuntime();
+  return useCallback(
+    (accountId: string) => runtime.forgetAccount(accountId),
+    [runtime],
+  );
+};
+
 const idleAutosave: ExternalStore<AutosaveState | null> = {
   get: () => null,
   set: () => undefined,

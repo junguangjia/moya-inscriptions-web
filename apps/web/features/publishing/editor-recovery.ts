@@ -320,6 +320,93 @@ export class EditorInterruptionRecovery {
   }
 }
 
+/** Stored interruption records by their IndexedDB key, whatever their id. */
+export interface EditorRecoveryRecords {
+  entries(): Promise<readonly (readonly [IDBValidKey, unknown])[]>;
+  remove(key: IDBValidKey): Promise<void>;
+}
+
+/**
+ * account-deletion-v1: removes every interruption record of an ended account
+ * from this browser: its manifest in each given storage and every stored
+ * record that names it, including one another tab wrote under its own id.
+ * Other accounts' records are untouched.
+ */
+export const discardAccountEditorRecovery = async (
+  accountId: string,
+  storages: readonly Storage[],
+  records: EditorRecoveryRecords | null,
+): Promise<void> => {
+  if (!ACCOUNT.test(accountId)) return;
+  for (const storage of storages) storage.removeItem(PREFIX + accountId);
+  if (!records) return;
+  for (const [key, value] of await records.entries())
+    if ((value as { accountId?: unknown } | null)?.accountId === accountId)
+      await records.remove(key);
+};
+
+const openEditorDatabase = () =>
+  new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open("artvenn.publishing.editor.v1", 1);
+    request.onupgradeneeded = () =>
+      request.result.createObjectStore("sessions");
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(new Error("editor_recovery_unavailable"));
+  });
+
+/** The browser form of `discardAccountEditorRecovery`. */
+export const discardBrowserEditorRecovery = async (
+  accountId: string,
+): Promise<void> => {
+  if (typeof window === "undefined") return;
+  const storages: Storage[] = [];
+  try {
+    storages.push(window.sessionStorage, window.localStorage);
+  } catch {
+    /* unavailable storage */
+  }
+  if (typeof indexedDB === "undefined")
+    return discardAccountEditorRecovery(accountId, storages, null);
+  let opened: Promise<IDBDatabase> | null = null;
+  const database = () => (opened ??= openEditorDatabase());
+  try {
+    await discardAccountEditorRecovery(accountId, storages, {
+      entries: async () => {
+        const store = (await database())
+          .transaction("sessions")
+          .objectStore("sessions");
+        return new Promise((resolve, reject) => {
+          const found: (readonly [IDBValidKey, unknown])[] = [];
+          const cursor = store.openCursor();
+          cursor.onsuccess = () => {
+            const current = cursor.result;
+            if (!current) return resolve(found);
+            found.push([current.key, current.value]);
+            current.continue();
+          };
+          cursor.onerror = () => reject(new Error("editor_recovery_failed"));
+        });
+      },
+      remove: async (key) => {
+        const transaction = (await database()).transaction(
+          "sessions",
+          "readwrite",
+        );
+        transaction.objectStore("sessions").delete(key);
+        await new Promise<void>((resolve, reject) => {
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = transaction.onabort = () =>
+            reject(new Error("editor_recovery_failed"));
+        });
+      },
+    });
+  } finally {
+    // Assigned inside the callbacks above, so read back without narrowing.
+    const pending = opened as Promise<IDBDatabase> | null;
+    if (pending) (await pending.catch(() => null))?.close();
+  }
+};
+
 export const createBrowserEditorRecovery =
   (): EditorInterruptionRecovery | null => {
     if (typeof window === "undefined" || typeof indexedDB === "undefined")
@@ -332,13 +419,7 @@ export const createBrowserEditorRecovery =
     } catch {
       return null;
     }
-    const db = new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("artvenn.publishing.editor.v1", 1);
-      request.onupgradeneeded = () =>
-        request.result.createObjectStore("sessions");
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(new Error("editor_recovery_unavailable"));
-    });
+    const db = openEditorDatabase();
     // An unavailable database is reported by save, not as an unhandled rejection.
     void db.catch(() => undefined);
     const request = <T>(operation: IDBRequest<T>) =>

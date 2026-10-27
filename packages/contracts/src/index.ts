@@ -145,6 +145,8 @@ export type {
 } from "./work-publishing-schemas.js";
 
 export type {
+  AuthAccountDeletionRequest,
+  AuthAccountDeletionResult,
   AuthAccountSecurity,
   AuthCapabilities,
   AuthChallengeAccepted,

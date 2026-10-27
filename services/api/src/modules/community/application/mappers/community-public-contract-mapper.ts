@@ -14,12 +14,14 @@ import type {
   CatalogCommentPage,
   CatalogCommentReply,
   CatalogCommentReplyPage,
+  CommentAuthor,
   PublicUserProfile,
 } from "@moya/contracts";
 
 import type {
   CatalogCommentRecord,
   CatalogCommentReplyRecord,
+  CommentAuthorRecord,
   CommentListingRecord,
   CommentPageRecord,
 } from "../../domain/catalog-comment.js";
@@ -39,31 +41,28 @@ export const mapPublicUserProfile = (
 const isoUtc = (value: Date): string =>
   value.toISOString().replace(/\.\d{3}Z$/, ".000Z");
 
+/**
+ * A comment author: `deleted` only for a deleted account (account-deletion-v1),
+ * whose text stays under the anonymized display name.
+ */
+const mapCommentAuthor = (author: CommentAuthorRecord): CommentAuthor => ({
+  id: author.id,
+  displayName: author.displayName,
+  ...(author.studioName === undefined ? {} : { studioName: author.studioName }),
+  ...(author.deleted === true ? { deleted: true as const } : {}),
+});
+
 export const mapCatalogCommentReply = (
   reply: CatalogCommentReplyRecord,
 ): CatalogCommentReply =>
   catalogCommentReplySchema.parse({
     id: reply.id,
-    author: {
-      id: reply.author.id,
-      displayName: reply.author.displayName,
-      ...(reply.author.studioName === undefined
-        ? {}
-        : { studioName: reply.author.studioName }),
-    },
+    author: mapCommentAuthor(reply.author),
     text: reply.text,
     createdAt: isoUtc(reply.createdAt),
     ...(reply.replyTo === undefined
       ? {}
-      : {
-          replyTo: {
-            id: reply.replyTo.id,
-            displayName: reply.replyTo.displayName,
-            ...(reply.replyTo.studioName === undefined
-              ? {}
-              : { studioName: reply.replyTo.studioName }),
-          },
-        }),
+      : { replyTo: mapCommentAuthor(reply.replyTo) }),
   });
 
 /** Moderation state never appears in a Public DTO. */
@@ -75,13 +74,7 @@ export const mapCatalogComment = (
   catalogCommentSchema.parse({
     id: comment.id,
     catalogId: comment.catalogId,
-    author: {
-      id: comment.author.id,
-      displayName: comment.author.displayName,
-      ...(comment.author.studioName === undefined
-        ? {}
-        : { studioName: comment.author.studioName }),
-    },
+    author: mapCommentAuthor(comment.author),
     text: comment.text,
     createdAt: isoUtc(comment.createdAt),
     replies: replies.map(mapCatalogCommentReply),

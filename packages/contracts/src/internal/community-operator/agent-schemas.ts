@@ -305,7 +305,7 @@ export const agentUserCandidateSchema = z.strictObject({
   id: publicUserIdSchema,
   handle: z.string(),
   displayName: z.string(),
-  status: z.enum(["active", "suspended"]),
+  status: z.enum(["active", "suspended", "deleted"]),
   matchKind: agentUserMatchKindSchema,
 });
 

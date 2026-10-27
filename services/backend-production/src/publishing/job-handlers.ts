@@ -58,7 +58,8 @@ export type PublishingWorkerJobKind =
   | "verify_withdrawal"
   | "reconcile_publication"
   | "sweep_published"
-  | "profile_render";
+  | "profile_render"
+  | "purge_deleted_account";
 
 /**
  * Job kinds coupled to the Backend's own upload state (W3): staging sweeps
@@ -71,13 +72,17 @@ export const UPLOAD_COUPLED_JOB_KINDS = [
   "sweep_staging",
 ] as const satisfies readonly PublishingWorkerJobKind[];
 
-/** Every other kind: processing, purges, reconciliation and Catalog renders. */
+/**
+ * Every other kind: processing, purges (including a deleted account's works
+ * and media, account-deletion-v1), reconciliation and Catalog renders.
+ */
 export const MEDIA_WORKER_JOB_KINDS = [
   "process_item",
   "derive_edit",
   "purge_item",
   "purge_blob",
   "purge_trashed_work",
+  "purge_deleted_account",
   "reconcile_capacity",
   "catalog_render",
 ] as const satisfies readonly PublishingWorkerJobKind[];
@@ -190,6 +195,14 @@ export interface PublishingWorkerPort {
     workId: string,
     now: Date,
   ): Promise<"purged" | "not_due" | "missing">;
+  /** One bounded batch of a deleted account's purge (account-deletion-v1). */
+  purgeDeletedAccount(
+    accountId: string,
+    now: Date,
+  ): Promise<{
+    readonly status: "purged" | "partial" | "missing";
+    readonly cancelledComponentIds: readonly string[];
+  }>;
   claimJobs(
     options: {
       readonly owner: string;
@@ -370,6 +383,10 @@ export const PUBLISHING_STORE_RECONCILE_SUBJECT = "media-store";
 export const PUBLISHING_STAGING_SWEEP_SUBJECT = "staging";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** Committed batches of one account purge per claim before it yields. */
+export const ACCOUNT_PURGE_BATCHES_PER_RUN = 5;
+/** A purge with more left is queued again for this long (attempts kept). */
+export const ACCOUNT_PURGE_CONTINUE_MS = 1_000;
 const ACCOUNT_ID_PATTERN = /^user-[0-9a-f]{32}$/;
 const ITEM_ID_PATTERN = /^media-item-[0-9a-f]{32}$/;
 const BLOB_ID_PATTERN = /^media-blob-[0-9a-f]{32}$/;
@@ -905,18 +922,43 @@ export function createPublishingJobHandlers(
     return COMPLETED;
   };
 
+  /** Tells the upload registry which transfers to stop; never throws. */
+  const stopUploads = (componentIds: readonly string[]) => {
+    if (componentIds.length === 0) return;
+    try {
+      options.onUploadsCancelled?.(componentIds);
+    } catch {
+      logger.error("[publishing-worker] upload registry notification failed");
+    }
+  };
+
   const expireSession = async (
     claim: PublishingWorkerJobClaim,
   ): Promise<PublishingJobResult> => {
     const expiry = await port.expireSession(claim.subjectId, clock());
-    if (expiry.cancelledComponentIds.length > 0) {
-      try {
-        options.onUploadsCancelled?.(expiry.cancelledComponentIds);
-      } catch {
-        logger.error("[publishing-worker] upload registry notification failed");
-      }
-    }
+    stopUploads(expiry.cancelledComponentIds);
     return COMPLETED;
+  };
+
+  /**
+   * Runs committed batches of a deleted account's purge (account-deletion-v1)
+   * until nothing is left, at most `ACCOUNT_PURGE_BATCHES_PER_RUN` per claim:
+   * with more left the job is deferred, attempts kept, so other jobs run in
+   * between. Each batch commits whole; an abort between batches gives the
+   * job back and the next claim continues where the last commit ended. An
+   * account that is not deleted, or has no deletion record, needs no work.
+   */
+  const purgeDeletedAccount = async (
+    claim: PublishingWorkerJobClaim,
+    signal: AbortSignal,
+  ): Promise<PublishingJobResult> => {
+    for (let batch = 0; batch < ACCOUNT_PURGE_BATCHES_PER_RUN; batch += 1) {
+      throwIfAborted(signal);
+      const purge = await port.purgeDeletedAccount(claim.subjectId, clock());
+      stopUploads(purge.cancelledComponentIds);
+      if (purge.status !== "partial") return COMPLETED;
+    }
+    return { status: "deferred", delayMs: ACCOUNT_PURGE_CONTINUE_MS };
   };
 
   const sweepLeftovers = async (
@@ -1254,6 +1296,10 @@ export function createPublishingJobHandlers(
         case "profile_render":
           return LEGACY_MEDIA_ID_PATTERN.test(subject)
             ? renderProfileMedia(claim, signal)
+            : invalidSubject;
+        case "purge_deleted_account":
+          return ACCOUNT_ID_PATTERN.test(subject)
+            ? purgeDeletedAccount(claim, signal)
             : invalidSubject;
         default:
           return failed("unsupported_job_kind", false);

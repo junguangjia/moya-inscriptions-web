@@ -258,7 +258,8 @@
   color: #1f5a2b;
 }
 
-.chip[data-state="hidden"] {
+.chip[data-state="hidden"],
+.chip[data-state="deleted"] {
   background: #eeeeee;
   color: #444;
 }

@@ -122,6 +122,14 @@ describe("CommunitySessionService", () => {
     expect(await service.identify(session!.token)).toBeNull();
   });
 
+  it("treats a deleted account's unrevoked session as signed out", async () => {
+    const { service, port } = createService();
+    const session = await service.signInDevelopmentAccount("dev-user-01");
+    port.setStatus(fixtureUsers.active.id, "deleted");
+    expect(await service.identify(session!.token)).toBeNull();
+    expect(await service.signInDevelopmentAccount("dev-user-01")).toBeNull();
+  });
+
   it("bounds the session lifetime", () => {
     const port = new InMemoryCommunityIdentityPort();
     for (const sessionTtlMs of [0, -1, 1.5, 31 * 24 * hour])

@@ -341,7 +341,8 @@ ON TABLE community.article_documents TO :"app_role";
 GRANT EXECUTE ON FUNCTION
   community.article_catalog_references_published(TEXT[], TEXT[], TEXT[])
 TO :"app_role";
--- Password auth: exact mutable credential fields, no DDL or delete authority.
+-- Password auth: exact mutable credential fields, no DDL. Only account
+-- deletion removes a credential (DELETE is granted at the end of this file).
 GRANT SELECT ON TABLE community.user_password_credentials TO :"app_role";
 GRANT INSERT (user_id, verifier, version, updated_at) ON TABLE community.user_password_credentials TO :"app_role";
 GRANT UPDATE (verifier, version, updated_at) ON TABLE community.user_password_credentials TO :"app_role";
@@ -586,13 +587,13 @@ BEGIN
 END $$;
 
 -- Coarse profile location (migration 20261026010000). This later relation is
--- optional for earlier migration phases. User identity cannot be rewritten,
--- and this role does not delete location rows directly.
+-- optional for earlier migration phases. User identity cannot be rewritten;
+-- a location row is deleted only with its account (account-deletion-v1).
 DO $$
 BEGIN
   IF to_regclass('community.profile_ip_locations') IS NOT NULL THEN
   EXECUTE format(
-    'GRANT SELECT, INSERT ON TABLE community.profile_ip_locations TO %I',
+    'GRANT SELECT, INSERT, DELETE ON TABLE community.profile_ip_locations TO %I',
     current_setting('moya.runtime_app_role'));
   EXECUTE format(
     'GRANT UPDATE (label, observed_at) ON TABLE community.profile_ip_locations TO %I',
@@ -616,5 +617,25 @@ DO $$
 BEGIN
   IF to_regclass('community.feedback_images') IS NOT NULL THEN
     EXECUTE format('GRANT SELECT, INSERT ON TABLE community.feedback_images TO %I', current_setting('moya.runtime_app_role'));
+  END IF;
+END $$;
+
+-- account-deletion-v1 (migration 20261027010000). Deleting an account erases
+-- its password credential and the contact ciphertext its auth challenges and
+-- handoffs hold (no foreign key references either table). The deletion record
+-- is append-only but for the background purge's completion; its user id,
+-- request key hash, session id and time are never rewritten. The relation is
+-- optional for earlier migration phases.
+GRANT DELETE ON TABLE community.user_password_credentials,
+  community.auth_challenges, community.auth_handoffs TO :"app_role";
+DO $$
+BEGIN
+  IF to_regclass('community.account_deletions') IS NOT NULL THEN
+    EXECUTE format(
+      'GRANT SELECT, INSERT ON TABLE community.account_deletions TO %I',
+      current_setting('moya.runtime_app_role'));
+    EXECUTE format(
+      'GRANT UPDATE (purge_state, purge_completed_at) ON TABLE community.account_deletions TO %I',
+      current_setting('moya.runtime_app_role'));
   END IF;
 END $$;

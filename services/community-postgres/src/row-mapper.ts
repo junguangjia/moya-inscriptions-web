@@ -11,7 +11,11 @@ export interface PublicUserRow extends QueryResultRow {
 
 const publicUserIdPattern = /^user-[0-9a-f]{32}$/;
 const handlePattern = /^[a-z][a-z0-9-]{2,31}$/;
-const statuses: readonly PublicUserStatus[] = ["active", "suspended"];
+const statuses: readonly PublicUserStatus[] = [
+  "active",
+  "suspended",
+  "deleted",
+];
 
 const isStatus = (value: unknown): value is PublicUserStatus =>
   typeof value === "string" &&

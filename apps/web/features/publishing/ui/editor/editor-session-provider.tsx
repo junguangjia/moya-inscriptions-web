@@ -1,9 +1,14 @@
 "use client";
 
 import { useBeforeAuth } from "../../../auth/auth-return";
+import {
+  clearAccountLocalData,
+  onAccountDeletedElsewhere,
+} from "../../../authors/account-local-data";
 
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -12,7 +17,10 @@ import {
   useSyncExternalStore,
 } from "react";
 
-import { useUploadSession } from "../../publishing-provider";
+import {
+  useForgetPublishingAccount,
+  useUploadSession,
+} from "../../publishing-provider";
 import { createBrowserEditorRecovery } from "../../editor-recovery";
 import { contentOf, createEditorSessionStore } from "./editor-session-state";
 
@@ -143,6 +151,24 @@ export class EditorSessionRegistry {
 
 const RegistryContext = createContext<EditorSessionRegistry | null>(null);
 
+/**
+ * account-deletion-v1: after the account was deleted, nothing in this tab may
+ * write its local data again. Its editor store is disposed (its interruption
+ * recovery moves to a new epoch, so a write under way is undone) and its
+ * uploads, autosave and publication end in the runtime, so a store change, an
+ * upload answer or `visibilitychange` persists nothing more. The caller then
+ * clears the data already stored (account-local-data.ts).
+ */
+const endAccountEditing = (
+  registry: EditorSessionRegistry,
+  forgetPublishing: (accountId: string) => void,
+  accountId: string,
+): void => {
+  const store = registry.current(accountId);
+  if (store) registry.dispose(store);
+  forgetPublishing(accountId);
+};
+
 /** Place inside `PublishingProvider`, above the product shell. */
 export const EditorSessionProvider = ({
   children,
@@ -151,6 +177,7 @@ export const EditorSessionProvider = ({
 }) => {
   const [registry] = useState(() => new EditorSessionRegistry());
   const upload = useUploadSession();
+  const forgetPublishing = useForgetPublishingAccount();
   const { accountId, session } = upload;
   const uploadRef = useRef(upload);
   uploadRef.current = upload;
@@ -227,6 +254,19 @@ export const EditorSessionProvider = ({
     return true;
   });
 
+  // account-deletion-v1: another tab of this browser deleted an account (or
+  // could not confirm its deletion and cleared it anyway). Its editing here
+  // ends first, so nothing writes its data back, then its data here is
+  // cleared; AuthorProvider rechecks on the same storage event and signs out.
+  useEffect(
+    () =>
+      onAccountDeletedElsewhere((deleted) => {
+        endAccountEditing(registry, forgetPublishing, deleted);
+        void clearAccountLocalData(deleted);
+      }),
+    [registry, forgetPublishing],
+  );
+
   // A session that ended while no editor showed it (e.g. its last upload was
   // discarded elsewhere) leaves nothing to return to. A store whose runtime
   // session has not started yet is never pruned.
@@ -253,6 +293,17 @@ export const useEditorSessionRegistry = (): EditorSessionRegistry => {
   if (registry === null)
     throw new Error("Editor sessions require EditorSessionProvider");
   return registry;
+};
+
+/** Ends a deleted account's editing in this tab (see endAccountEditing). */
+export const useEndAccountEditing = (): ((accountId: string) => void) => {
+  const registry = useEditorSessionRegistry();
+  const forgetPublishing = useForgetPublishingAccount();
+  return useCallback(
+    (accountId: string) =>
+      endAccountEditing(registry, forgetPublishing, accountId),
+    [registry, forgetPublishing],
+  );
 };
 
 const noSubscription = () => () => undefined;

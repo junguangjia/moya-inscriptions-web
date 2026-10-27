@@ -143,6 +143,18 @@ export const acknowledgeGuestBatch = (
       };
     else state.batches.splice(index, 1);
   });
+/**
+ * account-deletion-v1: forgets this browser's history of an ended account and
+ * any guest-favorite merge reserved for it. The reserved favorites stay with
+ * the guest (they were this browser's before any account) and are offered to
+ * the next confirmed account like the others.
+ */
+export const forgetLocalLibraryAccount = async (userId: string) => {
+  localStorage.removeItem(`artvenn.phase4.history.${userId}.v1`);
+  await transaction((state) => {
+    state.batches = state.batches.filter((batch) => batch.accountId !== userId);
+  });
+};
 export const readLocalHistory = (userId: string | null) => {
   try {
     return targets(

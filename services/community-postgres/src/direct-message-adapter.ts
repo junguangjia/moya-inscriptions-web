@@ -19,7 +19,11 @@ import {
 
 import { asCommunityOperationError } from "./availability.js";
 
-import type { DirectMessagePort, DirectMessageSendInput } from "@moya/api";
+import type {
+  DirectMessagePort,
+  DirectMessageSendInput,
+  PublicUserStatus,
+} from "@moya/api";
 import type {
   DirectConversation,
   DirectConversationPage,
@@ -76,7 +80,7 @@ interface ConversationRow extends QueryResultRow {
   other_id: string;
   other_name: string;
   other_studio_name: string;
-  other_status: "active" | "suspended";
+  other_status: PublicUserStatus;
   can_interact: boolean;
   unread_count: string | number;
   message_count: string | number;
@@ -639,7 +643,7 @@ export class PostgresDirectMessageAdapter implements DirectMessagePort {
       await db.query<{
         id: string;
         display_name: string;
-        status: "active" | "suspended";
+        status: PublicUserStatus;
       }>(
         "SELECT id, display_name, status FROM community.public_users WHERE id IN ($1,$2) ORDER BY id",
         [c.user_low, c.user_high],

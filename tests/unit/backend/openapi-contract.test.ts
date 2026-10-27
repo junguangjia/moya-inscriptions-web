@@ -192,6 +192,7 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
         "/v1/community/relationships/block",
         "/v1/community/relationships/follow",
         "/v1/community/auth/account",
+        "/v1/community/auth/account/deletion",
         "/v1/community/auth/capabilities",
         "/v1/community/auth/passwords/login",
         "/v1/community/auth/passwords/reset",
@@ -293,6 +294,7 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
       "/v1/community/relationships/block": ["post"],
       "/v1/community/relationships/follow": ["post"],
       "/v1/community/auth/account": ["get"],
+      "/v1/community/auth/account/deletion": ["post"],
       "/v1/community/auth/capabilities": ["get"],
       "/v1/community/auth/passwords/login": ["post"],
       "/v1/community/auth/passwords/reset": ["post"],
@@ -495,9 +497,16 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
     expect(requiredProperties(schemas.CatalogCommentReply)).not.toContain(
       "replyTo",
     );
+    // `deleted` marks only a deleted account (account-deletion-v1); still no
+    // status, handle or avatar.
     expect(
       Object.keys(asObject(asObject(schemas.CommentAuthor).properties)),
-    ).toEqual(["id", "displayName", "studioName"]);
+    ).toEqual(["id", "displayName", "studioName", "deleted"]);
+    expect(schemaProperty(schemas.CommentAuthor, "deleted")).toMatchObject({
+      const: true,
+      type: "boolean",
+    });
+    expect(requiredProperties(schemas.CommentAuthor)).not.toContain("deleted");
     expect(asObject(schemas.CatalogComment).additionalProperties).toBe(false);
     expect(
       asObject(
@@ -603,6 +612,56 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
     ]);
     expect(getOperation("/v1/community/auth/appeals/session").security).toEqual(
       [{ session: [] }],
+    );
+  });
+
+  it("documents self-service account deletion as a session command bound to the confirmed account", () => {
+    // account-deletion-v1: no account identifier in the body; the Session,
+    // the required x-author-account and a single-use proof bind it.
+    const deletion = asObject(
+      asObject(paths["/v1/community/auth/account/deletion"]).post,
+    );
+    expect(deletion.operationId).toBe("deleteOwnAccount");
+    expect(deletion.security).toEqual([{ session: [] }]);
+    expect(
+      ((deletion.parameters ?? []) as unknown[]).map(asObject),
+    ).toMatchObject([
+      { name: "x-author-account", in: "header", required: true },
+    ]);
+    expect(
+      asObject(
+        asObject(asObject(deletion.requestBody).content)["application/json"],
+      ).schema,
+    ).toEqual({ $ref: "#/components/schemas/AuthAccountDeletionRequest" });
+    expect(Object.keys(asObject(deletion.responses)).sort()).toEqual([
+      "200",
+      "401",
+      "422",
+      "500",
+      "503",
+    ]);
+    expect(
+      asObject(
+        asObject(asObject(asObject(deletion.responses)["200"]).content)[
+          "application/json"
+        ],
+      ).schema,
+    ).toEqual({ $ref: "#/components/schemas/AuthAccountDeletionResult" });
+    expect(schemas.AuthAccountDeletionRequest).toMatchObject({
+      additionalProperties: false,
+      required: ["reauthToken", "idempotencyKey"],
+    });
+    expect(
+      Object.keys(
+        asObject(asObject(schemas.AuthAccountDeletionRequest).properties),
+      ),
+    ).toEqual(["reauthToken", "idempotencyKey"]);
+    expect(schemas.AuthAccountDeletionResult).toMatchObject({
+      additionalProperties: false,
+      required: ["outcome", "deletedAt"],
+    });
+    expect(JSON.stringify(schemas.AuthAccountDeletionResult)).not.toMatch(
+      /token|session/iu,
     );
   });
 

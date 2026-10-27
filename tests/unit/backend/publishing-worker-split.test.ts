@@ -159,6 +159,9 @@ describe("publishing queue split between the Backend and the media worker", () =
     expect(MEDIA_WORKER_JOB_KINDS).toContain("catalog_render");
     expect(PROFILE_RENDER_JOB_KINDS).toEqual(["profile_render"]);
     expect(MEDIA_WORKER_JOB_KINDS).not.toContain("profile_render");
+    // A deleted account's purge runs beside the other purges (its handler:
+    // account-purge-job-handler.test.ts).
+    expect(MEDIA_WORKER_JOB_KINDS).toContain("purge_deleted_account");
   });
 
   it("runs only the selected maintenance steps and extra steps on their cadence", async () => {

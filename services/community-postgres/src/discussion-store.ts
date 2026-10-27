@@ -50,7 +50,7 @@ const likeCount = (
   alias: string,
 ) => `(SELECT count(*)::integer FROM community.comment_likes l JOIN community.public_users lu ON lu.id=l.user_id
  WHERE l.comment_id=${alias}.id AND lu.status='active' AND community.accounts_can_interact(l.user_id,${alias}.author_id))`;
-const rootProjection = `c.id,c.author_id,u.display_name,u.studio_name,c.text,c.created_at,c.body_deleted_at,
+const rootProjection = `c.id,c.author_id,u.display_name,u.studio_name,u.status AS author_status,c.text,c.created_at,c.body_deleted_at,
  CASE WHEN ${rootPublic} AND c.body_deleted_at IS NULL THEN ${likeCount("c")} ELSE 0 END AS like_count,
  EXISTS(SELECT 1 FROM community.comment_likes WHERE comment_id=c.id AND user_id=$3) AS liked`;
 const replyFromFor = (roots: string) =>
@@ -61,10 +61,11 @@ const replyFrom = replyFromFor("r.root_comment_id=$4");
 /** The same audience rules over every root of a page (`$4` text[]). */
 const groupedReplyFrom = replyFromFor("r.root_comment_id=ANY($4::text[])");
 const replyVisible = `${rootPublic} AND r.moderation='visible' AND r.body_deleted_at IS NULL`;
-const replyProjection = `r.id,r.author_id,ru.display_name,ru.studio_name,r.text,r.created_at,r.body_deleted_at,
+const replyProjection = `r.id,r.author_id,ru.display_name,ru.studio_name,ru.status AS author_status,r.text,r.created_at,r.body_deleted_at,
  CASE WHEN ${rootPublic} AND r.moderation='visible' AND r.body_deleted_at IS NULL THEN ${likeCount("r")} ELSE 0 END AS like_count,
  EXISTS(SELECT 1 FROM community.comment_likes WHERE comment_id=r.id AND user_id=$3) AS liked,
- (SELECT json_build_object('id',tu.id,'displayName',tu.display_name,'studioName',tu.studio_name) FROM community.catalog_comment_replies tr
+ (SELECT json_strip_nulls(json_build_object('id',tu.id,'displayName',tu.display_name,'studioName',tu.studio_name,
+  'deleted',CASE WHEN tu.status='deleted' THEN TRUE END)) FROM community.catalog_comment_replies tr
  JOIN community.public_users tu ON tu.id=tr.author_id WHERE tr.id=r.reply_to_reply_id
  AND community.accounts_can_interact($3,tu.id) AND (tr.moderation='visible' OR (tr.author_id=$3 AND tu.status='active'))) AS reply_to`;
 interface ItemRow extends QueryResultRow {
@@ -72,6 +73,7 @@ interface ItemRow extends QueryResultRow {
   author_id: string;
   display_name: string;
   studio_name: string;
+  author_status: string;
   text: string;
   created_at: Date;
   body_deleted_at: Date | null;
@@ -79,6 +81,11 @@ interface ItemRow extends QueryResultRow {
   liked: boolean;
   reply_to?: unknown;
 }
+/**
+ * One discussion item. A deleted author's account (account-deletion-v1) keeps
+ * the text under its anonymized name and is marked `deleted`, so no client
+ * links to a profile; the reply-to author is marked the same way in SQL.
+ */
 const item = (r: ItemRow): DiscussionReply =>
   discussionReplySchema.parse({
     id: r.id,
@@ -86,6 +93,7 @@ const item = (r: ItemRow): DiscussionReply =>
       id: r.author_id,
       displayName: r.display_name,
       studioName: r.studio_name,
+      ...(r.author_status === "deleted" ? { deleted: true } : {}),
     },
     text: r.body_deleted_at ? deletedText : r.text,
     createdAt: r.created_at.toISOString(),
@@ -583,7 +591,7 @@ export class PostgresDiscussionStore implements DiscussionPort {
       const to = replyTo
         ? (
             await db.query(
-              "SELECT u.id,u.display_name,u.studio_name FROM community.catalog_comment_replies r JOIN community.public_users u ON u.id=r.author_id WHERE r.id=$1",
+              "SELECT u.id,u.display_name,u.studio_name,u.status FROM community.catalog_comment_replies r JOIN community.public_users u ON u.id=r.author_id WHERE r.id=$1",
               [replyTo],
             )
           ).rows[0]
@@ -610,6 +618,7 @@ export class PostgresDiscussionStore implements DiscussionPort {
                   id: to.id,
                   displayName: to.display_name,
                   studioName: to.studio_name,
+                  ...(to.status === "deleted" ? { deleted: true } : {}),
                 },
               }
             : {}),

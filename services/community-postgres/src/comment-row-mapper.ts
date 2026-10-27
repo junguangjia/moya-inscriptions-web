@@ -4,6 +4,7 @@ import type {
   CommentAuthorRecord,
   ModerationEvent,
   OperatorCommentRecord,
+  PublicUserStatus,
 } from "@moya/api";
 import type { ModerationEventAction } from "@moya/contracts/internal/community-operator";
 import type { QueryResultRow } from "pg";
@@ -18,9 +19,11 @@ export interface CommentRow extends QueryResultRow {
   readonly author_id: unknown;
   readonly author_display_name: unknown;
   readonly author_studio_name?: unknown;
+  readonly author_status?: unknown;
   readonly reply_to_author_id?: unknown;
   readonly reply_to_display_name?: unknown;
   readonly reply_to_studio_name?: unknown;
+  readonly reply_to_status?: unknown;
 }
 
 export interface OperatorCommentRow extends CommentRow {
@@ -88,13 +91,20 @@ const asCatalogId = (value: unknown): string =>
 const asHandle = (value: unknown): string =>
   typeof value === "string" && handlePattern.test(value) ? value : invalid();
 
-const asUserStatus = (value: unknown): "active" | "suspended" =>
-  value === "active" || value === "suspended" ? value : invalid();
+const asUserStatus = (value: unknown): PublicUserStatus =>
+  value === "active" || value === "suspended" || value === "deleted"
+    ? value
+    : invalid();
 
+/**
+ * `status`, when the query selects it, only marks a deleted author's account
+ * (account-deletion-v1); no other status reaches the read side.
+ */
 const asAuthor = (
   id: unknown,
   displayName: unknown,
   studioName?: unknown,
+  status?: unknown,
 ): CommentAuthorRecord => {
   if (
     studioName !== undefined &&
@@ -110,6 +120,9 @@ const asAuthor = (
     id: id as CommentAuthorRecord["id"],
     displayName: asDisplayName(displayName),
     ...(typeof studioName === "string" ? { studioName } : {}),
+    ...(status !== undefined && asUserStatus(status) === "deleted"
+      ? { deleted: true as const }
+      : {}),
   };
 };
 
@@ -122,6 +135,7 @@ export const mapCommentRow = (row: CommentRow): CatalogCommentRecord => {
       row.author_id,
       row.author_display_name,
       row.author_studio_name,
+      row.author_status,
     ),
     text: asText(row.text),
     createdAt: asDate(row.created_at),
@@ -137,6 +151,7 @@ export const mapReplyRow = (row: CommentRow): CatalogCommentReplyRecord => {
           row.reply_to_author_id,
           row.reply_to_display_name,
           row.reply_to_studio_name,
+          row.reply_to_status,
         );
   return {
     id: asCommentId(row.id) as CatalogCommentReplyRecord["id"],
@@ -147,6 +162,7 @@ export const mapReplyRow = (row: CommentRow): CatalogCommentReplyRecord => {
       row.author_id,
       row.author_display_name,
       row.author_studio_name,
+      row.author_status,
     ),
     text: asText(row.text),
     createdAt: asDate(row.created_at),
