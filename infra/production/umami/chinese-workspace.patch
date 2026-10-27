@@ -285,9 +285,10 @@
 +      {extras}
 --- /dev/null
 +++ b/src/app/(main)/ArchiveContextNav.test.tsx
-@@ -0,0 +1,93 @@
+@@ -0,0 +1,107 @@
 +import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 +import { afterEach, beforeEach, expect, test, vi } from 'vitest';
++
 +const state = vi.hoisted(() => ({
 +  pathname: '/teams/synthetic/websites/site',
 +  websiteId: 'site' as string | undefined,
@@ -333,10 +334,9 @@
 +vi.mock('@/components/input/PixelSelect', () => ({
 +  PixelSelect: (props: any) => <Selector {...props} id={props.pixelId} />,
 +}));
-+vi.mock('./websites/[websiteId]/ArchiveReportNav', () => ({
-+  ArchiveReportNav: () => <span>全部18网站分析</span>,
-+}));
++
 +import { ArchiveContextNav } from './ArchiveContextNav';
++
 +beforeEach(() => {
 +  state.pathname = '/teams/synthetic/websites/site';
 +  state.websiteId = 'site';
@@ -349,15 +349,28 @@
 +afterEach(cleanup);
 +test('all five original business destinations remain reachable with a bare personal dashboard', () => {
 +  render(<ArchiveContextNav />);
++  fireEvent.click(screen.getByText('其他分析与工具'));
 +  const selector = screen.getByRole('combobox', { name: '分析内容' });
-+  expect(selector.querySelectorAll('option')).toHaveLength(5);
++  expect(
++    [...selector.querySelectorAll('option')].map(option => [option.value, option.textContent]),
++  ).toEqual([
++    ['dashboard', '仪表盘'],
++    ['boards', '看板'],
++    ['websites', '网站'],
++    ['links', '链接'],
++    ['pixels', '像素'],
++  ]);
 +  expect(selector).toHaveValue('websites');
-+  fireEvent.change(selector, { target: { value: 'dashboard' } });
-+  expect(state.push).toHaveBeenCalledWith('/dashboard');
-+  fireEvent.change(selector, { target: { value: 'links' } });
-+  expect(state.push).toHaveBeenCalledWith('/teams/synthetic/links');
-+  expect(state.renderUrl).toHaveBeenCalledWith('/links', false);
-+  expect(screen.getByText('全部18网站分析')).toBeDefined();
++  for (const destination of ['dashboard', 'boards', 'websites', 'links', 'pixels']) {
++    fireEvent.change(selector, { target: { value: destination } });
++    expect(state.push).toHaveBeenLastCalledWith(
++      destination === 'dashboard' ? '/dashboard' : `/teams/synthetic/${destination}`,
++    );
++    if (destination !== 'dashboard')
++      expect(state.renderUrl).toHaveBeenCalledWith(`/${destination}`, false);
++  }
++  expect(screen.queryByRole('combobox', { name: '分析页面' })).toBeNull();
++  expect(screen.queryByRole('navigation', { name: '分析功能' })).toBeNull();
 +});
 +test.each([
 +  ['websiteId', 'websites', '统计站点'],
@@ -376,7 +389,8 @@
 +    fireEvent.change(selector, { target: { value: 'other' } });
 +    expect(state.push).toHaveBeenCalledWith(`/teams/synthetic/${route}/other`);
 +    expect(state.renderUrl).toHaveBeenCalledWith(`/${route}/other`, false);
-+    if (key !== 'websiteId') expect(screen.queryByText('全部18网站分析')).toBeNull();
++    expect(screen.queryByRole('combobox', { name: '分析页面' })).toBeNull();
++    expect(screen.queryByRole('navigation', { name: '分析功能' })).toBeNull();
 +  },
 +);
 --- /dev/null
