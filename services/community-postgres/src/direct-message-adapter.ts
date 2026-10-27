@@ -528,7 +528,8 @@ export class PostgresDirectMessageAdapter implements DirectMessagePort {
     change: (db: PoolClient, row: ConversationRow) => Promise<void>,
   ): Promise<DirectConversation> {
     return this.run(true, async (db) => {
-      await this.active(db, actor);
+      // As in send: a change that raced the actor's deletion waits and fails.
+      await this.active(db, actor, "key-share");
       const pair = (
         await db.query<{ user_low: string; user_high: string }>(
           "SELECT c.user_low, c.user_high FROM community.dm_conversations c JOIN community.dm_participants p ON p.conversation_id=c.id AND p.user_id=$2 WHERE c.id=$1",

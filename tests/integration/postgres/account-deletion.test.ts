@@ -941,6 +941,13 @@ describe("account deletion under the real App role", () => {
       "INSERT INTO community.blocks(blocker_id,blocked_id) VALUES($1,$2)",
       [shielder, owner],
     );
+    // A conversation from before the deletion, which the account then tries
+    // to hide from another device while the deletion is under way.
+    const before = await new PostgresDirectMessageAdapter(db.app).send(writer, {
+      requestId: randomUUID(),
+      recipientId: owner,
+      text: "注销前的私信",
+    });
     // The deletion stops before its last statement: it holds the account's
     // row lock (FOR UPDATE) and has already erased it, uncommitted.
     let reached!: () => void;
@@ -1009,9 +1016,10 @@ describe("account deletion under the real App role", () => {
         recipientId: owner,
         text: "发给正在注销的账号",
       }),
+      messages.setHidden(owner, before.conversationId, true, randomUUID()),
     ].map((command) => settle<unknown>(command));
     // Each one reads the account under its key-share lock and waits.
-    await lockWaiters(6, ...waited);
+    await lockWaiters(7, ...waited);
     release();
     expect(await deletion).toMatchObject({
       ok: true,
@@ -1024,6 +1032,7 @@ describe("account deletion under the real App role", () => {
       { ok: false, error: expect.any(CommunityConflictError) },
       { ok: false, error: expect.any(CommunityNotFoundError) },
       { ok: false, error: expect.any(CommunityInputError) },
+      { ok: false, error: expect.any(CommunityNotFoundError) },
     ]);
     // Nothing committed after the deletion: no follow and no new block of
     // the account, the earlier shield stays in force (r3), no recommendation.
@@ -1041,6 +1050,11 @@ describe("account deletion under the real App role", () => {
         `SELECT count(*) AS n FROM community.dm_messages m
          JOIN community.dm_conversations c ON c.id=m.conversation_id
          WHERE c.user_low=$1 OR c.user_high=$1`,
+        1,
+      ],
+      [
+        `SELECT count(*) AS n FROM community.dm_participants
+         WHERE user_id=$1 AND hidden_at IS NOT NULL`,
         0,
       ],
     ] as const)

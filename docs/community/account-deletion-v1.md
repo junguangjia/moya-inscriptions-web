@@ -155,11 +155,12 @@ purge jobs and is retried by an operator.
   never be set again; Web shows 该账号已注销，屏蔽将继续有效 and reloads the
   list). An Admin recommendation is likewise refused for a deleted account.
   Follow, block, unblock, recommendation and a direct-message send (sender and
-  recipient) read the account under a key-share lock (`FOR KEY SHARE`): it waits
-  for a deletion in progress, whose row lock is `FOR UPDATE`, so a follow, block
-  or message that waited is refused instead of committing after the deletion,
-  and it does not conflict with the account's own command lock
-  (`FOR NO KEY UPDATE`), so it forms no cycle with the pair lock.
+  recipient) and conversation change (hide, mute, read) read the account under a
+  key-share lock (`FOR KEY SHARE`): it waits for a deletion in progress, whose
+  row lock is `FOR UPDATE`, so a follow, block or message that waited is refused
+  instead of committing after the deletion, and it does not conflict with the
+  account's own command lock (`FOR NO KEY UPDATE`), so it forms no cycle with
+  the pair lock.
 - Article agent connections (`community.article_authoring_connections`) and
   their grants, token wrappers and provider records are not revoked. The revoke
   path runs as the separate Article control role; the App role that runs the
