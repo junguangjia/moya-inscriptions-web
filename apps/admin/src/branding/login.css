@@ -1,0 +1,318 @@
+/* Loaded after workspace/theme.css. Native forms retain their own behavior. */
+:is(
+  .login,
+  .forgot-password,
+  :is(.reset-password, .template-minimal:has(.reset-password__wrap))
+).template-minimal {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: center;
+  justify-items: center;
+  min-block-size: 100svh;
+  min-block-size: 100dvh;
+  block-size: auto;
+  padding: clamp(24px, 6vh, 64px) clamp(16px, 4vw, 32px);
+  background: var(--yoyi-color-background-page);
+  color: var(--yoyi-color-text-primary);
+  font-family: var(--yoyi-font-interface);
+}
+
+:is(
+    .login,
+    .forgot-password,
+    :is(.reset-password, .template-minimal:has(.reset-password__wrap))
+  ).template-minimal
+  > .template-minimal__wrap {
+  box-sizing: border-box;
+  inline-size: 100%;
+  max-inline-size: 440px;
+  min-inline-size: 0;
+  padding: clamp(20px, 5vw, 40px);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-block-start: 3px solid var(--yoyi-color-seal-red);
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-surface);
+  box-shadow: var(--yoyi-shadow-subtle);
+  overflow-wrap: anywhere;
+}
+
+.login .login__brand {
+  margin-block-end: var(--yoyi-space-7);
+}
+
+.archive-login-intro {
+  margin-block-end: var(--yoyi-space-8);
+  text-align: center;
+}
+
+.archive-login-intro__brand {
+  margin: 0 0 var(--yoyi-space-3);
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  letter-spacing: 0.2em;
+}
+
+.archive-login-intro h1,
+:is(
+    .forgot-password,
+    :is(.reset-password, .template-minimal:has(.reset-password__wrap))
+  )
+  .form-header
+  h1 {
+  margin: 0;
+  color: var(--yoyi-color-text-primary);
+  font-family: var(--yoyi-font-editorial);
+  font-size: var(--yoyi-type-page-title-size);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.archive-login-intro__hint,
+:is(
+    .forgot-password,
+    :is(.reset-password, .template-minimal:has(.reset-password__wrap))
+  )
+  .form-header
+  p {
+  margin: var(--yoyi-space-3) 0 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.6;
+}
+
+:is(
+    .forgot-password,
+    :is(.reset-password, .template-minimal:has(.reset-password__wrap))
+  )
+  .template-minimal__wrap::before {
+  content: "由艺 · 管理后台";
+  display: block;
+  margin-block-end: var(--yoyi-space-7);
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  letter-spacing: 0.08em;
+}
+
+.login .login__form {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.login .login__form__inputWrap,
+:is(.reset-password, .template-minimal:has(.reset-password__wrap)) .inputWrap {
+  display: grid;
+  gap: var(--yoyi-space-6);
+}
+
+.login .login__form__inputWrap .field-type,
+:is(.reset-password, .template-minimal:has(.reset-password__wrap))
+  .inputWrap
+  .field-type {
+  margin-block-end: 0;
+}
+
+:is(
+    .login,
+    .forgot-password,
+    :is(.reset-password, .template-minimal:has(.reset-password__wrap))
+  )
+  .field-type {
+  min-inline-size: 0;
+  margin-block-end: var(--yoyi-space-6);
+}
+
+:is(
+    .login,
+    .forgot-password,
+    :is(.reset-password, .template-minimal:has(.reset-password__wrap))
+  )
+  .field-label {
+  display: inline-block;
+  margin-block-end: var(--yoyi-space-3);
+  color: var(--yoyi-color-text-primary);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.5;
+}
+
+/* Keep native password/autofill controls intact; never replace the input. */
+:is(
+    .login,
+    .forgot-password,
+    :is(.reset-password, .template-minimal:has(.reset-password__wrap)),
+    .account
+  )
+  :is(input[type="email"], input[type="text"], input[type="password"]) {
+  box-sizing: border-box;
+  inline-size: 100%;
+  min-inline-size: 0;
+  min-block-size: 48px;
+  padding: var(--yoyi-space-4) var(--yoyi-space-5);
+  border: 1px solid var(--yoyi-color-border-default);
+  border-radius: var(--yoyi-radius-md);
+  background: var(--yoyi-color-background-elevated);
+  color: var(--yoyi-color-text-primary);
+  font-family: var(--yoyi-font-interface);
+  font-size: max(16px, var(--yoyi-type-input-size));
+  line-height: 1.4;
+  scroll-margin-block: var(--yoyi-space-7);
+}
+
+:is(
+    .login,
+    .forgot-password,
+    :is(.reset-password, .template-minimal:has(.reset-password__wrap)),
+    .account
+  )
+  :is(button, a.btn) {
+  min-block-size: 44px;
+}
+
+:is(
+    .login,
+    .forgot-password,
+    :is(.reset-password, .template-minimal:has(.reset-password__wrap))
+  )
+  .form-submit
+  .btn {
+  inline-size: 100%;
+  margin-block: var(--yoyi-space-4) 0;
+  padding: var(--yoyi-space-4) var(--yoyi-space-5);
+  border: 1px solid var(--yoyi-color-text-primary);
+  border-radius: var(--yoyi-radius-md);
+  background: var(--yoyi-color-text-primary);
+  color: var(--yoyi-color-background-page);
+  font-size: var(--yoyi-type-body-size);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+:is(
+    .login,
+    .forgot-password,
+    :is(.reset-password, .template-minimal:has(.reset-password__wrap))
+  )
+  .form-submit
+  .btn:hover:not(:disabled) {
+  border-color: var(--yoyi-color-text-secondary);
+  background: var(--yoyi-color-text-secondary);
+}
+
+.login .login__form > a,
+.forgot-password .template-minimal__wrap > a,
+:is(.reset-password, .template-minimal:has(.reset-password__wrap))
+  .reset-password__wrap
+  > a {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-block-size: 44px;
+  margin-block: var(--yoyi-space-2);
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.5;
+  text-underline-offset: 3px;
+}
+
+:is(
+    .login,
+    .forgot-password,
+    :is(.reset-password, .template-minimal:has(.reset-password__wrap)),
+    .account
+  )
+  :is(input, button, a):focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 3px;
+}
+
+:is(
+    .login,
+    .forgot-password,
+    :is(.reset-password, .template-minimal:has(.reset-password__wrap)),
+    .account
+  )
+  .field-type.error
+  input {
+  border-color: var(--yoyi-color-error);
+}
+
+:is(
+    .login,
+    .forgot-password,
+    :is(.reset-password, .template-minimal:has(.reset-password__wrap))
+  )
+  :is(.field-error, [role="alert"]) {
+  max-inline-size: 100%;
+  overflow-wrap: anywhere;
+}
+
+/* Payload hides generic tooltips on mobile; field errors must remain readable. */
+:is(
+    .login,
+    .forgot-password,
+    :is(.reset-password, .template-minimal:has(.reset-password__wrap)),
+    .account
+  )
+  .field-error.tooltip.tooltip--show {
+  display: block;
+  position: static;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  margin-block: 0 var(--yoyi-space-3);
+  padding: var(--yoyi-space-3);
+  transform: none;
+  border: 1px solid var(--yoyi-color-error);
+  border-radius: var(--yoyi-radius-md);
+  background: var(--yoyi-color-background-elevated);
+  color: var(--yoyi-color-text-primary);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.5;
+  white-space: normal;
+}
+
+:is(
+    .login,
+    .forgot-password,
+    :is(.reset-password, .template-minimal:has(.reset-password__wrap)),
+    .account
+  )
+  .field-error.tooltip.tooltip--show::after {
+  content: none;
+}
+
+:is(
+    .login,
+    .forgot-password,
+    :is(.reset-password, .template-minimal:has(.reset-password__wrap)),
+    .account
+  )
+  .field-error
+  .tooltip-content {
+  color: var(--yoyi-color-text-primary);
+  overflow: visible;
+  text-overflow: clip;
+}
+
+@media (max-width: 480px) {
+  .login .login__brand {
+    margin-block-end: var(--yoyi-space-5);
+  }
+
+  .archive-login-intro {
+    margin-block-end: var(--yoyi-space-7);
+  }
+}
+
+/* A short landscape viewport or keyboard must not trap the submit control. */
+@media (max-height: 640px) {
+  :is(
+    .login,
+    .forgot-password,
+    :is(.reset-password, .template-minimal:has(.reset-password__wrap))
+  ).template-minimal {
+    align-content: start;
+    padding-block: var(--yoyi-space-5);
+  }
+}

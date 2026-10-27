@@ -1,8 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { workspacePageLabel } from "../workspace/routes";
+
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Gutter, Button } from "@payloadcms/ui";
+import { Gutter, Button, SetStepNav } from "@payloadcms/ui";
+import styles from "../community/community.module.css";
 import type {
   EditorialApprovalResult,
   EditorialMutationResult,
@@ -98,10 +101,14 @@ export const OwnerWorkflowClient = () => {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [failure, setFailure] = useState("");
+  const [mode, setMode] = useState<"approval" | "history">("approval");
+  const [confirming, setConfirming] = useState(false);
+  const mutationLock = useRef(false);
 
   const load = useCallback(async (page = 1) => {
     setBusy(true);
     setFailure("");
+    setConfirming(false);
     try {
       const next = await call<OwnerDraftPage>("owner-drafts", {
         page,
@@ -126,6 +133,9 @@ export const OwnerWorkflowClient = () => {
   }, [load]);
 
   const approve = async () => {
+    if (mutationLock.current) return;
+    mutationLock.current = true;
+    setConfirming(false);
     setBusy(true);
     setFailure("");
     setNotice("");
@@ -145,11 +155,14 @@ export const OwnerWorkflowClient = () => {
           : errorMessage("OPERATION_FAILED"),
       );
     } finally {
+      mutationLock.current = false;
       setBusy(false);
     }
   };
 
   const loadHistory = async (id: number, page = 1) => {
+    setMode("history");
+    setConfirming(false);
     setBusy(true);
     setFailure("");
     setVersionId("");
@@ -168,7 +181,8 @@ export const OwnerWorkflowClient = () => {
   };
 
   const restore = async () => {
-    if (!history) return;
+    if (!history || mutationLock.current) return;
+    mutationLock.current = true;
     setBusy(true);
     setFailure("");
     setNotice("");
@@ -190,6 +204,7 @@ export const OwnerWorkflowClient = () => {
           : errorMessage("OPERATION_FAILED"),
       );
     } finally {
+      mutationLock.current = false;
       setBusy(false);
     }
   };
@@ -200,179 +215,352 @@ export const OwnerWorkflowClient = () => {
     selectable.length > 0 &&
     selectable.every((row) => selected.some(({ id }) => id === row.id));
   return (
-    <Gutter>
-      <h1>批次审核与历史恢复</h1>
-      <p>
-        先查看记录与变更字段，再批准当前所见版本。无图记录可以发布；缺失或不合法字段需先完成编辑。
-      </p>
-      {notice && <p role="status">{notice}</p>}
-      {failure && <p role="alert">{failure}</p>}
-      <Button disabled={busy} onClick={() => void load(data?.page ?? 1)}>
-        刷新当前版本
-      </Button>
-      <p>
-        {data
-          ? `共 ${data.totalDocs} 条记录，第 ${data.page} / ${Math.max(1, data.totalPages)} 页`
-          : "正在读取记录…"}
-      </p>
-      <label>
-        <input
-          type="checkbox"
-          checked={allSelected}
-          disabled={busy || selectable.length === 0}
-          onChange={(event) =>
-            setSelected(event.target.checked ? selectable : [])
-          }
-        />
-        选择本页全部可批准记录
-      </label>
-      <ul>
-        {data?.docs.map((row) => (
-          <li key={row.id}>
-            <label>
-              <input
-                type="checkbox"
-                aria-label={`选择 ${row.title ?? "未填写标题"}`}
-                disabled={busy || row.missingFields.length > 0}
-                checked={selected.some(({ id }) => id === row.id)}
-                onChange={(event) =>
-                  setSelected(
-                    event.target.checked
-                      ? [...selected, row]
-                      : selected.filter(({ id }) => id !== row.id),
-                  )
-                }
-              />
-              {row.title ?? "未填写标题"} · 版本 {row.revision} ·{" "}
-              {row.status === "published" ? "已发布" : "草稿"}
-            </label>
-            <p>目录身份：{row.catalogId}</p>
-            <p>
-              与已发布内容相比：
-              {row.changedFields.length
-                ? fieldLabels(row.changedFields)
-                : "无内容差异"}
+    <Gutter className="archive-view">
+      <div className={styles.workspace}>
+        <SetStepNav nav={[{ label: "发布工具" }, { label: "批量审核" }]} />
+        <header className={styles.header}>
+          <div>
+            <h1 className={styles.title}>
+              {workspacePageLabel("/admin/editorial-workflow")}
+            </h1>
+            <p className={styles.lead}>
+              核对记录变更，批准指定账号执行当前版本。
             </p>
-            {row.missingFields.length > 0 && (
-              <p>待补充或修正：{fieldLabels(row.missingFields)}</p>
+          </div>
+          <Button
+            buttonStyle="secondary"
+            disabled={busy}
+            onClick={() => void load(data?.page ?? 1)}
+          >
+            刷新
+          </Button>
+        </header>
+        {notice && (
+          <p className={styles.receipt} data-tone="success" role="status">
+            {notice}
+          </p>
+        )}
+        {failure && (
+          <p className={styles.notice} data-tone="error" role="alert">
+            {failure}
+          </p>
+        )}
+        <div className={styles.tabs} role="tablist" aria-label="编辑工具">
+          {(
+            [
+              ["approval", "批量审核"],
+              ["history", "版本恢复"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              className={styles.tab}
+              type="button"
+              role="tab"
+              aria-selected={mode === value}
+              aria-controls="owner-workflow-content"
+              tabIndex={mode === value ? 0 : -1}
+              key={value}
+              onKeyDown={(event) => {
+                if (
+                  !["ArrowLeft", "ArrowRight", "Home", "End"].includes(
+                    event.key,
+                  )
+                )
+                  return;
+                event.preventDefault();
+                const next =
+                  event.key === "Home"
+                    ? "approval"
+                    : event.key === "End"
+                      ? "history"
+                      : value === "approval"
+                        ? "history"
+                        : "approval";
+                setMode(next);
+                setConfirming(false);
+                const tabs =
+                  event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>(
+                    '[role="tab"]',
+                  );
+                tabs?.[next === "approval" ? 0 : 1]?.focus();
+              }}
+              onClick={() => {
+                setMode(value);
+                setConfirming(false);
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <section
+          id="owner-workflow-content"
+          role="tabpanel"
+          aria-label={mode === "approval" ? "批量审核" : "版本恢复"}
+        >
+          <div className={styles.summaryLine}>
+            <p>
+              {data
+                ? `共 ${data.totalDocs} 条 · 第 ${data.page} / ${Math.max(1, data.totalPages)} 页`
+                : "正在读取记录…"}
+            </p>
+            {mode === "history" && (
+              <span>选择记录，查看可恢复的历史版本。</span>
             )}
-            <Link href={`/admin/collections/catalogs/${row.id}`}>
-              查看并编辑记录
-            </Link>
-            {" · "}
-            <Link href={`/admin/collections/catalogs/${row.id}/versions`}>
-              查看版本差异
-            </Link>{" "}
+          </div>
+          <div className={styles.tableWrap}>
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  {mode === "approval" && (
+                    <th scope="col">
+                      <input
+                        type="checkbox"
+                        aria-label="选择本页全部可批准记录"
+                        checked={allSelected}
+                        disabled={busy || confirming || selectable.length === 0}
+                        onChange={(event) =>
+                          setSelected(event.target.checked ? selectable : [])
+                        }
+                      />
+                    </th>
+                  )}
+                  <th scope="col">记录</th>
+                  <th scope="col">状态</th>
+                  <th scope="col">变更与待补充</th>
+                  <th scope="col">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data?.docs.map((row) => (
+                  <tr key={row.id}>
+                    {mode === "approval" && (
+                      <td>
+                        <input
+                          type="checkbox"
+                          aria-label={`选择 ${row.title ?? "未填写标题"}`}
+                          disabled={
+                            busy || confirming || row.missingFields.length > 0
+                          }
+                          checked={selected.some(({ id }) => id === row.id)}
+                          onChange={(event) =>
+                            setSelected(
+                              event.target.checked
+                                ? [...selected, row]
+                                : selected.filter(({ id }) => id !== row.id),
+                            )
+                          }
+                        />
+                      </td>
+                    )}
+                    <td>
+                      <Link
+                        className={styles.rowLink}
+                        href={`/admin/collections/catalogs/${row.id}`}
+                      >
+                        {row.title ?? "未填写标题"}
+                      </Link>
+                      <span className={styles.secondary}>
+                        版本 {row.revision}
+                      </span>
+                    </td>
+                    <td>
+                      <span
+                        className={styles.chip}
+                        data-state={
+                          row.status === "published" ? "visible" : "pending"
+                        }
+                      >
+                        <span aria-hidden="true">
+                          {row.status === "published" ? "✓" : "◷"}
+                        </span>{" "}
+                        {row.status === "published" ? "已发布" : "草稿"}
+                      </span>
+                    </td>
+                    <td>
+                      <p className={styles.excerpt}>
+                        {row.changedFields.length
+                          ? fieldLabels(row.changedFields)
+                          : "无内容差异"}
+                      </p>
+                      {row.missingFields.length > 0 && (
+                        <p className={styles.notice} data-tone="error">
+                          待补充：{fieldLabels(row.missingFields)}
+                        </p>
+                      )}
+                    </td>
+                    <td>
+                      <div className={styles.actions}>
+                        <Link
+                          href={`/admin/collections/catalogs/${row.id}/versions`}
+                        >
+                          对比版本
+                        </Link>
+                        {mode === "history" && (
+                          <Button
+                            buttonStyle="secondary"
+                            disabled={busy}
+                            onClick={() => void loadHistory(row.id)}
+                          >
+                            查看历史
+                          </Button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {data?.docs.length === 0 && (
+            <p className={styles.state}>暂无记录。</p>
+          )}
+          <div className={styles.pager}>
             <Button
               buttonStyle="secondary"
-              disabled={busy}
-              onClick={() => void loadHistory(row.id)}
+              disabled={busy || !data || data.page <= 1}
+              onClick={() => void load((data?.page ?? 1) - 1)}
             >
-              历史恢复
+              上一页
             </Button>
-          </li>
-        ))}
-      </ul>
-      <Button
-        buttonStyle="secondary"
-        disabled={busy || !data || data.page <= 1}
-        onClick={() => void load((data?.page ?? 1) - 1)}
-      >
-        上一页
-      </Button>
-      <Button
-        buttonStyle="secondary"
-        disabled={busy || !data || data.page >= data.totalPages}
-        onClick={() => void load((data?.page ?? 1) + 1)}
-      >
-        下一页
-      </Button>
-      <fieldset disabled={busy}>
-        <legend>批准所选批次</legend>
-        <label>
-          获准执行的自动化账号{" "}
-          <select
-            value={automationId}
-            onChange={(event) => setAutomationId(event.target.value)}
-          >
-            <option value="">请选择账号</option>
-            {data?.automationUsers.map(({ id, label }) => (
-              <option key={id} value={id}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <p>
-          已选 {selected.length}{" "}
-          条。批准自动绑定当前所见版本，无需填写版本号或校验值。
-        </p>
-        <Button
-          disabled={busy || selected.length === 0 || !automationId}
-          onClick={() => void approve()}
-        >
-          批准所选批次
-        </Button>
-      </fieldset>
-      {history && (
-        <fieldset disabled={busy}>
-          <legend>恢复历史版本</legend>
-          <p>
-            <Link href={`/admin/collections/catalogs/${history.id}`}>
-              目标记录 #{history.id}
-            </Link>
-          </p>
-          <p>
-            当前版本 {history.currentRevision}
-            。恢复会生成一个新草稿，不会更改已发布页面。
-          </p>
-          <label>
-            要恢复的历史内容{" "}
-            <select
-              value={versionId}
-              onChange={(event) => setVersionId(event.target.value)}
+            <Button
+              buttonStyle="secondary"
+              disabled={busy || !data || data.page >= data.totalPages}
+              onClick={() => void load((data?.page ?? 1) + 1)}
             >
-              <option value="">请选择历史版本</option>
-              {history.docs.map((version) => (
-                <option key={version.id} value={version.id}>
-                  版本 {version.revision} · {version.title ?? "未填写标题"} ·{" "}
-                  {version.status === "published" ? "已发布" : "草稿"} ·{" "}
-                  {version.createdAt}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p>
-            历史第 {history.page} / {Math.max(1, history.totalPages)} 页
-          </p>
-          <Button
-            buttonStyle="secondary"
-            disabled={busy || history.page <= 1}
-            onClick={() => void loadHistory(history.id, history.page - 1)}
-          >
-            较新版本
-          </Button>
-          <Button
-            buttonStyle="secondary"
-            disabled={busy || history.page >= history.totalPages}
-            onClick={() => void loadHistory(history.id, history.page + 1)}
-          >
-            较早版本
-          </Button>
-          <Button disabled={busy || !versionId} onClick={() => void restore()}>
-            恢复所选版本为新草稿
-          </Button>
-          <Button
-            buttonStyle="secondary"
-            onClick={() => {
-              setHistory(null);
-              setVersionId("");
-            }}
-          >
-            关闭历史恢复
-          </Button>
-        </fieldset>
-      )}
+              下一页
+            </Button>
+          </div>
+        </section>
+        {mode === "approval" && (
+          <fieldset className={styles.fieldset} disabled={busy}>
+            <legend>批准所选版本</legend>
+            <label className={styles.reportField}>
+              执行账号
+              <select
+                value={automationId}
+                disabled={confirming}
+                onChange={(event) => setAutomationId(event.target.value)}
+              >
+                <option value="">请选择自动化账号</option>
+                {data?.automationUsers.map(({ id, label }) => (
+                  <option key={id} value={id}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className={styles.secondary}>
+              已选 {selected.length}{" "}
+              条。批准后，该账号可发布所选版本；内容变动需要重新审核。
+            </p>
+            {confirming ? (
+              <div
+                className={styles.reportConfirmation}
+                role="group"
+                aria-label="确认批次批准"
+              >
+                <strong>批准 {selected.length} 条记录的当前版本</strong>
+                <p>
+                  执行账号：
+                  {
+                    data?.automationUsers.find(
+                      ({ id }) => String(id) === automationId,
+                    )?.label
+                  }
+                  。这会授予本批次发布权限。
+                </p>
+                <div className={styles.actions}>
+                  <Button disabled={busy} onClick={() => void approve()}>
+                    确认批准
+                  </Button>
+                  <Button
+                    buttonStyle="secondary"
+                    disabled={busy}
+                    onClick={() => setConfirming(false)}
+                  >
+                    返回修改
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <Button
+                disabled={busy || selected.length === 0 || !automationId}
+                onClick={() => setConfirming(true)}
+              >
+                核对并批准…
+              </Button>
+            )}
+          </fieldset>
+        )}
+        {mode === "history" && history && (
+          <fieldset className={styles.fieldset} disabled={busy}>
+            <legend>恢复为新草稿</legend>
+            <p>
+              <Link href={`/admin/collections/catalogs/${history.id}`}>
+                {data?.docs.find(({ id }) => id === history.id)?.title ??
+                  `记录 #${history.id}`}
+              </Link>{" "}
+              · 当前版本 {history.currentRevision}
+            </p>
+            <p className={styles.secondary}>
+              恢复后生成新草稿，审核后可另行发布。
+            </p>
+            <label className={styles.reportField}>
+              历史版本
+              <select
+                value={versionId}
+                onChange={(event) => setVersionId(event.target.value)}
+              >
+                <option value="">请选择版本</option>
+                {history.docs.map((version) => (
+                  <option key={version.id} value={version.id}>
+                    版本 {version.revision} · {version.title ?? "未填写标题"} ·{" "}
+                    {version.status === "published" ? "已发布" : "草稿"} ·{" "}
+                    {version.createdAt}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className={styles.pager}>
+              <span>
+                第 {history.page} / {Math.max(1, history.totalPages)} 页
+              </span>
+              <Button
+                buttonStyle="secondary"
+                disabled={busy || history.page <= 1}
+                onClick={() => void loadHistory(history.id, history.page - 1)}
+              >
+                较新版本
+              </Button>
+              <Button
+                buttonStyle="secondary"
+                disabled={busy || history.page >= history.totalPages}
+                onClick={() => void loadHistory(history.id, history.page + 1)}
+              >
+                较早版本
+              </Button>
+            </div>
+            <div className={styles.actions}>
+              <Button
+                disabled={busy || !versionId}
+                onClick={() => void restore()}
+              >
+                恢复为新草稿
+              </Button>
+              <Button
+                buttonStyle="secondary"
+                onClick={() => {
+                  setHistory(null);
+                  setVersionId("");
+                }}
+              >
+                取消
+              </Button>
+            </div>
+          </fieldset>
+        )}
+      </div>
     </Gutter>
   );
 };

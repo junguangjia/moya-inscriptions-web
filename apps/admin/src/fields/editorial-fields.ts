@@ -22,8 +22,8 @@ const statefulText = (
   type: "group",
   label,
   admin: {
-    description:
-      "原文逐字保存，不转换繁简或标点。非“有值”状态请清空原文；首尾空白会提示修正。",
+    hideGutter: true,
+    description: "按原文填写，保留繁简字和标点；未填写原文时选择对应资料状态。",
   },
   fields: [
     {
@@ -46,7 +46,7 @@ const statefulText = (
     {
       name: "value",
       type: "textarea",
-      label: "原文（有值时填写）",
+      label: "原文",
       maxLength,
     },
   ],
@@ -62,8 +62,9 @@ const filterDimensions = [
 const filterMetadataField: Field = {
   name: "filterMetadata",
   type: "group",
-  label: "碑刻筛选元数据（经编辑核实）",
+  label: "经核实的筛选信息",
   admin: {
+    hideGutter: true,
     description:
       "仅用于碑刻筛选，原始资料保持原文。原始地点不得填写现藏地；历史作者不是上传账号。未知和未提供须分别记录。",
   },
@@ -98,34 +99,32 @@ const filterMetadataField: Field = {
   })),
 };
 
-/** Native Payload fields; no JSON editor, alternate form or rich-text conversion. */
-export const editorialFields: Field[] = [
+/** The unnamed layout fields below leave every persisted field path intact. */
+const catalogFields: Field[] = [
   filterMetadataField,
   {
     name: "catalogId",
     type: "text",
-    label: "CatalogId（固定身份）",
+    label: "资料编号",
     required: true,
     maxLength: 128,
     unique: true,
     index: true,
     defaultValue: () => `catalog-${randomUUID()}`,
     admin: {
-      position: "sidebar",
       description: "新建时独立生成，已有目录须沿用原身份；创建后不可变更。",
     },
   },
   {
     name: "sourceId",
     type: "text",
-    label: "SourceId（固定来源身份）",
+    label: "来源编号",
     required: true,
     maxLength: 128,
     unique: true,
     index: true,
     defaultValue: () => `source-${randomUUID()}`,
     admin: {
-      position: "sidebar",
       description:
         "新建时独立生成，已有来源须沿用已保存的映射；不得由名称或 CatalogId 推导。",
     },
@@ -133,7 +132,7 @@ export const editorialFields: Field[] = [
   {
     name: "kind",
     type: "select",
-    label: "类型",
+    label: "资料类型",
     required: true,
     options: [
       { label: "碑刻", value: "inscription" },
@@ -143,7 +142,7 @@ export const editorialFields: Field[] = [
   {
     name: "title",
     type: "text",
-    label: "名称",
+    label: "资料名称",
     maxLength: 500,
     admin: { description: "草稿可暂缺；发布时必须填写。" },
   },
@@ -153,7 +152,7 @@ export const editorialFields: Field[] = [
     label: "列表摘要",
     maxLength: 2_000,
   },
-  { name: "periodLabel", type: "text", label: "年代显示文字", maxLength: 200 },
+  { name: "periodLabel", type: "text", label: "展示年代", maxLength: 200 },
   statefulText("dynasty", "朝代", 500, true),
   statefulText("dateText", "年代原文", 500, true),
   statefulText("province", "省级地域", 500, true),
@@ -194,14 +193,14 @@ export const editorialFields: Field[] = [
   {
     name: "provenance",
     type: "array",
-    label: "来源记录（内部）",
+    label: "内部来源记录",
     labels: { singular: "来源记录", plural: "来源记录" },
     admin: { description: "随本条目录版本保存；不直接成为公开资料来源。" },
     fields: [
       {
         name: "sourceId",
         type: "text",
-        label: "SourceId",
+        label: "来源编号",
         required: true,
         maxLength: 128,
       },
@@ -285,7 +284,7 @@ export const editorialFields: Field[] = [
   {
     name: "mediaPicker",
     type: "ui",
-    label: "媒体选择",
+    label: "添加图片",
     admin: {
       components: {
         Field: "./src/media/MediaSnapshotPicker#MediaSnapshotPicker",
@@ -299,14 +298,14 @@ export const editorialFields: Field[] = [
     labels: { singular: "图片", plural: "图片" },
     admin: {
       description:
-        "从上方原生媒体库添加图片。可拖动图片行并同步顺序；有图需指定一张代表图。无图也可发布。",
+        "拖动图片行调整顺序，再点击“同步图片顺序”。有图片时请选择一张代表图。",
     },
     fields: [
       {
         name: "mediaId",
         type: "text",
-        label: "MediaId",
-        admin: { readOnly: true, hidden: true },
+        label: "图片编号",
+        admin: { readOnly: true },
         required: true,
         maxLength: 128,
       },
@@ -314,7 +313,7 @@ export const editorialFields: Field[] = [
         name: "objectKey",
         type: "text",
         label: "存储对象键",
-        admin: { readOnly: true, hidden: true },
+        admin: { readOnly: true },
         required: true,
         maxLength: 2_048,
       },
@@ -344,7 +343,7 @@ export const editorialFields: Field[] = [
       {
         name: "position",
         type: "number",
-        label: "排序序号（从零起）",
+        label: "排序序号（从 0 开始）",
         required: true,
         min: 0,
         max: 2_147_483_647,
@@ -380,5 +379,89 @@ export const editorialFields: Field[] = [
     label: "内部备注",
     maxLength: 2_000,
     admin: { description: "仅供内部编辑，不进入 Public API。" },
+  },
+];
+
+const fieldsNamed = (...names: string[]): Field[] =>
+  catalogFields.filter(
+    (field) => "name" in field && names.includes(field.name),
+  );
+
+const media = catalogFields.find(
+  (field) => "name" in field && field.name === "media",
+);
+if (media?.type === "array") {
+  const technicalNames = [
+    "mediaId",
+    "objectKey",
+    "width",
+    "height",
+    "position",
+  ];
+  const technicalFields = media.fields.filter(
+    (field) => "name" in field && technicalNames.includes(field.name),
+  );
+  media.fields = [
+    ...media.fields.filter(
+      (field) => !("name" in field) || !technicalNames.includes(field.name),
+    ),
+    {
+      type: "collapsible",
+      label: "图片详细信息",
+      admin: { initCollapsed: true },
+      fields: technicalFields,
+    },
+  ];
+}
+
+/** Native Payload tabs are presentation only; no named groups or new data. */
+export const editorialFields: Field[] = [
+  {
+    type: "tabs",
+    admin: { className: "editorial-form-tabs" },
+    tabs: [
+      {
+        label: "基本资料",
+        fields: [
+          ...fieldsNamed(
+            "kind",
+            "title",
+            "summary",
+            "periodLabel",
+            "dynasty",
+            "dateText",
+            "province",
+            "prefecture",
+            "county",
+            "currentLocation",
+            "currentCustodian",
+            "scriptStyle",
+            "aliases",
+            "contributors",
+          ),
+          {
+            type: "collapsible",
+            label: "资料详细信息",
+            admin: { initCollapsed: true },
+            fields: fieldsNamed("catalogId", "sourceId"),
+          },
+        ],
+      },
+      {
+        label: "文字内容",
+        fields: fieldsNamed(
+          "description",
+          "transcription",
+          "historicalContext",
+          "scholarlyResearch",
+        ),
+      },
+      { label: "图片", fields: fieldsNamed("mediaPicker", "media") },
+      {
+        label: "资料来源",
+        fields: fieldsNamed("provenance", "sourceCitations", "ownerNote"),
+      },
+      { label: "筛选信息", fields: fieldsNamed("filterMetadata") },
+    ],
   },
 ];

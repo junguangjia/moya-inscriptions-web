@@ -408,13 +408,13 @@ export const AgentOperationsClient = () => {
     <div className={styles.workspace} data-agent-operations>
       <SetStepNav
         nav={[
-          { label: "社区", url: "/admin/community-moderation" },
-          { label: "代理操作" },
+          { label: "发布工具", url: "/admin/editorial-workflow" },
+          { label: "AI 操作" },
         ]}
       />
       <header className={styles.header}>
         <div>
-          <h1 className={styles.title}>代理操作</h1>
+          <h1 className={styles.title}>AI 操作</h1>
           <p className={styles.lead}>
             机器主体只能对已冻结的对象清单发起操作：或由调用方逐条指定，或由后端按关键词在评论正文中检索后冻结。
             关键词清单一律需要您批准；执行按 50

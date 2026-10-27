@@ -1,5 +1,7 @@
 "use client";
 
+import { workspacePageLabel } from "../workspace/routes";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -204,16 +206,21 @@ export const AccountCapacityClient = () => {
     <div className={styles.workspace}>
       <SetStepNav
         nav={[
-          { label: "社区", url: "/admin/community-moderation" },
-          { label: "账号容量" },
+          {
+            label: "用户",
+            url: "/admin/community-moderation/content?tab=users",
+          },
+          { label: "发布额度" },
         ]}
       />
       <header className={styles.header}>
         <div>
-          <h1 className={styles.title}>账号容量</h1>
+          <h1 className={styles.title}>
+            {workspacePageLabel("/admin/community-moderation/account-capacity")}
+          </h1>
           <p className={styles.lead}>
-            按不可变的账号 ID 查看作品媒体占用，并指定容量类别。各类别的容量在
-            <Link href="/admin/community-moderation/settings">发布设置</Link>
+            按用户编号查看已用空间和存储额度。各类额度可在
+            <Link href="/admin/community-moderation/settings">发布规则</Link>
             中配置；{TIME_ZONE_NOTE}。
           </p>
         </div>
@@ -281,7 +288,7 @@ export const AccountCapacityClient = () => {
         <p className={styles.state}>输入账号 ID 后查看其容量与占用。</p>
       ) : loadError !== null ? (
         <p className={styles.state} role="alert">
-          无法读取账号容量：{loadError}{" "}
+          无法读取发布额度：{loadError}{" "}
           <button
             className={styles.rowLink}
             disabled={busy}
@@ -446,14 +453,11 @@ export const AccountCapacityClient = () => {
               </p>
               <p>
                 {confirmation.capacityClass === "owner"
-                  ? "该账号将使用 Owner 账号容量。请确认这个账号 ID 属于真实的 Owner 社区账号，而不是按账号名或显示名推断。"
-                  : "该账号将使用普通账号容量。已占用超过普通容量时，新的媒体上传会被拒绝，已有内容不会被删除。"}
+                  ? "该账号将使用 Owner 发布额度。请确认这个账号 ID 属于真实的 Owner 社区账号，而不是按账号名或显示名推断。"
+                  : "该账号将使用普通发布额度。已占用超过普通容量时，新的媒体上传会被拒绝，已有内容不会被删除。"}
               </p>
               <p>
-                此更改由后端以 Owner 身份记录审计（请求 ID{" "}
-                <span className={styles.mono}>{confirmation.requestId}</span>
-                ），只针对版本 {confirmation.expectedVersion}
-                ；若期间已被更新则不会执行。
+                此次更改会记入操作记录。若账号设置已被更新，请刷新后重新核对。
               </p>
             </div>
           )

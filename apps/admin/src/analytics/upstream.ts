@@ -97,3 +97,82 @@ export const createUmamiUpstream = (
 };
 
 export const umamiUpstream = createUmamiUpstream();
+
+/** Enter the configured website in its real team scope, never an empty personal list. */
+export async function resolveAnalyticsWorkspacePath(
+  reader: Pick<typeof umamiUpstream, "request"> = umamiUpstream,
+): Promise<string | null> {
+  const websiteId = process.env.UMAMI_WEBSITE_ID ?? "";
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(
+      websiteId,
+    ) ||
+    !process.env.UMAMI_ORIGIN ||
+    !process.env.UMAMI_VIEWER_USERNAME ||
+    !process.env.UMAMI_VIEWER_PASSWORD
+  )
+    return null;
+  const response = await reader.request(
+    `${UMAMI_WORKSPACE_PATH}/api/websites/${websiteId}`,
+    {
+      method: "GET",
+      headers: { accept: "application/json" },
+    },
+  );
+  if (!response.ok) throw new Error("ANALYTICS_UNAVAILABLE");
+  const website: unknown = await response.json();
+  if (
+    !website ||
+    typeof website !== "object" ||
+    !("id" in website) ||
+    typeof website.id !== "string" ||
+    website.id.toLowerCase() !== websiteId.toLowerCase()
+  )
+    throw new Error("ANALYTICS_UNAVAILABLE");
+  const teamId = "teamId" in website ? website.teamId : null;
+  if (
+    typeof teamId === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(
+      teamId,
+    )
+  )
+    return `${UMAMI_WORKSPACE_PATH}/teams/${teamId}/websites/${websiteId}`;
+  return `${UMAMI_WORKSPACE_PATH}/websites/${websiteId}`;
+}
+
+/** Retain the existing configured Board as an additional analysis view. */
+export async function resolveAnalyticsBoardPath(
+  reader: Pick<typeof umamiUpstream, "request"> = umamiUpstream,
+): Promise<string | null> {
+  const boardId = process.env.UMAMI_BOARD_ID ?? "";
+  const isId = (value: unknown): value is string =>
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(
+      value,
+    );
+  if (
+    !isId(boardId) ||
+    !process.env.UMAMI_ORIGIN ||
+    !process.env.UMAMI_VIEWER_USERNAME ||
+    !process.env.UMAMI_VIEWER_PASSWORD
+  )
+    return null;
+  const response = await reader.request(
+    `${UMAMI_WORKSPACE_PATH}/api/boards/${boardId}`,
+    { method: "GET", headers: { accept: "application/json" } },
+  );
+  if (!response.ok) throw new Error("ANALYTICS_UNAVAILABLE");
+  const board: unknown = await response.json();
+  if (
+    !board ||
+    typeof board !== "object" ||
+    !("id" in board) ||
+    typeof board.id !== "string" ||
+    board.id.toLowerCase() !== boardId.toLowerCase()
+  )
+    throw new Error("ANALYTICS_UNAVAILABLE");
+  const teamId = "teamId" in board ? board.teamId : null;
+  return isId(teamId)
+    ? `${UMAMI_WORKSPACE_PATH}/teams/${teamId}/boards/${boardId}`
+    : `${UMAMI_WORKSPACE_PATH}/boards/${boardId}`;
+}

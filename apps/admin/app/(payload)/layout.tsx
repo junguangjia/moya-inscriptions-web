@@ -4,6 +4,9 @@ import type { ServerFunctionClient } from "payload";
 import type { ReactNode } from "react";
 import { importMap } from "./admin/importMap";
 import "@payloadcms/next/css";
+import "@moya/ui/styles.css";
+import "../../src/workspace/theme.css";
+import "../../src/branding/login.css";
 const serverFunction: ServerFunctionClient = async function (args) {
   "use server";
   return handleServerFunctions({ ...args, config, importMap });

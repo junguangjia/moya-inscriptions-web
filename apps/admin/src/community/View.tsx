@@ -1,7 +1,9 @@
 import { DefaultTemplate } from "@payloadcms/next/templates";
+import { SetStepNav } from "@payloadcms/ui";
 import type { AdminViewServerProps } from "payload";
 
 import { isOwner } from "../editorial/access";
+import { CommunityDashboardCard } from "./DashboardCard";
 import { ArticleSubmissionsQueueClient } from "./article-submissions-client";
 import { AccountCapacityClient } from "./account-capacity-client";
 import { AgentOperationsClient } from "./agent-operations-client";
@@ -33,7 +35,9 @@ const OwnerOnly = ({
   const { req, visibleEntities } = props.initPageResult;
   return (
     <DefaultTemplate {...props} req={req} visibleEntities={visibleEntities}>
-      {isOwner(req) ? children : <p role="alert">此工作区仅限 Owner。</p>}
+      <div className="archive-view">
+        {isOwner(req) ? children : <p role="alert">此工作区仅限 Owner。</p>}
+      </div>
     </DefaultTemplate>
   );
 };
@@ -131,3 +135,18 @@ export const CommunityAppealsView = (props: AdminViewServerProps) => (
 );
 
 export { ReportDetail } from "./reports-client";
+
+/** Payload wraps the dashboard in its native default template. */
+export const WorkspaceDashboard = (props: AdminViewServerProps) => {
+  const { req } = props.initPageResult;
+  return (
+    <>
+      <SetStepNav nav={[]} />
+      {isOwner(req) && req.user ? (
+        <CommunityDashboardCard {...props} user={req.user} />
+      ) : (
+        <p role="alert">此工作区仅限管理员。</p>
+      )}
+    </>
+  );
+};
