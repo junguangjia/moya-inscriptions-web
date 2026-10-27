@@ -21,13 +21,17 @@ export type AuthCapabilitiesView = AuthCapabilities;
 
 /**
  * Ordinary steps whose answers rewrite the session cookies: a sign-in (which
- * may also let go of a saved copy), a password reset and a sign-out.
+ * may also let go of a saved copy), a password reset, a factor change (whose
+ * answer reissues the session and lets go of that account's saved copies) and
+ * a sign-out.
  */
 const sessionCookieSteps: ReadonlySet<string> = new Set([
   "passwords/login",
   "challenges/verify",
   "registrations",
   "passwords/reset",
+  "factors/complete",
+  "factors/unlink",
   "sign-out",
 ]);
 

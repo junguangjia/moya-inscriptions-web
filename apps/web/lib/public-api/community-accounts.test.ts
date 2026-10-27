@@ -48,6 +48,11 @@ class FakeBackend {
   readonly unavailable = new Set<string>();
   /** Sessions, or every session of these accounts, whose sign-out fails. */
   readonly signOutFails = new Set<string>();
+  /**
+   * Sessions whose sign-out the Backend refuses as from an untrusted source
+   * (401 `AUTH_SOURCE_UNTRUSTED`) while `me` still accepts them.
+   */
+  readonly signOutUntrusted = new Set<string>();
   readonly grants: Account[] = [];
   private issued = 0;
   readonly fetch = vi.fn<typeof fetch>(async (input, init) => {
@@ -72,6 +77,16 @@ class FakeBackend {
           (profile !== undefined && this.signOutFails.has(profile.id)))
       )
         return new Response(null, { status: 503 });
+      if (token !== undefined && this.signOutUntrusted.has(token))
+        return Response.json(
+          {
+            error: {
+              code: "UNAUTHENTICATED",
+              message: "AUTH_SOURCE_UNTRUSTED",
+            },
+          },
+          { status: 401 },
+        );
       if (profile === undefined)
         return Response.json(
           {
@@ -689,20 +704,31 @@ describe("signing the current account out", () => {
     expect(backend.sessions.get(tokenA)).toEqual(A);
   });
 
-  it("keeps the current session and every saved session on an unconfirmed answer, so 退出登录 can be retried", async () => {
-    currentWithCopy();
-    const active = browser.active();
-    backend.signOutFails.add(tokenA2);
-    const failed = await browser.auth(
-      "sign-out",
-      {},
-      { "x-author-account": A.id },
-    );
-    expect(failed.status).toBe(503);
-    expect(browser.active()).toBe(active);
-    expect(browser.saved()).toEqual([B.id, A.id]);
-    expect(backend.sessions.get(tokenA)).toEqual(A);
-  });
+  it.each([
+    ["unavailable", 503, () => backend.signOutFails.add(tokenA2)],
+    // `me` still accepts the session, so it has not ended.
+    [
+      "a 401 from an untrusted source",
+      401,
+      () => backend.signOutUntrusted.add(tokenA2),
+    ],
+  ] as const)(
+    "keeps the current session and every saved session on an unconfirmed answer (%s), so 退出登录 can be retried",
+    async (_, status, refuse) => {
+      for (const headers of [{ "x-author-account": A.id }, {}]) {
+        currentWithCopy();
+        const active = browser.active();
+        refuse();
+        const failed = await browser.auth("sign-out", {}, headers);
+        expect(failed.status).toBe(status);
+        expect(failed.headers.getSetCookie()).toEqual([]);
+        expect(browser.active()).toBe(active);
+        expect(browser.saved()).toEqual([B.id, A.id]);
+        expect(backend.sessions.get(tokenA2)).toEqual(A);
+        expect(backend.sessions.get(tokenA)).toEqual(A);
+      }
+    },
+  );
 });
 
 describe("listing and switching held accounts", () => {
@@ -841,38 +867,46 @@ describe("listing and switching held accounts", () => {
     ]);
   });
 
-  it("keeps a copy whose sign-out cannot be confirmed, hidden behind its account's newer session", async () => {
-    backend.sessions.set(tokenA, A);
-    backend.sessions.set(tokenB, B);
-    backend.signOutFails.add(tokenA);
-    currentWithSavedCopy([B, tokenB]);
-    // A repeated tap cannot end the copy: it stays.
-    expect((await browser.switchTo(A.id)).status).toBe(200);
-    expect(browser.savedEntries().map((entry) => entry.token)).toEqual([
-      tokenA,
-      tokenB,
-    ]);
-    // Switching away keeps it beside A's newer session; A is listed once.
-    expect((await browser.switchTo(B.id)).status).toBe(200);
-    expect(browser.active()).toBe(tokenB);
-    expect(browser.savedEntries().map((entry) => entry.token)).toEqual([
-      tokenA2,
-      tokenA,
-    ]);
-    expect(await listed()).toEqual({
-      current: B,
-      others: [{ ...A, state: "ready" }],
-      limit: 3,
-    });
-    // Back to A: its newer session becomes current again, the copy stays.
-    expect((await browser.switchTo(A.id)).status).toBe(200);
-    expect(browser.active()).toBe(tokenA2);
-    expect(browser.savedEntries().map((entry) => entry.token)).toEqual([
-      tokenB,
-      tokenA,
-    ]);
-    expect(backend.sessions.get(tokenA)).toEqual(A);
-  });
+  // In Production the switch route carries no trusted authentication source,
+  // so the Backend answers a copy's sign-out with 401 while `me` accepts it.
+  it.each([
+    ["unavailable", () => backend.signOutFails.add(tokenA)],
+    ["untrusted", () => backend.signOutUntrusted.add(tokenA)],
+  ] as const)(
+    "keeps a copy whose sign-out cannot be confirmed (%s), hidden behind its account's newer session",
+    async (_, refuse) => {
+      backend.sessions.set(tokenA, A);
+      backend.sessions.set(tokenB, B);
+      refuse();
+      currentWithSavedCopy([B, tokenB]);
+      // A repeated tap cannot end the copy: it stays.
+      expect((await browser.switchTo(A.id)).status).toBe(200);
+      expect(browser.savedEntries().map((entry) => entry.token)).toEqual([
+        tokenA,
+        tokenB,
+      ]);
+      // Switching away keeps it beside A's newer session; A is listed once.
+      expect((await browser.switchTo(B.id)).status).toBe(200);
+      expect(browser.active()).toBe(tokenB);
+      expect(browser.savedEntries().map((entry) => entry.token)).toEqual([
+        tokenA2,
+        tokenA,
+      ]);
+      expect(await listed()).toEqual({
+        current: B,
+        others: [{ ...A, state: "ready" }],
+        limit: 3,
+      });
+      // Back to A: its newer session becomes current again, the copy stays.
+      expect((await browser.switchTo(A.id)).status).toBe(200);
+      expect(browser.active()).toBe(tokenA2);
+      expect(browser.savedEntries().map((entry) => entry.token)).toEqual([
+        tokenB,
+        tokenA,
+      ]);
+      expect(backend.sessions.get(tokenA)).toEqual(A);
+    },
+  );
 
   it("reports a refused current session as signed out without clearing it, and still lists the others", async () => {
     await holdAandB();

@@ -21,7 +21,9 @@ export const savedSessionsCapacity = 6;
  * Another account this browser holds. `reauth_required`: the Backend no longer
  * accepts its session (expired, signed out elsewhere, suspended or deleted).
  * Such an account stays held and is listed so on every read until it is
- * removed or signed in again; only its id and handle are known.
+ * removed, signed in again, or let go (once its sign-out is confirmed) to make
+ * room when another account is added while three are held; only its id and
+ * handle are known.
  */
 export type CommunityAccountListing =
   | (PublicUserProfile & { readonly state: "ready" })

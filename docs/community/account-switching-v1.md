@@ -33,16 +33,19 @@ session token and a lifetime ceiling; the parser fails closed and clears the
 cookie on anything malformed, repeated or holding a token twice. Tokens never
 reach browser JavaScript or a response body.
 
-A held session leaves this browser only once the Backend confirms that it ended:
-its sign-out answered `revoked`, or it was `refused` (sign-out 401 and `/v1/me`
-401), or it repeats the token of `yoyi-session`. An older session of an account
-whose sign-out cannot be confirmed stays saved as a hidden copy next to that
-account's newer session (so a user id may repeat in the cookie); the account is
-still listed once, never as a second account. A later
-sign-in, 退出登录, 移除 or 退出所有账号 of that account goes through the
-authentication relay, which carries the Production auth-ingress proof, and ends
-the copy. The cookie holds at most six entries (two other accounts and the
-copies); an add-account step that would need more is refused with
+A saved session (or one leaving `yoyi-session` for the saved list) leaves this
+browser only once the Backend confirms that it ended: its sign-out answered
+`revoked`, or it was `refused` (sign-out 401 and `/v1/me` 401), or it repeats
+the token of `yoyi-session`. A sign-in grant that replaces `yoyi-session` (an
+ordinary sign-in, or re-adding the current account) replaces that cookie as
+before #352. An older session of an account whose sign-out cannot be confirmed
+stays saved as a hidden copy next to that account's newer session (so a user id
+may repeat in the cookie); the account is still listed once, never as a second
+account. A later sign-in, 退出登录 (when it can name the account, see
+Routes), 移除 or 退出所有账号 of that account goes through the authentication
+relay, which carries the Production auth-ingress proof, and ends the copy. The
+cookie holds at most six entries (two other accounts and the copies); an
+add-account step that would need more is refused with
 `AUTH_ACCOUNT_STATE_UNAVAILABLE` before the Backend is asked.
 
 Each session keeps its own absolute Backend lifetime (seven days by default);
@@ -66,8 +69,10 @@ active cookie a new seven-day lifetime.
   `current: null` without being cleared here (the relays that use it clear it).
   Each other account is listed once: `ready` when one of its sessions is
   accepted as that account, otherwise `reauth_required` (需重新登录) on every
-  read until it is removed or signed in again. Saved sessions of the current
-  account are hidden copies.
+  read until it is removed, signed in again, or let go to make room when another
+  account is added while three are held (only once its sign-out is confirmed;
+  see add-account mode). Saved sessions of the current account are hidden
+  copies.
 - `POST /api/community/accounts/switch { accountId }` swaps the current and the
   saved session after `/v1/me` confirms the target; a target none of whose
   sessions is accepted answers 409 `reauth_required`, stays held and is listed
@@ -115,22 +120,31 @@ active cookie a new seven-day lifetime.
   confirmed sign-out (2xx) or when the Backend no longer accepts the session
   (sign-out 401 and `/v1/me` 401; the relay then answers 204, because a session
   the Backend no longer accepts is already over). Any other answer (unavailable,
-  an error, the approved fence 409 `AUTH_ACCOUNT_MISMATCH`, a refused assertion)
-  keeps the session and its cookie, and the page's
+  an error, the approved fence 409 `AUTH_ACCOUNT_MISMATCH`, a refused assertion,
+  or a 401 for a session `/v1/me` still accepts, such as
+  `AUTH_SOURCE_UNTRUSTED`) keeps the session and its cookie, and the page's
   existing 退出未能确认，请重试 is then true: the retry can still end it. Before
   account switching the relay cleared the cookie after any delivered answer,
   which could leave a live session the browser could no longer end; this
-  behavior change was confirmed by the Owner on 2026-10-27 (Issue #352 r3). On a
-  confirmed sign-out it also signs out this browser's saved sessions of the same
-  account (named by the page's assertion, or else by `/v1/me` before the
-  sign-out; a browser holding no saved session needs neither); confirmed ones
-  are let go and an unconfirmed one stays, then listed under that account
-  where 移除 ends it. Other accounts stay listed either way.
+  behavior change was confirmed by the Owner on 2026-10-27 (Issue #352 r3). When
+  this browser holds saved sessions, the relay also signs out its saved copies
+  of the account being signed out: on the 2xx path, and on the already-ended
+  (204) path when the page sent `x-author-account`. That account is the one the
+  page's `x-author-account` names; without an assertion it is named by `/v1/me`
+  before the sign-out, which can name it only while the current session is still
+  accepted (so a sign-out without an assertion signs out no copy when the
+  session had already ended or `/v1/me` could not answer). Copies whose sign-out
+  is confirmed are let go; unconfirmed copies stay held, listed under that
+  account where 移除 ends them. Other accounts stay listed either way.
 - The browser runs every request that rewrites these cookies (switch, remove,
-  sign out all, the add-account steps, an ordinary sign-in and sign-out) under
-  one exclusive Web Lock across its tabs, so two answers never write cookies
-  from different snapshots; the read-only list takes the same lock so it reads
-  after a write in flight. Without Web Locks the request runs directly.
+  sign out all, the add-account steps, an ordinary sign-in, a factor change
+  (`factors/complete`, `factors/unlink`, whose answer reissues the session) and
+  sign-out) under one exclusive Web Lock across its tabs, so two answers never
+  write cookies from different snapshots; the read-only list takes the same lock
+  so it reads after a write in flight. Without Web Locks the request runs
+  directly. The existing relays that clear `yoyi-session` once the Backend
+  refuses it (`/api/community/me`, the author, media and notification relays)
+  run outside that lock; see Known limitations.
 
 All answers are `private, no-store` with `Vary: Cookie`; writes require the
 same-origin checks of the author relay.
@@ -149,9 +163,13 @@ same-origin checks of the author relay.
   `x-author-account`, which the Backend refuses when it differs from the
   session; direct-message reads carry the assertion and the author handler
   refuses a mismatch on reads as on writes; auth sign-out with an assertion
-  answers 409 `AUTH_ACCOUNT_MISMATCH` for another account's session and, when
-  the asserted session cannot be read (no longer accepted, or a suspended
-  account's), that refusal; in both cases nothing is signed out.
+  answers 409 `AUTH_ACCOUNT_MISMATCH` for another account's live session and 401
+  `AUTH_ACCOUNT_SUSPENDED` for a suspended account's live session, and in both
+  cases nothing is signed out. A session the Backend no longer accepts signs out
+  as it does without an assertion: an open factor-change receipt of it is still
+  sealed, which revokes the session the change reissued (so 退出登录 after a
+  factor change whose answer was lost still ends that session); with no open
+  receipt the answer stays 401 `AUTH_UNAUTHENTICATED`.
 - Composer drafts stay bound to the account they were written as. The comment
   and colophon composers already keep a draft per confirmed account (another
   account's view never shows it, and it comes back when that account is current
@@ -182,6 +200,19 @@ same-origin checks of the author relay.
   so 移除 and 退出所有账号 let such a session go (`/v1/me` refuses it too)
   without ending it on the Backend; it lapses at its own expiry, and no browser
   holds its token any more.
+- 退出登录 on the product-access page sends no account assertion. When the
+  browser holds a saved copy of the current account and `/v1/me` cannot name
+  that account before the sign-out (the session had already ended, or the read
+  failed), the copy is not signed out: once the current session is cleared it is
+  listed under that account (switchable while the Backend accepts it)
+  until 移除 or 退出所有账号 ends it.
+- A request still carrying a session the Backend no longer accepts (for example
+  an `/api/community/me` re-check or an author read started in another tab) can
+  answer after a switch has just made another account current, and the relay's
+  existing refused-session clear then removes the new `yoyi-session` too. That
+  account must be signed in again on this browser, and its Backend session
+  lapses at its own expiry. The window is a few round trips; no data or write
+  crosses accounts.
 - The browser drops the saved cookie seven days after its latest entry's
   ceiling, so with a Backend session lifetime configured above fourteen days an
   untouched saved session could outlive it there.

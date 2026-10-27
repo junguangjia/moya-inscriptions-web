@@ -1318,7 +1318,9 @@ describe("Sign-out and appeal relay account fences", () => {
   });
 
   // The current session leaves this browser only once it has really ended:
-  // any other answer keeps it, so 退出登录 can be retried.
+  // any other answer keeps it, so 退出登录 can be retried. That includes a
+  // sign-out 401 for a session `me` still accepts, such as a Backend that
+  // does not trust the request's authentication source.
   it.each([
     [
       503,
@@ -1329,6 +1331,10 @@ describe("Sign-out and appeal relay account fences", () => {
     [500, { error: { code: "INTERNAL_ERROR", message: "Internal error" } }],
     [409, { error: { code: "CONFLICT", message: "AUTH_RATE_LIMITED" } }],
     [409, { error: { code: "CONFLICT", message: "AUTH_ACCOUNT_MISMATCH" } }],
+    [
+      401,
+      { error: { code: "UNAUTHENTICATED", message: "AUTH_SOURCE_UNTRUSTED" } },
+    ],
   ])(
     "keeps the session when the Backend answers sign-out with %s and the session still works",
     async (status, body) => {

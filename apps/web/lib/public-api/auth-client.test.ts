@@ -34,7 +34,7 @@ describe("auth relay request (account-switching-v1)", () => {
     ).toBe("GET");
   });
 
-  it("runs add-account, sign-in and sign-out steps under the account cookie lock", async () => {
+  it("runs add-account, sign-in, factor-change and sign-out steps under the account cookie lock", async () => {
     let release!: () => void;
     const held = navigator.locks.request(
       "yoyi-community-accounts",
@@ -48,22 +48,41 @@ describe("auth relay request (account-switching-v1)", () => {
     const settle = () => new Promise((done) => setTimeout(done, 10));
     // Reads and steps that never rewrite the session cookies do not wait.
     await authRequest("capabilities", { addAccount: true });
+    await authRequest("account");
     await authRequest("challenges", { body: { purpose: "link" } });
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(3);
     const adding = authRequest("challenges/verify", {
       body: {},
       addAccount: true,
     });
     const signingIn = authRequest("passwords/login", { body: {} });
+    // A factor change reissues the session, so it writes the cookies too.
+    const linking = authRequest("factors/complete", { body: {} });
+    const unlinking = authRequest("factors/unlink", { body: {} });
     const signingOut = authRequest("sign-out", { method: "POST", body: {} });
     await settle();
-    expect(fetch).toHaveBeenCalledTimes(2);
+    const sentWhileHeld = fetch.mock.calls.length;
+    // Released before asserting, so a failure here never strands the lock.
     release();
     await held;
-    await expect(adding).resolves.toEqual({ status: 200, body: {} });
-    await expect(signingIn).resolves.toEqual({ status: 200, body: {} });
-    await expect(signingOut).resolves.toEqual({ status: 200, body: {} });
-    expect(fetch).toHaveBeenCalledTimes(5);
+    expect(sentWhileHeld).toBe(3);
+    for (const step of [adding, signingIn, linking, unlinking, signingOut])
+      await expect(step).resolves.toEqual({ status: 200, body: {} });
+    expect(fetch).toHaveBeenCalledTimes(8);
+    expect(
+      fetch.mock.calls
+        .slice(3)
+        .map((call) => (call as unknown as [string])[0])
+        .sort(),
+    ).toEqual(
+      [
+        "challenges/verify",
+        "factors/complete",
+        "factors/unlink",
+        "passwords/login",
+        "sign-out",
+      ].map((step) => `/api/community/auth/${step}`),
+    );
   });
 
   it("names the account a sign-out is meant for", async () => {

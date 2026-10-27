@@ -165,15 +165,18 @@ export const handleCommunityAuth = async (
       }
       const asserted = request.headers["x-author-account"];
       if (asserted !== undefined) {
-        // An asserted account must be readable as this session's own: a
-        // session that is no longer accepted, or a suspended account's, is
-        // answered with that refusal and nothing is signed out.
+        // A live session of another account is refused and kept, and a
+        // suspended account's live session is refused with that reason;
+        // nothing is signed out. A session that is no longer accepted signs
+        // out as without an assertion: an open factor-change receipt of it is
+        // still sealed (revoking the session reissued from it), otherwise the
+        // answer stays AUTH_UNAUTHENTICATED.
         const account = await service.readAccount(token);
-        if (!account.ok) {
+        if (!account.ok && account.reason !== "AUTH_UNAUTHENTICATED") {
           sendFailure(response, account.reason);
           return;
         }
-        if (account.value.userId !== asserted) {
+        if (account.ok && account.value.userId !== asserted) {
           sendApiError(response, "CONFLICT", accountMismatchReason);
           return;
         }

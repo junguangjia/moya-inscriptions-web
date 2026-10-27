@@ -31,11 +31,13 @@ import type { PublicUserProfile } from "@moya/contracts";
  * validated by the Backend on each request with its own session, and no token
  * ever reaches a response body.
  *
- * A held session is let go of only once the Backend confirms that it ended:
- * signed out now, or no longer accepted. An older session of an account whose
- * sign-out cannot be confirmed stays saved as a hidden copy, never listed or
- * switched to while the account is current, and a later sign-out through the
- * authentication relay ends it.
+ * A saved session (or one leaving `yoyi-session` for the saved list) is let go
+ * of only once the Backend confirms that it ended: signed out now, or no longer
+ * accepted. A sign-in grant that replaces `yoyi-session` (an ordinary sign-in,
+ * or re-adding the current account) replaces that cookie as before #352. An
+ * older session of an account whose sign-out cannot be confirmed stays saved
+ * as a hidden copy, never listed or switched to while the account is current,
+ * and a later sign-out through the authentication relay ends it.
  */
 export interface CommunityAccountsContext {
   readonly baseUrl: URL;
@@ -290,9 +292,10 @@ export const parseAccountTarget = (text: string): string | null => {
  * session reads as `current: null` (the relays that use it clear it). Each
  * other account is listed once: `ready` when one of its sessions is accepted
  * as that account, otherwise `reauth_required`, on every read until it is
- * removed or signed in again. Saved sessions of the current account are
- * hidden copies. A check the Backend cannot answer for a listed account
- * leaves the answer unknown (503).
+ * removed, signed in again, or let go (once its sign-out is confirmed) to make
+ * room when another account is added while three are held. Saved sessions of
+ * the current account are hidden copies. A check the Backend cannot answer for
+ * a listed account leaves the answer unknown (503).
  */
 export const listCommunityAccounts = async (
   context: CommunityAccountsContext,

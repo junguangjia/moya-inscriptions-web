@@ -89,6 +89,53 @@ const start = async () => {
     if (!registered.ok) throw new Error(registered.reason);
     return registered.value;
   };
+  /**
+   * Replaces the account's email, as 账号与安全 does: the Backend reissues the
+   * session and revokes the one presented. Returns the reissued session.
+   */
+  const replaceEmail = async (sessionToken: string, identifier: string) => {
+    const reauth = await service.sendChallenge({
+      channel: "email",
+      purpose: "reauthenticate",
+      sessionToken,
+      idempotencyKey: randomUUID(),
+      source: "127.0.0.1",
+    });
+    if (!reauth.ok || reauth.value.continuationToken === undefined)
+      throw new Error("reauthentication refused");
+    const proof = await service.verifyChallenge({
+      challengeId: reauth.value.challengeId,
+      code: codes.at(-1)!,
+      continuationToken: reauth.value.continuationToken,
+      idempotencyKey: randomUUID(),
+    });
+    if (!proof.ok || proof.value.outcome !== "reauthenticated")
+      throw new Error("reauthentication proof refused");
+    const account = await service.readAccount(sessionToken);
+    if (!account.ok) throw new Error(account.reason);
+    const sent = await service.sendChallenge({
+      channel: "email",
+      purpose: "replace",
+      identifier,
+      reauthToken: proof.value.reauthToken,
+      sessionToken,
+      idempotencyKey: randomUUID(),
+      source: "127.0.0.1",
+    });
+    if (!sent.ok || sent.value.continuationToken === undefined)
+      throw new Error("replacement challenge refused");
+    const completed = await service.completeFactor({
+      challengeId: sent.value.challengeId,
+      code: codes.at(-1)!,
+      continuationToken: sent.value.continuationToken,
+      reauthToken: proof.value.reauthToken,
+      expectedVersion: account.value.email.version,
+      idempotencyKey: randomUUID(),
+      sessionToken,
+    });
+    if (!completed.ok) throw new Error(completed.reason);
+    return completed.value.session;
+  };
   const signOut = (token: string, account?: string) =>
     fetch(`http://127.0.0.1:${address.port}/v1/community/auth/sign-out`, {
       method: "POST",
@@ -99,7 +146,7 @@ const start = async () => {
       },
       body: "{}",
     });
-  return { service, port, register, signOut };
+  return { service, port, register, replaceEmail, signOut };
 };
 
 describe("Backend sign-out with an account assertion (account-switching-v1)", () => {
@@ -133,8 +180,39 @@ describe("Backend sign-out with an account assertion (account-switching-v1)", ()
     // without an assertion; the mismatch check never hides that answer.
     const again = await signOut(session.token, `user-${"e".repeat(32)}`);
     expect(again.status).toBe(401);
-    expect(apiErrorSchema.parse(await again.json()).error.code).toBe(
-      "UNAUTHENTICATED",
+    expect(apiErrorSchema.parse(await again.json()).error).toMatchObject({
+      code: "UNAUTHENTICATED",
+      message: "AUTH_UNAUTHENTICATED",
+    });
+  });
+
+  it("still seals a factor change whose answer was lost when the page names the account", async () => {
+    const { service, register, replaceEmail, signOut } = await start();
+    const original = await register("switch-e@example.invalid", "账号戊");
+    // The change commits, but its answer never reaches the browser: the
+    // browser still holds the original session, which the change revoked.
+    const reissued = await replaceEmail(
+      original.token,
+      "switch-e-new@example.invalid",
+    );
+    expect(await service.readAccount(original.token)).toMatchObject({
+      ok: false,
+      reason: "AUTH_UNAUTHENTICATED",
+    });
+    expect((await service.readAccount(reissued.token)).ok).toBe(true);
+
+    // 退出登录 names the account the page shows. The original session is no
+    // longer accepted, yet its sign-out still seals the open change and so
+    // ends the session reissued from it, which no browser ever received.
+    const signedOut = await signOut(original.token, original.profile.id);
+    expect(signedOut.status).toBe(204);
+    expect(await service.readAccount(reissued.token)).toMatchObject({
+      ok: false,
+      reason: "AUTH_UNAUTHENTICATED",
+    });
+    // Sealed once: a repeat finds nothing left to end.
+    expect((await signOut(original.token, original.profile.id)).status).toBe(
+      401,
     );
   });
 
