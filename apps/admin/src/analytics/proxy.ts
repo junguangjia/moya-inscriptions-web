@@ -10,10 +10,14 @@ const privateHeaders = {
 const failure = (status: number, message: string) =>
   new Response(message, { status, headers: privateHeaders });
 
-// Only build-addressed files may be reused by this browser. Never cache native
-// documents, RSC, configuration, geography data or private API responses.
+// Revalidate recognizable build assets on every request. Opaque compiler names
+// are not a proof of content identity; never give them a year of immutable life.
+// Documents, RSC, configuration, geography and private data remain no-store.
 const hashedAsset =
-  /^\/_next\/static\/(?:chunks|css|media)\/(?:[A-Za-z0-9_()[\].@-]+\/)*(?:[A-Za-z0-9_()[\].@-]*[.-])?(?:[a-f0-9]{8,}|[a-z0-9_-]{12,})(?:\.[a-z0-9]+){1,2}$/u;
+  /^\/_next\/static\/(?:chunks|css|media)\/(?:[A-Za-z0-9_()[\].@-]+\/)*(?:[A-Za-z0-9_()[\].@-]*[.-])?[a-f0-9]{8,}(?:\.[a-z0-9]+){1,2}$/u;
+
+const opaqueChunk =
+  /^\/_next\/static\/(?:chunks|css)\/[0-3][a-z0-9_-]{12}\.(?:js|css)$/u;
 
 const id = "[0-9a-f-]{36}";
 const teamDetail = new RegExp(`^/api/teams/${id}$`, "iu");
@@ -127,7 +131,7 @@ export const createAnalyticsProxy =
 
     const headers = new Headers();
     const staticAsset =
-      hashedAsset.test(suffix) &&
+      (hashedAsset.test(suffix) || opaqueChunk.test(suffix)) &&
       !request.headers.has("rsc") &&
       !request.headers.has("x-moya-umami-rsc");
     if (staticAsset) {
@@ -236,7 +240,7 @@ export const createAnalyticsProxy =
           response.headers.get("content-type") ?? "",
         )
       ) {
-        outgoing.set("cache-control", "private, max-age=31536000, immutable");
+        outgoing.set("cache-control", "private, no-cache");
         for (const name of ["etag", "last-modified"]) {
           const value = response.headers.get(name);
           if (value) outgoing.set(name, value);

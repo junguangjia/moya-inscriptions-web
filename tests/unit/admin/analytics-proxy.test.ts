@@ -388,9 +388,7 @@ describe("analytics static asset reuse", () => {
         headers: { "if-none-match": '"synthetic-build-etag"' },
       }),
     );
-    expect(result.headers.get("cache-control")).toBe(
-      "private, max-age=31536000, immutable",
-    );
+    expect(result.headers.get("cache-control")).toBe("private, no-cache");
     expect(result.headers.get("etag")).toBe('"synthetic-build-etag"');
     expect(result.headers.get("vary")).toContain("Cookie");
   });
@@ -398,6 +396,10 @@ describe("analytics static asset reuse", () => {
     "/api/config",
     "/websites/synthetic",
     "/_next/static/app.js",
+    "/_next/static/chunks/webpack-runtime.js",
+    "/_next/static/chunks/app-build-manifest.js",
+    "/_next/static/chunks/react-refresh.js",
+    "/_next/static/chunks/polyfills-es2015.js",
     "/maps/china-provinces.json",
   ])("keeps %s private and fresh", async (path) => {
     const request = vi.fn(async (_path: string, init: RequestInit) => {
@@ -420,4 +422,31 @@ describe("analytics static asset reuse", () => {
       ).headers.get("cache-control"),
     ).toBe("private, no-store");
   });
+});
+
+it("authenticates and revalidates a cached asset without repeating its body", async () => {
+  const isOwner = vi.fn(async () => true);
+  const request = vi.fn(async (_path: string, init: RequestInit) => {
+    expect(new Headers(init.headers).get("if-none-match")).toBe(
+      '"synthetic-build-etag"',
+    );
+    return new Response(null, {
+      status: 304,
+      headers: { etag: '"synthetic-build-etag"' },
+    });
+  });
+  const proxy = createAnalyticsProxy({
+    isOwner,
+    upstream: { request, origin: () => new URL(environment.UMAMI_ORIGIN) },
+  });
+  const response = await proxy(
+    new Request(url("/_next/static/chunks/0mqay9f16jzy9.js"), {
+      headers: { "if-none-match": '"synthetic-build-etag"' },
+    }),
+  );
+  expect(isOwner).toHaveBeenCalledOnce();
+  expect(response.status).toBe(304);
+  expect(await response.text()).toBe("");
+  expect(response.headers.get("cache-control")).toBe("private, no-cache");
+  expect(response.headers.get("cache-control")).not.toContain("immutable");
 });

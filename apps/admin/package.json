@@ -106,6 +106,7 @@
     "./login-intro": "./src/branding/LoginIntro.tsx",
     "./login.css": "./src/branding/login.css",
     "./media-thumbnail": "./src/media/thumbnail-url.ts",
-    "./media-thumbnail-endpoint": "./src/media/thumbnail-endpoint.ts"
+    "./media-thumbnail-endpoint": "./src/media/thumbnail-endpoint.ts",
+    "./analytics-device": "./src/analytics/device.ts"
   }
 }
