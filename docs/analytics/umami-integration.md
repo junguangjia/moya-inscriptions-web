@@ -286,6 +286,28 @@ Git 历史。更新维护须遵循
 验收须记录：任务数据库/网站归属、固定 image
 ID、初始化结果 ID、原生 overview/Board/漏斗/retention/地域页面截图、只读导航及匿名/非 Owner/伪造 Bearer 等负例。用真实浏览器打开 Payload 的受保护工作台；确认指标为合成活动且无重复前端 tracker。测量原生进程空闲/看板加载峰值、PG 连接数、主站接口响应和容器 OOM/限额情况。未实际运行的检查标为未验收。
 
+## Internal province fill
+
+The collector retains GeoLite country, existing province and city values. For
+China (`CN`) records with neither province nor city, it attempts a local
+ip2region lookup and fills only a recognized province code. Other countries,
+existing results, unavailable files and unknown values retain existing behavior.
+No public IP label, external lookup API, new service, schema or history rewrite
+is introduced. The official JavaScript reader uses a 512 KiB vector index per IP
+family and reads the pinned IPv4/IPv6 XDB files from `geo/`.
+
+Source and data hashes are recorded in `infra/production/umami/source.json`.
+Preserve the bundled license and notice. Replace files through the normal
+reviewed build/release process; do not mutate a running release's data files.
+
+The same 179 retained unique IPs were compared before integration: GeoLite
+provided 30 provinces; ip2region provided 179. Filling only the missing values
+adds 149 and preserves all existing 30. Those 30 had provider disagreements,
+which are not overwritten. Official XDB/text and MMDB/Python crosschecks had
+zero differences. This establishes field coverage, not physical-location
+accuracy or a count of human visitors. The deployed change applies to newly
+resolved sessions; it does not automatically rewrite historical sessions.
+
 ## 两套事件语义与保留期
 
 `community.analytics_events`

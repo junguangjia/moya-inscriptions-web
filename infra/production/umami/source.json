@@ -100,5 +100,32 @@
       "requiredTwoFactorSetup": "Private read-only shell reports unavailable when setup is required and incomplete; native setup and all gateway denial boundaries unchanged",
       "performance": "Deferred native leaf/detail/chart modules; current-scope cached summary/trend refresh and recoverable website reads; all18 analyses/all26dimensions/native GET semantics and gates preserved"
     }
+  },
+  "provinceFallback": {
+    "mode": "fill-only missing CN province; preserve known province, city and non-CN geography; internal analytics only",
+    "repository": "https://github.com/lionsoul2014/ip2region",
+    "commit": "70d862dbc7ee26c7de6e1adf4c25e63250de2606",
+    "clientVersion": "3.1.8",
+    "patch": "ip-province-fallback.patch",
+    "patchSha256": "ee0442474fe367cd426f58ffc7f253320b58f550395c8104419567078acaf8f2",
+    "upstreamDetectSha256": "28799f1bba9a5357951a77a88aa4b5e53aa10591a9ac6d0110af3f3f1c1fdaa2",
+    "patchedHashes": "ip-province-fallback.sha256",
+    "ipv4": {
+      "sha256": "27ecba8c9a6d5e3b280aedbe7ee15c65372b179fbd0dad3845d8c608f2fcace1",
+      "bytes": 11122642
+    },
+    "ipv6": {
+      "sha256": "939f6b46bd2b8bec3cf7c5ceb8ba782266ae9b1f35b5ba7916700dec0b7506ed",
+      "bytes": 37277813
+    },
+    "sample": {
+      "uniqueIPs": 179,
+      "beforeProvince": 30,
+      "afterFillOnly": 179,
+      "newlyFilled": 149,
+      "existingProviderDisagreements": 30,
+      "existingResultsPreserved": true,
+      "accuracyVerified": false
+    }
   }
 }

@@ -18,3 +18,5 @@
 !archive-navigation.json
 !archive-icons.svg
 !archive-assets.sha256
+!ip-province-fallback.patch
+!ip-province-fallback.sha256
