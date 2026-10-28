@@ -190,9 +190,7 @@ describe("work moderation prerequisites and recovery", () => {
     HTMLElement.prototype.scrollIntoView = vi.fn();
     render(createElement(CommunityContentClient));
     await button("隐藏作品");
-    fireEvent.click(
-      screen.getByRole("button", { name: "合成作品 a", exact: true }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "合成作品 a" }));
     const panel = await screen.findByRole("region", { name: "作品详情与管理" });
     const field = within(panel).getByRole("textbox", {
       name: "作品处置理由（必填）",
