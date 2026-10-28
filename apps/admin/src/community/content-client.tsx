@@ -149,7 +149,7 @@ export const CommunityContentClient = () => {
   const reason = readModerationReason(reasonDraft);
   useEffect(() => {
     if (reasonInvalid) reasonInput.current?.focus();
-  }, [reasonInvalid]);
+  }, [reasonInvalid, selectedWork?.id]);
   const [quantity, setQuantity] = useState("");
   const urlQuery = params.toString();
   const updateURL = (
@@ -518,6 +518,19 @@ export const CommunityContentClient = () => {
       </button>
     </div>
   );
+  const workReasonInput = (
+    <ModerationReasonInput
+      label="作品处置理由（必填）"
+      value={reasonDraft}
+      onChange={(value) => {
+        setReasonDraft(value);
+        if (readModerationReason(value) !== null) setReasonInvalid(false);
+      }}
+      textareaRef={reasonInput}
+      invalid={reasonInvalid}
+      disabled={disabled}
+    />
+  );
   return (
     <div className={styles.workspace} aria-busy={busy}>
       <SetStepNav
@@ -551,6 +564,34 @@ export const CommunityContentClient = () => {
           </p>
         </div>
       </header>
+      {notice ? (
+        <div className={styles.notice} role="status">
+          {notice}
+          {retry ? (
+            <>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void run(retry)}
+              >
+                重试同一操作
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setRetry(null);
+                  setNotice(null);
+                  void load();
+                }}
+              >
+                放弃并刷新
+              </button>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+      {busy ? <p role="status">正在保存操作，请等待结果…</p> : null}
       <div className={styles.layout} data-panel-open={selectedWork !== null}>
         <section
           aria-label={
@@ -651,34 +692,6 @@ export const CommunityContentClient = () => {
               }
             />
           ) : null}
-          {notice ? (
-            <div className={styles.notice} role="status">
-              {notice}
-              {retry ? (
-                <>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void run(retry)}
-                  >
-                    重试同一操作
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => {
-                      setRetry(null);
-                      setNotice(null);
-                      void load();
-                    }}
-                  >
-                    放弃并刷新
-                  </button>
-                </>
-              ) : null}
-            </div>
-          ) : null}
-          {busy ? <p role="status">正在保存操作，请等待结果…</p> : null}
           {tab !== "users" ? (
             <form
               className={styles.filters}
@@ -731,20 +744,9 @@ export const CommunityContentClient = () => {
           {loading ? <p role="status">读取中…</p> : null}
           {tab === "works" && works ? (
             <>
-              {(selectedIds.size === 0 || singleReasonRequested) && (
-                <ModerationReasonInput
-                  label="作品处置理由（必填）"
-                  value={reasonDraft}
-                  onChange={(value) => {
-                    setReasonDraft(value);
-                    if (readModerationReason(value) !== null)
-                      setReasonInvalid(false);
-                  }}
-                  textareaRef={reasonInput}
-                  invalid={reasonInvalid}
-                  disabled={disabled}
-                />
-              )}
+              {selectedWork === null &&
+                (selectedIds.size === 0 || singleReasonRequested) &&
+                workReasonInput}
               <BulkActions
                 key={activeUser?.id ?? "all-works"}
                 view="works"
@@ -1051,7 +1053,12 @@ export const CommunityContentClient = () => {
           <WorkDetailPanel
             key={selectedWork.id}
             item={selectedWork}
-            actions={workActions(selectedWork)}
+            actions={
+              <>
+                {workReasonInput}
+                {workActions(selectedWork)}
+              </>
+            }
             onClose={() => {
               detailRequest.current++;
               detailController.current?.abort();

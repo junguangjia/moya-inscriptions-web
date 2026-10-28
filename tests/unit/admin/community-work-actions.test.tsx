@@ -186,6 +186,38 @@ describe("work moderation prerequisites and recovery", () => {
     },
   );
 
+  it("keeps the required reason in the current work detail before confirmation", async () => {
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    render(createElement(CommunityContentClient));
+    await button("隐藏作品");
+    fireEvent.click(
+      screen.getByRole("button", { name: "合成作品 a", exact: true }),
+    );
+    const panel = await screen.findByRole("region", { name: "作品详情与管理" });
+    const field = within(panel).getByRole("textbox", {
+      name: "作品处置理由（必填）",
+    });
+    expect(
+      screen.getAllByRole("textbox", { name: "作品处置理由（必填）" }),
+    ).toHaveLength(1);
+    fireEvent.click(within(panel).getByRole("button", { name: "隐藏作品" }));
+    expect(document.activeElement).toBe(field);
+    expect(within(panel).getByRole("alert").textContent).toContain(
+      "请填写 1–2000 字",
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(writes()).toHaveLength(0);
+    fireEvent.change(field, { target: { value: "合成详情处置理由" } });
+    fireEvent.click(within(panel).getByRole("button", { name: "隐藏作品" }));
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "处置理由：合成详情处置理由",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    fireEvent.click(within(panel).getByRole("button", { name: "返回列表" }));
+    expect((reason() as HTMLTextAreaElement).value).toBe("合成详情处置理由");
+    expect(writes()).toHaveLength(0);
+  });
+
   it("requires confirmation, freezes the trimmed reason, updates the row and supports another action", async () => {
     runtime.call.mockImplementation(
       async (name: string, input: { state: OperatorWork["state"] }) => {

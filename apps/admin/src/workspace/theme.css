@@ -61,6 +61,11 @@ body {
   font-weight: 600;
 }
 
+/* The fixed archive nav keeps Payload's reserved content column. */
+.template-default > .archive-nav + .template-default__wrap {
+  grid-column: 2;
+}
+
 .template-default__wrap > :where(section, div:not(.app-header)) {
   min-width: 0;
 }
