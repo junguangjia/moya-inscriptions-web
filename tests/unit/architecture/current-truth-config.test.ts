@@ -288,6 +288,56 @@ describe("current repository truth and local configuration", () => {
     );
   });
 
+  it("selects an EdgeOne client address only for analytics and preserves socket-peer identities", async () => {
+    const nginx = await readFile(
+      path.join(repositoryRoot, "infra/production/nginx/yoyi.conf.template"),
+      "utf8",
+    );
+    expect(nginx).toContain("geo $remote_addr $yoyi_analytics_edgeone_peer {");
+    expect(nginx).toMatch(
+      /geo \$remote_addr \$yoyi_analytics_edgeone_peer \{\s*default 0;\s*include \/etc\/yoyi\/nginx\/analytics-edgeone-peers\.conf;\s*\}/,
+    );
+    expect(nginx).toMatch(
+      /geo \$http_eo_connecting_ip \$yoyi_analytics_candidate_valid \{\s*default 1;\s*255\.255\.255\.255 0;\s*\}/,
+    );
+    expect(nginx).toContain(
+      'map "$yoyi_analytics_edgeone_peer:$yoyi_analytics_candidate_valid" $yoyi_analytics_client_ip {',
+    );
+    expect(nginx).toContain('"1:1" $http_eo_connecting_ip;');
+    expect(nginx).toContain("default $remote_addr;");
+    expect(nginx).not.toMatch(
+      /(?:^|\n)\s*(?:real_ip_header|set_real_ip_from|real_ip_recursive)\s/,
+    );
+    expect(nginx).not.toMatch(/\$http_(?:x_forwarded_for|x_real_ip)/);
+    const analytics = /location = \/api\/community\/analytics \{([^}]*)\}/.exec(
+      nginx,
+    )?.[1];
+    expect(analytics).toContain(
+      "proxy_set_header X-Moya-Client-Ip $yoyi_analytics_client_ip;",
+    );
+    expect(analytics).toContain(
+      "limit_req zone=yoyi_analytics burst=10 nodelay;",
+    );
+    expect(analytics).toContain("client_max_body_size 32k;");
+    expect(analytics).toContain(
+      "proxy_set_header X-Forwarded-For $remote_addr;",
+    );
+    const authentication =
+      /location \^~ \/api\/community\/auth\/ \{([^}]*)\}/.exec(nginx)?.[1];
+    expect(authentication).toContain(
+      "proxy_set_header X-Moya-Client-Ip $remote_addr;",
+    );
+    expect(
+      nginx.match(
+        /proxy_set_header X-Moya-Client-Ip \$yoyi_analytics_client_ip;/g,
+      ),
+    ).toHaveLength(1);
+    expect(nginx).toContain(
+      "limit_req_zone $binary_remote_addr zone=yoyi_analytics:1m rate=30r/m;",
+    );
+    expect(nginx).toContain('"ip":"$remote_addr"');
+  });
+
   it("keeps media streaming and Article issuer boundaries explicit", async () => {
     const nginx = await readFile(
       path.join(repositoryRoot, "infra/production/nginx/yoyi.conf.template"),

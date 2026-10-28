@@ -174,6 +174,106 @@ certificate issuance, firewall edits, installation, service activation or cloud
 requests run in this task. No Swarm, Kubernetes, PM2, Redis or extra controller
 is introduced.
 
+### Analytics client-IP trust
+
+Only `/api/community/analytics` may replace its `X-Moya-Client-Ip` value with
+EdgeOne's `EO-Connecting-IP`, and only when the socket peer belongs to the
+verified current origin ACL for this exact site's accelerated hostname. The
+[EdgeOne header reference](https://cloud.tencent.com/document/product/1552/87654)
+defines this address as the connection into EdgeOne; a preceding proxy remains
+the observed client. Caller-supplied `X-Forwarded-For` and `X-Real-IP` never
+select the analytics address. The
+[Nginx geo module](https://nginx.org/en/docs/http/ngx_http_geo_module.html)
+validates IPv4/IPv6 candidates; missing, malformed or duplicate values retain
+the socket peer. Authentication, rate limits, forwarding headers and operational
+logs continue to use the original `$remote_addr`.
+
+The template includes the fixed private file
+`/etc/yoyi/nginx/analytics-edgeone-peers.conf`. An empty file trusts no peers
+and retains socket-peer attribution. A missing file makes `nginx -t` reject the
+new configuration; do not reload, and preserve the currently running
+configuration. Nginx 1.24's `geo` include opens a literal filename rather than
+expanding globs. During authorized initial bootstrap, prepare its
+root-controlled parent directory and create an empty mode `0600` file only if
+the file does not exist:
+
+```sh
+sudo sh -c 'umask 077; set -C; : > /etc/yoyi/nginx/analytics-edgeone-peers.conf'
+```
+
+The shell's no-clobber setting must remain enabled: an existing file causes this
+command to fail without replacing its trust list. Do not populate the file with
+guessed CDN ranges, a platform-wide list, `default 1`, or `/0` prefixes. First
+obtain a fresh authenticated, read-only
+[`DescribeOriginACL`](https://cloud.tencent.com/document/api/1552/120408)
+response for the exact zone and verify that `Status` is `online` and `L7Hosts`
+contains the exact hostname. Keep the response and generated include in private
+operational storage, outside Git and published attachments. The offline compiler
+does not authenticate a response or call Tencent; its input must already have
+that verified provenance.
+
+Wrap the verified response in this schema (all values below are synthetic):
+
+```json
+{
+  "schemaVersion": 1,
+  "provider": "tencent-edgeone",
+  "zoneId": "zone-synthetic",
+  "host": "catalog.example.invalid",
+  "capturedAt": "2026-10-28T12:00:00Z",
+  "originAclInfo": {
+    "Status": "online",
+    "L7Hosts": ["catalog.example.invalid"],
+    "CurrentOriginACL": {
+      "Version": "mlc-synthetic-current-v1",
+      "EntireAddresses": {
+        "IPv4": ["192.0.2.0/24"],
+        "IPv6": ["2001:db8::/32"]
+      }
+    }
+  }
+}
+```
+
+From the task worktree, compile a new, uniquely named private output:
+
+```sh
+/opt/homebrew/bin/mise exec -- node scripts/analytics/render-client-ip-trust.mjs \
+  --input /private/task/edgeone-origin-acl.json \
+  --output /private/task/analytics-edgeone-current.conf \
+  --host catalog.example.invalid --zone zone-synthetic
+```
+
+The compiler requires matching host/zone bindings, a current ACL version,
+canonical network CIDRs, a nonempty current list and a UTC capture no older than
+72 hours. It rejects host bits, `/0`, invalid address families and directive
+injection. It creates mode `0600` output without overwriting an existing file,
+and prints only IPv4/IPv6 counts and the output SHA-256. It trusts only
+`CurrentOriginACL`; `NextOriginACL`, if present, is never merged into the trust
+list. The generated IPv6 spelling is normalized without changing its network.
+
+During the separately authorized deployment, preserve the exact active include,
+its SHA-256 and the rendered Nginx configuration for rollback. Compile to a new
+private file; never compile over the active path. Stage the reviewed output as a
+root-owned mode `0600` temporary file on the active file's filesystem and verify
+its expected output hash. Immediately before an atomic rename to the fixed
+include path, verify that the active file still has its recorded expected hash;
+a mismatch stops that replacement. Run `nginx -t` before reload. If it fails,
+restore the exact saved file atomically, validate again and preserve the running
+configuration. Verify the normal and spoofed header paths, IPv4/IPv6 and
+direct-peer fallback against the generated runtime.
+
+Refresh the read-only evidence at least every 72 hours and before activation;
+this freshness check runs at compilation, not per request. If provenance,
+freshness or host binding cannot be reverified, replace the active include with
+an empty file through the same expected-hash and atomic-replacement procedure,
+then validate/reload to return to socket-peer attribution. Do not delete the
+required file. An announced next ACL requires a fresh capture after it becomes
+current; do not acknowledge a provider switch, change a firewall, install a
+timer or trust the next list as part of this compiler. Historical rows without
+recoverable client evidence remain unchanged; this configuration cannot
+reconstruct their original IPs.
+
 ## Database roles, pools and verified TLS
 
 A single TencentDB instance and single database can host the future Payload and
