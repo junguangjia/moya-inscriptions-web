@@ -11,6 +11,8 @@ import {
   UMAMI_VERSION,
 } from "./common.mjs";
 
+import { COMPATIBILITY_POLICY, runtimePolicy } from "./runtime-policy.mjs";
+
 export function buildImagePlan(values) {
   const target = values.target ?? "standalone";
   const platform = values.platform ?? "linux/amd64";
@@ -24,6 +26,9 @@ export function buildImagePlan(values) {
     !/^[a-z0-9][a-z0-9._/-]*:[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/u.test(tag)
   )
     throw new AnalyticsToolError("EXPLICIT_IMAGE_TAG_REQUIRED");
+  const policy = runtimePolicy(values["runtime-policy"]);
+  if (policy.id === COMPATIBILITY_POLICY && target !== "standalone")
+    throw new AnalyticsToolError("COMPATIBILITY_STANDALONE_REQUIRED");
   const dockerContext = values["docker-context"];
   if (
     dockerContext !== undefined &&
@@ -47,9 +52,10 @@ export function buildImagePlan(values) {
       "--tag",
       tag,
       "--file",
-      path.join(context, "Dockerfile"),
+      path.join(context, policy.dockerfile),
       context,
     ],
+    ...(policy.id === COMPATIBILITY_POLICY ? { runtimePolicy: policy.id } : {}),
     dockerContext: dockerContext ?? "EXPLICIT_CONTEXT_REQUIRED",
     version: UMAMI_VERSION,
     sourceCommit: UMAMI_SOURCE_COMMIT,
@@ -67,6 +73,7 @@ if (
         tag: { type: "string" },
         "docker-context": { type: "string" },
         target: { type: "string" },
+        "runtime-policy": { type: "string" },
         platform: { type: "string" },
         execute: { type: "boolean", default: false },
       },

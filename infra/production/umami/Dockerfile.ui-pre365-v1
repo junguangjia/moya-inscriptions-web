@@ -1,0 +1,106 @@
+# syntax=docker/dockerfile:1.7
+# Explicit #360 UI-only compatibility build. Current #365 Dockerfile is unchanged.
+# Business source is the pinned live9d recipe; only eight reviewed UI files vary.
+FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS standalone-builder
+WORKDIR /app
+ADD --checksum=sha256:dfdc154f23fe52ffd8fbf13c0544ea880e5ef01463f57d06954512b41c50a93a https://codeload.github.com/umami-software/umami/tar.gz/ec0ff50388c264ed8ce46f00967e92f7e71476ae /tmp/umami.tar.gz
+RUN tar -xzf /tmp/umami.tar.gz --strip-components=1 -C /app \
+    && rm /tmp/umami.tar.gz \
+    && apt-get update \
+    && apt-get install --no-install-recommends --yes ca-certificates patch \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install --global pnpm@12.3.4 \
+    && printf '\nstrictDepBuilds: false\n' >> pnpm-workspace.yaml \
+    && pnpm install --frozen-lockfile
+# Preserve the actual host when upgrading pg's existing socket to strict TLS.
+# With Node 24 and an IP target, omitting it makes certificate checks use localhost.
+COPY pg-tls-host.patch upstream-pg-tls.sha256 patched-pg-tls.sha256 /tmp/
+RUN sha256sum -c /tmp/upstream-pg-tls.sha256 \
+    && patch -p1 --fuzz=0 < /tmp/pg-tls-host.patch \
+    && sha256sum -c /tmp/patched-pg-tls.sha256
+COPY pool-limit.patch upstream-pool.sha256 patched-pool.sha256 /tmp/
+RUN sha256sum -c /tmp/upstream-pool.sha256 \
+    && patch -p1 --fuzz=0 < /tmp/pool-limit.patch \
+    && sha256sum -c /tmp/patched-pool.sha256 \
+    && cp /app/docker/proxy.ts /app/src/proxy.ts
+ENV BASE_PATH=/admin/analytics-workspace \
+    NEXT_TELEMETRY_DISABLED=1 \
+    DATABASE_TYPE=postgresql \
+    DATABASE_URL=postgresql://REPLACE_ME_BUILD_USER:REPLACE_ME_BUILD_PASSWORD@127.0.0.1:5432/REPLACE_ME_BUILD_DATABASE
+ADD --checksum=sha256:46df66d141c04e4920e00b5e4bbfc4445178adc11de9a8b2900bcea79c100c0e https://raw.githubusercontent.com/GitSquared/node-geolite2-redist/e26a98449d33ab0639d555b736898d4f55623c82/redist/GeoLite2-City.tar.gz /tmp/geolite-city.tar.gz
+RUN mkdir -p /app/geo \
+    && tar -xzf /tmp/geolite-city.tar.gz --strip-components=1 -C /app/geo \
+    && echo 'fd112e5b13ca19e8bb0bf2e1902fb0694f6ba1940bef916e0d8d9d9346f4e029  /app/geo/GeoLite2-City.mmdb' | sha256sum -c - \
+    && rm /tmp/geolite-city.tar.gz
+COPY chinese-workspace.patch upstream-chinese.sha256 patched-chinese.sha256 generated-chinese.sha256 /tmp/
+COPY generate-chinese-dictionaries.mjs /app/scripts/artvenn-generate-chinese.mjs
+RUN sha256sum -c /tmp/upstream-chinese.sha256 \
+    && patch -p1 --fuzz=0 < /tmp/chinese-workspace.patch \
+    && sha256sum -c /tmp/patched-chinese.sha256 \
+    && echo 'bb6148463d47161c894f28b09d6f93611a002f0f8013d84df6a61126419680f7  /app/scripts/artvenn-generate-chinese.mjs' | sha256sum -c - \
+    && node scripts/artvenn-generate-chinese.mjs --database geo/GeoLite2-City.mmdb --output-dir src/data \
+    && sha256sum -c /tmp/generated-chinese.sha256 \
+    && cp src/data/geo-translations-NOTICE.txt geo/geo-translations-NOTICE.txt \
+    && mv src/data/geo-translations-collisions.json src/data/geo-translations-summary.json /tmp/
+COPY archive-theme.css /app/src/app/archive-theme.css
+COPY archive-navigation.json /app/src/data/archive-navigation.json
+COPY archive-icons.svg /app/public/archive-icons.svg
+COPY archive-assets.sha256 /tmp/archive-assets.sha256
+RUN echo '18f441d5caae2c4e74fe5dd848949c792be480ae105881a77a2ece47872f7d1b  /tmp/archive-assets.sha256' | sha256sum -c -
+RUN sha256sum -c /tmp/archive-assets.sha256
+COPY china-provinces.json china-map-NOTICE.txt /app/public/maps/
+RUN echo '99adfeded5223848bbe37a0a12f8023e11ee12161c7800521c27db42fdeac275  /app/public/maps/china-provinces.json' | sha256sum -c - \
+    && echo '9c7d4778ad5c927ebb19371132f4b4943147f28f13eca7c60b1bd1a6852d79e1  /app/public/maps/china-map-NOTICE.txt' | sha256sum -c -
+# Optional local China province fill; no network lookup during collection.
+COPY ui-pre365-v1-province.patch /tmp/ip-province-fallback.patch
+COPY ui-pre365-v1-province.sha256 /tmp/ip-province-fallback.sha256
+RUN echo 'ee0442474fe367cd426f58ffc7f253320b58f550395c8104419567078acaf8f2  /tmp/ip-province-fallback.patch' | sha256sum -c - \
+    && echo '28799f1bba9a5357951a77a88aa4b5e53aa10591a9ac6d0110af3f3f1c1fdaa2  /app/src/lib/detect.ts' | sha256sum -c - \
+    && patch -p1 --fuzz=0 < /tmp/ip-province-fallback.patch \
+    && sha256sum -c /tmp/ip-province-fallback.sha256
+ADD --checksum=sha256:27ecba8c9a6d5e3b280aedbe7ee15c65372b179fbd0dad3845d8c608f2fcace1 https://raw.githubusercontent.com/lionsoul2014/ip2region/70d862dbc7ee26c7de6e1adf4c25e63250de2606/data/ip2region_v4.xdb /app/geo/ip2region_v4.xdb
+ADD --checksum=sha256:939f6b46bd2b8bec3cf7c5ceb8ba782266ae9b1f35b5ba7916700dec0b7506ed https://raw.githubusercontent.com/lionsoul2014/ip2region/70d862dbc7ee26c7de6e1adf4c25e63250de2606/data/ip2region_v6.xdb /app/geo/ip2region_v6.xdb
+COPY ui-pre365-v1-verify.mjs ui-pre365-v1-source.json ui-pre365-v1-protected.sha256 /tmp/
+RUN echo '5aef1ff2ff9805b66d00b437c6ed4d1b7861396620167ee408f90ac343d6216c  /tmp/ui-pre365-v1-verify.mjs' | sha256sum -c - \
+    && echo '905227061911b151030a469957f52f2392198cbfe1ac79d05196d979e7fa7436  /tmp/ui-pre365-v1-source.json' | sha256sum -c - \
+    && echo '5409b442949b55ea40293a1ce41609f4e3a169dd16d167b160ebbc46edb7478f  /tmp/ui-pre365-v1-protected.sha256' | sha256sum -c - \
+    && node /tmp/ui-pre365-v1-verify.mjs --root /app --metadata /tmp/ui-pre365-v1-source.json --inventory /tmp/ui-pre365-v1-protected.sha256
+ENV SKIP_BUILD_GEO=1
+RUN pnpm exec vitest run src/lib/format.test.ts src/lib/artvenn-ip-province.test.ts src/lib/artvenn-labels.test.ts src/lib/artvenn-geography.test.ts src/components/hooks/useFormat.test.ts src/lib/artvenn-china-map.test.ts src/components/metrics/artvenn-geography-lists.test.tsx src/queries/sql/sessions/artvenn-geography-context.test.ts src/components/metrics/MetricLabel.test.tsx src/components/metrics/WorldMap.test.tsx src/components/metrics/WorldMap.geometry.test.tsx 'src/app/(main)/boards/[boardId]/BoardViewHeader.test.tsx' src/components/metrics/MetricsExpandedTable.accessibility.test.tsx 'src/app/api/websites/[websiteId]/metrics/artvenn-display.test.ts' 'src/app/(main)/App.archive.test.tsx' 'src/app/(main)/ArchiveShell.test.tsx' 'src/app/(main)/websites/[websiteId]/ArchiveReportNav.test.tsx' 'src/app/(main)/websites/[websiteId]/WebsiteHeader.archive.test.tsx' 'src/app/(main)/ArchiveContextNav.test.tsx' 'src/app/(main)/ArchiveContinuousNavigation.test.tsx' 'src/lib/archive-analysis.test.ts' 'src/components/hooks/archive-analysis-scope.test.tsx' 'src/components/metrics/WeeklyTraffic.test.tsx' 'src/components/common/DataGrid.archive.test.tsx' 'src/components/input/WebsiteFilterButton.archive.test.tsx' 'src/app/(main)/websites/[websiteId]/ArchiveAnalysis.test.tsx' 'src/app/(main)/websites/[websiteId]/WebsitePage.composed.test.tsx' 'src/app/(main)/websites/[websiteId]/compare/CompareTables.archive.test.tsx' 'src/app/(main)/websites/[websiteId]/WebsiteExpandedView.archive.test.tsx' 'src/app/(main)/websites/[websiteId]/(reports)/retention/RetentionPage.archive.test.tsx' 'src/components/charts/DeferredChart.test.tsx' 'src/components/common/LoadingPanel.refresh.test.tsx' 'src/app/(main)/websites/WebsiteProvider.archive.test.tsx' 'src/components/common/ErrorBoundary.archive.test.tsx' 'src/lib/archive-theme.test.ts' --maxWorkers=1 \
+    && pnpm build:docker
+
+FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS standalone
+LABEL org.opencontainers.image.title="ArtVenn private Umami standalone artifact" \
+    org.opencontainers.image.version="3.4.0" \
+    org.opencontainers.image.source="https://github.com/umami-software/umami" \
+    org.opencontainers.image.revision="ec0ff50388c264ed8ce46f00967e92f7e71476ae" \
+    com.artvenn.umami.patch-sha256="96e842017bdd90b3b67044f4606805f15389525fc5d71654ff99bb0832618029" \
+    com.artvenn.umami.pg-tls-host-sha256="ad0a70c6fc8820bb613a8437c634b6a0a6a04cc3cc36175ab72590d2733c24e6" \
+    com.artvenn.umami.province-fallback-sha256="ee0442474fe367cd426f58ffc7f253320b58f550395c8104419567078acaf8f2" \
+    com.artvenn.umami.runtime-policy="ui-pre365-v1" \
+    com.artvenn.umami.database-timezone="inherit" \
+    com.artvenn.umami.protected-source-sha256="5409b442949b55ea40293a1ce41609f4e3a169dd16d167b160ebbc46edb7478f" \
+    com.artvenn.umami.protected-source-verifier-sha256="5aef1ff2ff9805b66d00b437c6ed4d1b7861396620167ee408f90ac343d6216c" \
+    com.artvenn.umami.compatibility-manifest-sha256="905227061911b151030a469957f52f2392198cbfe1ac79d05196d979e7fa7436" \
+    com.artvenn.umami.locale="zh-CN" \
+    com.artvenn.umami.geography="cn-province-map-v2" \
+    com.artvenn.umami.china-map-sha256="99adfeded5223848bbe37a0a12f8023e11ee12161c7800521c27db42fdeac275" \
+    com.artvenn.umami.geo-sha256="fd112e5b13ca19e8bb0bf2e1902fb0694f6ba1940bef916e0d8d9d9346f4e029" \
+    com.artvenn.umami.base-path="/admin/analytics-workspace" \
+    com.artvenn.umami.libc="glibc" \
+    com.artvenn.umami.node-major="24" \
+    com.artvenn.umami.pool-max="3"
+WORKDIR /app
+ENV NODE_ENV=production \
+    HOSTNAME=127.0.0.1 \
+    PORT=3010 \
+    BASE_PATH=/admin/analytics-workspace \
+    NEXT_TELEMETRY_DISABLED=1 \
+    NODE_OPTIONS=--max-old-space-size=512
+COPY --from=standalone-builder --chown=node:node /app/.next/standalone ./
+COPY --from=standalone-builder --chown=node:node /app/.next/static ./.next/static
+COPY --from=standalone-builder --chown=node:node /app/public ./public
+COPY --from=standalone-builder --chown=node:node /app/LICENSE ./LICENSE
+COPY --from=standalone-builder --chown=node:node /app/geo ./geo
+USER node
+CMD ["node", "server.js"]
