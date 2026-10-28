@@ -7,6 +7,7 @@ import {
   UMAMI_GEOGRAPHY_POLICY,
   UMAMI_CHINA_MAP_SHA256,
   UMAMI_PG_TLS_HOST_SHA256,
+  UMAMI_PROVINCE_FALLBACK_SHA256,
 } from "./common.mjs";
 import { createHash } from "node:crypto";
 import { buildImagePlan } from "./build-umami-image.mjs";
@@ -71,7 +72,7 @@ test("every local Docker COPY input is in the exact build-context whitelist", as
       .filter((line) => /^COPY /u.test(line) && !/ --from=/u.test(line))
       .flatMap((line) => line.split(/\s+/u).slice(1, -1)),
   );
-  assert.equal(sources.size, 17);
+  assert.equal(sources.size, 19);
   const checkWhitelist = (candidate) => {
     assert.equal(candidate[0], "**");
     assert.ok(
@@ -313,6 +314,8 @@ test("standalone runtime export requires immutable glibc image metadata and expl
       "com.artvenn.umami.locale": "zh-CN",
       "com.artvenn.umami.patch-sha256": UMAMI_WORKSPACE_IDENTITY,
       "com.artvenn.umami.pg-tls-host-sha256": UMAMI_PG_TLS_HOST_SHA256,
+      "com.artvenn.umami.province-fallback-sha256":
+        UMAMI_PROVINCE_FALLBACK_SHA256,
       "com.artvenn.umami.geography": UMAMI_GEOGRAPHY_POLICY,
       "com.artvenn.umami.china-map-sha256": UMAMI_CHINA_MAP_SHA256,
       "com.artvenn.umami.geo-sha256":
@@ -321,6 +324,7 @@ test("standalone runtime export requires immutable glibc image metadata and expl
   };
   assert.doesNotThrow(() => verifyRuntimeImage(metadata, plan));
   for (const key of [
+    "com.artvenn.umami.province-fallback-sha256",
     "com.artvenn.umami.patch-sha256",
     "com.artvenn.umami.pg-tls-host-sha256",
     "com.artvenn.umami.locale",
