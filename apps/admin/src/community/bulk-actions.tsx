@@ -1,5 +1,6 @@
 "use client";
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
+import type { RefObject } from "react";
 import { ConfirmationModal, useModal } from "@payloadcms/ui";
 import {
   call,
@@ -22,29 +23,44 @@ export const ModerationReasonInput = ({
   onChange,
   disabled = false,
   label = "处置理由（必填）",
+  invalid = false,
+  textareaRef,
 }: {
   readonly value: string;
   readonly onChange: (value: string) => void;
   readonly disabled?: boolean;
   readonly label?: string;
-}) => (
-  <div className={styles.reportField}>
-    <label>
-      {label}
-      <textarea
-        disabled={disabled}
-        maxLength={2000}
-        required
-        rows={3}
-        value={value}
-        onChange={(event) => onChange(event.currentTarget.value)}
-      />
-    </label>
-    <span className={styles.secondary}>
-      请先填写理由，再核对并确认决定。理由会提供给相关用户；批量处置逐项使用同一理由。
-    </span>
-  </div>
-);
+  readonly invalid?: boolean;
+  readonly textareaRef?: RefObject<HTMLTextAreaElement | null>;
+}) => {
+  const id = useId();
+  return (
+    <div className={styles.reportField}>
+      <label>
+        {label}
+        <textarea
+          ref={textareaRef}
+          aria-invalid={invalid || undefined}
+          aria-describedby={`${id}-hint${invalid ? ` ${id}-error` : ""}`}
+          disabled={disabled}
+          maxLength={2000}
+          required
+          rows={3}
+          value={value}
+          onChange={(event) => onChange(event.currentTarget.value)}
+        />
+      </label>
+      <span id={`${id}-hint`} className={styles.secondary}>
+        请先填写理由，再核对并确认决定。理由会提供给相关用户；批量处置逐项使用同一理由。
+      </span>
+      {invalid ? (
+        <span id={`${id}-error`} role="alert">
+          请填写 1–2000 字的处置理由后再确认。
+        </span>
+      ) : null}
+    </div>
+  );
+};
 
 export interface SelectedOperation {
   readonly id: string;
@@ -156,6 +172,8 @@ export const BulkActions = ({
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<SelectedOperation[]>([]);
   const [reasonDraft, setReasonDraft] = useState("");
+  const [reasonInvalid, setReasonInvalid] = useState(false);
+  const reasonInput = useRef<HTMLTextAreaElement | null>(null);
   const [results, setResults] = useState<string[]>([]);
   const [confirming, setConfirming] = useState<{
     label: string;
@@ -234,12 +252,17 @@ export const BulkActions = ({
   const lines = [...results, ...skipped];
   if (count === 0 && pending.length === 0 && lines.length === 0) return null;
   return (
-    <section aria-label="批量操作" className={styles.bulkBar}>
+    <section aria-label="批量操作" className={styles.bulkBar} aria-busy={busy}>
       {choices.some((choice) => choice.requiresReason) ? (
         <ModerationReasonInput
           label="批量处置理由（必填）"
           value={reasonDraft}
-          onChange={setReasonDraft}
+          onChange={(value) => {
+            setReasonDraft(value);
+            if (readModerationReason(value) !== null) setReasonInvalid(false);
+          }}
+          textareaRef={reasonInput}
+          invalid={reasonInvalid}
           disabled={busy || pending.length > 0}
         />
       ) : null}
@@ -254,15 +277,17 @@ export const BulkActions = ({
             key={choice.value}
             type="button"
             className={styles.actionButton}
-            disabled={
-              disabled ||
-              busy ||
-              count === 0 ||
-              pending.length > 0 ||
-              (choice.requiresReason === true &&
-                readModerationReason(reasonDraft) === null)
-            }
+            disabled={disabled || busy || count === 0 || pending.length > 0}
             onClick={() => {
+              if (
+                choice.requiresReason === true &&
+                readModerationReason(reasonDraft) === null
+              ) {
+                setReasonInvalid(true);
+                reasonInput.current?.focus();
+                return;
+              }
+              setReasonInvalid(false);
               if (choice.confirm === undefined) {
                 void run(
                   prepareSnapshot(
@@ -294,6 +319,7 @@ export const BulkActions = ({
             {choice.label}
           </button>
         ))}
+        {busy ? <span role="status">正在处理所选项目…</span> : null}
         {pending.length > 0 ? (
           <>
             <button

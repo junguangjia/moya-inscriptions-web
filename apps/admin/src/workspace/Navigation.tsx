@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import {
   Link,
@@ -27,14 +27,22 @@ export const WorkspaceNavigation = ({
   const pathname = usePathname();
   const params = useSearchParams();
   const active = currentWorkspace(pathname, params);
+  const [navigationReady, setNavigationReady] = useState(false);
   useEffect(() => {
     if (!hydrated) return;
-    if (!window.matchMedia("(min-width: 1025px)").matches) return;
+    if (!window.matchMedia("(min-width: 1025px)").matches) {
+      setNavOpen(false);
+      setNavigationReady(true);
+      return;
+    }
     let current = true;
     // Wait for Payload's initial preference read; it otherwise races this default.
-    const fallback = window.setTimeout(() => {
-      if (current) setNavOpen(true);
-    }, 750);
+    const finish = () => {
+      if (!current) return;
+      setNavOpen(window.matchMedia("(min-width: 1025px)").matches);
+      setNavigationReady(true);
+    };
+    const fallback = window.setTimeout(finish, 750);
     let afterPreference: number | undefined;
     void getPreference("nav")
       .catch(() => undefined)
@@ -42,9 +50,7 @@ export const WorkspaceNavigation = ({
         window.clearTimeout(fallback);
         // Payload applies the preference through another async layer. Finish
         // the desktop default after that microtask chain, including old false.
-        afterPreference = window.setTimeout(() => {
-          if (current) setNavOpen(true);
-        }, 0);
+        afterPreference = window.setTimeout(finish, 0);
       });
     return () => {
       current = false;
@@ -73,9 +79,9 @@ export const WorkspaceNavigation = ({
       ]
         .filter(Boolean)
         .join(" ")}
-      inert={!navOpen || undefined}
+      inert={!hydrated || !navOpen || undefined}
+      data-archive-nav-pending={!navigationReady || undefined}
       aria-label="管理后台导航"
-      data-has-workspace-bar={active !== null && active.workspace.id !== "home"}
     >
       <div className="nav__scroll" ref={navRef}>
         <Link
@@ -191,6 +197,10 @@ export const WorkspaceTabs = ({
               href={page.href}
               key={page.href}
               className="archive-workspace-tab"
+              title={"description" in page ? page.description : undefined}
+              aria-description={
+                "description" in page ? page.description : undefined
+              }
               aria-current={
                 current.page.href === page.href ? "page" : undefined
               }
@@ -216,6 +226,10 @@ export const WorkspaceTabs = ({
               key={page.href}
               prefetch={false}
               className="archive-workspace-tab"
+              title={"description" in page ? page.description : undefined}
+              aria-description={
+                "description" in page ? page.description : undefined
+              }
               aria-current={
                 current.page.href === page.href ? "page" : undefined
               }

@@ -61,6 +61,46 @@ body {
   font-weight: 600;
 }
 
+/* The fixed archive nav keeps Payload's reserved content column. */
+.template-default > .archive-nav + .template-default__wrap {
+  grid-column: 2;
+}
+
+/* Match the existing desktop-open default while Payload reads preferences. */
+@media (min-width: 1025px) {
+  body:has(.template-default > .archive-nav[data-archive-nav-pending="true"])
+    .archive-workspace-bar {
+    margin-inline-start: var(--archive-nav-width);
+  }
+
+  .template-default:has(> .archive-nav[data-archive-nav-pending="true"]) {
+    grid-template-columns: var(--archive-nav-width) minmax(0, 1fr);
+  }
+
+  .template-default > .archive-nav[data-archive-nav-pending="true"] {
+    display: block;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The mobile sidebar stays closed until Payload can initialize its state. */
+@media (max-width: 1024px) {
+  .template-default:has(> .archive-nav[data-archive-nav-pending="true"]) {
+    grid-template-columns: 0 minmax(0, 1fr);
+  }
+
+  .template-default > .archive-nav[data-archive-nav-pending="true"] {
+    display: none;
+  }
+
+  .template-default:not(.template-default--nav-hydrated)
+    > .archive-nav
+    + .template-default__wrap {
+    grid-column: 1 / -1;
+  }
+}
+
 .template-default__wrap > :where(section, div:not(.app-header)) {
   min-width: 0;
 }
@@ -74,14 +114,11 @@ body {
 }
 
 .archive-nav {
-  top: var(--archive-nav-top, 0px);
-  height: calc(100dvh - var(--archive-nav-top, 0px));
+  position: fixed;
+  top: 0;
+  height: 100dvh;
   border-inline-end: 1px solid var(--yoyi-color-border-subtle);
   background: var(--yoyi-color-background-surface);
-}
-
-.archive-nav[data-has-workspace-bar="true"] {
-  --archive-nav-top: var(--archive-workspace-bar-height);
 }
 
 .archive-nav .nav__scroll {
@@ -91,7 +128,7 @@ body {
   height: 100%;
   max-height: 100%;
   overflow-y: auto;
-  padding-bottom: var(--yoyi-space-5);
+  padding: 0 0 var(--yoyi-space-5);
 }
 
 .archive-nav__brand {
@@ -219,7 +256,7 @@ body {
   gap: var(--yoyi-space-7);
   min-height: 64px;
   margin-inline-start: var(--archive-nav-width);
-  padding-inline: var(--gutter-h);
+  padding-inline: var(--yoyi-space-6);
   border-bottom: 1px solid var(--yoyi-color-border-subtle);
   background: var(--yoyi-color-background-page);
 }
@@ -604,9 +641,6 @@ body {
 @media (max-width: 600px) {
   :root {
     --archive-workspace-bar-height: 56px;
-  }
-  .archive-nav[data-has-workspace-bar="true"] {
-    --archive-nav-top: var(--archive-workspace-bar-height);
   }
   .archive-workspace-name {
     display: none;

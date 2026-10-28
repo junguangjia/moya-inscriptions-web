@@ -2,7 +2,7 @@
   "version": 1,
   "sources": {
     "packages/design-tokens/src/theme.css": "62c0496afbbd07112fce0fe8127a640665d33fe9468a2500930651bc27341478",
-    "apps/admin/src/workspace/routes.ts": "ebb9561633c28f139fb1744ffa362f4d3c46c49e197d69f10c1574aa601e06c1",
+    "apps/admin/src/workspace/routes.ts": "bc7c3aaeb97892ac98b85bd386046d56e3f9b4d91367625e10a2ab3d81541ea9",
     "packages/ui/src/assets/icons/home.svg": "e9273d0ad3923611970593046872ef21439c8bd666a498179f09833d7019c5ec",
     "packages/ui/src/assets/icons/inscriptions.svg": "671209be8eeb555d45c39c202a0bc11b6104ee8a315211e0262e8b9fc7cc2b86",
     "packages/ui/src/assets/icons/discussion.svg": "3fad72aa0e3478b758a0c51a61f55aed6831e4e06c9b7a6373b9f2797df7ac45",
@@ -24,7 +24,7 @@
       "target": "src/app/archive-theme.css"
     },
     "archive-navigation.json": {
-      "sha256": "b656a4921010d3bccc13a429d293875ab88cdef168b25530505dc83631724eae",
+      "sha256": "04c07462e6937f041bbef0fd61884624977db9feb4c02054fbd05636e00650d4",
       "target": "src/data/archive-navigation.json"
     },
     "archive-icons.svg": {

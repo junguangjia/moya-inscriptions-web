@@ -333,7 +333,7 @@
 .actionButton:disabled,
 .iconButton:disabled {
   color: var(--yoyi-color-text-tertiary);
-  cursor: progress;
+  cursor: not-allowed;
 }
 
 .actionButton[data-primary="true"] {

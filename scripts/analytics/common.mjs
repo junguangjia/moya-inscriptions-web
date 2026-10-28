@@ -6,7 +6,7 @@ import { parseEnv } from "node:util";
 export const UMAMI_VERSION = "3.4.0";
 export const UMAMI_SOURCE_COMMIT = "ec0ff50388c264ed8ce46f00967e92f7e71476ae";
 export const UMAMI_WORKSPACE_IDENTITY =
-  "dcc89f4646e2cbc7ae651b64d7e16be6a385645cefbc356e2d2c19c5362a5a0c";
+  "96e842017bdd90b3b67044f4606805f15389525fc5d71654ff99bb0832618029";
 export const UMAMI_PG_TLS_HOST_SHA256 =
   "ad0a70c6fc8820bb613a8437c634b6a0a6a04cc3cc36175ab72590d2733c24e6";
 export const UMAMI_PROVINCE_FALLBACK_SHA256 =

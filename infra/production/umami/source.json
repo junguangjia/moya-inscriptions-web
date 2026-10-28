@@ -26,7 +26,7 @@
   "geographyPolicy": "cn-province-map-v2",
   "localizationPatch": {
     "file": "chinese-workspace.patch",
-    "sha256": "8476dde38293f008b88f0711e1839cae26d7efcfa073b0cfdaa1456d724f3c33",
+    "sha256": "6a527b22d526e4ecfd66bc921028e5a337e523ca35c5c872a7f64e5e590654af",
     "scope": "Chinese display and China geography; five composed private Admin analysis groups retaining all native read reports, keys, queries and permissions",
     "upstreamHashes": "upstream-chinese.sha256 (after pool patch)",
     "patchedHashes": "patched-chinese.sha256",
@@ -36,7 +36,7 @@
     "cityEntries": 14144,
     "globalCityEntries": 13397,
     "regionEntries": 1320,
-    "identitySha256": "dcc89f4646e2cbc7ae651b64d7e16be6a385645cefbc356e2d2c19c5362a5a0c"
+    "identitySha256": "96e842017bdd90b3b67044f4606805f15389525fc5d71654ff99bb0832618029"
   },
   "postgresTlsPatch": {
     "file": "pg-tls-host.patch",
@@ -66,14 +66,14 @@
   "archiveShell": {
     "mode": "/admin/analytics-workspace only",
     "assetsManifest": "archive-assets.json",
-    "manifestSha256": "5a519cc86135eb8dfef74c1a5a0388f7b93002b9d0893d118b872f195d9b6548",
+    "manifestSha256": "1d5e54348935e58af9629366e17f8659e0868e3c956837739289bde80c7e0176",
     "snapshots": {
       "archive-theme.css": {
         "sha256": "62c0496afbbd07112fce0fe8127a640665d33fe9468a2500930651bc27341478",
         "target": "src/app/archive-theme.css"
       },
       "archive-navigation.json": {
-        "sha256": "b656a4921010d3bccc13a429d293875ab88cdef168b25530505dc83631724eae",
+        "sha256": "04c07462e6937f041bbef0fd61884624977db9feb4c02054fbd05636e00650d4",
         "target": "src/data/archive-navigation.json"
       },
       "archive-icons.svg": {
