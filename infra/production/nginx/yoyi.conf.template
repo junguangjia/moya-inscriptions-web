@@ -2,6 +2,25 @@
 # Render/validate this template only during separately authorized deployment.
 # Fixed classifications omit raw paths/query strings, cookies, tokens and UA text.
 limit_req_zone $binary_remote_addr zone=yoyi_analytics:1m rate=30r/m;
+# Analytics alone may use EdgeOne's overwritten connection address. This private
+# include contains only the verified current origin ACL for this site's host.
+# An empty file trusts no peers; a missing file rejects configuration validation.
+# Bootstrap it without overwriting an existing list; never add a broad default.
+geo $remote_addr $yoyi_analytics_edgeone_peer {
+    default 0;
+    include /etc/yoyi/nginx/analytics-edgeone-peers.conf;
+}
+# geo maps missing/malformed addresses (including duplicate header lists) to
+# 255.255.255.255. Reject that sentinel rather than forwarding an invalid value.
+# Nginx 1.24 requires the bare sentinel address here; its /32 form is rejected.
+geo $http_eo_connecting_ip $yoyi_analytics_candidate_valid {
+    default 1;
+    255.255.255.255 0;
+}
+map "$yoyi_analytics_edgeone_peer:$yoyi_analytics_candidate_valid" $yoyi_analytics_client_ip {
+    default $remote_addr;
+    "1:1" $http_eo_connecting_ip;
+}
 map $uri $yoyi_route_class {
     default other;
     / page;
@@ -177,7 +196,7 @@ server {
         proxy_set_header X-Moya-Auth-Relay "";
         proxy_set_header X-Moya-Auth-Source "";
         proxy_set_header X-Moya-Analytics-Ingress "__ANALYTICS_INGRESS_TOKEN__";
-        proxy_set_header X-Moya-Client-Ip $remote_addr;
+        proxy_set_header X-Moya-Client-Ip $yoyi_analytics_client_ip;
         proxy_set_header X-Moya-Analytics-Relay "";
         proxy_set_header X-Moya-Analytics-Source "";
         proxy_set_header X-Moya-Analytics-Excluded "";
