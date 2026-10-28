@@ -23,6 +23,7 @@ import {
   UMAMI_CHINA_MAP_SHA256,
   UMAMI_PG_TLS_HOST_SHA256,
   UMAMI_PROVINCE_FALLBACK_SHA256,
+  UMAMI_POSTGRES_TIMEZONE,
 } from "./common.mjs";
 
 const imageId = `sha256:${"a".repeat(64)}`;
@@ -38,6 +39,7 @@ const labels = {
   "com.artvenn.umami.patch-sha256": UMAMI_WORKSPACE_IDENTITY,
   "com.artvenn.umami.pg-tls-host-sha256": UMAMI_PG_TLS_HOST_SHA256,
   "com.artvenn.umami.province-fallback-sha256": UMAMI_PROVINCE_FALLBACK_SHA256,
+  "com.artvenn.umami.database-timezone": UMAMI_POSTGRES_TIMEZONE,
   "com.artvenn.umami.geography": UMAMI_GEOGRAPHY_POLICY,
   "com.artvenn.umami.china-map-sha256": UMAMI_CHINA_MAP_SHA256,
   "com.artvenn.umami.geo-sha256":
@@ -107,9 +109,11 @@ else if(command!=='rm')process.exit(13);\n`,
     assert.equal(manifest.geographyPolicy, UMAMI_GEOGRAPHY_POLICY);
     assert.equal(manifest.postgresTlsHostSha256, UMAMI_PG_TLS_HOST_SHA256);
     assert.equal(manifest.locale, "zh-CN");
+    assert.equal(manifest.postgresTimeZone, UMAMI_POSTGRES_TIMEZONE);
     assert.equal(
       manifest.provinceFallbackSha256,
       UMAMI_PROVINCE_FALLBACK_SHA256,
+      UMAMI_POSTGRES_TIMEZONE,
     );
     assert.ok(
       gunzipSync(archive).includes(Buffer.from("synthetic fixture only")),

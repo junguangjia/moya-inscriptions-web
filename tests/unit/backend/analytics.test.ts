@@ -5,7 +5,11 @@ import type {
   AnalyticsPolicy,
   AnalyticsPort,
 } from "@moya/api";
-import { analyticsBatchSchema } from "@moya/contracts/analytics";
+import {
+  ANALYTICS_IP_RETENTION_DAYS,
+  analyticsBatchSchema,
+  analyticsStatusSchema,
+} from "@moya/contracts/analytics";
 import type { AnalyticsBatch } from "@moya/contracts/analytics";
 import {
   AnalyticsWorker,
@@ -61,6 +65,26 @@ const fakePort = () => {
   return { port, delivery };
 };
 describe("bounded analytics contract", () => {
+  it("reports 60-day IP retention and accepts only the old and new rollout values", async () => {
+    const { port } = fakePort();
+    const status = await new AnalyticsService(
+      port,
+      policy(),
+      () => now,
+    ).status();
+    expect(status.ipRetentionDays).toBe(60);
+    expect(ANALYTICS_IP_RETENTION_DAYS).toBe(60);
+    expect(analyticsStatusSchema.parse(status).ipRetentionDays).toBe(60);
+    expect(
+      analyticsStatusSchema.parse({ ...status, ipRetentionDays: 7 })
+        .ipRetentionDays,
+    ).toBe(7);
+    for (const ipRetentionDays of [0, 8, 30, 59, 61, 180])
+      expect(
+        analyticsStatusSchema.safeParse({ ...status, ipRetentionDays }).success,
+      ).toBe(false);
+    expect(status.eventRetentionDays).toBe(180);
+  });
   it("rejects caller identity/IP claims, unknown events, oversized batches and unpaired targets", () => {
     expect(analyticsBatchSchema.safeParse(batch()).success).toBe(true);
     for (const field of ["userId", "ip", "owner", "country"])

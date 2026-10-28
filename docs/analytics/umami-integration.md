@@ -305,8 +305,36 @@ provided 30 provinces; ip2region provided 179. Filling only the missing values
 adds 149 and preserves all existing 30. Those 30 had provider disagreements,
 which are not overwritten. Official XDB/text and MMDB/Python crosschecks had
 zero differences. This establishes field coverage, not physical-location
-accuracy or a count of human visitors. The deployed change applies to newly
-resolved sessions; it does not automatically rewrite historical sessions.
+accuracy or a count of human visitors. New and repeated Backend-relayed events
+may fill a stored blank province only when its country is CN, its city is also
+blank, and its website/distinct identity match the incoming session. Existing
+geography remains unchanged. The controlled historical repair uses exact
+canonical event IDs and unambiguous retained IP observations, with private
+per-row old/new backups and guarded updates. It does not infer a city or alter
+event IDs/counts.
+
+## PostgreSQL connection timezone
+
+Only the Umami connection is pinned to UTC with `PGOPTIONS=-c timezone=UTC`. Do
+not change the database cluster timezone, database URL, APP_SECRET or Node.js
+calendar timezone. The pinned Prisma PostgreSQL adapter serializes UTC date
+fields without an offset; a PRC database session interpreted those values eight
+hours early. Changing the connection alone is insufficient for stored history.
+
+Historical time repair derives each native event time from its exact canonical
+event ID (second precision), each session creation time from a uniquely matching
+source event, and event-data creation dates from their verified parent. The
+`occurredAt` date value retains the canonical full millisecond timestamp. Other
+date-valued fields or unrelated tables are not blindly shifted. Preserve
+existing duplicate deliveries rather than deleting or recounting events.
+
+Pause only the native collector for the bounded repair, keep canonical ingest
+and its queue intact, save per-ID old/new fields privately before updates, and
+check expected old values transactionally. After committing corrected history,
+keep the collector's UTC connection even if rolling back application bytes, or
+restore the guarded old date values before restoring the old connection policy.
+A commit-unknown result requires state inspection, never an automatic time
+shift.
 
 ## 两套事件语义与保留期
 
@@ -321,7 +349,7 @@ Umami 的路径由 surface/目标 ID 生成，是逻辑分析路径；不保存�
 
 Canonical 默认 180 天（Backend 允许配置 7–730 天）；单独
 `analytics_ip_observations`
-原始 IP/UA 固定 7 天。Backend 的删除任务不自动清理 Umami 独立数据库。Umami
+原始 IP/UA 保留 60 天。滚动部署的约束和状态契约暂兼容旧 7 天写入；先更新 Admin 契约消费者，再切换 Backend。迁移只延长仍未过期的旧观察记录，不恢复已过期或已删除的记录。IP 列表当前仍返回最近 50 条，列表条数不是去重 IP 总数。Backend 的删除任务不自动清理 Umami 独立数据库。Umami
 `session` 保存近似地域和 distinct ID；没有原始 IP 列，但仍需要生命周期维护。
 
 `prune-umami.mjs`

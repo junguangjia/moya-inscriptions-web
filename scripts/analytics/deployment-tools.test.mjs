@@ -8,6 +8,7 @@ import {
   UMAMI_CHINA_MAP_SHA256,
   UMAMI_PG_TLS_HOST_SHA256,
   UMAMI_PROVINCE_FALLBACK_SHA256,
+  UMAMI_POSTGRES_TIMEZONE,
 } from "./common.mjs";
 import { createHash } from "node:crypto";
 import { buildImagePlan } from "./build-umami-image.mjs";
@@ -101,6 +102,31 @@ test("every local Docker COPY input is in the exact build-context whitelist", as
     () => checkWhitelist([...rules, "!*.patch"]),
     assert.AssertionError,
   );
+});
+
+test("Umami pins UTC only for PostgreSQL connections in both serving paths", async () => {
+  const root = new URL("../../infra/production/", import.meta.url);
+  const [service, example, dockerfile, source] = await Promise.all([
+    readFile(new URL("systemd/yoyi-umami-standalone.service", root), "utf8"),
+    readFile(new URL("env/umami.env.example", root), "utf8"),
+    readFile(new URL("umami/Dockerfile", root), "utf8"),
+    readFile(new URL("umami/source.json", root), "utf8").then(JSON.parse),
+  ]);
+  assert.match(
+    service,
+    /ExecStart=.*"PGOPTIONS=-c timezone=UTC".*node server\.js/u,
+  );
+  assert.match(example, /^PGOPTIONS="-c timezone=UTC"$/mu);
+  assert.equal(
+    (dockerfile.match(/PGOPTIONS="-c timezone=UTC"/gu) ?? []).length,
+    2,
+  );
+  assert.equal(
+    source.postgresConnectionTimeZone.value,
+    UMAMI_POSTGRES_TIMEZONE,
+  );
+  assert.equal(source.postgresConnectionTimeZone.options, "-c timezone=UTC");
+  assert.doesNotMatch(service, /(?:^|\s)(?:TZ|APP_SECRET|DATABASE_URL)=/u);
 });
 
 test("pg TLS patch only adds the original host to the existing socket options", async () => {
@@ -316,6 +342,8 @@ test("standalone runtime export requires immutable glibc image metadata and expl
       "com.artvenn.umami.pg-tls-host-sha256": UMAMI_PG_TLS_HOST_SHA256,
       "com.artvenn.umami.province-fallback-sha256":
         UMAMI_PROVINCE_FALLBACK_SHA256,
+      UMAMI_POSTGRES_TIMEZONE,
+      "com.artvenn.umami.database-timezone": UMAMI_POSTGRES_TIMEZONE,
       "com.artvenn.umami.geography": UMAMI_GEOGRAPHY_POLICY,
       "com.artvenn.umami.china-map-sha256": UMAMI_CHINA_MAP_SHA256,
       "com.artvenn.umami.geo-sha256":
@@ -324,6 +352,7 @@ test("standalone runtime export requires immutable glibc image metadata and expl
   };
   assert.doesNotThrow(() => verifyRuntimeImage(metadata, plan));
   for (const key of [
+    "com.artvenn.umami.database-timezone",
     "com.artvenn.umami.province-fallback-sha256",
     "com.artvenn.umami.patch-sha256",
     "com.artvenn.umami.pg-tls-host-sha256",

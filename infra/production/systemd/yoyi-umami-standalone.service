@@ -13,9 +13,9 @@ Group=yoyi-umami
 WorkingDirectory=/srv/yoyi/umami/current
 EnvironmentFile=/etc/yoyi/umami.env
 # Existing Node 24 runtime, no bundled daemon or package installation on startup.
-# Fix the listener/heap independently of EnvironmentFile.
+# Fix listener/heap and only PostgreSQL connection timezone independently of EnvironmentFile.
 ExecStartPre=/usr/bin/mkdir -p /var/lib/yoyi-umami/cache
-ExecStart=/usr/bin/env NODE_ENV=production HOSTNAME=127.0.0.1 PORT=3010 NODE_OPTIONS=--max-old-space-size=512 node server.js
+ExecStart=/usr/bin/env NODE_ENV=production HOSTNAME=127.0.0.1 PORT=3010 NODE_OPTIONS=--max-old-space-size=512 "PGOPTIONS=-c timezone=UTC" node server.js
 Restart=on-failure
 RestartSec=10
 TimeoutStartSec=60

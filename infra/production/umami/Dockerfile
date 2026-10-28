@@ -51,14 +51,16 @@ RUN echo '99adfeded5223848bbe37a0a12f8023e11ee12161c7800521c27db42fdeac275  /app
     && echo '9c7d4778ad5c927ebb19371132f4b4943147f28f13eca7c60b1bd1a6852d79e1  /app/public/maps/china-map-NOTICE.txt' | sha256sum -c -
 # Optional local China province fill; no network lookup during collection.
 COPY ip-province-fallback.patch ip-province-fallback.sha256 /tmp/
-RUN echo 'ee0442474fe367cd426f58ffc7f253320b58f550395c8104419567078acaf8f2  /tmp/ip-province-fallback.patch' | sha256sum -c - \
+RUN echo '19c912fe03a013b817a86253632ac1d4957162cf3194d4cec6c08b10fac7ef6d  /tmp/ip-province-fallback.patch' | sha256sum -c - \
     && echo '28799f1bba9a5357951a77a88aa4b5e53aa10591a9ac6d0110af3f3f1c1fdaa2  /app/src/lib/detect.ts' | sha256sum -c - \
+    && echo '269ae458330c3fee1e74312bb3d59ce211b65008edcbfdb4748ce09b5defb5bf  /app/src/queries/sql/sessions/createSession.ts' | sha256sum -c - \
+    && echo 'daf722b736185a5fa62f346e6760ca07e6734bfa5ebd4056a193de46fa2c7851  /app/src/app/(main)/websites/[websiteId]/ArchiveGeography.tsx' | sha256sum -c - \
     && patch -p1 --fuzz=0 < /tmp/ip-province-fallback.patch \
     && sha256sum -c /tmp/ip-province-fallback.sha256
 ADD --checksum=sha256:27ecba8c9a6d5e3b280aedbe7ee15c65372b179fbd0dad3845d8c608f2fcace1 https://raw.githubusercontent.com/lionsoul2014/ip2region/70d862dbc7ee26c7de6e1adf4c25e63250de2606/data/ip2region_v4.xdb /app/geo/ip2region_v4.xdb
 ADD --checksum=sha256:939f6b46bd2b8bec3cf7c5ceb8ba782266ae9b1f35b5ba7916700dec0b7506ed https://raw.githubusercontent.com/lionsoul2014/ip2region/70d862dbc7ee26c7de6e1adf4c25e63250de2606/data/ip2region_v6.xdb /app/geo/ip2region_v6.xdb
 ENV SKIP_BUILD_GEO=1
-RUN pnpm exec vitest run src/lib/format.test.ts src/lib/artvenn-ip-province.test.ts src/lib/artvenn-labels.test.ts src/lib/artvenn-geography.test.ts src/components/hooks/useFormat.test.ts src/lib/artvenn-china-map.test.ts src/components/metrics/artvenn-geography-lists.test.tsx src/queries/sql/sessions/artvenn-geography-context.test.ts src/components/metrics/MetricLabel.test.tsx src/components/metrics/WorldMap.test.tsx src/components/metrics/WorldMap.geometry.test.tsx 'src/app/(main)/boards/[boardId]/BoardViewHeader.test.tsx' src/components/metrics/MetricsExpandedTable.accessibility.test.tsx 'src/app/api/websites/[websiteId]/metrics/artvenn-display.test.ts' 'src/app/(main)/App.archive.test.tsx' 'src/app/(main)/ArchiveShell.test.tsx' 'src/app/(main)/websites/[websiteId]/ArchiveReportNav.test.tsx' 'src/app/(main)/websites/[websiteId]/WebsiteHeader.archive.test.tsx' 'src/app/(main)/ArchiveContextNav.test.tsx' 'src/app/(main)/ArchiveContinuousNavigation.test.tsx' 'src/lib/archive-analysis.test.ts' 'src/components/hooks/archive-analysis-scope.test.tsx' 'src/components/metrics/WeeklyTraffic.test.tsx' 'src/components/common/DataGrid.archive.test.tsx' 'src/components/input/WebsiteFilterButton.archive.test.tsx' 'src/app/(main)/websites/[websiteId]/ArchiveAnalysis.test.tsx' 'src/app/(main)/websites/[websiteId]/WebsitePage.composed.test.tsx' 'src/app/(main)/websites/[websiteId]/compare/CompareTables.archive.test.tsx' 'src/app/(main)/websites/[websiteId]/WebsiteExpandedView.archive.test.tsx' 'src/app/(main)/websites/[websiteId]/(reports)/retention/RetentionPage.archive.test.tsx' 'src/components/charts/DeferredChart.test.tsx' 'src/components/common/LoadingPanel.refresh.test.tsx' 'src/app/(main)/websites/WebsiteProvider.archive.test.tsx' 'src/components/common/ErrorBoundary.archive.test.tsx' --maxWorkers=1 \
+RUN pnpm exec vitest run src/lib/format.test.ts src/lib/artvenn-ip-province.test.ts src/lib/artvenn-postgres-utc.test.ts src/queries/sql/sessions/createSession.artvenn.test.ts 'src/app/(main)/websites/[websiteId]/ArchiveGeography.scope.test.tsx' src/lib/artvenn-labels.test.ts src/lib/artvenn-geography.test.ts src/components/hooks/useFormat.test.ts src/lib/artvenn-china-map.test.ts src/components/metrics/artvenn-geography-lists.test.tsx src/queries/sql/sessions/artvenn-geography-context.test.ts src/components/metrics/MetricLabel.test.tsx src/components/metrics/WorldMap.test.tsx src/components/metrics/WorldMap.geometry.test.tsx 'src/app/(main)/boards/[boardId]/BoardViewHeader.test.tsx' src/components/metrics/MetricsExpandedTable.accessibility.test.tsx 'src/app/api/websites/[websiteId]/metrics/artvenn-display.test.ts' 'src/app/(main)/App.archive.test.tsx' 'src/app/(main)/ArchiveShell.test.tsx' 'src/app/(main)/websites/[websiteId]/ArchiveReportNav.test.tsx' 'src/app/(main)/websites/[websiteId]/WebsiteHeader.archive.test.tsx' 'src/app/(main)/ArchiveContextNav.test.tsx' 'src/app/(main)/ArchiveContinuousNavigation.test.tsx' 'src/lib/archive-analysis.test.ts' 'src/components/hooks/archive-analysis-scope.test.tsx' 'src/components/metrics/WeeklyTraffic.test.tsx' 'src/components/common/DataGrid.archive.test.tsx' 'src/components/input/WebsiteFilterButton.archive.test.tsx' 'src/app/(main)/websites/[websiteId]/ArchiveAnalysis.test.tsx' 'src/app/(main)/websites/[websiteId]/WebsitePage.composed.test.tsx' 'src/app/(main)/websites/[websiteId]/compare/CompareTables.archive.test.tsx' 'src/app/(main)/websites/[websiteId]/WebsiteExpandedView.archive.test.tsx' 'src/app/(main)/websites/[websiteId]/(reports)/retention/RetentionPage.archive.test.tsx' 'src/components/charts/DeferredChart.test.tsx' 'src/components/common/LoadingPanel.refresh.test.tsx' 'src/app/(main)/websites/WebsiteProvider.archive.test.tsx' 'src/components/common/ErrorBoundary.archive.test.tsx' --maxWorkers=1 \
     && pnpm build:docker
 
 # Explicit migration image. Never run automatically from the serving unit.
@@ -75,7 +77,8 @@ LABEL org.opencontainers.image.title="ArtVenn private Umami" \
     org.opencontainers.image.revision="ec0ff50388c264ed8ce46f00967e92f7e71476ae" \
     com.artvenn.umami.patch-sha256="dcc89f4646e2cbc7ae651b64d7e16be6a385645cefbc356e2d2c19c5362a5a0c" \
     com.artvenn.umami.pg-tls-host-sha256="ad0a70c6fc8820bb613a8437c634b6a0a6a04cc3cc36175ab72590d2733c24e6" \
-    com.artvenn.umami.province-fallback-sha256="ee0442474fe367cd426f58ffc7f253320b58f550395c8104419567078acaf8f2" \
+    com.artvenn.umami.province-fallback-sha256="19c912fe03a013b817a86253632ac1d4957162cf3194d4cec6c08b10fac7ef6d" \
+    com.artvenn.umami.database-timezone="UTC" \
     com.artvenn.umami.locale="zh-CN" \
     com.artvenn.umami.geography="cn-province-map-v2" \
     com.artvenn.umami.china-map-sha256="99adfeded5223848bbe37a0a12f8023e11ee12161c7800521c27db42fdeac275" \
@@ -87,7 +90,8 @@ ENV NODE_ENV=production \
     PORT=3000 \
     BASE_PATH=/admin/analytics-workspace \
     NEXT_TELEMETRY_DISABLED=1 \
-    NODE_OPTIONS=--max-old-space-size=512
+    NODE_OPTIONS=--max-old-space-size=512 \
+    PGOPTIONS="-c timezone=UTC"
 COPY --from=builder --chown=node:node /app/.next/standalone ./
 COPY --from=builder --chown=node:node /app/.next/static ./.next/static
 COPY --from=builder --chown=node:node /app/public ./public
@@ -152,14 +156,16 @@ RUN echo '99adfeded5223848bbe37a0a12f8023e11ee12161c7800521c27db42fdeac275  /app
     && echo '9c7d4778ad5c927ebb19371132f4b4943147f28f13eca7c60b1bd1a6852d79e1  /app/public/maps/china-map-NOTICE.txt' | sha256sum -c -
 # Optional local China province fill; no network lookup during collection.
 COPY ip-province-fallback.patch ip-province-fallback.sha256 /tmp/
-RUN echo 'ee0442474fe367cd426f58ffc7f253320b58f550395c8104419567078acaf8f2  /tmp/ip-province-fallback.patch' | sha256sum -c - \
+RUN echo '19c912fe03a013b817a86253632ac1d4957162cf3194d4cec6c08b10fac7ef6d  /tmp/ip-province-fallback.patch' | sha256sum -c - \
     && echo '28799f1bba9a5357951a77a88aa4b5e53aa10591a9ac6d0110af3f3f1c1fdaa2  /app/src/lib/detect.ts' | sha256sum -c - \
+    && echo '269ae458330c3fee1e74312bb3d59ce211b65008edcbfdb4748ce09b5defb5bf  /app/src/queries/sql/sessions/createSession.ts' | sha256sum -c - \
+    && echo 'daf722b736185a5fa62f346e6760ca07e6734bfa5ebd4056a193de46fa2c7851  /app/src/app/(main)/websites/[websiteId]/ArchiveGeography.tsx' | sha256sum -c - \
     && patch -p1 --fuzz=0 < /tmp/ip-province-fallback.patch \
     && sha256sum -c /tmp/ip-province-fallback.sha256
 ADD --checksum=sha256:27ecba8c9a6d5e3b280aedbe7ee15c65372b179fbd0dad3845d8c608f2fcace1 https://raw.githubusercontent.com/lionsoul2014/ip2region/70d862dbc7ee26c7de6e1adf4c25e63250de2606/data/ip2region_v4.xdb /app/geo/ip2region_v4.xdb
 ADD --checksum=sha256:939f6b46bd2b8bec3cf7c5ceb8ba782266ae9b1f35b5ba7916700dec0b7506ed https://raw.githubusercontent.com/lionsoul2014/ip2region/70d862dbc7ee26c7de6e1adf4c25e63250de2606/data/ip2region_v6.xdb /app/geo/ip2region_v6.xdb
 ENV SKIP_BUILD_GEO=1
-RUN pnpm exec vitest run src/lib/format.test.ts src/lib/artvenn-ip-province.test.ts src/lib/artvenn-labels.test.ts src/lib/artvenn-geography.test.ts src/components/hooks/useFormat.test.ts src/lib/artvenn-china-map.test.ts src/components/metrics/artvenn-geography-lists.test.tsx src/queries/sql/sessions/artvenn-geography-context.test.ts src/components/metrics/MetricLabel.test.tsx src/components/metrics/WorldMap.test.tsx src/components/metrics/WorldMap.geometry.test.tsx 'src/app/(main)/boards/[boardId]/BoardViewHeader.test.tsx' src/components/metrics/MetricsExpandedTable.accessibility.test.tsx 'src/app/api/websites/[websiteId]/metrics/artvenn-display.test.ts' 'src/app/(main)/App.archive.test.tsx' 'src/app/(main)/ArchiveShell.test.tsx' 'src/app/(main)/websites/[websiteId]/ArchiveReportNav.test.tsx' 'src/app/(main)/websites/[websiteId]/WebsiteHeader.archive.test.tsx' 'src/app/(main)/ArchiveContextNav.test.tsx' 'src/app/(main)/ArchiveContinuousNavigation.test.tsx' 'src/lib/archive-analysis.test.ts' 'src/components/hooks/archive-analysis-scope.test.tsx' 'src/components/metrics/WeeklyTraffic.test.tsx' 'src/components/common/DataGrid.archive.test.tsx' 'src/components/input/WebsiteFilterButton.archive.test.tsx' 'src/app/(main)/websites/[websiteId]/ArchiveAnalysis.test.tsx' 'src/app/(main)/websites/[websiteId]/WebsitePage.composed.test.tsx' 'src/app/(main)/websites/[websiteId]/compare/CompareTables.archive.test.tsx' 'src/app/(main)/websites/[websiteId]/WebsiteExpandedView.archive.test.tsx' 'src/app/(main)/websites/[websiteId]/(reports)/retention/RetentionPage.archive.test.tsx' 'src/components/charts/DeferredChart.test.tsx' 'src/components/common/LoadingPanel.refresh.test.tsx' 'src/app/(main)/websites/WebsiteProvider.archive.test.tsx' 'src/components/common/ErrorBoundary.archive.test.tsx' --maxWorkers=1 \
+RUN pnpm exec vitest run src/lib/format.test.ts src/lib/artvenn-ip-province.test.ts src/lib/artvenn-postgres-utc.test.ts src/queries/sql/sessions/createSession.artvenn.test.ts 'src/app/(main)/websites/[websiteId]/ArchiveGeography.scope.test.tsx' src/lib/artvenn-labels.test.ts src/lib/artvenn-geography.test.ts src/components/hooks/useFormat.test.ts src/lib/artvenn-china-map.test.ts src/components/metrics/artvenn-geography-lists.test.tsx src/queries/sql/sessions/artvenn-geography-context.test.ts src/components/metrics/MetricLabel.test.tsx src/components/metrics/WorldMap.test.tsx src/components/metrics/WorldMap.geometry.test.tsx 'src/app/(main)/boards/[boardId]/BoardViewHeader.test.tsx' src/components/metrics/MetricsExpandedTable.accessibility.test.tsx 'src/app/api/websites/[websiteId]/metrics/artvenn-display.test.ts' 'src/app/(main)/App.archive.test.tsx' 'src/app/(main)/ArchiveShell.test.tsx' 'src/app/(main)/websites/[websiteId]/ArchiveReportNav.test.tsx' 'src/app/(main)/websites/[websiteId]/WebsiteHeader.archive.test.tsx' 'src/app/(main)/ArchiveContextNav.test.tsx' 'src/app/(main)/ArchiveContinuousNavigation.test.tsx' 'src/lib/archive-analysis.test.ts' 'src/components/hooks/archive-analysis-scope.test.tsx' 'src/components/metrics/WeeklyTraffic.test.tsx' 'src/components/common/DataGrid.archive.test.tsx' 'src/components/input/WebsiteFilterButton.archive.test.tsx' 'src/app/(main)/websites/[websiteId]/ArchiveAnalysis.test.tsx' 'src/app/(main)/websites/[websiteId]/WebsitePage.composed.test.tsx' 'src/app/(main)/websites/[websiteId]/compare/CompareTables.archive.test.tsx' 'src/app/(main)/websites/[websiteId]/WebsiteExpandedView.archive.test.tsx' 'src/app/(main)/websites/[websiteId]/(reports)/retention/RetentionPage.archive.test.tsx' 'src/components/charts/DeferredChart.test.tsx' 'src/components/common/LoadingPanel.refresh.test.tsx' 'src/app/(main)/websites/WebsiteProvider.archive.test.tsx' 'src/components/common/ErrorBoundary.archive.test.tsx' --maxWorkers=1 \
     && pnpm build:docker
 
 FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS standalone
@@ -169,7 +175,8 @@ LABEL org.opencontainers.image.title="ArtVenn private Umami standalone artifact"
     org.opencontainers.image.revision="ec0ff50388c264ed8ce46f00967e92f7e71476ae" \
     com.artvenn.umami.patch-sha256="dcc89f4646e2cbc7ae651b64d7e16be6a385645cefbc356e2d2c19c5362a5a0c" \
     com.artvenn.umami.pg-tls-host-sha256="ad0a70c6fc8820bb613a8437c634b6a0a6a04cc3cc36175ab72590d2733c24e6" \
-    com.artvenn.umami.province-fallback-sha256="ee0442474fe367cd426f58ffc7f253320b58f550395c8104419567078acaf8f2" \
+    com.artvenn.umami.province-fallback-sha256="19c912fe03a013b817a86253632ac1d4957162cf3194d4cec6c08b10fac7ef6d" \
+    com.artvenn.umami.database-timezone="UTC" \
     com.artvenn.umami.locale="zh-CN" \
     com.artvenn.umami.geography="cn-province-map-v2" \
     com.artvenn.umami.china-map-sha256="99adfeded5223848bbe37a0a12f8023e11ee12161c7800521c27db42fdeac275" \
@@ -184,7 +191,8 @@ ENV NODE_ENV=production \
     PORT=3010 \
     BASE_PATH=/admin/analytics-workspace \
     NEXT_TELEMETRY_DISABLED=1 \
-    NODE_OPTIONS=--max-old-space-size=512
+    NODE_OPTIONS=--max-old-space-size=512 \
+    PGOPTIONS="-c timezone=UTC"
 COPY --from=standalone-builder --chown=node:node /app/.next/standalone ./
 COPY --from=standalone-builder --chown=node:node /app/.next/static ./.next/static
 COPY --from=standalone-builder --chown=node:node /app/public ./public

@@ -1,8 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { AnalyticsService } from "@moya/api";
 import type { AnalyticsWriteContext } from "@moya/api";
 import type { AnalyticsBatch } from "@moya/contracts/analytics";
+import { ANALYTICS_IP_RETENTION_DAYS } from "@moya/contracts/analytics";
 import {
   createPostgresPool,
   parsePostgresConfig,
@@ -70,6 +72,78 @@ afterAll(async () => {
   await pool.end();
 });
 describe("canonical analytics PostgreSQL ingestion", () => {
+  it("extends only unexpired legacy IP observations and allows 7/60-day rolling writers", async () => {
+    const connection = await pool.connect();
+    const table = `analytics_retention_${randomUUID().replaceAll("-", "")}`;
+    const migration = await readFile(
+      new URL(
+        "../../../database/community-migrations/20261028010000_analytics_ip_retention_60_days.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    try {
+      await connection.query("BEGIN");
+      await connection.query(`CREATE TEMP TABLE ${table} (
+        label TEXT PRIMARY KEY,
+        received_at TIMESTAMPTZ NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        CONSTRAINT analytics_ip_observations_check CHECK (
+          expires_at = received_at + INTERVAL '7 days'
+        )
+      ) ON COMMIT DROP`);
+      await connection.query(`INSERT INTO ${table} VALUES
+        ('active', CURRENT_TIMESTAMP - INTERVAL '2 days', CURRENT_TIMESTAMP + INTERVAL '5 days'),
+        ('expired', CURRENT_TIMESTAMP - INTERVAL '8 days', CURRENT_TIMESTAMP - INTERVAL '1 day'),
+        ('boundary', CURRENT_TIMESTAMP - INTERVAL '7 days', CURRENT_TIMESTAMP)`);
+      await connection.query(
+        migration.replaceAll("community.analytics_ip_observations", table),
+      );
+      const result = await connection.query<{ label: string; days: number }>(
+        `SELECT label, (EXTRACT(EPOCH FROM expires_at-received_at)/86400)::integer AS days FROM ${table} ORDER BY label`,
+      );
+      expect(result.rows).toEqual([
+        { label: "active", days: 60 },
+        { label: "boundary", days: 7 },
+        { label: "expired", days: 7 },
+      ]);
+      await connection.query(`INSERT INTO ${table} VALUES
+        ('old-writer', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '7 days'),
+        ('new-writer', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '60 days')`);
+      await expect(
+        connection.query(`INSERT INTO ${table} VALUES
+          ('unapproved', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '30 days')`),
+      ).rejects.toMatchObject({ code: "23514" });
+    } finally {
+      await connection.query("ROLLBACK");
+      connection.release();
+    }
+  });
+  it("retains new IP observations for 60 days across the former seven-day cutoff", async () => {
+    const observedAt = new Date(now.getTime() - 8 * 86400000);
+    const sample = input();
+    await adapter.append(sample, context(observedAt));
+    const stored = (
+      await pool.query<{ expires_at: Date }>(
+        "SELECT expires_at FROM community.analytics_ip_observations WHERE visitor_id=$1::uuid",
+        [sample.visitorId],
+      )
+    ).rows[0]!;
+    expect(stored.expires_at.getTime()).toBe(
+      observedAt.getTime() + ANALYTICS_IP_RETENTION_DAYS * 86400000,
+    );
+    const justBeforeExpiry = new Date(stored.expires_at.getTime() - 1);
+    expect(
+      (await adapter.recentIps(justBeforeExpiry)).items.some(
+        (item) => item.visitorId === sample.visitorId,
+      ),
+    ).toBe(true);
+    expect(
+      (await adapter.recentIps(stored.expires_at)).items.some(
+        (item) => item.visitorId === sample.visitorId,
+      ),
+    ).toBe(false);
+  });
   it("deduplicates event ids atomically and preserves ranking context, with one IP observation per new batch", async () => {
     const batch = input();
     batch.events.push({
@@ -234,9 +308,11 @@ describe("canonical analytics PostgreSQL ingestion", () => {
     ).toBe(1);
   });
   it("never exposes expired IP observations or forwards using the backend IP, and keeps event retention separate", async () => {
-    const eightDaysAgo = new Date(now.getTime() - 8 * 86400000),
+    const beyondIpRetention = new Date(
+        now.getTime() - (ANALYTICS_IP_RETENTION_DAYS + 1) * 86400000,
+      ),
       old = input();
-    await adapter.append(old, context(eightDaysAgo));
+    await adapter.append(old, context(beyondIpRetention));
     const ancient = input();
     await adapter.append(
       ancient,
