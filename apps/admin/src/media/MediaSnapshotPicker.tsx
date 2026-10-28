@@ -21,10 +21,13 @@ type MediaPreview = { mediaId: string; url: string };
 const nativePreview = (
   document: Record<string, unknown>,
 ): MediaPreview | null => {
-  if (typeof document.mediaId !== "string" || typeof document.url !== "string")
+  if (
+    typeof document.mediaId !== "string" ||
+    typeof document.thumbnailURL !== "string"
+  )
     return null;
   try {
-    const url = new URL(document.url, window.location.origin);
+    const url = new URL(document.thumbnailURL, window.location.origin);
     if (url.origin !== window.location.origin) return null;
     return { mediaId: document.mediaId, url: `${url.pathname}${url.search}` };
   } catch {
@@ -253,6 +256,17 @@ export const MediaSnapshotPicker: UIFieldClientComponent = () => {
                     width={120}
                     height={120}
                     loading="lazy"
+                    decoding="async"
+                    onError={() => {
+                      setPreviews((current) =>
+                        current.filter(
+                          (item) =>
+                            item.mediaId !== picture.mediaId ||
+                            item.url !== preview.url,
+                        ),
+                      );
+                      setPreviewUnavailable(true);
+                    }}
                   />
                 ) : (
                   <span

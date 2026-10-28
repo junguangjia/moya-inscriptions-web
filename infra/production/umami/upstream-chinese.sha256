@@ -28,11 +28,13 @@ dc174d61136d5b09d0f865a850ac389fab1a9f398d4ac67be6cd8aa52b7a97fa  src/app/(main)
 3efb3b7344c271d25b90342a5cf81d09e0bb17071ae09ecc15129e4ae686da0d  src/app/(main)/websites/[websiteId]/(reports)/retention/RetentionPage.tsx
 0c2c7b266532c9df63c8ff886a041ad518dd7aa1dd4211df0886f36fc0beadbb  src/app/(main)/websites/[websiteId]/(reports)/revenue/RevenueMetricsBar.tsx
 512fa63ff737a95421688d6e35b3893829859b2d32e49c11f3d04dffdd2a345b  src/app/(main)/websites/[websiteId]/ExpandedViewModal.tsx
+0f15bb87b1da8cfad37745d8fd4f961926670bdae94f4d9f7b76c631269dd4fe  src/app/(main)/websites/[websiteId]/WebsiteChart.tsx
 76fe56d3c6fd83600f10ebca5e90b8a8a938b16fceadea1c7b63c18442810d67  src/app/(main)/websites/[websiteId]/WebsiteControls.tsx
 452d2860fc5d367b42e0c8b7fcd5b6e41a0aeba6df13e3c7b6e7b95cea3392ae  src/app/(main)/websites/[websiteId]/WebsiteExpandedMenu.tsx
 bcb1a9f4c370e1bfac2b88a8c4ad8f1c0f298b0c0bd896ff8bad4d6c9d4c61be  src/app/(main)/websites/[websiteId]/WebsiteExpandedView.tsx
 63d7995f377e049764c3eab65302dd9ed662795bdd9500e5c14531ebffdb48bd  src/app/(main)/websites/[websiteId]/WebsiteHeader.tsx
 fb2ab0062774ca36d8ccadb9d904ba360711dc3a64a90f35bd93e88a2ea848b8  src/app/(main)/websites/[websiteId]/WebsiteLayout.tsx
+5320933eb4959abae7e4c26ef8c9e5a8e6412188063c667f643c3378a9709bf5  src/app/(main)/websites/[websiteId]/WebsiteMetricsBar.tsx
 5e61386632e7d6e39f84077d4c7bbe08729d6d984cb87f609cf2a3c14e660eeb  src/app/(main)/websites/[websiteId]/WebsitePage.tsx
 941b1acdbf865c8f2195bc5e8a740c262b0b15f68f042005301743cefef1fa76  src/app/(main)/websites/[websiteId]/WebsitePanels.tsx
 a563d1ba3ea447ec47c851cf554c5172b50a371f795e83db4261914988ea1e0f  src/app/(main)/websites/[websiteId]/compare/ComparePage.tsx
@@ -53,6 +55,7 @@ e84ef6c15f67696b134cd2b8e7ce494961f6631154a75f83bfa31261559d0368  src/app/api/we
 d9567f52cdd172698456a5ac417292d3d1a1ca5f031d49d06908c0e0662edba0  src/app/layout.tsx
 c191024ec4f6d8d5ce4f89d242385f59aa467de715d0e487b4b746bee63420df  src/components/charts/BarChart.tsx
 eace4508dc25294e30f046aefac9721f8e8b28f89c556a80ccf97387f7829afb  src/components/charts/BubbleChart.tsx
+05b5304196b80d825c8fa4bf72ea1ac4e739322d4bf13a70d2b74761cee68f6e  src/components/charts/Chart.tsx
 fb85138099ef893f117a7ce05a18e278c95ec86f765360af11b32f1330725d12  src/components/charts/DistributionBarChart.tsx
 25b73f0fa6bbb237c37d9e1813406b1d1fd216037c7e73b0f852433b431e7158  src/components/charts/PieChart.tsx
 c3c0b71b4ddfe0f5e230ea25edf683f1609b5a81a9cfc85a919a7bd07ee345f7  src/components/common/DataGrid.tsx

@@ -88,6 +88,7 @@ export interface BackendApplicationOptions {
   readonly catalogRecipePolicy?: () => Promise<CatalogRecipePolicy>;
   readonly catalogDeliveryReadiness?: import("./community/operator-handler.js").OperatorRouteDependencies["catalogDeliveryReadiness"];
   readonly catalogPublishedRenditions?: import("./community/operator-handler.js").OperatorRouteDependencies["catalogPublishedRenditions"];
+  readonly catalogThumbnail?: import("./community/operator-handler.js").OperatorRouteDependencies["catalogThumbnail"];
   /** The App's Catalog render backlog for the pacing of bulk work; absent answers 503. */
   readonly catalogRenderBacklog?: import("./community/operator-handler.js").OperatorRouteDependencies["catalogRenderBacklog"];
   readonly analytics?: {
@@ -451,6 +452,7 @@ const resolveCommunity = (
     catalogRecipePolicy: options.catalogRecipePolicy,
     catalogDeliveryReadiness: options.catalogDeliveryReadiness,
     catalogPublishedRenditions: options.catalogPublishedRenditions,
+    catalogThumbnail: options.catalogThumbnail,
     catalogRenderBacklog: options.catalogRenderBacklog,
     operatorCredential: options.communityOperatorCredential ?? "",
   };

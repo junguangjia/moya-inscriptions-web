@@ -104,10 +104,13 @@ beforeEach(() => {
       docs: [
         {
           mediaId: "synthetic-image-one",
-          url: "/api/media/file/one.webp",
+          thumbnailURL: "/api/catalog-media-thumbnail?fixture=file/one.webp",
           objectKey: "must-not-be-used",
         },
-        { mediaId: "synthetic-image-two", url: "/api/media/file/two.webp" },
+        {
+          mediaId: "synthetic-image-two",
+          thumbnailURL: "/api/catalog-media-thumbnail?fixture=file/two.webp",
+        },
       ],
     }),
   });
@@ -123,7 +126,7 @@ describe("Catalog native media form controls", () => {
     render(createElement(Picker));
     await waitFor(() =>
       expect(screen.getByAltText("第一张图片").getAttribute("src")).toBe(
-        "/api/media/file/one.webp",
+        "/api/catalog-media-thumbnail?fixture=file/one.webp",
       ),
     );
     const request = new URL(
@@ -214,4 +217,21 @@ describe("Catalog native media form controls", () => {
         .hasAttribute("disabled"),
     ).toBe(false);
   });
+});
+
+it("replaces a failed thumbnail with a placeholder and keeps image controls usable", async () => {
+  render(createElement(Picker));
+  const image = await screen.findByAltText("第一张图片");
+  fireEvent.error(image);
+  expect(screen.queryByAltText("第一张图片")).toBeNull();
+  expect(screen.getByLabelText("图片预览暂不可用")).toBeTruthy();
+  expect(
+    screen.getByText("图片预览暂不可用，可继续编辑下方图片信息。"),
+  ).toBeTruthy();
+  expect(
+    screen
+      .getByRole("button", { name: /同步图片顺序/ })
+      .hasAttribute("disabled"),
+  ).toBe(false);
+  expect(document.querySelector('img[src*="/api/media/file/"]')).toBeNull();
 });

@@ -26,7 +26,7 @@
   "geographyPolicy": "cn-province-map-v2",
   "localizationPatch": {
     "file": "chinese-workspace.patch",
-    "sha256": "5b25dae8797326c271d96a7fdb863d5314d1738f015a3f717409d8111be344ab",
+    "sha256": "8476dde38293f008b88f0711e1839cae26d7efcfa073b0cfdaa1456d724f3c33",
     "scope": "Chinese display and China geography; five composed private Admin analysis groups retaining all native read reports, keys, queries and permissions",
     "upstreamHashes": "upstream-chinese.sha256 (after pool patch)",
     "patchedHashes": "patched-chinese.sha256",
@@ -36,7 +36,7 @@
     "cityEntries": 14144,
     "globalCityEntries": 13397,
     "regionEntries": 1320,
-    "identitySha256": "a531b1383b044f9edf62f6e227fbf93d702437526359be557a9065b457c1bd86"
+    "identitySha256": "dcc89f4646e2cbc7ae651b64d7e16be6a385645cefbc356e2d2c19c5362a5a0c"
   },
   "postgresTlsPatch": {
     "file": "pg-tls-host.patch",
@@ -66,14 +66,14 @@
   "archiveShell": {
     "mode": "/admin/analytics-workspace only",
     "assetsManifest": "archive-assets.json",
-    "manifestSha256": "fe237aca231056972ba5a3533f88b5a3cd96f69df26ad306e7303180a1eb6683",
+    "manifestSha256": "5a519cc86135eb8dfef74c1a5a0388f7b93002b9d0893d118b872f195d9b6548",
     "snapshots": {
       "archive-theme.css": {
         "sha256": "62c0496afbbd07112fce0fe8127a640665d33fe9468a2500930651bc27341478",
         "target": "src/app/archive-theme.css"
       },
       "archive-navigation.json": {
-        "sha256": "ff1f9d243b15fb124103483cf14145a029c0c919fa68b26a9c9d12a46f09339c",
+        "sha256": "b656a4921010d3bccc13a429d293875ab88cdef168b25530505dc83631724eae",
         "target": "src/data/archive-navigation.json"
       },
       "archive-icons.svg": {
@@ -97,7 +97,8 @@
       "geographyExpansion": "Native search before max 500 matching rows; original columns and CSV retained",
       "weeklyTraffic": "All 168 day/hour values with responsive 24-hour axis",
       "retentionMonth": "Private embedded month state uses retentionMonth only; legacy date/offset initialize it; shared historical range and native retention query unchanged",
-      "requiredTwoFactorSetup": "Private read-only shell reports unavailable when setup is required and incomplete; native setup and all gateway denial boundaries unchanged"
+      "requiredTwoFactorSetup": "Private read-only shell reports unavailable when setup is required and incomplete; native setup and all gateway denial boundaries unchanged",
+      "performance": "Deferred native leaf/detail/chart modules; current-scope cached summary/trend refresh and recoverable website reads; all18 analyses/all26dimensions/native GET semantics and gates preserved"
     }
   }
 }

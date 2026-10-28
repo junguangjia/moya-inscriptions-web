@@ -909,3 +909,70 @@ describe("Catalog rendition delivery over HTTP (unified media pipeline, PR 1b)",
     expect(resolveMany).not.toHaveBeenCalled();
   });
 });
+
+describe("private Catalog thumbnail operator route", () => {
+  const source = {
+    mediaId: "synthetic-thumb",
+    objectKey: `editorial/${"a".repeat(64)}/${"b".repeat(64)}-${"c".repeat(64)}.jpg`,
+    sourceSha256: "c".repeat(64),
+  };
+  const syntheticCredential = "EXPLICIT_SYNTHETIC_PLACEHOLDER";
+  const invoke = async (
+    authenticated: boolean,
+    query = new URLSearchParams(source).toString(),
+    method = "GET",
+  ) => {
+    const provider = vi.fn(async () => ({
+      bytes: new Uint8Array([1, 2, 3]),
+      mimeType: "image/webp" as const,
+    }));
+    const writeHead = vi.fn(),
+      end = vi.fn();
+    await handleOperatorRequest(
+      {
+        method,
+        url: `/internal/community/catalog-delivery/thumbnail?${query}`,
+        headers: authenticated
+          ? { authorization: `Bearer ${syntheticCredential}` }
+          : {},
+      } as IncomingMessage,
+      { writeHead, end, headersSent: false } as unknown as ServerResponse,
+      "/internal/community/catalog-delivery/thumbnail",
+      {
+        operatorCredential: syntheticCredential,
+        moderationService: {},
+        catalogThumbnail: provider,
+      } as unknown as OperatorRouteDependencies,
+    );
+    return { provider, writeHead, end };
+  };
+  it("requires the existing operator boundary before any private source read", async () => {
+    const result = await invoke(false);
+    expect(result.writeHead.mock.calls[0]![0]).toBe(401);
+    expect(result.provider).not.toHaveBeenCalled();
+  });
+  it("serves one small existing derivative without a publishing service or public generation", async () => {
+    const result = await invoke(true);
+    expect(result.provider).toHaveBeenCalledWith(source);
+    expect(result.writeHead).toHaveBeenCalledWith(
+      200,
+      expect.objectContaining({
+        "Content-Type": "image/webp",
+        "Content-Length": 3,
+        "Cache-Control": "private, no-store",
+      }),
+    );
+    expect(result.end).toHaveBeenCalledWith(new Uint8Array([1, 2, 3]));
+  });
+  it("rejects duplicate source fields and unsupported writes before calling the provider", async () => {
+    const invalid = await invoke(
+      true,
+      `${new URLSearchParams(source)}&mediaId=other`,
+    );
+    expect(invalid.writeHead.mock.calls[0]![0]).toBe(400);
+    expect(invalid.provider).not.toHaveBeenCalled();
+    const write = await invoke(true, "", "POST");
+    expect(write.writeHead.mock.calls[0]![0]).toBe(405);
+    expect(write.provider).not.toHaveBeenCalled();
+  });
+});

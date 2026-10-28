@@ -9,6 +9,7 @@ import sharp from "sharp";
 import {
   editorialDraftSchema,
   editorialContentFromDocument,
+  catalogThumbnailRequestSchema,
 } from "@moya/contracts/internal/editorial";
 
 // Run only against a task-created synthetic CMS. The access file is external,
@@ -23,6 +24,10 @@ let clientErrorCount = 0;
 let expectedWithdrawalConflict = false;
 let withdrawalConflictCount = 0;
 let nativeWithdrawalCode;
+let mediaCheck;
+let mediaCaptionKinds;
+let expectUnavailableThumbnail = false;
+const unavailableThumbnails = [];
 const startedAt = Date.now();
 const checkpoint = (name) =>
   console.log(
@@ -61,6 +66,28 @@ try {
     clientErrorCount += 1;
   });
   page.on("response", (response) => {
+    const url = new URL(response.url());
+    // This synthetic CMS has no rendition Backend. Verify that one exact
+    // new thumbnail read fails explicitly and the editor remains usable.
+    if (
+      expectUnavailableThumbnail &&
+      url.origin === origin &&
+      url.pathname === "/api/catalog-media-thumbnail" &&
+      response.status() === 503 &&
+      response.request().resourceType() === "image"
+    ) {
+      const keys = [...url.searchParams.keys()];
+      const input =
+        keys.length === 3 && new Set(keys).size === 3
+          ? catalogThumbnailRequestSchema.safeParse(
+              Object.fromEntries(url.searchParams),
+            )
+          : null;
+      if (input?.success) {
+        unavailableThumbnails.push(input.data);
+        return;
+      }
+    }
     if (
       expectedWithdrawalConflict &&
       response.status() === 409 &&
@@ -291,6 +318,7 @@ try {
   completed.push(stage);
 
   stage = "native-media-upload-and-draft-preview";
+  expectUnavailableThumbnail = true;
   await page.goto(`${origin}/admin/collections/catalogs/${created.id}`);
   await expect(page.locator('input[name="title"]')).toHaveValue(publishedTitle);
   // The native unnamed tab changes presentation, not the media field paths.
@@ -346,6 +374,44 @@ try {
   );
   assert.equal(mediaDraft.media[0].objectKey, uploaded.objectKey);
   assert.equal(mediaDraft.media[0].isRepresentative, true);
+  mediaCheck = "picker-count";
+  const mediaPicker = page.locator("[data-editorial-media-picker]:visible");
+  await expect(mediaPicker).toHaveCount(1);
+  mediaCaptionKinds = (
+    await mediaPicker
+      .locator(".editorial-media-preview__caption")
+      .allTextContents()
+  ).map((text) =>
+    text.includes("Synthetic native upload")
+      ? "uploaded"
+      : text.includes("未填写图片说明")
+        ? "empty"
+        : "other",
+  );
+  mediaCheck = "placeholder-count";
+  const uploadedPreview = mediaPicker
+    .locator(".editorial-media-preview")
+    .filter({ hasText: "Synthetic native upload" });
+  await expect(uploadedPreview).toHaveCount(1);
+  await expect(
+    uploadedPreview.locator(".editorial-media-preview__placeholder"),
+  ).toHaveCount(1);
+  mediaCheck = "unavailable-message";
+  await expect(
+    mediaPicker.getByText("图片预览暂不可用，可继续编辑下方图片信息。", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    mediaPicker.getByRole("button", { name: /同步图片顺序/ }),
+  ).toBeEnabled();
+  mediaCheck = "unavailable-identity";
+  assert(unavailableThumbnails.length > 0);
+  for (const input of unavailableThumbnails) {
+    assert.equal(input.mediaId, uploaded.mediaId);
+    assert.equal(input.objectKey, uploaded.objectKey);
+    assert.equal(input.sourceSha256, uploaded.sha256);
+  }
   const preview = await requestResult(
     await page.request.get(`${origin}/api/editorial/preview/${created.id}`),
   );
@@ -486,6 +552,12 @@ try {
   await expect(page.locator("#action-unpublish")).toHaveCount(0);
   completed.push(stage);
 
+  // Recheck every later image response as well, after withdrawal/reloads.
+  for (const input of unavailableThumbnails) {
+    assert.equal(input.mediaId, uploaded.mediaId);
+    assert.equal(input.objectKey, uploaded.objectKey);
+    assert.equal(input.sourceSha256, uploaded.sha256);
+  }
   assert.equal(clientErrorCount, 0);
   assert.equal(responseFailures.length, 0);
   console.log(JSON.stringify({ ok: true, completed }));
@@ -505,6 +577,12 @@ try {
       requestShapeFailures,
       clientErrorCount,
       nativeWithdrawalCode,
+      mediaCheck,
+      mediaCaptionKinds,
+      thumbnailFailureCount: unavailableThumbnails.length,
+      receivedCount: Number.isSafeInteger(error?.matcherResult?.actual)
+        ? error.matcherResult.actual
+        : undefined,
     }),
   );
   process.exitCode = 1;

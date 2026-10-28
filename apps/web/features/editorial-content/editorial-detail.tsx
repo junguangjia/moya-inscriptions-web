@@ -139,7 +139,7 @@ export const academicViewFromArticle = (
   })),
   citation: [
     article.citations[0]?.text ??
-      `${article.byline}：《${article.title}》，由艺${article.issue ? `，${article.issue}` : ""}。`,
+      `${article.byline}：《${article.title}》，由于艺${article.issue ? `，${article.issue}` : ""}。`,
     article.citations.length > 1
       ? article.citations
           .slice(1)

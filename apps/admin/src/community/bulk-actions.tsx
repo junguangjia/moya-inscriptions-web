@@ -185,12 +185,19 @@ export const BulkActions = ({
       }
       setPending(retry);
       onPending?.(retry.length);
-      await onComplete();
     } finally {
       lock.current = false;
       setBusy(false);
       onBusy(false);
     }
+    // Unknown commands remain in pending; the completed writes no longer lock
+    // the entire workspace while a cancellable list refresh is in flight.
+    void onComplete().catch(() =>
+      setResults((current) => [
+        ...current,
+        "批量结果已保留，列表刷新失败，请刷新重试。",
+      ]),
+    );
   };
   const prepareSnapshot = (
     action: string,
@@ -217,9 +224,15 @@ export const BulkActions = ({
     setPending([]);
     setResults([]);
     onPending?.(0);
-    void onComplete();
+    void onComplete().catch(() =>
+      setResults((current) => [
+        ...current,
+        "批量结果已保留，列表刷新失败，请刷新重试。",
+      ]),
+    );
   };
   const lines = [...results, ...skipped];
+  if (count === 0 && pending.length === 0 && lines.length === 0) return null;
   return (
     <section aria-label="批量操作" className={styles.bulkBar}>
       {choices.some((choice) => choice.requiresReason) ? (

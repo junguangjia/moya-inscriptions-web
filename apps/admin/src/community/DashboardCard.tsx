@@ -44,12 +44,12 @@ export const CommunityDashboardCard = async ({ user }: ServerProps) => {
     >
       <header className="archive-page-heading">
         <div>
-          <p className="archive-eyebrow">由艺 · 管理后台</p>
+          <p className="archive-eyebrow">由于艺 · 管理后台</p>
           <h1 id="workspace-title">工作台</h1>
           <p>整理资料，处理投稿，查看近期操作。</p>
         </div>
         <span className="archive-heading-stamp" aria-hidden="true">
-          由艺
+          由于艺
         </span>
       </header>
       <section aria-labelledby="pending-title">

@@ -16,6 +16,7 @@ import {
 } from "payload";
 import sharp from "sharp";
 import { createLocalPublishedMediaReadAccess } from "./local-read";
+import { catalogThumbnailURL } from "./thumbnail-url";
 
 const MIME_FORMATS = {
   "image/jpeg": "jpeg",
@@ -155,6 +156,7 @@ type MediaAccess = {
   ) => boolean | Promise<boolean>;
   canRegister: (req: PayloadRequest) => boolean | Promise<boolean>;
   localDirectory: string;
+  apiBase?: string;
 };
 
 /** Native Payload uploads retain bytes; never configure global Payload `sharp`. */
@@ -180,6 +182,8 @@ export function createMediaCollection(options: MediaAccess): CollectionConfig {
     },
     upload: {
       staticDir: options.localDirectory,
+      adminThumbnail: ({ doc }) => catalogThumbnailURL(doc, options.apiBase),
+      cacheTags: false,
       mimeTypes: Object.keys(MIME_FORMATS),
       filesRequiredOnCreate: false,
       pasteURL: false,

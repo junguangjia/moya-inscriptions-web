@@ -125,6 +125,18 @@ describe("native Payload original media", () => {
       expect(result.orderConfidence).toBe("LOW");
       expect(result.objectKey).toBe(`${result.prefix}/${result.filename}`);
       expect("sizes" in result).toBe(false);
+      const thumbnail = new URL(
+        String(result.thumbnailURL),
+        "http://cms.example.invalid",
+      );
+      expect(thumbnail.pathname).toBe("/api/catalog-media-thumbnail");
+      expect(thumbnail.searchParams.get("mediaId")).toBe(mediaId);
+      expect(thumbnail.searchParams.get("objectKey")).toBe(result.objectKey);
+      expect(thumbnail.searchParams.get("sourceSha256")).toBe(hash(bytes));
+      expect(payload.collections.media.config.upload).toHaveProperty(
+        "cacheTags",
+        false,
+      );
 
       await expect(
         payload.findByID({

@@ -27,22 +27,31 @@ export const WorkspaceNavigation = ({
   const pathname = usePathname();
   const params = useSearchParams();
   const active = currentWorkspace(pathname, params);
-  const desktopInitialized = useRef(false);
   useEffect(() => {
-    if (!hydrated || !shouldAnimate || desktopInitialized.current) return;
-    desktopInitialized.current = true;
+    if (!hydrated) return;
     if (!window.matchMedia("(min-width: 1025px)").matches) return;
     let current = true;
     // Wait for Payload's initial preference read; it otherwise races this default.
+    const fallback = window.setTimeout(() => {
+      if (current) setNavOpen(true);
+    }, 750);
+    let afterPreference: number | undefined;
     void getPreference("nav")
       .catch(() => undefined)
       .then(() => {
-        if (current) setNavOpen(true);
+        window.clearTimeout(fallback);
+        // Payload applies the preference through another async layer. Finish
+        // the desktop default after that microtask chain, including old false.
+        afterPreference = window.setTimeout(() => {
+          if (current) setNavOpen(true);
+        }, 0);
       });
     return () => {
       current = false;
+      window.clearTimeout(fallback);
+      window.clearTimeout(afterPreference);
     };
-  }, [hydrated, shouldAnimate, getPreference, setNavOpen]);
+  }, [hydrated, getPreference, setNavOpen]);
   useEffect(() => {
     if (user?.collection !== "users" || user.role !== "owner") return;
     const controller = new AbortController();
@@ -74,11 +83,11 @@ export const WorkspaceNavigation = ({
           href="/admin"
           prefetch={false}
           onClick={closeOnMobile}
-          aria-label="由艺管理后台工作台"
+          aria-label="由于艺管理后台工作台"
         >
           <AdminIcon />
           <span>
-            由艺<span className="archive-nav__caption">管理后台</span>
+            由于艺<span className="archive-nav__caption">管理后台</span>
           </span>
         </Link>
         <nav className="nav__wrap archive-nav__links" aria-label="工作区">
@@ -175,18 +184,47 @@ export const WorkspaceTabs = ({
         className="archive-workspace-tabs"
         aria-label={`${current.workspace.label}页面`}
       >
-        {pages.map((page) => (
-          <Link
-            href={page.href}
-            key={page.href}
-            prefetch={false}
-            className="archive-workspace-tab"
-            aria-current={current.page.href === page.href ? "page" : undefined}
-            ref={current.page.href === page.href ? activeLink : undefined}
-          >
-            {page.label}
-          </Link>
-        ))}
+        {pages.map((page) =>
+          pathname === "/admin/community-moderation/content" &&
+          page.href.split("?")[0] === pathname ? (
+            <a
+              href={page.href}
+              key={page.href}
+              className="archive-workspace-tab"
+              aria-current={
+                current.page.href === page.href ? "page" : undefined
+              }
+              ref={current.page.href === page.href ? activeLink : undefined}
+              onClick={(event) => {
+                if (
+                  event.button !== 0 ||
+                  event.metaKey ||
+                  event.ctrlKey ||
+                  event.shiftKey ||
+                  event.altKey
+                )
+                  return;
+                event.preventDefault();
+                window.history.pushState(null, "", page.href);
+              }}
+            >
+              {page.label}
+            </a>
+          ) : (
+            <Link
+              href={page.href}
+              key={page.href}
+              prefetch={false}
+              className="archive-workspace-tab"
+              aria-current={
+                current.page.href === page.href ? "page" : undefined
+              }
+              ref={current.page.href === page.href ? activeLink : undefined}
+            >
+              {page.label}
+            </Link>
+          ),
+        )}
       </nav>
     </div>
   );

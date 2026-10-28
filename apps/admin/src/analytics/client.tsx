@@ -9,7 +9,10 @@ import type {
   AnalyticsIpObservations,
   AnalyticsStatus,
 } from "@moya/contracts/analytics";
-import { excludeOwnerAnalyticsDevice } from "./device";
+import {
+  excludeOwnerAnalyticsDevice,
+  prepareOwnerAnalyticsEntry,
+} from "./device";
 import { workspacePageLabel } from "../workspace/routes";
 import { UiIcon } from "../workspace/Icon";
 import styles from "./analytics.module.css";
@@ -37,9 +40,12 @@ export const AnalyticsClient = ({
   const title = workspacePageLabel(path);
   useEffect(() => {
     const controller = new AbortController();
-    void excludeOwnerAnalyticsDevice(controller.signal).then(() => {
-      // Complete the existing cookie attempt before leaving this document.
-      // Failed attempts keep their existing false result; they do not block entry.
+    void (
+      isEntry
+        ? prepareOwnerAnalyticsEntry(controller.signal)
+        : excludeOwnerAnalyticsDevice(controller.signal)
+    ).then(() => {
+      // Finish the bounded exclusion attempts before crossing documents.
       if (!controller.signal.aborted && isEntry && workspacePath)
         window.location.replace(workspacePath);
     });

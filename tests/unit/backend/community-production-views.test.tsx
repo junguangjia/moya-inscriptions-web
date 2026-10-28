@@ -1,5 +1,6 @@
 import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToStaticMarkup, renderToPipeableStream } from "react-dom/server";
+import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AdminViewServerProps, ServerProps } from "payload";
 import type { ReactNode } from "react";
@@ -16,12 +17,20 @@ const runtime = await vi.hoisted(async () => {
     templates: realpathSync(adminRequire.resolve("@payloadcms/next/templates")),
     link: realpathSync(adminRequire.resolve("next/link")),
     navigation: realpathSync(adminRequire.resolve("next/navigation")),
+    dynamic: realpathSync(adminRequire.resolve("next/dynamic")),
+    appDynamic: realpathSync(
+      adminRequire.resolve("next/dist/shared/lib/app-dynamic"),
+    ),
     user: { collection: "users", role: "owner" },
     pathname: "/admin",
     params: new URLSearchParams(),
     call: vi.fn(),
   };
 });
+// Match the App Router transform; bare next/dynamic otherwise selects the Pages loader in Vitest.
+vi.mock(runtime.dynamic, async () => ({
+  default: (await import(runtime.appDynamic)).default,
+}));
 vi.mock(runtime.ui, () => ({
   useAuth: () => ({ user: runtime.user }),
   Link: ({
@@ -147,6 +156,23 @@ const props = (role: "owner" | "automation"): AdminViewServerProps =>
       visibleEntities: {},
     },
   }) as unknown as AdminViewServerProps;
+
+/** Await the real lazy SSR boundary; keep the server-side availability gates under test. */
+const renderReady = (node: ReactNode): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const output = new PassThrough();
+    let html = "";
+    output.on("data", (chunk) => {
+      html += chunk.toString();
+    });
+    output.on("end", () => resolve(html));
+    output.on("error", reject);
+    const render = renderToPipeableStream(node, {
+      onAllReady: () => render.pipe(output),
+      onError: reject,
+    });
+  });
+
 const businessViews = [
   [CommunityModerationView, "queue-enabled"],
   [CommunitySettingsView, "publishing-enabled"],
@@ -171,19 +197,19 @@ afterEach(() => {
 describe.each(["development", "production"])(
   "Admin business availability in %s",
   (nodeEnv) => {
-    it("renders every existing business view for the Owner and refuses automation", () => {
+    it("renders every existing business view for the Owner and refuses automation", async () => {
       vi.stubEnv("NODE_ENV", nodeEnv);
       for (const [View, content] of businessViews) {
         expect(
-          renderToStaticMarkup(createElement(View, props("owner"))),
+          await renderReady(createElement(View, props("owner"))),
         ).toContain(content);
-        const refused = renderToStaticMarkup(
+        const refused = await renderReady(
           createElement(View, props("automation")),
         );
         expect(refused).toContain("此工作区仅限 Owner。");
         expect(refused).not.toContain(content);
       }
-      const agents = renderToStaticMarkup(
+      const agents = await renderReady(
         createElement(AgentOperationsView, props("owner")),
       );
       expect(agents.includes("agent-operations")).toBe(

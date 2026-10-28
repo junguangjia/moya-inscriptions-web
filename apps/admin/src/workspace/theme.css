@@ -104,6 +104,14 @@ body {
   text-decoration: none;
 }
 
+.archive-nav__brand > span {
+  white-space: nowrap;
+}
+
+.archive-nav__brand > :first-child {
+  flex-shrink: 0;
+}
+
 .archive-nav__caption {
   display: block;
   margin-top: var(--yoyi-space-2);

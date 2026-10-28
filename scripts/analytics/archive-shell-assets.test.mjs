@@ -71,7 +71,7 @@ test("archive theme and navigation snapshots match the canonical Admin sources",
   assert.equal(items.length, 8);
   assert.equal(dataLinks.length, 4);
   assert.deepEqual(navigation, {
-    brandLabel: "由艺",
+    brandLabel: "由于艺",
     caption: "管理后台",
     homeHref: "/admin",
     brandAssetHref: "/admin/brand.svg",

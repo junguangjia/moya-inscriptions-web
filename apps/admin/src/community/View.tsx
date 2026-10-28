@@ -4,19 +4,21 @@ import type { AdminViewServerProps } from "payload";
 
 import { isOwner } from "../editorial/access";
 import { CommunityDashboardCard } from "./DashboardCard";
-import { ArticleSubmissionsQueueClient } from "./article-submissions-client";
-import { AccountCapacityClient } from "./account-capacity-client";
-import { AgentOperationsClient } from "./agent-operations-client";
-import { CommunityContentClient } from "./content-client";
-import { CommunityHistoryClient } from "./history-client";
-import { CommunityFeedbackClient } from "./feedback-client";
-import { PublishingJobsClient } from "./publishing-jobs-client";
-import { CommunityQueueClient } from "./queue-client";
-import { CommunityReportsClient } from "./reports-client";
-import { ThreadsClient } from "./threads-client";
-import { DmModerationClient } from "./dm-moderation-client";
-import { CommunitySettingsClient } from "./settings-client";
-import { WorkSubmissionsQueueClient } from "./work-submissions-client";
+import {
+  ArticleSubmissionsQueueClient,
+  AccountCapacityClient,
+  AgentOperationsClient,
+  CommunityContentClient,
+  CommunityHistoryClient,
+  CommunityFeedbackClient,
+  PublishingJobsClient,
+  CommunityQueueClient,
+  CommunityReportsClient,
+  ThreadsClient,
+  DmModerationClient,
+  CommunitySettingsClient,
+  WorkSubmissionsQueueClient,
+} from "./lazy-clients";
 
 /**
  * The Community views inside the standard Admin shell: the review queue (the
@@ -133,8 +135,6 @@ export const CommunityAppealsView = (props: AdminViewServerProps) => (
     <CommunityReportsClient appealsOnly />
   </OwnerOnly>
 );
-
-export { ReportDetail } from "./reports-client";
 
 /** Payload wraps the dashboard in its native default template. */
 export const WorkspaceDashboard = (props: AdminViewServerProps) => {

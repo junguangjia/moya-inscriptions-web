@@ -10,6 +10,15 @@ const privateHeaders = {
 const failure = (status: number, message: string) =>
   new Response(message, { status, headers: privateHeaders });
 
+// Revalidate recognizable build assets on every request. Opaque compiler names
+// are not a proof of content identity; never give them a year of immutable life.
+// Documents, RSC, configuration, geography and private data remain no-store.
+const hashedAsset =
+  /^\/_next\/static\/(?:chunks|css|media)\/(?:[A-Za-z0-9_()[\].@-]+\/)*(?:[A-Za-z0-9_()[\].@-]*[.-])?[a-f0-9]{8,}(?:\.[a-z0-9]+){1,2}$/u;
+
+const opaqueChunk =
+  /^\/_next\/static\/(?:chunks|css)\/[0-3][a-z0-9_-]{12}\.(?:js|css)$/u;
+
 const id = "[0-9a-f-]{36}";
 const teamDetail = new RegExp(`^/api/teams/${id}$`, "iu");
 const teamWebsites = new RegExp(`^/api/teams/${id}/websites$`, "iu");
@@ -121,6 +130,16 @@ export const createAnalyticsProxy =
       return failure(404, "此入口仅提供分析报表；请在现有后台管理账号。");
 
     const headers = new Headers();
+    const staticAsset =
+      (hashedAsset.test(suffix) || opaqueChunk.test(suffix)) &&
+      !request.headers.has("rsc") &&
+      !request.headers.has("x-moya-umami-rsc");
+    if (staticAsset) {
+      for (const name of ["if-none-match", "if-modified-since"]) {
+        const value = request.headers.get(name);
+        if (value) headers.set(name, value);
+      }
+    }
     for (const name of [
       "accept",
       "accept-language",
@@ -152,6 +171,7 @@ export const createAnalyticsProxy =
       const response = await upstream.request(upstreamPath, {
         method: request.method,
         headers,
+        signal: request.signal,
         // Native bootstrap needs POST verify; never relay credentials or bodies.
         ...(request.method === "POST" ? { body: "{}" } : {}),
       });
@@ -212,6 +232,20 @@ export const createAnalyticsProxy =
         );
       }
       const outgoing = new Headers(privateHeaders);
+      if (
+        staticAsset &&
+        [200, 304].includes(response.status) &&
+        !response.headers.has("location") &&
+        !/text\/(?:html|x-component)/iu.test(
+          response.headers.get("content-type") ?? "",
+        )
+      ) {
+        outgoing.set("cache-control", "private, no-cache");
+        for (const name of ["etag", "last-modified"]) {
+          const value = response.headers.get(name);
+          if (value) outgoing.set(name, value);
+        }
+      }
       for (const name of [
         "content-type",
         "content-security-policy",

@@ -126,6 +126,7 @@ import {
   createCatalogDeliveryFacts,
   createCatalogReadiness,
   createCatalogPublishedRenditions,
+  selectCatalogThumbnail,
   createCatalogRenderBacklog,
   currentCatalogRecipePolicy,
 } from "./publishing/catalog-delivery-intents.js";
@@ -848,6 +849,10 @@ export const prepareProductionBackend = async (
       publicationConfig,
       createBackendApplication({
         catalogRecipePolicy: async () => currentCatalogRecipePolicy(),
+        catalogThumbnail: (input) =>
+          readBoundedArticleThumbnail(publishing?.store, () =>
+            selectCatalogThumbnail(communityPool, input),
+          ),
         // App facts only: no prepare reader and no CMS connection is needed.
         catalogPublishedRenditions:
           createCatalogPublishedRenditions(communityPool),

@@ -116,6 +116,8 @@ export async function call<Result>(
   input: unknown = {},
   signal?: AbortSignal,
 ): Promise<Result> {
+  const deadline = AbortSignal.timeout(20_000);
+  const requestSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
   let response: Response;
   try {
     response = await fetch(`/api/community-moderation/${name}`, {
@@ -124,7 +126,7 @@ export async function call<Result>(
       cache: "no-store",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
-      ...(signal === undefined ? {} : { signal }),
+      signal: requestSignal,
     });
   } catch (error) {
     if (signal?.aborted === true) throw error;
@@ -137,6 +139,11 @@ export async function call<Result>(
   try {
     body = await response.json();
   } catch {
+    if (deadline.aborted && ![400, 422].includes(response.status))
+      throw new OperatorFailure(
+        "OPERATOR_UNREACHABLE",
+        failureMessage("OPERATOR_UNREACHABLE"),
+      );
     throw new OperatorFailure(
       "OPERATION_FAILED",
       failureMessage("OPERATION_FAILED"),

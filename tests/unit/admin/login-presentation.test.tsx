@@ -15,7 +15,7 @@ describe("native Admin authentication presentation", () => {
     expect(
       screen.getByRole("heading", { level: 1, name: "管理后台" }),
     ).toBeTruthy();
-    expect(screen.getByText("由艺")).toBeTruthy();
+    expect(screen.getByText("由于艺")).toBeTruthy();
     expect(screen.getByText("使用后台账号登录")).toBeTruthy();
     expect(
       view.container.querySelector("form,input,button,a,svg,img"),

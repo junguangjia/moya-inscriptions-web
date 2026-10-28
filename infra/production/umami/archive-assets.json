@@ -24,7 +24,7 @@
       "target": "src/app/archive-theme.css"
     },
     "archive-navigation.json": {
-      "sha256": "ff1f9d243b15fb124103483cf14145a029c0c919fa68b26a9c9d12a46f09339c",
+      "sha256": "b656a4921010d3bccc13a429d293875ab88cdef168b25530505dc83631724eae",
       "target": "src/data/archive-navigation.json"
     },
     "archive-icons.svg": {
