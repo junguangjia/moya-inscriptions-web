@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "ui-pre365-v1",
+  "baselineCommit": "9d542f1a1852ec1b4e8f1d31dcbcdc22b353be28",
+  "baselineRecipeSha256": "18aea48f9f59079a6474902ba4d954df19012e66c008c8520a930647829c4a23",
+  "sourceCommit": "ec0ff50388c264ed8ce46f00967e92f7e71476ae",
+  "sourceArchiveSha256": "dfdc154f23fe52ffd8fbf13c0544ea880e5ef01463f57d06954512b41c50a93a",
+  "provincePatchFile": "ui-pre365-v1-province.patch",
+  "provincePatchSha256": "ee0442474fe367cd426f58ffc7f253320b58f550395c8104419567078acaf8f2",
+  "provincePatchedHashesFile": "ui-pre365-v1-province.sha256",
+  "provincePatchedHashesSha256": "c140510d453116e4bbbba7f20023d172e361b6fc4d9792d3e8073333739aef51",
+  "workspaceIdentitySha256": "96e842017bdd90b3b67044f4606805f15389525fc5d71654ff99bb0832618029",
+  "protectedInventoryFile": "ui-pre365-v1-protected.sha256",
+  "protectedInventorySha256": "5409b442949b55ea40293a1ce41609f4e3a169dd16d167b160ebbc46edb7478f",
+  "protectedFileCount": 2094,
+  "presentationFiles": {
+    "src/app/(main)/ArchiveShell.module.css": "0e7ceb974f78c2e3c9ced0f32d7e05a134bfce32a06ab28ff221de2f4e89581a",
+    "src/app/(main)/ArchiveShell.test.tsx": "72177ebc124d9e7fd6e2be3d1c75baf7d4af9c97db89ca372fc98fa9a1b973d7",
+    "src/app/(main)/ArchiveShell.tsx": "20d098932504d05ada022c05c5260c9bc23ff7bfe48bfe89354ae589bf0aa212",
+    "src/app/Providers.tsx": "61b427849c391b28d6bc0547142a89008a7dda0938f5e2073609db5d2836579c",
+    "src/app/layout.tsx": "7c1513c5cb9549184ba9acc438382b3cb79fb4dc4e5e24972f4abdd48d1923c8",
+    "src/data/archive-navigation.json": "04c07462e6937f041bbef0fd61884624977db9feb4c02054fbd05636e00650d4",
+    "src/lib/archive-admin.ts": "95b1d852559f12ea0b9c07145f0db2d52a66328d51a75b3ae65dc3a725fc6dd2",
+    "src/lib/archive-theme.test.ts": "cb32233765cafa7a64a50f11b370b34a8206d8e80f4ccde0d7d2f153757afb5a"
+  },
+  "dependencyFiles": {
+    "node_modules/.pnpm/pg@8.22.0/node_modules/pg/lib/connection.js": "ad0a70c6fc8820bb613a8437c634b6a0a6a04cc3cc36175ab72590d2733c24e6"
+  },
+  "verifierSha256": "5aef1ff2ff9805b66d00b437c6ed4d1b7861396620167ee408f90ac343d6216c",
+  "postgresTimeZone": "inherit",
+  "imageEnvironmentPolicy": {
+    "PGOPTIONS": "absent",
+    "TZ": "absent"
+  },
+  "preservedDefaults": {
+    "infra/production/umami/Dockerfile": "3637bfb99189c3154ab10bf65b60a9884a0ac0eeac064c1696d4328d4bf9580c",
+    "infra/production/umami/.dockerignore": "fd85735d4d57daa1736998ae174a6bbe82a68873253606d3fe2abbbfa3de9734",
+    "infra/production/umami/source.json": "0510ea92af09cf25b291330b112271e9250958543d13b655305a7ebf1e4aba30",
+    "infra/production/umami/ip-province-fallback.patch": "19c912fe03a013b817a86253632ac1d4957162cf3194d4cec6c08b10fac7ef6d",
+    "infra/production/umami/ip-province-fallback.sha256": "4895e099afbea9f12354e7a332f959b18a0abca8dfcc90cb6952f8e8e372a3ef",
+    "infra/production/systemd/yoyi-umami-standalone.service": "659cfad2598694710cba02629345ffabee51cc692fb15dada5e01914ec3e64c3",
+    "infra/production/env/umami.env.example": "c1647e895e9775ff3b79b7e8ee844c77b5a6210f87b99f15583f799a9a32b7a2"
+  }
+}

@@ -17,11 +17,11 @@ import {
   UMAMI_BASE_PATH,
   UMAMI_WORKSPACE_IDENTITY,
   UMAMI_PG_TLS_HOST_SHA256,
-  UMAMI_PROVINCE_FALLBACK_SHA256,
-  UMAMI_POSTGRES_TIMEZONE,
   UMAMI_GEOGRAPHY_POLICY,
   UMAMI_CHINA_MAP_SHA256,
 } from "./common.mjs";
+
+import { COMPATIBILITY_POLICY, runtimePolicy } from "./runtime-policy.mjs";
 
 export function runtimeExportPlan(values) {
   if (!/^sha256:[a-f0-9]{64}$/u.test(values.image ?? ""))
@@ -38,7 +38,9 @@ export function runtimeExportPlan(values) {
     !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$/u.test(values["docker-context"] ?? "")
   )
     throw new AnalyticsToolError("EXPLICIT_BUILD_DOCKER_CONTEXT_REQUIRED");
+  const policy = runtimePolicy(values["runtime-policy"]);
   return {
+    ...(policy.id === COMPATIBILITY_POLICY ? { runtimePolicy: policy.id } : {}),
     image: values.image,
     output: values.output,
     manifest: `${values.output}.json`,
@@ -49,6 +51,7 @@ export function runtimeExportPlan(values) {
 
 export function verifyRuntimeImage(metadata, plan) {
   const labels = metadata.labels ?? {};
+  const policy = runtimePolicy(plan.runtimePolicy);
   if (
     metadata.id !== plan.image ||
     `${metadata.os}/${metadata.architecture}` !== plan.platform ||
@@ -59,23 +62,43 @@ export function verifyRuntimeImage(metadata, plan) {
     labels["com.artvenn.umami.node-major"] !== "24" ||
     labels["com.artvenn.umami.pool-max"] !== "3" ||
     labels["com.artvenn.umami.locale"] !== "zh-CN" ||
-    labels["com.artvenn.umami.patch-sha256"] !== UMAMI_WORKSPACE_IDENTITY ||
+    labels["com.artvenn.umami.patch-sha256"] !==
+      policy.workspaceIdentitySha256 ||
     labels["com.artvenn.umami.pg-tls-host-sha256"] !==
       UMAMI_PG_TLS_HOST_SHA256 ||
     labels["com.artvenn.umami.province-fallback-sha256"] !==
-      UMAMI_PROVINCE_FALLBACK_SHA256 ||
-    labels["com.artvenn.umami.database-timezone"] !== UMAMI_POSTGRES_TIMEZONE ||
+      policy.provinceFallbackSha256 ||
+    labels["com.artvenn.umami.database-timezone"] !== policy.postgresTimeZone ||
     labels["com.artvenn.umami.geography"] !== UMAMI_GEOGRAPHY_POLICY ||
     labels["com.artvenn.umami.china-map-sha256"] !== UMAMI_CHINA_MAP_SHA256 ||
     labels["com.artvenn.umami.geo-sha256"] !==
       "fd112e5b13ca19e8bb0bf2e1902fb0694f6ba1940bef916e0d8d9d9346f4e029"
   )
     throw new AnalyticsToolError("PINNED_GLIBC_RUNTIME_IMAGE_REQUIRED");
+  if (
+    policy.id === COMPATIBILITY_POLICY &&
+    (labels["com.artvenn.umami.runtime-policy"] !== policy.id ||
+      labels["com.artvenn.umami.protected-source-sha256"] !==
+        policy.protectedInventorySha256 ||
+      labels["com.artvenn.umami.protected-source-verifier-sha256"] !==
+        policy.verifierSha256 ||
+      labels["com.artvenn.umami.compatibility-manifest-sha256"] !==
+        policy.manifestSha256 ||
+      !Array.isArray(metadata.env) ||
+      metadata.env.some(
+        (entry) =>
+          typeof entry !== "string" ||
+          !/^[A-Za-z_][A-Za-z0-9_]*=/u.test(entry) ||
+          /^(?:PGOPTIONS|TZ)=/u.test(entry),
+      ))
+  )
+    throw new AnalyticsToolError("COMPATIBILITY_RUNTIME_IDENTITY_REQUIRED");
 }
 
 /** Export a stopped task-owned container. No server/process/DB is started. */
 export async function exportRuntime(values) {
   const plan = runtimeExportPlan(values);
+  const policy = runtimePolicy(plan.runtimePolicy);
   if (!values.execute)
     return {
       ok: true,
@@ -105,7 +128,7 @@ export async function exportRuntime(values) {
     return result.stdout.trim();
   };
   const format =
-    '{"labels":{{json .Config.Labels}},"architecture":{{json .Architecture}},"os":{{json .Os}},"id":{{json .Id}}}';
+    '{"labels":{{json .Config.Labels}},"architecture":{{json .Architecture}},"os":{{json .Os}},"id":{{json .Id}},"env":{{json .Config.Env}}}';
   let metadata;
   try {
     metadata = JSON.parse(
@@ -203,7 +226,7 @@ export async function exportRuntime(values) {
     manifest = await open(plan.manifest, "wx", 0o600);
     manifestCreated = true;
     await manifest.writeFile(
-      `${JSON.stringify({ version: UMAMI_VERSION, sourceCommit: UMAMI_SOURCE_COMMIT, sourceArchiveSha256: "dfdc154f23fe52ffd8fbf13c0544ea880e5ef01463f57d06954512b41c50a93a", imageId: plan.image, platform: plan.platform, libc: "glibc", nodeMajor: 24, basePath: UMAMI_BASE_PATH, poolMax: 3, workspaceIdentitySha256: UMAMI_WORKSPACE_IDENTITY, postgresTlsHostSha256: UMAMI_PG_TLS_HOST_SHA256, locale: "zh-CN", geographyPolicy: UMAMI_GEOGRAPHY_POLICY, postgresTimeZone: UMAMI_POSTGRES_TIMEZONE, provinceFallbackSha256: UMAMI_PROVINCE_FALLBACK_SHA256, chinaMapSha256: UMAMI_CHINA_MAP_SHA256, geoDatabaseSha256: "fd112e5b13ca19e8bb0bf2e1902fb0694f6ba1940bef916e0d8d9d9346f4e029", archiveSha256: sha256, archiveBytes: bytes, contents: "/app standalone only; no private env/config/database" }, null, 2)}\n`,
+      `${JSON.stringify({ version: UMAMI_VERSION, sourceCommit: UMAMI_SOURCE_COMMIT, sourceArchiveSha256: "dfdc154f23fe52ffd8fbf13c0544ea880e5ef01463f57d06954512b41c50a93a", imageId: plan.image, platform: plan.platform, libc: "glibc", nodeMajor: 24, basePath: UMAMI_BASE_PATH, poolMax: 3, workspaceIdentitySha256: UMAMI_WORKSPACE_IDENTITY, postgresTlsHostSha256: UMAMI_PG_TLS_HOST_SHA256, locale: "zh-CN", geographyPolicy: UMAMI_GEOGRAPHY_POLICY, postgresTimeZone: policy.postgresTimeZone, provinceFallbackSha256: policy.provinceFallbackSha256, ...(policy.id === COMPATIBILITY_POLICY ? { runtimePolicy: policy.id, businessSourceBaseline: policy.businessSourceBaseline, protectedInventorySha256: policy.protectedInventorySha256, compatibilityManifestSha256: policy.manifestSha256, configurationPolicy: "inherit-existing-effective-environment" } : {}), chinaMapSha256: UMAMI_CHINA_MAP_SHA256, geoDatabaseSha256: "fd112e5b13ca19e8bb0bf2e1902fb0694f6ba1940bef916e0d8d9d9346f4e029", archiveSha256: sha256, archiveBytes: bytes, contents: "/app standalone only; no private env/config/database" }, null, 2)}\n`,
     );
     await manifest.sync();
     success = true;
@@ -271,6 +294,7 @@ if (
         "docker-context": { type: "string" },
         output: { type: "string" },
         platform: { type: "string" },
+        "runtime-policy": { type: "string" },
         execute: { type: "boolean", default: false },
       },
       allowPositionals: false,

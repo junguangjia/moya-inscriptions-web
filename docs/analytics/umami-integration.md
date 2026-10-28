@@ -418,3 +418,66 @@ ID 和事件 ID。它们是客户端行为证据；点赞等事件来自成功�
 
 历史 41,324 次 HTTP 请求的旧日志缺少路径、IP 和 User-Agent，无法追溯为哪台设备或全部归于 Owner/AI。新增结构化 Nginx 日志只记录路由类别、客户端类别、状态、耗时、响应字节、退出标记和来源 IP，不记录查询串、完整 UA 或 Cookie；客户端类别是启发式线索。`summarize-traffic.mjs`
 流式汇总这些类别，也能读取旧日志并明确标记无法归因。产品事件与请求数分别统计，不把接口轮询当访问量。日志轮转模板保留约 7 天，需在批准部署时启用。
+
+## UI-only compatibility runtime: `ui-pre365-v1`
+
+The explicit `ui-pre365-v1` variant combines Issue #360's reviewed Admin shell
+presentation with the native analytics business behavior of
+`9d542f1a1852ec1b4e8f1d31dcbcdc22b353be28`. Select it only when fresh release
+checks establish that the live runtime still matches that baseline and #365's
+new write behavior has not been activated. If #365 is active, select the current
+default artifact instead; this variant does not authorize rolling it back. The
+normal Dockerfile, default context whitelist, current province patch, UTC
+settings and systemd templates remain unchanged. Omitting `--runtime-policy`
+retains the normal current build and export behavior.
+
+The compatibility recipe and all its inputs must come from the approved merged
+release tag. It directly applies the exact legacy province patch (`ee044247…`)
+to the pinned upstream source, together with the tag's reviewed Chinese UI
+patch. It never reverses or replaces #365 on `main`. Its own Dockerfile-specific
+ignore file admits only named build inputs; no private environment file enters
+the context. Before compiling, the recipe verifies 2,094 protected source files
+against the live baseline, the exact eight reviewed presentation files and the
+patched pg TLS driver. The full source file set is checked, so extra API,
+authentication, query or shadow dependency files are refused. The generator’s
+collision report and elapsed-time summary are moved to the build’s temporary
+directory; only its four pinned runtime dictionary outputs remain under the
+inventoried source tree.
+
+Plan the standalone artifact from that tag with the existing local build daemon:
+
+```sh
+node scripts/analytics/build-umami-image.mjs \
+  --runtime-policy ui-pre365-v1 --target standalone --platform linux/amd64 \
+  --docker-context <existing-build-context> --tag <task-image:tag>
+```
+
+After reviewing the plan, `--execute` builds it. Other build targets and unknown
+policies are refused. The variant runs the 34 live-baseline native suites plus
+the shared-theme regression suite; #365's three additional business suites are
+absent because that companion patch is not selected.
+
+Export the resulting immutable local image with the same explicit policy:
+
+```sh
+node scripts/analytics/export-umami-runtime.mjs \
+  --runtime-policy ui-pre365-v1 --platform linux/amd64 \
+  --docker-context <existing-build-context> --image <immutable-sha256-image> \
+  --output <absolute-task-output.tar.gz>
+```
+
+The exporter checks the compatibility policy, legacy province patch, UI
+identity, protected source inventory, verifier and compatibility manifest
+labels. It also requires the complete image environment and refuses `PGOPTIONS`
+or `TZ`, even empty values. The exported manifest records the selected baseline
+and the `inherit-existing-effective-environment` policy. The final image
+supplies no PostgreSQL or JavaScript timezone override. A default current image
+cannot be exported as this compatibility artifact, or vice versa.
+
+Activation uses the existing controlled release procedure with an unchanged live
+effective command and environment, fresh service/version checks and a retained
+compatible rollback. Preserve current `PGOPTIONS`, `TZ`, credentials, connection
+strings, authentication and data. This release slice performs no historical
+correction and activates none of #365's new session-write behavior. The
+compatibility artifact must independently pass its pinned Linux build and
+release checks before the native service switches.
