@@ -237,11 +237,20 @@ describe("Owner selected-item commands", () => {
       ),
     );
     const button = view.getByText("批量隐藏") as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    expect(view.getByRole("alert").textContent).toContain("请填写");
+    expect(document.activeElement).toBe(
+      view.getByLabelText("批量处置理由（必填）"),
+    );
+    expect(fetcher).not.toHaveBeenCalled();
     fireEvent.change(view.getByLabelText("批量处置理由（必填）"), {
       target: { value: "   " },
     });
-    expect(button.disabled).toBe(true);
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    expect(view.getByRole("alert").textContent).toContain("请填写");
+    expect(fetcher).not.toHaveBeenCalled();
     fireEvent.change(view.getByLabelText("批量处置理由（必填）"), {
       target: { value: "  Shared human reason  " },
     });

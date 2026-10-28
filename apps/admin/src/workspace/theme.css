@@ -74,14 +74,11 @@ body {
 }
 
 .archive-nav {
-  top: var(--archive-nav-top, 0px);
-  height: calc(100dvh - var(--archive-nav-top, 0px));
+  position: fixed;
+  top: 0;
+  height: 100dvh;
   border-inline-end: 1px solid var(--yoyi-color-border-subtle);
   background: var(--yoyi-color-background-surface);
-}
-
-.archive-nav[data-has-workspace-bar="true"] {
-  --archive-nav-top: var(--archive-workspace-bar-height);
 }
 
 .archive-nav .nav__scroll {
@@ -91,7 +88,7 @@ body {
   height: 100%;
   max-height: 100%;
   overflow-y: auto;
-  padding-bottom: var(--yoyi-space-5);
+  padding: 0 0 var(--yoyi-space-5);
 }
 
 .archive-nav__brand {
@@ -219,7 +216,7 @@ body {
   gap: var(--yoyi-space-7);
   min-height: 64px;
   margin-inline-start: var(--archive-nav-width);
-  padding-inline: var(--gutter-h);
+  padding-inline: var(--yoyi-space-6);
   border-bottom: 1px solid var(--yoyi-color-border-subtle);
   background: var(--yoyi-color-background-page);
 }
@@ -604,9 +601,6 @@ body {
 @media (max-width: 600px) {
   :root {
     --archive-workspace-bar-height: 56px;
-  }
-  .archive-nav[data-has-workspace-bar="true"] {
-    --archive-nav-top: var(--archive-workspace-bar-height);
   }
   .archive-workspace-name {
     display: none;

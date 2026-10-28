@@ -336,3 +336,18 @@ it("finishes desktop initialization after Payload applies an old closed preferen
   await vi.advanceTimersByTimeAsync(0);
   expect(runtime.setNavOpen).toHaveBeenLastCalledWith(true);
 });
+
+it("keeps all Data destinations in a stable tab bar with accessible purposes", () => {
+  location("/admin/analytics");
+  render(createElement(WorkspaceTabs));
+  const nav = screen.getByRole("navigation", { name: "数据页面" });
+  for (const link of within(nav).getAllByRole("link")) {
+    expect(link.getAttribute("title")).toBeTruthy();
+    expect(link.getAttribute("aria-description")).toBe(
+      link.getAttribute("title"),
+    );
+  }
+  expect(
+    within(nav).getByRole("link", { name: "统计看板" }).getAttribute("title"),
+  ).toBe("查看已保存的统计汇总看板。");
+});

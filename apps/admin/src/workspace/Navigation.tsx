@@ -75,7 +75,6 @@ export const WorkspaceNavigation = ({
         .join(" ")}
       inert={!navOpen || undefined}
       aria-label="管理后台导航"
-      data-has-workspace-bar={active !== null && active.workspace.id !== "home"}
     >
       <div className="nav__scroll" ref={navRef}>
         <Link
@@ -191,6 +190,10 @@ export const WorkspaceTabs = ({
               href={page.href}
               key={page.href}
               className="archive-workspace-tab"
+              title={"description" in page ? page.description : undefined}
+              aria-description={
+                "description" in page ? page.description : undefined
+              }
               aria-current={
                 current.page.href === page.href ? "page" : undefined
               }
@@ -216,6 +219,10 @@ export const WorkspaceTabs = ({
               key={page.href}
               prefetch={false}
               className="archive-workspace-tab"
+              title={"description" in page ? page.description : undefined}
+              aria-description={
+                "description" in page ? page.description : undefined
+              }
               aria-current={
                 current.page.href === page.href ? "page" : undefined
               }

@@ -143,7 +143,13 @@ export const CommunityContentClient = () => {
   const [skipped, setSkipped] = useState<string[]>([]);
   const [confirmation, setConfirmation] = useState<Operation | null>(null);
   const [reasonDraft, setReasonDraft] = useState("");
+  const [singleReasonRequested, setSingleReasonRequested] = useState(false);
+  const [reasonInvalid, setReasonInvalid] = useState(false);
+  const reasonInput = useRef<HTMLTextAreaElement | null>(null);
   const reason = readModerationReason(reasonDraft);
+  useEffect(() => {
+    if (reasonInvalid) reasonInput.current?.focus();
+  }, [reasonInvalid]);
   const [quantity, setQuantity] = useState("");
   const urlQuery = params.toString();
   const updateURL = (
@@ -384,7 +390,14 @@ export const CommunityContentClient = () => {
       `推荐「${title}」`,
     );
   const confirmWork = (item: OperatorWork, state: OperatorWork["state"]) => {
-    if (reason === null) return;
+    if (disabled || item.authorDeleted) return;
+    if (reason === null) {
+      setSingleReasonRequested(true);
+      setReasonInvalid(true);
+      reasonInput.current?.focus();
+      return;
+    }
+    setReasonInvalid(false);
     setConfirmation({
       name: "moderate-work",
       input: {
@@ -468,7 +481,7 @@ export const CommunityContentClient = () => {
             type="button"
             className={styles.actionButton}
             key={state}
-            disabled={disabled || item.authorDeleted || reason === null}
+            disabled={disabled || item.authorDeleted}
             onClick={() => confirmWork(item, state)}
           >
             {workActionPhrases[state]}
@@ -506,7 +519,7 @@ export const CommunityContentClient = () => {
     </div>
   );
   return (
-    <div className={styles.workspace}>
+    <div className={styles.workspace} aria-busy={busy}>
       <SetStepNav
         nav={[
           { label: tab === "users" ? "用户" : "内容" },
@@ -665,6 +678,7 @@ export const CommunityContentClient = () => {
               ) : null}
             </div>
           ) : null}
+          {busy ? <p role="status">正在保存操作，请等待结果…</p> : null}
           {tab !== "users" ? (
             <form
               className={styles.filters}
@@ -717,11 +731,17 @@ export const CommunityContentClient = () => {
           {loading ? <p role="status">读取中…</p> : null}
           {tab === "works" && works ? (
             <>
-              {selectedIds.size === 0 && (
+              {(selectedIds.size === 0 || singleReasonRequested) && (
                 <ModerationReasonInput
                   label="作品处置理由（必填）"
                   value={reasonDraft}
-                  onChange={setReasonDraft}
+                  onChange={(value) => {
+                    setReasonDraft(value);
+                    if (readModerationReason(value) !== null)
+                      setReasonInvalid(false);
+                  }}
+                  textareaRef={reasonInput}
+                  invalid={reasonInvalid}
                   disabled={disabled}
                 />
               )}

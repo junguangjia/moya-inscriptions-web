@@ -63,10 +63,26 @@ export const workspaces = [
     label: "数据",
     icon: "layout-double",
     pages: [
-      { label: "访问分析", href: "/admin/analytics" },
-      { label: "统计看板", href: "/admin/analytics/board" },
-      { label: "IP 记录", href: "/admin/analytics/ips" },
-      { label: "采集状态", href: "/admin/analytics/status" },
+      {
+        label: "访问分析",
+        href: "/admin/analytics",
+        description: "查看访问趋势、来源、访客与互动详情。",
+      },
+      {
+        label: "统计看板",
+        href: "/admin/analytics/board",
+        description: "查看已保存的统计汇总看板。",
+      },
+      {
+        label: "IP 记录",
+        href: "/admin/analytics/ips",
+        description: "查看最近的访问来源 IP 与自动过期时间。",
+      },
+      {
+        label: "采集状态",
+        href: "/admin/analytics/status",
+        description: "检查采集、同步、排除规则与数据保留状态。",
+      },
     ],
   },
   {

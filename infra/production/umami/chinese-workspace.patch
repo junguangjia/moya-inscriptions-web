@@ -713,7 +713,7 @@
 +});
 --- /dev/null
 +++ b/src/app/(main)/ArchiveShell.module.css
-@@ -0,0 +1,384 @@
+@@ -0,0 +1,367 @@
 +.shell {
 +  min-height: 100dvh;
 +  color: var(--yoyi-color-text-primary);
@@ -793,6 +793,9 @@
 +  background: var(--yoyi-color-seal-red-muted);
 +  font-weight: 600;
 +}
++.link[aria-current="page"] > .icon {
++  color: var(--yoyi-color-seal-red);
++}
 +.mark {
 +  width: 5px;
 +  height: 5px;
@@ -832,11 +835,11 @@
 +  top: 0;
 +  z-index: 30;
 +  align-items: center;
-+  gap: var(--yoyi-space-5);
++  gap: var(--yoyi-space-7);
 +  min-height: 64px;
 +  padding-inline: var(--yoyi-space-6);
 +  border-bottom: 1px solid var(--yoyi-color-border-subtle);
-+  background: var(--yoyi-color-background-surface);
++  background: var(--yoyi-color-background-page);
 +}
 +.workspaceName {
 +  display: inline-flex;
@@ -844,24 +847,26 @@
 +  gap: var(--yoyi-space-3);
 +  color: var(--yoyi-color-text-secondary);
 +  white-space: nowrap;
-+  font-size: var(--yoyi-type-navigation-size);
++  font-size: var(--yoyi-type-body-small-size);
 +}
 +.dataLinks {
 +  display: flex;
 +  align-items: stretch;
-+  gap: var(--yoyi-space-5);
++  gap: var(--yoyi-space-6);
 +  min-width: 0;
++  align-self: stretch;
 +  overflow-x: auto;
 +}
 +.dataLinks a {
 +  display: inline-flex;
 +  align-items: center;
-+  min-height: 64px;
++  min-height: 44px;
++  padding-block: var(--yoyi-space-4);
 +  white-space: nowrap;
 +  color: var(--yoyi-color-text-secondary);
 +  text-decoration: none;
 +  border-bottom: 2px solid transparent;
-+  font-size: var(--yoyi-type-navigation-size);
++  font-size: var(--yoyi-type-body-small-size);
 +}
 +.dataLinks a[aria-current="page"] {
 +  color: var(--yoyi-color-text-primary);
@@ -962,11 +967,8 @@
 +    display: inline-flex;
 +  }
 +  .bar {
-+    padding-inline: var(--yoyi-space-4);
-+    gap: var(--yoyi-space-3);
-+  }
-+  .workspaceName {
-+    display: none;
++    padding-inline: var(--yoyi-space-6);
++    gap: var(--yoyi-space-6);
 +  }
 +  .dataLinks {
 +    gap: var(--yoyi-space-4);
@@ -1044,37 +1046,6 @@
 +  border-radius: var(--yoyi-radius-md);
 +}
 +
-+.dataReturn {
-+  display: inline-flex;
-+  align-items: center;
-+  gap: var(--yoyi-space-3);
-+  min-height: 44px;
-+  white-space: nowrap;
-+  text-decoration: none;
-+  color: var(--yoyi-color-text-secondary);
-+  font-size: var(--yoyi-type-navigation-size);
-+}
-+.dataTools {
-+  display: flex;
-+  align-items: center;
-+  gap: var(--yoyi-space-5);
-+  margin-inline-start: auto;
-+  min-width: 0;
-+  overflow-x: auto;
-+}
-+.dataTools a {
-+  display: inline-flex;
-+  align-items: center;
-+  min-height: 44px;
-+  white-space: nowrap;
-+  color: var(--yoyi-color-text-secondary);
-+  text-decoration: none;
-+  font-size: var(--yoyi-type-body-small-size);
-+}
-+.dataTools a:hover,
-+.dataReturn:hover {
-+  color: var(--yoyi-color-text-primary);
-+}
 +.contextInline {
 +  min-width: 0;
 +  max-width: 100%;
@@ -1087,9 +1058,6 @@
 +  flex-basis: 260px;
 +}
 +@media (max-width: 640px) {
-+  .dataTools {
-+    gap: var(--yoyi-space-4);
-+  }
 +  .contextInline {
 +    width: 100%;
 +  }
@@ -1098,9 +1066,24 @@
 +    width: 100%;
 +  }
 +}
++
++@media (max-width: 600px) {
++  .workspaceName {
++    display: none;
++  }
++  .bar {
++    min-height: 56px;
++  }
++}
++
++.link > .icon,
++.workspaceName > .icon {
++  width: 18px;
++  height: 18px;
++}
 --- /dev/null
 +++ b/src/app/(main)/ArchiveShell.test.tsx
-@@ -0,0 +1,133 @@
+@@ -0,0 +1,146 @@
 +import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 +import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 +
@@ -1220,23 +1203,36 @@
 +  expect(screen.getByText('原分析内容')).toBeDefined();
 +});
 +
-+test('website analysis uses quiet Data tools and leaves site context to its one page header', () => {
++test('website analysis keeps the same Data tabs and explains every destination', () => {
++  const view = render(<ArchiveShell>原完整网站分析</ArchiveShell>);
++  const nav = screen.getByRole('navigation', { name: '数据页面' });
++  const originalClass = nav.className;
++  const originalLinks = within(nav)
++    .getAllByRole('link')
++    .map(link => link.getAttribute('href'));
 +  runtime.websiteId = 'synthetic-site';
-+  render(<ArchiveShell>原完整网站分析</ArchiveShell>);
-+  expect(screen.getByRole('navigation', { name: '数据工具' }).querySelectorAll('a')).toHaveLength(
-+    3,
++  view.rerender(<ArchiveShell>原完整网站分析</ArchiveShell>);
++  expect(nav.className).toBe(originalClass);
++  expect(
++    within(nav)
++      .getAllByRole('link')
++      .map(link => link.getAttribute('href')),
++  ).toEqual(originalLinks);
++  expect(within(nav).getAllByRole('link')).toHaveLength(4);
++  expect(within(nav).getByRole('link', { name: '访问分析' })).toHaveAttribute(
++    'aria-current',
++    'page',
 +  );
-+  expect(screen.getByRole('link', { name: '返回数据工作区' })).toHaveAttribute(
-+    'href',
-+    '/admin/analytics',
-+  );
-+  expect(screen.queryByRole('navigation', { name: '数据页面' })).toBeNull();
++  for (const link of within(nav).getAllByRole('link')) {
++    expect(link.getAttribute('title')).toBeTruthy();
++    expect(link.getAttribute('aria-description')).toBe(link.getAttribute('title'));
++  }
 +  expect(screen.queryByRole('navigation', { name: '分析内容与数据范围' })).toBeNull();
 +  expect(screen.getByText('原完整网站分析')).toBeDefined();
 +});
 --- /dev/null
 +++ b/src/app/(main)/ArchiveShell.tsx
-@@ -0,0 +1,195 @@
+@@ -0,0 +1,181 @@
 +'use client';
 +import { Dialog, Modal, useTheme } from '@umami/react-zen';
 +import { type ReactNode, useRef, useState } from 'react';
@@ -1358,36 +1354,22 @@
 +          >
 +            <ArchiveIcon name="menu" />
 +          </button>
-+          {websiteId ? (
-+            <a
-+              href={archiveNavigation.dataLinks[0]?.href}
-+              className={styles.dataReturn}
-+              aria-label="返回数据工作区"
-+            >
-+              <ArchiveIcon name="layout-double" />
-+              数据
-+            </a>
-+          ) : (
-+            <span className={styles.workspaceName}>
-+              <ArchiveIcon name="layout-double" />
-+              数据
-+            </span>
-+          )}
-+          <nav
-+            aria-label={websiteId ? '数据工具' : '数据页面'}
-+            className={websiteId ? styles.dataTools : styles.dataLinks}
-+          >
-+            {(websiteId ? archiveNavigation.dataLinks.slice(1) : archiveNavigation.dataLinks).map(
-+              item => (
-+                <a
-+                  href={item.href}
-+                  key={item.href}
-+                  aria-current={!websiteId && item.href === activeDataHref ? 'page' : undefined}
-+                >
-+                  {item.label}
-+                </a>
-+              ),
-+            )}
++          <span className={styles.workspaceName}>
++            <ArchiveIcon name="layout-double" />
++            数据
++          </span>
++          <nav aria-label="数据页面" className={styles.dataLinks}>
++            {archiveNavigation.dataLinks.map(item => (
++              <a
++                href={item.href}
++                key={item.href}
++                aria-current={item.href === activeDataHref ? 'page' : undefined}
++                title={item.description}
++                aria-description={item.description}
++              >
++                {item.label}
++              </a>
++            ))}
 +          </nav>
 +        </header>
 +        <main id="archive-analysis-main" className={styles.content}>
@@ -4406,20 +4388,16 @@
 +  if (display?.embedded) return null;
 --- a/src/app/Providers.tsx
 +++ b/src/app/Providers.tsx
-@@ -5 +5 @@
--import { useEffect } from 'react';
-+import { useEffect, useState } from 'react';
 @@ -7,2 +7,2 @@
 -import { useLocale } from '@/components/hooks';
 -import 'chartjs-adapter-date-fns';
 +import { useLocale } from '@/components/hooks/useLocale';
 +import { archiveAdminMode, resolveArchiveTheme } from '@/lib/archive-admin';
-@@ -35,0 +36,4 @@
-+  const [theme, setTheme] = useState<'light' | 'dark' | undefined>();
-+  useEffect(() => {
-+    if (archiveAdminMode) setTheme(resolveArchiveTheme());
-+  }, []);
-@@ -37 +41 @@
+@@ -35,0 +36,3 @@
++  // Zen initializes in a layout effect; pass the shared preference immediately
++  // so its stale local theme cannot overwrite the document-head bootstrap.
++  const theme = archiveAdminMode ? resolveArchiveTheme() : undefined;
+@@ -37 +40 @@
 -    <ZenProvider>
 +    <ZenProvider theme={theme}>
 --- /dev/null
@@ -4636,21 +4614,26 @@
 @@ -8,0 +9,3 @@
 +import './archive-theme.css';
 +import './archive-admin.css';
-+import { archiveAdminMode, archiveNavigation } from '@/lib/archive-admin';
-@@ -26 +29,5 @@
++import { archiveAdminMode, archiveNavigation, archiveThemeBootstrap } from '@/lib/archive-admin';
+@@ -26 +29,6 @@
 -    <html lang="en" className={`${inter.className} ${inter.variable}`}>
 +    <html
 +      lang="zh-CN"
 +      className={`${inter.className} ${inter.variable}`}
 +      data-archive-admin={archiveAdminMode ? 'true' : undefined}
++      suppressHydrationWarning={archiveAdminMode}
 +    >
-@@ -28 +35,4 @@
+@@ -28 +36,8 @@
 -        <link rel="icon" href="/favicon.ico" />
++        {archiveAdminMode && (
++          // biome-ignore lint/security/noDangerouslySetInnerHtml: Fixed non-authorizing preference bootstrap; no request or content interpolation.
++          <script id="archive-theme" dangerouslySetInnerHTML={{ __html: archiveThemeBootstrap }} />
++        )}
 +        <link
 +          rel="icon"
 +          href={archiveAdminMode ? archiveNavigation.brandAssetHref : '/favicon.ico'}
 +        />
-@@ -54,2 +64,2 @@
+@@ -54,2 +69,2 @@
 -      template: '%s | Umami',
 -      default: 'Umami',
 +      template: archiveAdminMode ? `%s | ${archiveNavigation.brandLabel}管理后台` : '%s | Umami',
@@ -8021,14 +8004,14 @@
 +] as const;
 --- /dev/null
 +++ b/src/lib/archive-admin.ts
-@@ -0,0 +1,35 @@
+@@ -0,0 +1,49 @@
 +import navigation from '../data/archive-navigation.json';
 +
 +export const archiveAdminMode = process.env.basePath === '/admin/analytics-workspace';
 +export const archiveNavigation = navigation;
 +export const archiveAssets = {
 +  theme: '62c0496afbbd07112fce0fe8127a640665d33fe9468a2500930651bc27341478',
-+  navigation: 'b656a4921010d3bccc13a429d293875ab88cdef168b25530505dc83631724eae',
++  navigation: '04c07462e6937f041bbef0fd61884624977db9feb4c02054fbd05636e00650d4',
 +  icons: '8d39d4a06bb7d863d2b954454b1d8e414e1d8a642245716f2e4343854b48f863',
 +} as const;
 +export const archiveIconsHref = `${process.env.basePath || ''}/archive-icons.svg?v=${archiveAssets.icons}`;
@@ -8057,6 +8040,20 @@
 +    (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
 +  );
 +}
++
++/** Runs in the document head before either CSS theme or hydration can repaint. */
++export const archiveThemeBootstrap = `(() => {
++  const name = ${JSON.stringify(archiveNavigation.themeCookieName)} + '=';
++  let preference;
++  try {
++    preference = document.cookie.split(';').map(part => part.trim())
++      .find(part => part.startsWith(name))?.slice(name.length);
++  } catch {}
++  const theme = preference === 'light' || preference === 'dark' ? preference
++    : window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
++  document.documentElement.setAttribute('data-theme', theme);
++  document.documentElement.classList.toggle('dark', theme === 'dark');
++})();`;
 --- /dev/null
 +++ b/src/lib/archive-analysis.test.ts
 @@ -0,0 +1,146 @@
@@ -8324,6 +8321,68 @@
 +  }
 +  return result;
 +}
+--- /dev/null
++++ b/src/lib/archive-theme.test.ts
+@@ -0,0 +1,59 @@
++import { afterEach, expect, test, vi } from 'vitest';
++import { archiveThemeBootstrap } from './archive-admin';
++
++const runBootstrap = () => {
++  // Execute the exact fixed document-head source before any provider is mounted.
++  // biome-ignore lint/security/noGlobalEval: Fixed reviewed bootstrap, not user-supplied code.
++  window.eval(archiveThemeBootstrap);
++};
++afterEach(() => {
++  vi.unstubAllGlobals();
++  document.documentElement.removeAttribute('data-theme');
++  document.documentElement.classList.remove('dark');
++  // biome-ignore lint/suspicious/noDocumentCookie: Synthetic non-authorizing preference.
++  document.cookie = 'payload-theme=; Max-Age=0; Path=/';
++  localStorage.clear();
++});
++test.each(['light', 'dark'] as const)(
++  'explicit %s preference paints before hydration despite opposite system and local theme',
++  theme => {
++    const opposite = theme === 'dark' ? 'light' : 'dark';
++    vi.stubGlobal(
++      'matchMedia',
++      vi.fn(() => ({ matches: opposite === 'dark' })),
++    );
++    localStorage.setItem('theme', opposite);
++    // biome-ignore lint/suspicious/noDocumentCookie: Synthetic non-authorizing preference.
++    document.cookie = `payload-theme=${theme}; Path=/`;
++    // biome-ignore lint/suspicious/noDocumentCookie: Synthetic session proves bootstrap does not mutate authentication.
++    document.cookie = 'fixture-session=REPLACE_ME_SYNTHETIC_COOKIE';
++    const cookies = document.cookie;
++    runBootstrap();
++    expect(document.documentElement.dataset.theme).toBe(theme);
++    expect(document.documentElement.classList.contains('dark')).toBe(theme === 'dark');
++    expect(document.cookie).toBe(cookies);
++    expect(localStorage.getItem('theme')).toBe(opposite);
++  },
++);
++test.each([true, false])(
++  'automatic preference follows system dark=%s and ignores stale native preference',
++  dark => {
++    vi.stubGlobal(
++      'matchMedia',
++      vi.fn(() => ({ matches: dark })),
++    );
++    localStorage.setItem('theme', dark ? 'light' : 'dark');
++    runBootstrap();
++    expect(document.documentElement.dataset.theme).toBe(dark ? 'dark' : 'light');
++  },
++);
++test('malformed preference is never interpolated into executable source', () => {
++  vi.stubGlobal(
++    'matchMedia',
++    vi.fn(() => ({ matches: false })),
++  );
++  // biome-ignore lint/suspicious/noDocumentCookie: Synthetic invalid preference.
++  document.cookie = 'payload-theme=invalid; Path=/';
++  runBootstrap();
++  expect(document.documentElement.dataset.theme).toBe('light');
++});
 --- /dev/null
 +++ b/src/lib/artvenn-china-map.test.ts
 @@ -0,0 +1,194 @@
