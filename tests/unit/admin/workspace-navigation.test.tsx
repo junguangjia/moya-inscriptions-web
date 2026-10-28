@@ -2,6 +2,7 @@
 import { createElement } from "react";
 import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -32,6 +33,7 @@ const runtime = await vi.hoisted(async () => {
     theme: "light",
     mobile: false,
     animate: false,
+    hydrated: true,
     getPreference: vi.fn(),
   };
 });
@@ -61,7 +63,7 @@ vi.mock(runtime.ui, () => ({
     ),
   useAuth: () => ({ user: runtime.user }),
   useNav: () => ({
-    hydrated: true,
+    hydrated: runtime.hydrated,
     navOpen: true,
     navRef: { current: null },
     shouldAnimate: runtime.animate,
@@ -130,6 +132,7 @@ beforeEach(() => {
   runtime.theme = "light";
   runtime.mobile = false;
   runtime.animate = false;
+  runtime.hydrated = true;
   runtime.getPreference.mockReset().mockResolvedValue(undefined);
   runtime.setNavOpen.mockReset();
   runtime.setTheme.mockReset();
@@ -314,7 +317,7 @@ it("opens desktop navigation after a bounded preference wait even when Payload s
   await vi.advanceTimersByTimeAsync(100);
   runtime.animate = true;
   view.rerender(createElement(WorkspaceNavigation));
-  await vi.advanceTimersByTimeAsync(650);
+  await act(() => vi.advanceTimersByTimeAsync(650));
   expect(runtime.setNavOpen).toHaveBeenCalledWith(true);
 });
 
@@ -333,7 +336,7 @@ it("finishes desktop initialization after Payload applies an old closed preferen
   })();
   finish({ open: false });
   await nativePreference;
-  await vi.advanceTimersByTimeAsync(0);
+  await act(() => vi.advanceTimersByTimeAsync(0));
   expect(runtime.setNavOpen).toHaveBeenLastCalledWith(true);
 });
 
@@ -350,4 +353,22 @@ it("keeps all Data destinations in a stable tab bar with accessible purposes", (
   expect(
     within(nav).getByRole("link", { name: "统计看板" }).getAttribute("title"),
   ).toBe("查看已保存的统计汇总看板。");
+});
+
+it("keeps the first desktop shell reserved until the existing bounded default finishes", async () => {
+  vi.useFakeTimers();
+  runtime.hydrated = false;
+  runtime.getPreference.mockReturnValue(new Promise(() => {}));
+  const view = render(createElement(WorkspaceNavigation));
+  const sidebar = view.container.querySelector("aside")!;
+  expect(sidebar.hasAttribute("inert")).toBe(true);
+  expect(sidebar.getAttribute("data-archive-nav-pending")).toBe("true");
+  expect(runtime.getPreference).not.toHaveBeenCalled();
+  runtime.hydrated = true;
+  view.rerender(createElement(WorkspaceNavigation));
+  await act(() => vi.advanceTimersByTimeAsync(749));
+  expect(sidebar.getAttribute("data-archive-nav-pending")).toBe("true");
+  await act(() => vi.advanceTimersByTimeAsync(1));
+  expect(runtime.setNavOpen).toHaveBeenLastCalledWith(true);
+  expect(sidebar.hasAttribute("data-archive-nav-pending")).toBe(false);
 });

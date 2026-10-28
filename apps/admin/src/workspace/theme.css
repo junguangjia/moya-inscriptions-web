@@ -66,6 +66,41 @@ body {
   grid-column: 2;
 }
 
+/* Match the existing desktop-open default while Payload reads preferences. */
+@media (min-width: 1025px) {
+  body:has(.template-default > .archive-nav[data-archive-nav-pending="true"])
+    .archive-workspace-bar {
+    margin-inline-start: var(--archive-nav-width);
+  }
+
+  .template-default:has(> .archive-nav[data-archive-nav-pending="true"]) {
+    grid-template-columns: var(--archive-nav-width) minmax(0, 1fr);
+  }
+
+  .template-default > .archive-nav[data-archive-nav-pending="true"] {
+    display: block;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The mobile sidebar stays closed until Payload can initialize its state. */
+@media (max-width: 1024px) {
+  .template-default:has(> .archive-nav[data-archive-nav-pending="true"]) {
+    grid-template-columns: 0 minmax(0, 1fr);
+  }
+
+  .template-default > .archive-nav[data-archive-nav-pending="true"] {
+    display: none;
+  }
+
+  .template-default:not(.template-default--nav-hydrated)
+    > .archive-nav
+    + .template-default__wrap {
+    grid-column: 1 / -1;
+  }
+}
+
 .template-default__wrap > :where(section, div:not(.app-header)) {
   min-width: 0;
 }
