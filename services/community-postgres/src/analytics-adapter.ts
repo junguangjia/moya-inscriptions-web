@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { ANALYTICS_IP_RETENTION_DAYS } from "@moya/contracts/analytics";
 import type {
   AnalyticsBatch,
   AnalyticsIpObservations,
@@ -70,7 +71,7 @@ export class PostgresAnalyticsAdapter implements AnalyticsPort {
       await db.query(
         `INSERT INTO community.analytics_ip_observations
         (id,visitor_id,user_id,ip,user_agent,received_at,expires_at)
-        VALUES($1::uuid,$2::uuid,$3,$4::inet,$5,$6::timestamptz,$6::timestamptz+INTERVAL '7 days')`,
+        VALUES($1::uuid,$2::uuid,$3,$4::inet,$5,$6::timestamptz,$6::timestamptz+($7::integer * INTERVAL '1 day'))`,
         [
           observationId,
           batch.visitorId,
@@ -78,6 +79,7 @@ export class PostgresAnalyticsAdapter implements AnalyticsPort {
           context.ip,
           context.userAgent.slice(0, 512),
           context.receivedAt,
+          ANALYTICS_IP_RETENTION_DAYS,
         ],
       );
       if (context.forward) {

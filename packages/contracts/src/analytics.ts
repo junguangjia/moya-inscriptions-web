@@ -56,12 +56,17 @@ export const analyticsBatchResultSchema = z.strictObject({
   accepted: z.number().int().min(0).max(20),
   excluded: z.boolean(),
 });
+export const ANALYTICS_IP_RETENTION_DAYS = 60;
 export const analyticsStatusSchema = z.strictObject({
   enabled: z.boolean(),
   forwardingConfigured: z.boolean(),
   ownerExclusionConfigured: z.boolean(),
   eventRetentionDays: z.number().int().positive(),
-  ipRetentionDays: z.literal(7),
+  // Rebuilt consumers accept the old Backend during the rolling deployment.
+  ipRetentionDays: z.union([
+    z.literal(7),
+    z.literal(ANALYTICS_IP_RETENTION_DAYS),
+  ]),
   last24Hours: z.strictObject({
     events: z.number().int().nonnegative(),
     visitors: z.number().int().nonnegative(),

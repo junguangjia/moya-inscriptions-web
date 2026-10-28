@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { ANALYTICS_IP_RETENTION_DAYS } from "@moya/contracts/analytics";
 import type {
   AnalyticsBatch,
   AnalyticsBatchResult,
@@ -79,7 +80,7 @@ export class AnalyticsService {
       forwardingConfigured: this.policy.forwardingConfigured,
       ownerExclusionConfigured: this.policy.ownerExclusionConfigured,
       eventRetentionDays: this.policy.eventRetentionDays,
-      ipRetentionDays: 7,
+      ipRetentionDays: ANALYTICS_IP_RETENTION_DAYS,
       ...(await this.port.status(this.now())),
     };
   }

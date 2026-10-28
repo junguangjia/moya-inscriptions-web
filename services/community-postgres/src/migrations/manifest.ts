@@ -385,4 +385,10 @@ export const requiredCommunityMigrations: readonly RequiredCommunityMigration[] 
       checksum:
         "06f8c363b7480e275e7dcd49a97a5a297987bb4ed9b3b3d4c8c87a882920282b",
     }),
+    Object.freeze({
+      migrationId: "20261028010000",
+      filename: "20261028010000_analytics_ip_retention_60_days.sql",
+      checksum:
+        "b65868582750b1e3a688680eb1f32a57bddf0d607d87d473a838de6e72045e64",
+    }),
   ]);

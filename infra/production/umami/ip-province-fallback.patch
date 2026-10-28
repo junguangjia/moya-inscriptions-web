@@ -647,7 +647,7 @@
 \ No newline at end of file
 --- /dev/null
 +++ b/src/lib/artvenn-ip-province.js
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,48 @@
 +import path from 'node:path';
 +import { isIP } from 'node:net';
 +import {
@@ -665,7 +665,12 @@
 +  ['青海省', 'QH'], ['宁夏', 'NX'], ['新疆', 'XJ'], ['台湾省', 'TW'],
 +  ['香港特别行政区', 'HK'], ['澳门特别行政区', 'MO'],
 +]);
++const provinceKeys = new Set(Object.values(provinces).map(value => `CN-${value}`));
 +const readers = new Map();
++
++export function isCnProvince(value) {
++  return provinceKeys.has(value);
++}
 +
 +// Internal statistics only. Preserve known geography and never infer a city.
 +export async function fillMissingCnProvince(ip, country, region, city, directory = path.join(process.cwd(), 'geo')) {
@@ -971,3 +976,170 @@
 +Code is licensed under Apache-2.0 OR MIT; see ip2region-LICENSE.md.
 +Data is an IP-network estimate, not a verified physical user location.
 +Existing GeoLite geography is preserved; only missing China provinces are filled.
+--- a/src/queries/sql/sessions/createSession.ts
++++ b/src/queries/sql/sessions/createSession.ts
+@@ -1,4 +1,5 @@
+ import type { Prisma } from '@/generated/prisma/client';
++import { isCnProvince } from '@/lib/artvenn-ip-province';
+ import { FIELD_LENGTH } from '@/lib/constants';
+ import { truncateString } from '@/lib/format';
+ import prisma from '@/lib/prisma';
+@@ -50,9 +51,18 @@
+       {{distinctId}},
+       {{createdAt}}
+     )
+-    on conflict (session_id) do nothing
++    on conflict (session_id) do update set region = excluded.region
++    where session.website_id = excluded.website_id
++      and session.distinct_id is not distinct from excluded.distinct_id
++      and session.country = 'CN' and excluded.country = 'CN'
++      and coalesce(session.region, '') = ''
++      and coalesce(session.city, '') = ''
++      and {{allowProvinceFill}}
+     `,
+-    normalizedData,
++    {
++      ...normalizedData,
++      allowProvinceFill: data.country === 'CN' && isCnProvince(normalizedData.region),
++    },
+     FUNCTION_NAME,
+   );
+ }
+--- /dev/null
++++ b/src/queries/sql/sessions/createSession.artvenn.test.ts
+@@ -0,0 +1,75 @@
++import { DatabaseSync } from 'node:sqlite';
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++import { createSession } from './createSession';
++
++let database: DatabaseSync;
++vi.mock('@/lib/prisma', () => ({
++  default: {
++    writeRawQuery: async (sql: string, values: Record<string, any>) => {
++      const keys: string[] = [];
++      const bound = sql.replace(/\{\{([A-Za-z0-9_]+)\}\}/g, (_, key) => {
++        keys.push(key);
++        return '?';
++      });
++      return database.prepare(bound).run(...keys.map(key => {
++        const value = values[key];
++        return value instanceof Date ? value.toISOString() : typeof value === 'boolean' ? Number(value) : value;
++      }));
++    },
++  },
++}));
++
++const input = (changes: Record<string, any> = {}) => ({
++  id: '10000000-0000-4000-8000-000000000001',
++  websiteId: '10000000-0000-4000-8000-000000000002',
++  distinctId: 'synthetic-distinct-visitor',
++  country: 'CN',
++  region: null,
++  city: null,
++  browser: 'chrome',
++  os: 'Mac OS',
++  device: 'desktop',
++  screen: '1200x800',
++  language: 'zh-CN',
++  createdAt: new Date('2026-10-20T01:02:03Z'),
++  ...changes,
++});
++const row = () => ({ ...database.prepare('select * from session').get() });
++
++beforeEach(() => {
++  database = new DatabaseSync(':memory:');
++  database.exec('create table session(session_id text primary key, website_id text, browser text, os text, device text, screen text, language text, country text, region text, city text, distinct_id text, created_at text)');
++});
++afterEach(() => database.close());
++
++describe('revisited native sessions fill only an unknown China province', () => {
++  it('fills the province while keeping every identity and previously stored field', async () => {
++    await createSession(input());
++    const before = row();
++    await createSession(input({ region: 'CN-JS', browser: 'firefox', device: 'phone', createdAt: new Date('2026-10-25T03:04:05Z') }));
++    expect(row()).toEqual({ ...before, region: 'CN-JS' });
++  });
++  it('also fills empty strings without filling the city', async () => {
++    await createSession(input({ region: '', city: '' }));
++    const before = row();
++    await createSession(input({ region: 'CN-GD', city: 'Guangzhou' }));
++    expect(row()).toEqual({ ...before, region: 'CN-GD' });
++  });
++  it.each([
++    [{ region: 'CN-SH' }, { region: 'CN-JS' }],
++    [{ city: 'Shanghai' }, { region: 'CN-JS' }],
++    [{ country: 'US' }, { region: 'CN-JS' }],
++    [{}, { country: 'US', region: 'CN-JS' }],
++    [{}, { country: 'CNA', region: 'CN-JS' }],
++    [{}, { region: 'CN-UNKNOWN' }],
++    [{}, { region: 'US-CA' }],
++    [{}, { region: null }],
++    [{}, { region: 'CN-JS', distinctId: 'different-synthetic-visitor' }],
++    [{}, { region: 'CN-JS', websiteId: '10000000-0000-4000-8000-000000000003' }],
++  ])('preserves known geography and rejects conflicting or invalid fill input (%j / %j)', async (stored, incoming) => {
++    await createSession(input(stored));
++    const before = row();
++    await createSession(input(incoming));
++    expect(row()).toEqual(before);
++  });
++});
+--- /dev/null
++++ b/src/lib/artvenn-postgres-utc.test.ts
+@@ -0,0 +1,17 @@
++import { createRequire } from 'node:module';
++import { afterEach, expect, it, vi } from 'vitest';
++
++afterEach(() => vi.unstubAllEnvs());
++
++it('the pinned pg driver passes connection-only UTC options without changing the application timezone or identity settings', () => {
++  const originalTimezone = process.env.TZ;
++  const originalSecret = process.env.APP_SECRET;
++  const connectionString = 'postgresql://REPLACE_ME_TEST_USER:REPLACE_ME_TEST_PASSWORD@127.0.0.1:5432/REPLACE_ME_TEST_DATABASE';
++  vi.stubEnv('PGOPTIONS', '-c timezone=UTC');
++  const { Client } = createRequire(import.meta.url)('pg');
++  const client = new Client({ connectionString });
++  expect(client.connectionParameters.options).toBe('-c timezone=UTC');
++  expect(client.connectionParameters.database).toBe('REPLACE_ME_TEST_DATABASE');
++  expect(process.env.TZ).toBe(originalTimezone);
++  expect(process.env.APP_SECRET).toBe(originalSecret);
++});
+--- a/src/app/(main)/websites/[websiteId]/ArchiveGeography.tsx
++++ b/src/app/(main)/websites/[websiteId]/ArchiveGeography.tsx
+@@ -1,5 +1,5 @@
+ 'use client';
+-import { Button, Heading, Tab, TabList, TabPanel, Tabs } from '@umami/react-zen';
++import { Button, Heading, Tab, TabList, TabPanel, Tabs, Text } from '@umami/react-zen';
+ import { useState } from 'react';
+ import { Panel } from '@/components/common/Panel';
+ import { MetricsExpandedTable } from '@/components/metrics/MetricsExpandedTable';
+@@ -57,6 +57,10 @@
+               </TabPanel>
+             ))}
+           </Tabs>
++          <Text size="sm" color="muted">
++            访客数为去重标识，不等于去重 IP。
++            {!expanded && '占比仅按当前榜单内已解析项计算，未包含未知位置。'}
++          </Text>
+           <Button variant="quiet" aria-expanded={expanded} onPress={() => setExpanded(!expanded)}>
+             {expanded ? '收起完整列表' : `展开全部${items.find(item => item.id === tab)?.label}`}
+           </Button>
+--- /dev/null
++++ b/src/app/(main)/websites/[websiteId]/ArchiveGeography.scope.test.tsx
+@@ -0,0 +1,17 @@
++import { fireEvent, render, screen } from '@testing-library/react';
++import { expect, it, vi } from 'vitest';
++import { ArchiveGeography } from './ArchiveGeography';
++
++vi.mock('@/components/common/Panel', () => ({ Panel: ({ children }) => <section>{children}</section> }));
++vi.mock('@/components/metrics/WorldMap', () => ({ WorldMap: () => <div>合成地图</div> }));
++vi.mock('@/components/metrics/MetricsTable', () => ({ MetricsTable: () => <div>合成地域榜单</div> }));
++vi.mock('@/components/metrics/MetricsExpandedTable', () => ({ MetricsExpandedTable: () => <div>合成展开表</div> }));
++
++it('states the resolved-list percentage denominator and removes that explanation when the expanded view has no percentage column', () => {
++  render(<ArchiveGeography websiteId="10000000-0000-4000-8000-000000000002" />);
++  expect(screen.getByText(/访客数为去重标识，不等于去重 IP/)).toBeDefined();
++  expect(screen.getByText(/占比仅按当前榜单内已解析项计算，未包含未知位置/)).toBeDefined();
++  fireEvent.click(screen.getByRole('button', { name: '展开全部省份' }));
++  expect(screen.queryByText(/占比仅按当前榜单内已解析项计算/)).toBeNull();
++  expect(screen.getByText(/访客数为去重标识，不等于去重 IP/)).toBeDefined();
++});

@@ -102,12 +102,12 @@
     }
   },
   "provinceFallback": {
-    "mode": "fill-only missing CN province; preserve known province, city and non-CN geography; internal analytics only",
+    "mode": "fill-only missing CN province, including revisited sessions; preserve known province, city, country and identities; internal analytics only",
     "repository": "https://github.com/lionsoul2014/ip2region",
     "commit": "70d862dbc7ee26c7de6e1adf4c25e63250de2606",
     "clientVersion": "3.1.8",
     "patch": "ip-province-fallback.patch",
-    "patchSha256": "ee0442474fe367cd426f58ffc7f253320b58f550395c8104419567078acaf8f2",
+    "patchSha256": "19c912fe03a013b817a86253632ac1d4957162cf3194d4cec6c08b10fac7ef6d",
     "upstreamDetectSha256": "28799f1bba9a5357951a77a88aa4b5e53aa10591a9ac6d0110af3f3f1c1fdaa2",
     "patchedHashes": "ip-province-fallback.sha256",
     "ipv4": {
@@ -126,6 +126,15 @@
       "existingProviderDisagreements": 30,
       "existingResultsPreserved": true,
       "accuracyVerified": false
-    }
+    },
+    "upstreamCreateSessionSha256": "269ae458330c3fee1e74312bb3d59ce211b65008edcbfdb4748ce09b5defb5bf",
+    "priorArchiveGeographySha256": "daf722b736185a5fa62f346e6760ca07e6734bfa5ebd4056a193de46fa2c7851",
+    "revisitFill": "Same website and distinct identity; stored CN country and empty province/city; incoming CN country and recognized province; update region only",
+    "listCaption": "Visitor identifiers are not unique IPs; compact geography percentages cover displayed resolved rows and omit unknown locations"
+  },
+  "postgresConnectionTimeZone": {
+    "value": "UTC",
+    "options": "-c timezone=UTC",
+    "scope": "Umami database connections only; preserve JavaScript TZ, APP_SECRET and DATABASE_URL"
   }
 }
