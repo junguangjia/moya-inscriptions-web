@@ -293,6 +293,10 @@ test("Formal root composes truthful runtime list states", async ({ page }) => {
     "data-active-discussion-feed",
     "topics",
   );
+  if ((await shell.getAttribute("data-desktop")) === "true")
+    await expect(
+      discussion.getByRole("heading", { name: "专题", exact: true, level: 1 }),
+    ).toBeVisible();
   await expect(
     discussion.getByRole("tabpanel", { name: "专题" }),
   ).toContainText("专题暂时不可用");

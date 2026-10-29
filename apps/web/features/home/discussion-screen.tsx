@@ -211,7 +211,9 @@ export function DiscussionScreen({
       data-active-discussion-feed={active}
     >
       <header className={styles.homeHeader} data-author-bar="">
-        {shell.desktop && <h1 className={styles.desktopTitle}>讨论</h1>}
+        {shell.desktop && (
+          <h1 className={styles.desktopTitle}>{labels[active]}</h1>
+        )}
         {headerStart ?? <span />}
         <AnimatedTopTabs
           items={feeds.map((id) => ({

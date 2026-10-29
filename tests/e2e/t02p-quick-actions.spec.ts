@@ -14,6 +14,7 @@ const ready = async (page: Page, path = "/dev/t02p/qa?qaChrome=hidden") => {
   await page.addInitScript(() => {
     try {
       window.localStorage.setItem("yoyi.home-feed-layout.v2", "double");
+      window.localStorage.setItem("yoyi.desktop-feed-layout.v1", "double");
     } catch {
       // Storage may be unavailable; the layout then follows the platform.
     }

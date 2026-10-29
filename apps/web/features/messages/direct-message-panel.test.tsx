@@ -283,6 +283,7 @@ describe("DirectMessagePanel (content-community-completion-v1)", () => {
     );
     await flush();
     expect(node.textContent).toContain("书法学徒");
+    expect(node.textContent).toContain("删除对话仅对自己隐藏，对方仍可查看。");
     // Owner acceptance (2026-09-25): a row shows no visible request tag, only
     // the unread count; its accessible name still states the request.
     expect(node.querySelector("[data-dm-row]")?.textContent).not.toContain(

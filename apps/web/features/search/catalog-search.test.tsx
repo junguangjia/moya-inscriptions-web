@@ -186,6 +186,13 @@ describe("real Catalog Search utility", () => {
     );
     expect(triggers).toHaveLength(3);
     expect(
+      triggers.every((trigger) =>
+        (trigger.getAttribute("aria-label") ?? "").includes(
+          trigger.textContent?.trim() ?? "",
+        ),
+      ),
+    ).toBe(true);
+    expect(
       triggers.every((t) => t.getAttribute("aria-label") === "打开搜索"),
     ).toBe(true);
     const visible = triggers[1]!;

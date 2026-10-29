@@ -655,6 +655,11 @@ export const DirectMessagePanel = ({
         </div>
       )}
       {list.state === "populated" && (
+        <p className={panelStyles.viewStatus}>
+          删除对话仅对自己隐藏，对方仍可查看。
+        </p>
+      )}
+      {list.state === "populated" && (
         <ul className={styles.conversationList} aria-label="私信会话">
           {list.items.map((conversation) => {
             const name = conversation.participant.displayName;

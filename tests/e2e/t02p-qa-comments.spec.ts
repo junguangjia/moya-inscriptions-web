@@ -4,9 +4,10 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() =>
-    localStorage.setItem("yoyi.home-feed-layout.v2", "double"),
-  );
+  await page.addInitScript(() => {
+    localStorage.setItem("yoyi.home-feed-layout.v2", "double");
+    localStorage.setItem("yoyi.desktop-feed-layout.v1", "double");
+  });
 });
 
 test.beforeAll(async ({ request }) => {
