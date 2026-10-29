@@ -104,8 +104,11 @@ test("calligraphy Detail has independent complete images and a vertical content-
       detail.locator("[data-desktop-calligraphy-detail]"),
     ).toBeVisible();
     await expect(
-      detail.locator('[data-detail-reading-variant="desktop-information"]'),
+      detail.locator("[data-desktop-detail-information]"),
     ).toHaveCount(1);
+    await expect(
+      detail.locator("[data-desktop-detail-image-pane]"),
+    ).toBeVisible();
     return;
   }
   await expect(detail).toHaveAttribute("data-detail-mode", "calligraphy");

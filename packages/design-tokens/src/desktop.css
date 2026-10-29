@@ -15,7 +15,8 @@
   --yoyi-desktop-feed-row-gap: 24px;
   --yoyi-desktop-reader-upper: clamp(320px, 48svh, 600px);
   --yoyi-desktop-reader-upper-empty: clamp(400px, 64svh, 720px);
-  --yoyi-desktop-reader-colophon: clamp(240px, 30svh, 360px);
+  --yoyi-desktop-reader-colophon: clamp(320px, 60svh, 720px);
+  --yoyi-desktop-reader-information-width: clamp(280px, 24vw, 380px);
   --yoyi-desktop-reader-colophon-empty: 96px;
   --yoyi-desktop-reader-media-max: 960px;
 }

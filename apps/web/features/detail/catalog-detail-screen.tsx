@@ -6,6 +6,7 @@ import { CalligraphyDetailLayout } from "./calligraphy-detail-layout";
 import { DesktopCalligraphyDetailLayout } from "./desktop-calligraphy-detail-layout";
 import { VerticalText } from "../authors/vertical-text";
 import styles from "./catalog-detail.module.css";
+import desktopStyles from "./desktop-calligraphy-detail-layout.module.css";
 
 import type { ReactNode, RefObject } from "react";
 import type {
@@ -39,6 +40,44 @@ export interface CatalogDetailScreenProps {
 
 /** An accessible-only name for an untitled work; the stored title stays empty. */
 const UNTITLED_WORK_HEADING = "未命名作品";
+
+/** One semantic content renderer, optionally housed in a desktop disclosure. */
+const DetailGroup = ({
+  group,
+  title,
+  collapsible,
+  open = false,
+  children,
+}: {
+  readonly group: string;
+  readonly title: string;
+  readonly collapsible: boolean;
+  readonly open?: boolean;
+  readonly children: ReactNode;
+}) =>
+  collapsible ? (
+    <details
+      className={desktopStyles.group}
+      data-desktop-information-group={group}
+      open={open || undefined}
+    >
+      <summary>
+        <span>{title}</span>
+        <Icon name="next" aria-hidden="true" />
+      </summary>
+      <div
+        className={desktopStyles.groupContent}
+        data-desktop-group-content=""
+        role="region"
+        aria-label={title}
+        tabIndex={0}
+      >
+        {children}
+      </div>
+    </details>
+  ) : (
+    <>{children}</>
+  );
 
 const DetailMessage = ({
   description,
@@ -88,11 +127,13 @@ const DetailIdentity = ({
   vertical = false,
   headingOnly = false,
   omitHeading = false,
+  collapsible = false,
 }: {
   readonly detail: CatalogDetailPresentation;
   readonly vertical?: boolean;
   readonly headingOnly?: boolean;
   readonly omitHeading?: boolean;
+  readonly collapsible?: boolean;
 }) => {
   const text = (value: string) =>
     vertical ? <VerticalText text={value} /> : value;
@@ -130,16 +171,23 @@ const DetailIdentity = ({
         ? (detail.sections ?? [])
             .filter((section) => section.key === "description")
             .map((section) => (
-              <p
+              <DetailGroup
                 key={section.key}
-                className={styles.workBody}
-                data-detail-section="description"
-                data-detail-reading-anchor={
-                  vertical ? "description" : undefined
-                }
+                group="work-body"
+                title={section.title}
+                collapsible={collapsible}
+                open
               >
-                {text(section.text)}
-              </p>
+                <p
+                  className={styles.workBody}
+                  data-detail-section="description"
+                  data-detail-reading-anchor={
+                    vertical ? "description" : undefined
+                  }
+                >
+                  {text(section.text)}
+                </p>
+              </DetailGroup>
             ))
         : null}
       {!omitHeading && detail.contentType === "work" ? (
@@ -149,39 +197,55 @@ const DetailIdentity = ({
         />
       ) : null}
       {headingOnly || detail.summary === undefined ? null : (
-        <p
-          className={styles.summary}
-          data-detail-reading-anchor={vertical ? "summary" : undefined}
+        <DetailGroup
+          group="summary"
+          title="摘要"
+          collapsible={collapsible}
+          open={detail.facts.length === 0}
         >
-          {text(detail.summary)}
-        </p>
+          <p
+            className={styles.summary}
+            data-detail-reading-anchor={vertical ? "summary" : undefined}
+          >
+            {text(detail.summary)}
+          </p>
+        </DetailGroup>
       )}
       {headingOnly || detail.aliases.length === 0 ? null : (
-        <div className={styles.aliases}>
-          <span>又名</span>
-          <p data-detail-reading-anchor={vertical ? "aliases" : undefined}>
-            {text(detail.aliases.join(" · "))}
-          </p>
-        </div>
+        <DetailGroup group="aliases" title="又名" collapsible={collapsible}>
+          <div className={styles.aliases}>
+            {collapsible ? null : <span>又名</span>}
+            <p data-detail-reading-anchor={vertical ? "aliases" : undefined}>
+              {text(detail.aliases.join(" · "))}
+            </p>
+          </div>
+        </DetailGroup>
       )}
       {headingOnly || detail.facts.length === 0 ? null : (
-        <section className={styles.factsSection} data-detail-facts="">
-          <h2>基本资料</h2>
-          <dl className={styles.facts}>
-            {detail.facts.map((fact, index) => (
-              <div key={`${fact.label}-${fact.value}-${index}`}>
-                <dt>{fact.label}</dt>
-                <dd
-                  data-detail-reading-anchor={
-                    vertical ? `fact-${index}` : undefined
-                  }
-                >
-                  {text(fact.value)}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </section>
+        <DetailGroup
+          group="facts"
+          title="基本资料"
+          collapsible={collapsible}
+          open
+        >
+          <section className={styles.factsSection} data-detail-facts="">
+            {collapsible ? null : <h2>基本资料</h2>}
+            <dl className={styles.facts}>
+              {detail.facts.map((fact, index) => (
+                <div key={`${fact.label}-${fact.value}-${index}`}>
+                  <dt>{fact.label}</dt>
+                  <dd
+                    data-detail-reading-anchor={
+                      vertical ? `fact-${index}` : undefined
+                    }
+                  >
+                    {text(fact.value)}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        </DetailGroup>
       )}
     </section>
   );
@@ -201,48 +265,54 @@ const hasReadingFlow = (detail: CatalogDetailPresentation) =>
 const DetailAuthorship = ({
   authorship,
   vertical = false,
+  collapsible = false,
 }: {
   readonly authorship: DetailAuthorshipPresentation;
   readonly vertical?: boolean;
+  readonly collapsible?: boolean;
 }) => (
-  <section
-    className={styles.readingSection}
-    data-detail-authorship={authorship.kind}
-    data-detail-section="authorship"
-  >
-    <h2>作品性质</h2>
-    <p data-detail-authorship-label="">{authorship.label}</p>
-    {authorship.references.length === 0 ? null : (
-      <div className={styles.factsSection}>
-        <dl className={styles.facts} data-detail-authorship-references="">
-          {authorship.references.map((reference, index) => (
-            <div key={reference.label}>
-              <dt>{reference.label}</dt>
-              <dd
-                data-detail-reading-anchor={
-                  vertical ? `authorship-${index}` : undefined
-                }
-              >
-                {vertical ? (
-                  <VerticalText text={reference.value} />
-                ) : (
-                  reference.value
-                )}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      </div>
-    )}
-  </section>
+  <DetailGroup group="authorship" title="作品性质" collapsible={collapsible}>
+    <section
+      className={styles.readingSection}
+      data-detail-authorship={authorship.kind}
+      data-detail-section="authorship"
+    >
+      {collapsible ? null : <h2>作品性质</h2>}
+      <p data-detail-authorship-label="">{authorship.label}</p>
+      {authorship.references.length === 0 ? null : (
+        <div className={styles.factsSection}>
+          <dl className={styles.facts} data-detail-authorship-references="">
+            {authorship.references.map((reference, index) => (
+              <div key={reference.label}>
+                <dt>{reference.label}</dt>
+                <dd
+                  data-detail-reading-anchor={
+                    vertical ? `authorship-${index}` : undefined
+                  }
+                >
+                  {vertical ? (
+                    <VerticalText text={reference.value} />
+                  ) : (
+                    reference.value
+                  )}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      )}
+    </section>
+  </DetailGroup>
 );
 
 const DetailReadingFlow = ({
   detail,
   vertical = false,
+  collapsible = false,
 }: {
   readonly detail: CatalogDetailPresentation;
   readonly vertical?: boolean;
+  readonly collapsible?: boolean;
 }) => {
   const sections = (detail.sections ?? []).filter(
     (section) => detail.contentType !== "work" || section.key !== "description",
@@ -253,62 +323,84 @@ const DetailReadingFlow = ({
   return (
     <div className={styles.readingFlow}>
       {sections.map((section) => (
-        <section
+        <DetailGroup
           key={section.key}
-          className={styles.readingSection}
-          data-detail-section={section.key}
+          group={section.key}
+          title={section.title}
+          collapsible={collapsible}
+          open={
+            detail.summary === undefined &&
+            detail.facts.length === 0 &&
+            section === sections[0]
+          }
         >
-          <h2>{section.title}</h2>
-          <p data-detail-reading-anchor={vertical ? section.key : undefined}>
-            {vertical ? <VerticalText text={section.text} /> : section.text}
-          </p>
-        </section>
+          <section
+            className={styles.readingSection}
+            data-detail-section={section.key}
+          >
+            {collapsible ? null : <h2>{section.title}</h2>}
+            <p data-detail-reading-anchor={vertical ? section.key : undefined}>
+              {vertical ? <VerticalText text={section.text} /> : section.text}
+            </p>
+          </section>
+        </DetailGroup>
       ))}
       {authorship === null ? null : (
-        <DetailAuthorship authorship={authorship} vertical={vertical} />
+        <DetailAuthorship
+          authorship={authorship}
+          vertical={vertical}
+          collapsible={collapsible}
+        />
       )}
       {detail.sourceCitations.length === 0 ? null : (
-        <section
-          className={styles.readingSection}
-          data-detail-section="sources"
+        <DetailGroup
+          group="sources"
+          title="资料来源"
+          collapsible={collapsible}
+          open={sections.length === 0 && authorship === null}
         >
-          <h2>资料来源</h2>
-          <ul className={styles.sources}>
-            {detail.sourceCitations.map((citation, index) => (
-              <li
-                key={`${citation.label}-${index}`}
-                data-detail-reading-anchor={
-                  vertical ? `source-${index}` : undefined
-                }
-              >
-                <strong>
-                  {vertical ? (
-                    <VerticalText text={citation.label} />
-                  ) : (
-                    citation.label
-                  )}
-                </strong>
-                {citation.citation === undefined ? null : (
-                  <span>
+          <section
+            className={styles.readingSection}
+            data-detail-section="sources"
+          >
+            {collapsible ? null : <h2>资料来源</h2>}
+            <ul className={styles.sources}>
+              {detail.sourceCitations.map((citation, index) => (
+                <li
+                  key={`${citation.label}-${index}`}
+                  data-detail-reading-anchor={
+                    vertical ? `source-${index}` : undefined
+                  }
+                >
+                  <strong>
                     {vertical ? (
-                      <VerticalText text={citation.citation} />
+                      <VerticalText text={citation.label} />
                     ) : (
-                      citation.citation
+                      citation.label
                     )}
+                  </strong>
+                  {citation.citation === undefined ? null : (
+                    <span>
+                      {vertical ? (
+                        <VerticalText text={citation.citation} />
+                      ) : (
+                        citation.citation
+                      )}
+                    </span>
+                  )}
+                  {citation.url === undefined ? null : (
+                    <a href={citation.url} rel="noreferrer" target="_blank">
+                      查看来源
+                    </a>
+                  )}
+                  <span className={styles.citationScope}>
+                    适用于：{citation.scopeLabel}
                   </span>
-                )}
-                {citation.url === undefined ? null : (
-                  <a href={citation.url} rel="noreferrer" target="_blank">
-                    查看来源
-                  </a>
-                )}
-                <span className={styles.citationScope}>
-                  适用于：{citation.scopeLabel}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
+                </li>
+              ))}
+            </ul>
+          </section>
+        </DetailGroup>
       )}
     </div>
   );
@@ -440,8 +532,13 @@ export const CatalogDetailScreen = ({
           leading={<DetailIdentity detail={detail} vertical headingOnly />}
           information={
             <>
-              <DetailIdentity detail={detail} vertical omitHeading />
-              <DetailReadingFlow detail={detail} vertical />
+              <DetailIdentity
+                detail={detail}
+                vertical
+                omitHeading
+                collapsible
+              />
+              <DetailReadingFlow detail={detail} vertical collapsible />
             </>
           }
           onActiveMediaIndexChange={onActiveMediaIndexChange}

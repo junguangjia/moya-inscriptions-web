@@ -40,6 +40,11 @@ export interface CatalogDetailReadingStripHandle {
   readonly scrollToStart: () => void;
   readonly scrollToMedia: () => boolean;
   readonly scrollToInformation: () => void;
+  readonly scrollByPage: (direction: "forward" | "backward") => void;
+  readonly pagingState: () => {
+    readonly forward: boolean;
+    readonly backward: boolean;
+  };
 }
 
 export interface CatalogDetailReadingStripProps {
@@ -336,6 +341,23 @@ export const CatalogDetailReadingStrip = forwardRef<
         return true;
       },
       scrollToStart: () => scrollToOffset(0),
+      pagingState: () => {
+        const node = stripRef.current;
+        const offset = readOffset();
+        return {
+          backward: offset > 1,
+          forward:
+            node !== null && offset < node.scrollWidth - node.clientWidth - 1,
+        };
+      },
+      scrollByPage: (direction) => {
+        const node = stripRef.current;
+        if (node !== null)
+          scrollToOffset(
+            readOffset() +
+              (direction === "forward" ? 1 : -1) * node.clientWidth * 0.8,
+          );
+      },
       scrollToMedia: () => {
         const mediaNode = mediaRef.current;
         if (mediaNode === null) return false;
@@ -347,7 +369,7 @@ export const CatalogDetailReadingStrip = forwardRef<
         if (informationNode !== null) scrollToElement(informationNode);
       },
     }),
-    [scrollToComments, scrollToElement, scrollToOffset],
+    [scrollToComments, scrollToElement, scrollToOffset, readOffset],
   );
 
   const restore = useCallback(() => {

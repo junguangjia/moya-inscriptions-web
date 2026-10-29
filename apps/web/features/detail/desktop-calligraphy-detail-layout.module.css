@@ -1,104 +1,304 @@
 .layout {
   display: grid;
   min-width: 0;
-  gap: var(--yoyi-space-5);
-  --desktop-detail-upper-height: var(--yoyi-desktop-reader-upper-empty);
+  gap: var(--yoyi-space-8);
 }
-
-.layout:has([data-colophon-entry]) {
-  --desktop-detail-upper-height: var(--yoyi-desktop-reader-upper);
-}
-
-.navigation {
+.firstScreen {
   display: flex;
-  align-items: center;
-  justify-content: flex-end;
+  flex-direction: column;
+  gap: var(--yoyi-space-5);
+  height: calc(100svh - var(--detail-header-height) - var(--yoyi-space-5));
+  min-height: 420px;
+}
+.hero {
+  display: grid;
+  grid-template-areas: "information image";
+  grid-template-columns:
+    minmax(260px, var(--yoyi-desktop-reader-information-width))
+    minmax(0, 1fr);
+  gap: var(--yoyi-space-7);
+  min-height: 0;
+  flex: 1 1 0;
+}
+.information {
+  grid-area: information;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--yoyi-space-5);
+  background: var(--yoyi-color-background-surface);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-lg);
+  scrollbar-width: thin;
+}
+.information:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+.information [data-detail-info-panel] {
+  position: static;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+.informationHeading {
+  height: clamp(120px, 20svh, 180px);
+  overflow-x: auto;
+  margin-bottom: var(--yoyi-space-5);
+  writing-mode: vertical-rl;
+  direction: ltr;
+  text-orientation: mixed;
+  font-family: var(--yoyi-font-editorial);
+}
+.informationHeading [data-detail-info-panel] {
+  height: 100%;
+  width: 100%;
+  writing-mode: inherit;
+}
+.informationHeading [data-detail-title] {
+  margin: 0 0 0 var(--yoyi-space-4);
+  font-size: var(--yoyi-type-section-title-size);
+  line-height: 1.5;
+  font-weight: 600;
+}
+.informationHeading :where(p, time) {
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-metadata-size);
+  line-height: 1.7;
+}
+.informationGroups {
+  display: grid;
   gap: var(--yoyi-space-3);
 }
-
-.navigation button,
-.compose {
+.informationGroups > [data-detail-info-panel],
+.informationGroups > div {
   display: grid;
+  gap: var(--yoyi-space-3);
+}
+.group {
+  min-width: 0;
+  border-top: 1px solid var(--yoyi-color-border-subtle);
+}
+.group > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 48px;
+  gap: var(--yoyi-space-3);
+  cursor: pointer;
+  list-style: none;
+  font: 600 var(--yoyi-type-label-size)/1.5 var(--yoyi-font-interface);
+}
+.group > summary::-webkit-details-marker {
+  display: none;
+}
+.group > summary [data-icon] {
+  width: 18px;
+  height: 18px;
+  transform: rotate(90deg);
+  transition: transform var(--yoyi-duration-normal) var(--yoyi-easing-standard);
+}
+.group[open] > summary [data-icon] {
+  transform: rotate(-90deg);
+}
+.group > summary:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--yoyi-radius-sm);
+}
+.groupContent {
+  width: 100%;
+  height: clamp(160px, 26svh, 260px);
+  padding: var(--yoyi-space-3) 0 var(--yoyi-space-4);
+  overflow: auto;
+  overscroll-behavior: contain;
+  writing-mode: vertical-rl;
+  direction: ltr;
+  text-orientation: mixed;
+  font-family: var(--yoyi-font-editorial);
+  scrollbar-width: thin;
+}
+.groupContent:focus-visible,
+.informationHeading:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: -2px;
+}
+.information .groupContent :where(section, div, dl, ul, li, p, dt, dd) {
+  position: static;
+  display: block;
+  width: auto;
+  max-width: none;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  writing-mode: inherit;
+  direction: ltr;
+}
+.information .groupContent :where(p, dd, li) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.9;
+  font-size: var(--yoyi-type-body-size);
+}
+.information .groupContent :where(dl > div, li) {
+  margin-block-end: var(--yoyi-space-5);
+}
+.information .groupContent dt {
+  color: var(--yoyi-color-text-tertiary);
+  margin-inline-end: var(--yoyi-space-2);
+  font-size: var(--yoyi-type-metadata-size);
+}
+.information .groupContent strong {
+  display: block;
+  margin-inline-end: var(--yoyi-space-3);
+}
+.mediaColumn {
+  grid-area: image;
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: var(--yoyi-space-3);
+  min-width: 0;
+  min-height: 0;
+}
+.navigation {
+  position: absolute;
+  z-index: 3;
+  top: var(--yoyi-space-2);
+  right: var(--yoyi-space-2);
+  display: flex;
+  gap: var(--yoyi-space-2);
+}
+.navigation button,
+.compose,
+.imageEdges button,
+.colophonHeader button {
+  display: grid;
+  place-items: center;
   width: 44px;
   height: 44px;
   flex: 0 0 44px;
   padding: 0;
-  place-items: center;
-  color: var(--yoyi-color-text-secondary);
-  background: transparent;
   border: 0;
   border-radius: var(--yoyi-radius-md);
+  color: var(--yoyi-color-text-secondary);
+  background: var(--yoyi-color-background-page);
   cursor: pointer;
 }
-
 .navigation button:hover,
-.compose:hover {
+.compose:hover,
+.imageEdges button:hover,
+.colophonHeader button:hover {
   color: var(--yoyi-color-text-primary);
   background: var(--yoyi-color-background-muted);
 }
-
 .navigation button:focus-visible,
-.compose:focus-visible {
+.compose:focus-visible,
+.imageEdges button:focus-visible,
+.colophonHeader button:focus-visible,
+.colophonCue:focus-visible {
   outline: 2px solid var(--yoyi-color-focus-ring);
   outline-offset: 2px;
 }
-
-.upper,
-.lower {
-  position: relative;
-  min-width: 0;
-  scroll-margin-top: calc(var(--detail-header-height) + var(--yoyi-space-5));
-}
-
-.upper {
-  --desktop-reading-height: var(--desktop-detail-upper-height);
-}
-
 .media {
-  width: min(58vw, var(--yoyi-desktop-reader-media-max));
-  max-width: 100%;
-  height: 100%;
-  min-width: 0;
+  position: relative;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  direction: ltr;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
   writing-mode: horizontal-tb;
+  direction: ltr;
 }
-
 .media [data-feed-stage-frame] {
-  height: calc(100% - var(--yoyi-space-9));
+  height: 100%;
+  min-height: 0;
   aspect-ratio: auto;
-  flex: 1 1 auto;
+  flex: 1 1 0;
 }
-
 .media [data-feed-dots] {
   flex: 0 0 auto;
 }
-
+.imageEdges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.imageEdges button {
+  position: absolute;
+  top: 45%;
+  pointer-events: auto;
+}
+.previousImage {
+  right: var(--yoyi-space-3);
+}
+.nextImage {
+  left: var(--yoyi-space-3);
+}
+.imageEdges button:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+.colophonHeader button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
 .missingMedia {
   display: grid;
-  width: min(42vw, var(--yoyi-desktop-reader-media-max));
   height: 100%;
+  width: 100%;
   place-items: center;
-  direction: ltr;
 }
-
 .actions {
   min-width: 0;
-  padding-inline: var(--yoyi-space-5);
+  min-height: 44px;
 }
-
 .actions [data-detail-content-actions] {
   justify-content: flex-end;
 }
-
-.lower {
-  padding-top: var(--yoyi-space-5);
+.colophonCue {
+  display: flex;
+  flex: 0 0 64px;
+  min-height: 64px;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: var(--yoyi-space-5);
+  padding: var(--yoyi-space-4);
+  color: var(--yoyi-color-text-primary);
+  border: 0;
   border-top: 1px solid var(--yoyi-color-border-subtle);
+  background: transparent;
+  cursor: pointer;
+  font: 500 var(--yoyi-type-body-size)/1.5 var(--yoyi-font-editorial);
+}
+.colophonCue:hover {
+  color: var(--yoyi-color-seal-red);
+}
+.colophonCue [data-icon] {
+  transform: rotate(90deg);
+}
+.cueHint {
+  color: var(--yoyi-color-text-tertiary);
+  font: var(--yoyi-type-metadata-size)/1.5 var(--yoyi-font-interface);
+}
+.lower {
+  position: relative;
+  min-width: 0;
+  padding-top: var(--yoyi-space-7);
+  border-top: 1px solid var(--yoyi-color-border-subtle);
+  scroll-margin-top: calc(var(--detail-header-height) + var(--yoyi-space-5));
   --desktop-reading-height: var(--yoyi-desktop-reader-colophon-empty);
 }
-
 .lower:has(
   [data-colophon-entry],
   [data-colophon-writing],
@@ -107,54 +307,52 @@
 ) {
   --desktop-reading-height: var(--yoyi-desktop-reader-colophon);
 }
-
+.colophonHeader {
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--yoyi-space-5);
+  margin-bottom: var(--yoyi-space-5);
+}
+.colophonHeader h2,
+.colophonHeader p {
+  margin: 0;
+}
+.colophonHeader h2 {
+  font: 600 var(--yoyi-type-section-title-size)/1.5 var(--yoyi-font-editorial);
+}
+.colophonHeader p {
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-metadata-size);
+}
+.colophonHeader nav {
+  display: flex;
+  gap: var(--yoyi-space-3);
+}
+.lower [data-detail-reading-strip] {
+  scrollbar-width: auto;
+}
+.lower [data-detail-reading-strip]::-webkit-scrollbar {
+  height: 12px;
+}
 .lower [data-feed-colophon] {
   min-width: 100%;
   padding-inline: var(--yoyi-space-3);
   --colophon-top: var(--yoyi-space-3);
 }
-
 .lower [data-colophon-head] h4 {
-  font-size: var(--yoyi-type-section-title-size);
+  display: none;
 }
-
-.lower:not(
-    :has(
-      [data-colophon-entry],
-      [data-colophon-writing],
-      [data-colophon-skeleton]
-    )
-  )
-  [data-colophon-head]
-  h4 {
-  font-size: var(--yoyi-type-body-size);
-  letter-spacing: 0.1em;
-}
-
-.lower:not(
-    :has(
-      [data-colophon-entry],
-      [data-colophon-writing],
-      [data-colophon-skeleton]
-    )
-  )
-  [data-colophon-head] {
-  flex-direction: column;
-}
-
 .lower [data-colophon-input] {
   padding-block: var(--yoyi-space-3);
 }
-
 .compose {
   position: absolute;
   left: 0;
-  top: var(--yoyi-space-7);
+  top: calc(76px + var(--yoyi-space-7));
   display: none;
 }
-
-/* A known empty discussion offers one pencil. Focusing the same existing
-   textarea expands the row; draft and submission state stay in its owner. */
 .lower:not(
     :has(
       [data-colophon-entry],
@@ -166,7 +364,6 @@
   .compose {
   display: grid;
 }
-
 .lower:not(
     :has(
       [data-colophon-entry],
@@ -180,13 +377,25 @@
   visibility: visible;
   pointer-events: none;
 }
-
-.layout[data-detail-text-only] .upper {
-  --desktop-reading-height: clamp(240px, 38svh, 400px);
+.layout[data-detail-text-only] .hero {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "information";
 }
-
-@media (min-width: 1920px) {
-  .media {
-    width: min(50vw, var(--yoyi-desktop-reader-media-max));
+.layout[data-detail-text-only] .information {
+  width: min(100%, var(--yoyi-desktop-prose-max));
+  justify-self: center;
+}
+@media (max-width: 1279px) {
+  .hero {
+    grid-template-columns: 260px minmax(0, 1fr);
+    gap: var(--yoyi-space-5);
+  }
+  .information {
+    padding: var(--yoyi-space-4);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .group > summary [data-icon] {
+    transition: none;
   }
 }

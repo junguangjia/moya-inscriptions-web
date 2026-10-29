@@ -170,6 +170,33 @@ afterEach(() => {
 });
 
 describe("CatalogDetailReadingStrip", () => {
+  it("pages the desktop colophon from right to left within its real scroll bounds", () => {
+    const view = mounts(undefined, "desktop-comments");
+    expect(view.ref.current!.pagingState()).toEqual({
+      forward: true,
+      backward: false,
+    });
+    act(() => view.ref.current!.scrollByPage("forward"));
+    expect(view.offset()).toBe(240);
+    expect(view.ref.current!.pagingState()).toEqual({
+      forward: true,
+      backward: true,
+    });
+    view.setOffset(1490);
+    act(() => view.ref.current!.scrollByPage("forward"));
+    expect(view.offset()).toBe(1500);
+    expect(view.ref.current!.pagingState()).toEqual({
+      forward: false,
+      backward: true,
+    });
+    view.setOffset(10);
+    act(() => view.ref.current!.scrollByPage("backward"));
+    expect(view.offset()).toBe(0);
+    expect(view.ref.current!.pagingState()).toEqual({
+      forward: true,
+      backward: false,
+    });
+  });
   it("keeps ordinary reply alignment and anchor maintenance horizontal", () => {
     const view = mounts();
     const reply = view.host.querySelector<HTMLElement>(

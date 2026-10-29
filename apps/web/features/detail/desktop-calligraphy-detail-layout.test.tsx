@@ -1,8 +1,21 @@
-import { createRef } from "react";
+// @vitest-environment jsdom
+import { act, createRef } from "react";
+import { createRoot } from "react-dom/client";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+const authJourney = vi.hoisted(() => ({
+  returned: undefined as unknown,
+  capture: undefined as (() => unknown) | undefined,
+}));
+vi.mock("../auth/auth-return", () => ({
+  useAuthReturnView: (_slot: string, capture: () => unknown) => {
+    authJourney.capture = capture;
+    return authJourney.returned;
+  },
+}));
 import { CatalogDetailScreen } from "./catalog-detail-screen";
+import { DesktopCalligraphyDetailLayout } from "./desktop-calligraphy-detail-layout";
 import type { CatalogDetailPresentation } from "./catalog-detail-presentation";
 
 const catalog: CatalogDetailPresentation = {
@@ -84,10 +97,19 @@ const render = (
   );
 
 describe("desktop calligraphy detail", () => {
-  it("places complete catalog images and information above a separately scrolling colophon", () => {
+  it("separates the image and complete disclosure modules above a below-fold colophon", () => {
     const html = render();
     expect(html).toContain('data-desktop-detail-content="catalog"');
-    expect(html).toContain('data-detail-reading-variant="desktop-information"');
+    expect(html).not.toContain(
+      'data-detail-reading-variant="desktop-information"',
+    );
+    expect(html).toContain('data-desktop-detail-information=""');
+    expect(html).toContain('data-desktop-detail-image-pane=""');
+    expect(html).toContain('data-desktop-information-group="facts"');
+    expect(html).toContain('data-desktop-information-group="transcription"');
+    expect(html).toContain('data-desktop-information-group="sources"');
+    expect(html).toContain('data-desktop-colophon-cue=""');
+    expect(html).toContain('aria-label="向左读题跋"');
     expect(html).toContain('data-detail-reading-variant="desktop-comments"');
     expect(html.indexOf("data-desktop-detail-upper")).toBeLessThan(
       html.indexOf("data-test-actions"),
@@ -136,6 +158,7 @@ describe("desktop calligraphy detail", () => {
     const html = render(catalog, { colophon: null });
     expect(html).not.toContain("data-desktop-detail-colophon");
     expect(html).not.toContain('aria-label="前往题跋"');
+    expect(html).not.toContain('data-desktop-colophon-cue=""');
     expect(html).toContain("完整资料。");
   });
 
@@ -146,4 +169,72 @@ describe("desktop calligraphy detail", () => {
     expect(html).toContain("data-normal-comments");
     expect(html).not.toContain("data-desktop-calligraphy-detail");
   });
+});
+
+afterEach(() => {
+  authJourney.returned = undefined;
+  authJourney.capture = undefined;
+});
+it("restores only the exact auth journey's disclosure and reading positions into the new account scope", () => {
+  (
+    globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
+  ).IS_REACT_ACT_ENVIRONMENT = true;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const draw = (positionKey: string, key: string) =>
+    act(() =>
+      root.render(
+        <DesktopCalligraphyDetailLayout
+          key={key}
+          activeMediaIndex={0}
+          detail={{ ...work, media: [] }}
+          leading={<h1>作品</h1>}
+          information={
+            <details data-desktop-information-group="work-body" open>
+              <summary>正文</summary>
+              <div data-desktop-group-content="">全部正文</div>
+            </details>
+          }
+          positionKey={positionKey}
+          onActiveMediaIndexChange={vi.fn()}
+          onOpenViewer={vi.fn()}
+          viewerOpen={false}
+        />,
+      ),
+    );
+  try {
+    draw("guest:work:auth-test:calligraphy", "guest");
+    const information = host.querySelector<HTMLElement>(
+      "[data-desktop-detail-information]",
+    )!;
+    const group = host.querySelector<HTMLDetailsElement>("details")!;
+    const body = host.querySelector<HTMLElement>(
+      "[data-desktop-group-content]",
+    )!;
+    information.scrollTop = 90;
+    body.scrollLeft = -140;
+    group.open = false;
+    authJourney.returned = authJourney.capture!();
+    draw("account-1:work:auth-test:calligraphy", "returned");
+    expect(host.querySelector<HTMLDetailsElement>("details")!.open).toBe(false);
+    expect(
+      host.querySelector<HTMLElement>("[data-desktop-detail-information]")!
+        .scrollTop,
+    ).toBe(90);
+    expect(
+      host.querySelector<HTMLElement>("[data-desktop-group-content]")!
+        .scrollLeft,
+    ).toBe(-140);
+    authJourney.returned = undefined;
+    draw("account-2:work:auth-test:calligraphy", "other-account");
+    expect(host.querySelector<HTMLDetailsElement>("details")!.open).toBe(true);
+    expect(
+      host.querySelector<HTMLElement>("[data-desktop-detail-information]")!
+        .scrollTop,
+    ).toBe(0);
+  } finally {
+    act(() => root.unmount());
+    host.remove();
+  }
 });
