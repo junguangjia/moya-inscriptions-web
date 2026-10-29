@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 
 import { PrimaryBottomNavigation } from "./primary-bottom-navigation";
 import { PrimaryShell } from "./primary-shell";
+import { Icon } from "@moya/ui";
 
 import type { PresentationPlatform } from "./device-platform";
 import type { PrimaryDestination } from "./primary-shell";
@@ -27,6 +28,9 @@ export const resolveAdjacentPrimaryDestination = (
 };
 
 export interface PrimaryNavigationPagerProps {
+  readonly displaySettingsOnly?: boolean;
+  readonly desktop?: boolean;
+  readonly onSettingsIntent?: ((opener: HTMLElement) => void) | undefined;
   readonly activeDestination: PrimaryDestination;
   readonly platform: PresentationPlatform;
   readonly onDestinationChange: (destination: PrimaryDestination) => void;
@@ -41,6 +45,9 @@ export interface PrimaryNavigationPagerProps {
 }
 
 export const PrimaryNavigationPager = ({
+  displaySettingsOnly = false,
+  desktop = false,
+  onSettingsIntent,
   activeDestination,
   platform,
   onDestinationChange,
@@ -81,6 +88,8 @@ export const PrimaryNavigationPager = ({
         hidden={navigationHidden}
       >
         <PrimaryBottomNavigation
+          desktop={desktop}
+          onSettingsIntent={onSettingsIntent}
           activeDestination={activeDestination}
           navigationAction={navigationAction}
           minimized={navigationMinimized}
@@ -89,6 +98,19 @@ export const PrimaryNavigationPager = ({
           onDestinationChange={onDestinationChange}
         />
       </div>
+
+      {displaySettingsOnly && onSettingsIntent && (
+        <button
+          type="button"
+          className="yoyi-icon-button"
+          data-desktop-display-settings=""
+          aria-label="显示设置"
+          title="显示设置"
+          onClick={(event) => onSettingsIntent(event.currentTarget)}
+        >
+          <Icon name="settings" />
+        </button>
+      )}
 
       {showDevelopmentPagerControls ? (
         <div

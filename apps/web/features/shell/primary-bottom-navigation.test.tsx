@@ -143,6 +143,8 @@ describe("PrimaryBottomNavigation", () => {
 
     expectTypeOf<keyof PrimaryBottomNavigationProps>().toEqualTypeOf<
       | "activeDestination"
+      | "desktop"
+      | "onSettingsIntent"
       | "navigationAction"
       | "minimized"
       | "onDestinationChange"

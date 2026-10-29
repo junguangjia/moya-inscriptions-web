@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import type { Locator, Page, TestInfo } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 
 const runtimeIds = {
   calligraphy: "runtime-calligraphy",
@@ -9,6 +9,12 @@ const runtimeIds = {
   noMedia: "runtime-inscription-no-media",
 } as const;
 
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("yoyi.desktop-feed-layout.v1", "double"),
+  );
+});
+
 type PresentationPlatform = "pc" | "phone" | "tablet";
 
 const expectedInitialPlatform = (projectName: string): PresentationPlatform => {
@@ -16,26 +22,6 @@ const expectedInitialPlatform = (projectName: string): PresentationPlatform => {
   if (projectName.startsWith("tablet")) return "tablet";
   return "pc";
 };
-
-// pc-browse-only-v1: the fixture issues no session, so every page here is a
-// visitor without an account. These projects open at the wide layout (desktop
-// 1280, iPad landscape 1194), where such a visitor only browses; iPhone and
-// iPad portrait (834) keep everything.
-const wideAnonymous = (projectName: string) =>
-  projectName.startsWith("desktop") ||
-  projectName === "tablet-landscape-webkit";
-
-// Below the 896 px wide layout a desktop window is a "tablet" with the dock.
-const narrowViewport = { height: 900, width: 800 } as const;
-
-const restoreProjectViewport = async (page: Page, testInfo: TestInfo) => {
-  const viewport = testInfo.project.use.viewport;
-  if (!viewport) throw new Error(`${testInfo.project.name} has no viewport`);
-  await page.setViewportSize(viewport);
-};
-
-// Identifiers in the shape the deep-link parsers accept.
-const sampleHex = "0123456789abcdef0123456789abcdef";
 
 const formalSurface = (page: Page) =>
   page.locator("[data-clean-product-preview]");
@@ -89,14 +75,6 @@ const expectBrowseOnly = async (page: Page, browseOnly: boolean) => {
 };
 
 /** A browse-only Detail reads without comments, actions or a sign-in entry. */
-const expectBrowseOnlyDetail = async (detail: Locator) => {
-  await expect(detail.locator("[data-comment-section]")).toHaveCount(0);
-  await expect(detail.locator("[data-detail-landscape-comments]")).toHaveCount(
-    0,
-  );
-  await expect(detail.locator("[data-detail-content-actions]")).toHaveCount(0);
-  await expect(detail.locator('a[href^="/login"]')).toHaveCount(0);
-};
 
 const selectHomeFeed = async (
   page: Page,
@@ -134,9 +112,6 @@ const detailDialog = (page: Page) =>
 
 const viewerDialog = (page: Page) =>
   productShell(page).getByRole("dialog", { name: "图像查看" });
-
-const isPlainHomeUrl = (url: URL) =>
-  url.pathname === "/" && url.search === "" && url.hash === "";
 
 const isFormalPrimaryUrl = (url: URL) =>
   url.pathname === "/" &&
@@ -222,21 +197,12 @@ test("Formal root serves only the request-rendered React Product Shell", async (
     "data-platform",
     expectedInitialPlatform(testInfo.project.name),
   );
-  // pc-browse-only-v1: a wide visitor without an account keeps header Search
-  // but has neither the dock nor 消息; narrower screens keep both.
-  const wide = wideAnonymous(testInfo.project.name);
-  await expectBrowseOnly(page, wide);
+
+  await expectBrowseOnly(page, false);
   await expect(
     surface.getByRole("button", { exact: true, name: "打开搜索" }),
   ).toBeVisible();
-  if (wide) {
-    await expect(
-      surface.locator("[data-live-message-trigger]").filter({ visible: true }),
-    ).toHaveCount(0);
-    await expect(
-      surface.locator("[data-message-trigger-hidden]").first(),
-    ).toBeAttached();
-  }
+
   expect(
     await page.evaluate(
       () =>
@@ -265,9 +231,7 @@ test("Formal root serves only the request-rendered React Product Shell", async (
   ).toHaveCount(0);
 });
 
-test("Formal root composes truthful runtime list states", async ({
-  page,
-}, testInfo) => {
+test("Formal root composes truthful runtime list states", async ({ page }) => {
   // The shared anonymous fixture normally returns healthy empty lists. Keep
   // this failure-state journey explicit rather than relying on a missing route.
   let topicsUnavailable = true;
@@ -319,14 +283,7 @@ test("Formal root composes truthful runtime list states", async ({
   await expect(home.locator('[data-home-feed-panel="nearby"]')).toContainText(
     "附近内容尚未接入",
   );
-  // pc-browse-only-v1: a wide visitor without an account has no 讨论. Below
-  // the wide width the dock returns, so the 讨论 states are read there.
-  const wide = wideAnonymous(testInfo.project.name);
-  if (wide) {
-    await expectBrowseOnly(page, true);
-    await page.setViewportSize(narrowViewport);
-    await expectBrowseOnly(page, false);
-  }
+
   await selectPrimaryDestination(page, "讨论", "discussion");
   const discussion = shell.locator("[data-discussion-surface]");
   const topicsTab = discussion.getByRole("tab", { exact: true, name: "专题" });
@@ -336,6 +293,10 @@ test("Formal root composes truthful runtime list states", async ({
     "data-active-discussion-feed",
     "topics",
   );
+  if ((await shell.getAttribute("data-desktop")) === "true")
+    await expect(
+      discussion.getByRole("heading", { name: "专题", exact: true, level: 1 }),
+    ).toBeVisible();
   await expect(
     discussion.getByRole("tabpanel", { name: "专题" }),
   ).toContainText("专题暂时不可用");
@@ -348,13 +309,8 @@ test("Formal root composes truthful runtime list states", async ({
   await expect(
     discussion.getByRole("tabpanel", { name: "专题" }),
   ).toContainText("暂无专题");
-  if (wide) {
-    // Back at the wide width, browse-only returns 讨论 to Home at runtime.
-    await restoreProjectViewport(page, testInfo);
-    await expect(shell).toHaveAttribute("data-active-destination", "home");
-    await expectBrowseOnly(page, true);
-  }
 
+  await selectPrimaryDestination(page, "首页", "home");
   // The existing inscription sequence loads when its Home tab becomes active.
   await selectHomeFeed(page, "碑刻", "inscriptions");
   await expect(
@@ -379,14 +335,12 @@ test("Formal root composes truthful runtime list states", async ({
 
 test("Formal Home, Inscriptions, and Calligraphy reuse one Detail and Viewer journey", async ({
   page,
-}, testInfo) => {
+}) => {
   const { shell } = await openFormalRoot(page);
   const detail = detailDialog(page);
   const back = detail.getByRole("button", { exact: true, name: "返回" });
-  // pc-browse-only-v1: wide cards still open Detail and take focus back, but
-  // the Detail reads without comments or actions.
-  const wide = wideAnonymous(testInfo.project.name);
-  await expectBrowseOnly(page, wide);
+
+  await expectBrowseOnly(page, false);
 
   const openAndReturn = async (catalogId: string, title: string) => {
     const opener = activeCatalogOpener(shell, catalogId);
@@ -400,7 +354,7 @@ test("Formal Home, Inscriptions, and Calligraphy reuse one Detail and Viewer jou
     await expect(detail).toBeVisible();
     await expect(detail).toHaveAttribute("data-detail-source", "runtime");
     await expect(detail.locator("[data-detail-title]")).toHaveText(title);
-    if (wide) await expectBrowseOnlyDetail(detail);
+
     await expect(back).toBeVisible();
     await Promise.all([
       page.waitForURL(isFormalPrimaryUrl, { timeout: 10_000 }),
@@ -425,7 +379,7 @@ test("Formal Home, Inscriptions, and Calligraphy reuse one Detail and Viewer jou
   await expect(detail.locator("[data-detail-title]")).toHaveText(
     "运行时多图碑刻",
   );
-  if (wide) await expectBrowseOnlyDetail(detail);
+
   const mainImage = detail.locator(
     "[data-detail-main-image], [data-feed-slide][aria-hidden=false] img",
   );
@@ -576,53 +530,17 @@ test("Catalog redirect remains 307 and Formal Detail failures stay truthful", as
   await expect(detailDialog(page)).not.toContainText("错误替代资源");
 });
 
-test("Wide visitors without an account only browse; narrower screens keep the dock", async ({
+test("anonymous visitors keep product navigation and a real sign-in entry", async ({
   page,
-}, testInfo) => {
-  if (!wideAnonymous(testInfo.project.name)) {
-    await openFormalRoot(page);
-    await expectBrowseOnly(page, false);
-    return;
-  }
-  // pc-browse-only-v1: profile, editor and 讨论 links are dropped at mount and
-  // leave a plain Home. Each target changes the path or query, so every visit
-  // is a full document load rather than a same-document hash change.
-  const shell = productShell(page);
-  for (const target of [
-    "/#editor",
-    `/?authorId=user-${sampleHex}#profile`,
-    `/?topic=thread-${sampleHex}`,
-  ]) {
-    await openFormalRoot(page, target);
-    await page.waitForURL(isPlainHomeUrl, { timeout: 10_000 });
-    await expectBrowseOnly(page, true);
-    await expect(shell).toHaveAttribute("data-active-destination", "home");
-    await expect(shell).toHaveAttribute("data-editor-open", "false");
-    await expect(shell).toHaveAttribute("data-topic-open", "false");
-    await expect(shell).toHaveAttribute("data-detail-open", "false");
-    await expect(page.locator("[data-author-profile]")).toHaveCount(0);
-  }
-
-  // A card has no long-press menu: a held mouse press shows nothing, and its
-  // release is an ordinary click that opens Detail.
-  const opener = activeCatalogOpener(shell, runtimeIds.noMedia);
-  await expect(opener).toBeVisible();
-  await expect(
-    shell.locator('[data-home-surface] [data-quick-actions="enabled"]'),
-  ).toHaveCount(0);
-  await opener.hover();
-  await page.mouse.down();
-  await page.waitForTimeout(600);
-  await expect(page.locator("[data-quick-action-menu]")).toHaveCount(0);
-  await expect(shell).toHaveAttribute("data-detail-open", "false");
-  await Promise.all([
-    page.waitForURL((url) => isFormalDetailUrl(url, runtimeIds.noMedia), {
-      timeout: 10_000,
-    }),
-    page.mouse.up(),
-  ]);
-  await expect(detailDialog(page)).toBeVisible();
-  await expect(detailDialog(page).locator("[data-detail-title]")).toHaveText(
-    "运行时无图碑刻",
-  );
+}) => {
+  await openFormalRoot(page);
+  await expectBrowseOnly(page, false);
+  await selectPrimaryDestination(page, "用户", "user");
+  const login = page
+    .locator('[data-author-profile="guest"]')
+    .getByRole("link", { name: "登录", exact: true });
+  await expect(login).toBeVisible();
+  await login.click();
+  await expect(page.locator('[data-auth-mode="sign-in"]')).toBeVisible();
+  await expect(page).toHaveURL((url) => url.pathname === "/login");
 });

@@ -14,6 +14,7 @@ const ready = async (page: Page, path = "/dev/t02p/qa?qaChrome=hidden") => {
   await page.addInitScript(() => {
     try {
       window.localStorage.setItem("yoyi.home-feed-layout.v2", "double");
+      window.localStorage.setItem("yoyi.desktop-feed-layout.v1", "double");
     } catch {
       // Storage may be unavailable; the layout then follows the platform.
     }
@@ -234,11 +235,6 @@ test("browser mouse holds toggle QA states without moving cards, and keyboard st
 
 // A wide screen without an account only browses on the Formal root
 // (pc-browse-only-v1); the /dev/t02p routes have no browse-only policy.
-const wideProjects = new Set([
-  "desktop-chromium",
-  "desktop-webkit",
-  "tablet-landscape-webkit",
-]);
 
 for (const path of [
   "/",
@@ -246,9 +242,7 @@ for (const path of [
   "/dev/t02p/qa",
   "/dev/t02p/qa?qaChrome=hidden",
 ]) {
-  test(`QA scope and pager permission on ${path}`, async ({
-    page,
-  }, testInfo) => {
+  test(`QA scope and pager permission on ${path}`, async ({ page }) => {
     await ready(page, path);
     const enabled = path.startsWith("/dev/t02p/qa");
     const pager = page.locator("[data-home-surface] [data-home-feed-pager]");
@@ -270,26 +264,6 @@ for (const path of [
         page.locator("[data-t02p-qa-harness], [data-qa-controls]"),
       ).toHaveCount(0);
       await expect(page.locator("[data-quick-action-qa-log]")).toHaveCount(0);
-      if (wideProjects.has(testInfo.project.name)) {
-        // The fixture issues no session cookie: browse-only cards open Detail
-        // with a click and carry no long-press menu.
-        await expect(shell).toHaveAttribute("data-browse-only", "true");
-        const opener = homeFeed(page, "home")
-          .locator('[data-content-type="catalog"] [data-open-catalog]')
-          .first();
-        // Cards are rendered before their missing actions mean anything.
-        await expect(opener).toBeVisible();
-        await expect(opener).toHaveAttribute("aria-label", /^打开/u);
-        await expect(
-          page.locator('[data-quick-actions="enabled"]'),
-        ).toHaveCount(0);
-        await expect(page.locator("[data-quick-action-menu]")).toHaveCount(0);
-        await opener.focus();
-        await page.keyboard.press("Enter");
-        await expect(shell).toHaveAttribute("data-detail-open", "true");
-        await expect(page.locator("[data-quick-action-menu]")).toHaveCount(0);
-        return;
-      }
       // An iPad seeds the wide layout on the server; wait for its correction.
       await expect(shell).toHaveAttribute("data-browse-only", "false");
       expect(

@@ -32,6 +32,75 @@
     height 520ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+.desktopDock {
+  position: fixed;
+  z-index: var(--yoyi-z-index-navigation);
+  inset-block: var(--yoyi-space-7);
+  right: var(--yoyi-space-5);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--yoyi-space-7);
+  width: var(--yoyi-desktop-navigation-width);
+  padding: var(--yoyi-space-5) var(--yoyi-space-3);
+  overflow-y: auto;
+  background: var(--yoyi-color-background-surface);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-lg);
+}
+.desktopDock nav,
+.desktopTools {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--yoyi-space-4);
+}
+.desktopTools {
+  margin-top: auto;
+}
+.desktopAction {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+}
+.desktopDock .entry {
+  display: grid;
+  flex: 0 0 auto;
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  place-items: center;
+  color: var(--yoyi-color-text-secondary);
+  border-radius: var(--yoyi-radius-md);
+}
+.desktopDock .entry[data-selected="true"] {
+  color: var(--yoyi-color-seal-red);
+  background: var(--yoyi-color-seal-red-muted);
+}
+.desktopDock .entry:hover,
+.desktopTools button:hover {
+  background: var(--yoyi-color-background-muted);
+}
+.desktopDock .label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.desktopDock .iconWrap {
+  transform: none;
+}
+.desktopDock .entry:focus-visible,
+.desktopTools button:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
 .dock[data-has-action="false"] {
   --primary-navigation-max-width: 520px;
 }

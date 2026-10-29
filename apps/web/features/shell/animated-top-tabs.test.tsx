@@ -54,6 +54,68 @@ afterEach(async () => {
 });
 
 describe("AnimatedTopTabs", () => {
+  it("starts the vertical rail icon-only and expands even the already active tab", async () => {
+    const view = (activeKey: Key) => (
+      <AnimatedTopTabs
+        items={items}
+        activeKey={activeKey}
+        onSelect={select}
+        ariaLabel="内容分类"
+        orientation="vertical"
+      />
+    );
+    await act(async () => root.render(view("all")));
+    expect(host.querySelectorAll('[data-label-expanded="true"]')).toHaveLength(
+      0,
+    );
+    expect(tab("all").getAttribute("aria-label")).toBe("全部");
+    expect(tab("all").getAttribute("aria-selected")).toBe("true");
+    await act(async () => tab("all").click());
+    expect(tab("all").getAttribute("data-label-expanded")).toBe("true");
+    await act(async () => tab("inscriptions").click());
+    expect(tab("all").hasAttribute("data-label-expanded")).toBe(false);
+    expect(tab("inscriptions").getAttribute("data-label-expanded")).toBe(
+      "true",
+    );
+    await act(async () => root.render(view("inscriptions")));
+    expect(tab("inscriptions").getAttribute("data-label-expanded")).toBe(
+      "true",
+    );
+    await act(async () => root.render(view("calligraphy")));
+    expect(host.querySelectorAll('[data-label-expanded="true"]')).toHaveLength(
+      0,
+    );
+  });
+  it("uses vertical arrow keys and focus order for the desktop category rail", async () => {
+    await act(async () =>
+      root.render(
+        <AnimatedTopTabs
+          items={items}
+          activeKey="all"
+          onSelect={select}
+          ariaLabel="内容分类"
+          orientation="vertical"
+        />,
+      ),
+    );
+    expect(
+      host.querySelector('[role="tablist"]')?.getAttribute("aria-orientation"),
+    ).toBe("vertical");
+    await act(async () =>
+      tab("all").dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+      ),
+    );
+    expect(select).toHaveBeenLastCalledWith("inscriptions");
+    expect(document.activeElement).toBe(tab("inscriptions"));
+    await act(async () =>
+      tab("inscriptions").dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }),
+      ),
+    );
+    expect(select).toHaveBeenLastCalledWith("all");
+    expect(document.activeElement).toBe(tab("all"));
+  });
   it("keeps accessible tab selection distinct from fractional pager progress", async () => {
     await render("all", 0.5);
     expect(

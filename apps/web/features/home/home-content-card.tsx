@@ -13,6 +13,8 @@ import {
 } from "../media/responsive-media";
 import styles from "./home-screen.module.css";
 import { feedMediaAspectRatio } from "./catalog-card";
+import { DesktopCardFrame } from "./desktop-card-frame";
+import { MediaFallback } from "./card-media-parts";
 import { useMasonrySlot } from "./catalog-masonry";
 
 import type { NearbyCard } from "./home-feed";
@@ -33,6 +35,55 @@ export const HomeContentCard = ({
     media === undefined
       ? undefined
       : responsiveImage(media, MEDIA_SIZES.feedCard(media, slot));
+
+  if (slot?.desktop)
+    return (
+      <DesktopCardFrame
+        title={item.title}
+        metadata={item.metadata ?? ""}
+        data-home-content-card=""
+        data-home-content-id={item.id}
+        media={
+          media === undefined || failed ? (
+            <MediaFallback
+              label={
+                failed
+                  ? `图像无法加载：${item.title}`
+                  : `暂无图像：${item.title}`
+              }
+              state={failed ? "failed" : "missing"}
+            />
+          ) : (
+            <div data-catalog-media-state="valid">
+              <img
+                alt={media.alt}
+                decoding="async"
+                loading="lazy"
+                height={media.height}
+                width={media.width}
+                src={image?.src ?? media.src}
+                srcSet={image?.srcSet}
+                sizes={image?.sizes}
+                onLoad={onMediaSettled}
+                onError={() => {
+                  setFailed(true);
+                  onMediaSettled?.();
+                }}
+              />
+            </div>
+          )
+        }
+        action={
+          quickActions === null ? null : (
+            <QuickActionCardAction
+              className={styles.cardAction}
+              content={{ kind: "nearby", id: item.id, title: item.title }}
+              environment={quickActions}
+            />
+          )
+        }
+      />
+    );
 
   return (
     <article

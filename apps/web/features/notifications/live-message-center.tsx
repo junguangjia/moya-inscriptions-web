@@ -22,6 +22,7 @@ import local from "./notifications.module.css";
 /** C supplies a stable adapter at the client composition boundary; no preview sender is imported here. */
 export interface DirectMessagePanelAdapter {
   render: (props: {
+    desktop?: boolean;
     onOpenProfile: (id: string) => void;
     onDepthChange: (depth: number) => void;
     backRequested: number;
@@ -483,7 +484,7 @@ function AccountMessages({
         >
           <div
             ref={content}
-            className={`${styles.content}${incoming && confirmed ? ` ${local.pullScroll}` : ""}${directOpen ? ` ${local.directOpen}` : ""}`}
+            className={`${styles.content}${shell.desktop ? ` ${local.desktopHome}` : ""}${incoming && confirmed ? ` ${local.pullScroll}` : ""}${directOpen ? ` ${local.directOpen}` : ""}`}
             data-message-live=""
             data-message-view={view}
             onScroll={(event) =>
@@ -581,6 +582,7 @@ function AccountMessages({
                     )}
                     <div className={local.directRegion}>
                       {directMessages.render({
+                        desktop: shell.desktop,
                         onOpenProfile: navigate,
                         onDepthChange: setDmDepth,
                         backRequested: dmBack,

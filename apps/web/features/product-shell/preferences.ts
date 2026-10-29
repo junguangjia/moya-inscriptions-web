@@ -1,9 +1,14 @@
-import type { PresentationPlatform } from "../shell/device-platform";
+import type {
+  DeviceClass,
+  PresentationPlatform,
+} from "../shell/device-platform";
 
 // A new namespace resets presentation defaults once without modifying legacy
 // choices or unrelated storage. Later choices persist in these same keys.
 export const THEME_PREFERENCE_STORAGE_KEY = "yoyi.theme-preference.v2";
 export const FEED_LAYOUT_PREFERENCE_STORAGE_KEY = "yoyi.home-feed-layout.v2";
+export const DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY =
+  "yoyi.desktop-feed-layout.v1";
 
 export type ThemePreference = "light" | "dark" | "system";
 export const DEFAULT_THEME_PREFERENCE: ThemePreference = "light";
@@ -42,12 +47,23 @@ export const parseFeedLayoutPreference = (
     : null;
 
 /**
- * Phone and tablet open in calligraphy mode. PC sizes its own columns and
- * ignores the preference.
+ * Every device opens in calligraphy mode. Desktop keeps its own explicit
+ * preference even when a narrow window uses the compact presentation.
  */
+const defaultFeedLayouts = {
+  phone: "single",
+  tablet: "single",
+  pc: "single",
+} as const satisfies Record<PresentationPlatform, FeedLayoutPreference>;
 export const defaultFeedLayoutFor = (
   platform: PresentationPlatform,
-): FeedLayoutPreference => (platform === "pc" ? "double" : "single");
+): FeedLayoutPreference => defaultFeedLayouts[platform];
+
+/** Storage scope follows the device, never a resizable presentation width. */
+export const feedLayoutStorageKeyFor = (device: DeviceClass): string =>
+  device === "desktop"
+    ? DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY
+    : FEED_LAYOUT_PREFERENCE_STORAGE_KEY;
 
 export interface PreferenceStorage {
   readonly getItem: (key: string) => string | null;
@@ -66,10 +82,11 @@ export const readStoredThemePreference = (
 
 export const readStoredFeedLayoutPreference = (
   storage: PreferenceStorage,
+  device: DeviceClass = "phone",
 ): FeedLayoutPreference | null => {
   try {
     return parseFeedLayoutPreference(
-      storage.getItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY),
+      storage.getItem(feedLayoutStorageKeyFor(device)),
     );
   } catch {
     return null;

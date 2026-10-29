@@ -107,6 +107,7 @@ const useHostTitle = (
   const studioName = participant?.studioName;
   useLayoutEffect(() => {
     if (!seam || id === null || name === null) return;
+    const subscribed = change.current;
     change.current?.({
       label: name,
       content: (
@@ -117,7 +118,7 @@ const useHostTitle = (
         />
       ),
     });
-    return () => change.current?.(null);
+    return () => (change.current ?? subscribed)?.(null);
   }, [seam, id, name, studioName]);
   return seam;
 };
@@ -449,6 +450,8 @@ const ConversationView = ({
 };
 
 export interface DirectMessagePanelProps {
+  /** Layout only: the existing conversation keeps owning its draft and requests. */
+  readonly desktop?: boolean;
   /** Open straight into the conversation with this account (from a profile). */
   readonly openWith?: {
     readonly userId: string;
@@ -473,6 +476,7 @@ export interface DirectMessagePanelProps {
  * conversation view over the same-origin API. Nothing here is a preview.
  */
 export const DirectMessagePanel = ({
+  desktop = false,
   openWith = null,
   onOpenProfile,
   onDepthChange,
@@ -513,7 +517,7 @@ export const DirectMessagePanel = ({
     );
   }
   const conversations = useConversations(
-    author.viewer !== null && target === null,
+    author.viewer !== null && (target === null || desktop),
   );
   const [undo, setUndo] = useState<{
     conversation: DirectConversation;
@@ -562,15 +566,14 @@ export const DirectMessagePanel = ({
         <a href={author.signInHref}>登录后查看私信</a>
       </p>
     );
-  if (target)
-    return (
-      <ConversationView
-        key={`${author.viewer.id}:${target.participant.id}:${target.key}`}
-        target={target}
-        onOpenProfile={onOpenProfile}
-        {...(onTitleChange ? { onTitleChange } : {})}
-      />
-    );
+  const conversation = target ? (
+    <ConversationView
+      key={`${author.viewer.id}:${target.participant.id}:${target.key}`}
+      target={target}
+      onOpenProfile={onOpenProfile}
+      {...(onTitleChange && !desktop ? { onTitleChange } : {})}
+    />
+  ) : null;
   const hide = async (conversation: DirectConversation) => {
     try {
       const hidden = await authorClient.messages.participant(
@@ -615,7 +618,7 @@ export const DirectMessagePanel = ({
     }
   };
   const list = conversations.state;
-  return (
+  const listPanel = (
     <div className={panelStyles.panel} data-dm-list="">
       {notice && (
         <p role="status" className={styles.notice} data-dm-notice="">
@@ -650,6 +653,11 @@ export const DirectMessagePanel = ({
           <h3>暂无私信</h3>
           <p>在他人主页点击「私信」即可开始对话。</p>
         </div>
+      )}
+      {list.state === "populated" && (
+        <p className={panelStyles.viewStatus}>
+          删除对话仅对自己隐藏，对方仍可查看。
+        </p>
       )}
       {list.state === "populated" && (
         <ul className={styles.conversationList} aria-label="私信会话">
@@ -727,9 +735,31 @@ export const DirectMessagePanel = ({
           继续加载
         </button>
       )}
-      <p className={styles.previewNote}>
-        私信为纯文本，每 10 秒在前台自动刷新；删除仅对自己隐藏。
-      </p>
+    </div>
+  );
+  return (
+    <div
+      className={panelStyles.workspace}
+      data-dm-workspace=""
+      data-desktop={desktop ? "true" : "false"}
+    >
+      <div
+        className={panelStyles.listSide}
+        hidden={!desktop && target !== null}
+        aria-label="私信会话列表"
+      >
+        {desktop || target === null ? listPanel : null}
+      </div>
+      <div className={panelStyles.conversationSide}>
+        {conversation ??
+          (desktop ? (
+            <div className={panelStyles.selectionPrompt}>
+              <Icon name="message" aria-hidden="true" />
+              <h3>选择一段对话</h3>
+              <p>在左侧选择私信，或从对方主页开始对话。</p>
+            </div>
+          ) : null)}
+      </div>
     </div>
   );
 };

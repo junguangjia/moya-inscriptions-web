@@ -4,9 +4,10 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() =>
-    localStorage.setItem("yoyi.home-feed-layout.v2", "double"),
-  );
+  await page.addInitScript(() => {
+    localStorage.setItem("yoyi.home-feed-layout.v2", "double");
+    localStorage.setItem("yoyi.desktop-feed-layout.v1", "double");
+  });
 });
 
 test.beforeAll(async ({ request }) => {
@@ -149,15 +150,14 @@ test("formal compositions render the live comment section over the real client",
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
+  await page.addInitScript(() =>
+    localStorage.setItem("yoyi.desktop-feed-layout.v1", "double"),
+  );
   // Mission 2C: the Formal root and /dev/t02p compose the real comment client
   // in the Development runtime the fixture runs; the QA store never reaches
   // them. The fixture serves an empty listing and issues no session, so the
   // truthful states are "no comments yet" and signed out with the
   // current sign-in entry.
-  // pc-browse-only-v1: desktop-chromium is a wide screen, where the Formal
-  // root only browses for a visitor without an account. Its Detail keeps the
-  // hero layout with no comments, sign-in entry or content actions; the
-  // /dev/t02p composition has no browse-only policy and keeps all of them.
   for (const path of [
     "/?catalogId=runtime-inscription-no-media",
     "/dev/t02p?catalogId=runtime-inscription-no-media",
@@ -166,22 +166,6 @@ test("formal compositions render the live comment section over the real client",
     const experience = page.locator("[data-detail-experience]");
     await expect(experience).toBeVisible();
     const shell = page.locator("[data-product-shell]");
-    if (path.startsWith("/?")) {
-      await expect(shell).toHaveAttribute("data-browse-only", "true");
-      // Absence is only meaningful once the record itself has rendered.
-      await expect(
-        page.getByRole("dialog", { name: "资料详情" }),
-      ).toHaveAttribute("data-detail-state", "loaded");
-      await expect(page.locator("[data-comment-section]")).toHaveCount(0);
-      await expect(
-        page.locator("[data-detail-landscape-comments]"),
-      ).toHaveCount(0);
-      await expect(page.locator("[data-detail-content-actions]")).toHaveCount(
-        0,
-      );
-      await expect(experience.locator("a[href^='/login']")).toHaveCount(0);
-      continue;
-    }
     await expect(shell).toHaveAttribute("data-browse-only", "false");
     const section = page.locator("[data-comment-section]");
     await expect(section).toHaveCount(1);

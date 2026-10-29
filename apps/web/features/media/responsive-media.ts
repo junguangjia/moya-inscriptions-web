@@ -307,6 +307,12 @@ export interface MediaSlot {
   readonly platform: PresentationPlatform;
   /** 1 for the single layout, 2 for the double layout, 3 to 8 on pc. */
   readonly columns: number;
+  /** Measured image box of the desktop calligraphy row, excluding its caption. */
+  readonly desktop?: {
+    readonly mediaWidth: number;
+    readonly height: number;
+    readonly cropped: boolean;
+  };
   /** A feature or panorama card covering every column. */
   readonly span: boolean;
 }
@@ -377,6 +383,15 @@ export const MEDIA_SIZES = {
    * box width stays an upper bound.
    */
   feedCard: (media: MediaSize, slot?: MediaSlot | null): string => {
+    if (slot?.desktop) {
+      const { mediaWidth, height, cropped } = slot.desktop;
+      const intrinsic = height * aspectOf(media);
+      return px(
+        cropped
+          ? Math.max(mediaWidth, intrinsic)
+          : Math.min(mediaWidth, intrinsic),
+      );
+    }
     const factor = coverFitFactor(media);
     return slot ? masonrySizes(slot, factor) : columnFeedSizes(factor);
   },

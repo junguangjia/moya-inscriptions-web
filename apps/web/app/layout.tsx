@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
 import "@moya/design-tokens/theme.css";
+import "@moya/design-tokens/desktop.css";
 import "@moya/ui/styles.css";
 
 import "./globals.css";

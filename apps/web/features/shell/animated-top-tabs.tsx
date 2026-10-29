@@ -11,6 +11,7 @@ export interface AnimatedTopTab<Key extends string> {
 }
 
 export interface AnimatedTopTabsProps<Key extends string> {
+  readonly orientation?: "horizontal" | "vertical";
   readonly items: readonly AnimatedTopTab<Key>[];
   readonly activeKey: Key;
   /** Continuous pager position; omit for click-only tab groups. */
@@ -24,6 +25,7 @@ export interface AnimatedTopTabsProps<Key extends string> {
 }
 
 export const AnimatedTopTabs = <Key extends string>({
+  orientation = "horizontal",
   items,
   activeKey,
   progress,
@@ -49,6 +51,20 @@ export const AnimatedTopTabs = <Key extends string>({
   const progressDriven = progress !== undefined && Number.isFinite(progress);
   const settled = Math.abs(position - selectedIndex) < 0.0001;
   const [indicator, setIndicator] = useState({ left: 0, width: 0 });
+  const [labelState, setLabelState] = useState<{
+    active: Key;
+    expanded: Key | null;
+  }>({ active: activeKey, expanded: null });
+  let expandedKey = labelState.expanded;
+  if (labelState.active !== activeKey) {
+    expandedKey = expandedKey === activeKey ? activeKey : null;
+    setLabelState({ active: activeKey, expanded: expandedKey });
+  }
+  const select = (key: Key) => {
+    if (orientation === "vertical")
+      setLabelState((current) => ({ ...current, expanded: key }));
+    onSelect(key);
+  };
 
   useLayoutEffect(() => {
     const measure = () => {
@@ -98,12 +114,21 @@ export const AnimatedTopTabs = <Key extends string>({
       // Scroll only this strip. Resize observation also reveals the part that
       // expands after a click, without reacting to manual horizontal scrolling.
       const delta =
-        item.left < frame.left
-          ? item.left - frame.left
-          : item.right > frame.right
-            ? item.right - frame.right
-            : 0;
-      if (delta) container.scrollLeft += delta;
+        orientation === "vertical"
+          ? item.top < frame.top
+            ? item.top - frame.top
+            : item.bottom > frame.bottom
+              ? item.bottom - frame.bottom
+              : 0
+          : item.left < frame.left
+            ? item.left - frame.left
+            : item.right > frame.right
+              ? item.right - frame.right
+              : 0;
+      if (delta) {
+        if (orientation === "vertical") container.scrollTop += delta;
+        else container.scrollLeft += delta;
+      }
     };
     reveal();
     const observer =
@@ -111,19 +136,21 @@ export const AnimatedTopTabs = <Key extends string>({
     observer?.observe(container);
     observer?.observe(button);
     return () => observer?.disconnect();
-  }, [activeKey, items, settled]);
+  }, [activeKey, items, settled, orientation]);
 
   return (
     <div
       ref={viewport}
       className={`${styles.viewport}${className ? ` ${className}` : ""}`}
       data-animated-top-tabs=""
+      data-orientation={orientation}
     >
       <div
         ref={track}
         className={styles.track}
         role="tablist"
         aria-label={ariaLabel}
+        aria-orientation={orientation}
         data-progress-driven={progressDriven ? "true" : "false"}
       >
         {items.map(({ id, label, icon }, index) => {
@@ -144,16 +171,25 @@ export const AnimatedTopTabs = <Key extends string>({
                 (idPrefix ? `${idPrefix}-panel-${id}` : undefined)
               }
               aria-selected={selected}
+              aria-label={label}
+              title={label}
               tabIndex={selected ? 0 : -1}
               className={styles.tab}
               data-tab-key={id}
+              data-label-expanded={
+                orientation === "vertical" && expandedKey === id
+                  ? "true"
+                  : undefined
+              }
               style={{ "--top-tab-activation": activation } as CSSProperties}
-              onClick={() => onSelect(id)}
+              onClick={() => select(id)}
               onKeyDown={(event) => {
                 const next =
-                  event.key === "ArrowRight"
+                  event.key ===
+                  (orientation === "vertical" ? "ArrowDown" : "ArrowRight")
                     ? (index + 1) % items.length
-                    : event.key === "ArrowLeft"
+                    : event.key ===
+                        (orientation === "vertical" ? "ArrowUp" : "ArrowLeft")
                       ? (index + items.length - 1) % items.length
                       : event.key === "Home"
                         ? 0
@@ -164,7 +200,7 @@ export const AnimatedTopTabs = <Key extends string>({
                 const item = items[next];
                 if (!item) return;
                 event.preventDefault();
-                onSelect(item.id);
+                select(item.id);
                 buttons.current.get(item.id)?.focus({ preventScroll: true });
               }}
             >
@@ -173,7 +209,13 @@ export const AnimatedTopTabs = <Key extends string>({
                   <span className={styles.icon}>{icon}</span>
                 </span>
               )}
-              <span className={styles.label}>{label}</span>
+              <span
+                className={styles.labelSlot}
+                data-tab-label-slot=""
+                aria-hidden={orientation === "vertical" ? true : undefined}
+              >
+                <span className={styles.label}>{label}</span>
+              </span>
             </button>
           );
         })}

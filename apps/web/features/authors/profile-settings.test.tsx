@@ -88,6 +88,7 @@ vi.mock("../product-shell/product-shell", () => ({
   useProductShell: () => ({
     feedLayout: "double",
     platform: presentation.platform,
+    desktop: presentation.platform === "pc",
     theme: "system",
     setThemePreference,
     setFeedLayoutPreference,
@@ -558,11 +559,17 @@ describe("grouped My settings", () => {
     expect(onEdit).toHaveBeenCalledOnce();
     expect(onClose).not.toHaveBeenCalled();
   });
-  it("keeps desktop layout controls hidden and supports radio arrow selection", async () => {
+  it("shows desktop mode choices, switches modes, and supports theme radio arrows", async () => {
     presentation.platform = "pc";
     const { node } = await render(null);
     await click(node, "外观");
-    expect(node.querySelector("[aria-label='首页布局']")).toBeNull();
+    const modes = node.querySelector("[aria-label='电脑显示模式']");
+    expect(modes).not.toBeNull();
+    expect(modes?.querySelector("[aria-checked='true']")?.textContent).toBe(
+      "正常模式",
+    );
+    await click(node, "书法模式");
+    expect(setFeedLayoutPreference).toHaveBeenCalledExactlyOnceWith("single");
     expect(
       node.querySelector("dialog")?.getAttribute("data-settings-platform"),
     ).toBe("pc");

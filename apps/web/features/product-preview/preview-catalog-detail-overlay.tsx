@@ -67,6 +67,7 @@ export const PreviewCatalogDetailOverlay = ({
     changeViewerMedia,
     closeViewer,
     feedLayout,
+    desktop,
     openViewer,
     orientation,
     platform,
@@ -76,7 +77,7 @@ export const PreviewCatalogDetailOverlay = ({
   // an empty node, so the Detail keeps its hero layout. The actions themselves
   // keep only the plain author line.
   const readOnly = browseOnly === true;
-  const calligraphy = platform !== "pc" && feedLayout === "single";
+  const calligraphy = (desktop || platform !== "pc") && feedLayout === "single";
   const generationRef = useRef(0);
   const missingTargetRef = useRef<ContentIdentity | null>(null);
   // A seed only for a known account: never during a session error or a first
@@ -205,7 +206,8 @@ export const PreviewCatalogDetailOverlay = ({
       backButtonRef={backButtonRef}
       catalogId={catalogId}
       calligraphy={calligraphy}
-      positionKey={`${author?.viewer?.id ?? "guest"}:${targetType}:${targetId}:${calligraphy ? "calligraphy" : "normal"}`}
+      desktop={desktop}
+      positionKey={`${author?.viewer?.id ?? "guest"}:${targetType}:${targetId}:${calligraphy ? (desktop ? "desktop-calligraphy" : "calligraphy") : "normal"}`}
       commentSection={readOnly || calligraphy ? undefined : commentSection}
       colophon={
         !readOnly && calligraphy && state.state === "loaded"

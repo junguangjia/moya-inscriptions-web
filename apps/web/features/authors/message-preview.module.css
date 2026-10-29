@@ -788,3 +788,47 @@
   margin: auto;
   box-shadow: var(--yoyi-shadow-dialog);
 }
+
+/* Desktop surfaces share tokens; phone and tablet rules remain independent. */
+
+:global(html[data-device-class="desktop"][data-platform="pc"]) .page.page {
+  inset: var(--yoyi-space-8);
+  width: min(
+    var(--yoyi-desktop-message-max),
+    calc(100vw - var(--yoyi-space-11))
+  );
+  height: calc(100dvh - var(--yoyi-space-11));
+  max-height: calc(100dvh - var(--yoyi-space-11));
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-lg);
+  box-shadow: var(--yoyi-shadow-dialog);
+}
+:global(html[data-device-class="desktop"][data-platform="pc"]) .page > div {
+  width: 100%;
+}
+:global(html[data-device-class="desktop"][data-platform="pc"])
+  .page
+  > div
+  > header {
+  min-height: 64px;
+  padding-inline: var(--yoyi-space-5);
+}
+:global(html[data-device-class="desktop"][data-platform="pc"]) .categories {
+  padding: var(--yoyi-space-4) var(--yoyi-space-5);
+  gap: var(--yoyi-space-4);
+}
+:global(html[data-device-class="desktop"][data-platform="pc"])
+  .categories
+  > button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 56px;
+  padding: var(--yoyi-space-3);
+  gap: var(--yoyi-space-3);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-surface);
+}

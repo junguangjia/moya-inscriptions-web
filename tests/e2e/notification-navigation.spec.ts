@@ -367,9 +367,7 @@ async function assertDetailMode(page: Page, preference: "single" | "double") {
   await expect(page).toHaveURL(
     new RegExp(`catalogId=${CATALOG_ID}.*#detail$`, "u"),
   );
-  const calligraphy =
-    preference === "single" &&
-    (await detail.getAttribute("data-platform")) !== "pc";
+  const calligraphy = preference === "single";
   await expect(detail).toHaveAttribute(
     "data-detail-mode",
     calligraphy ? "calligraphy" : "normal",
@@ -394,10 +392,10 @@ for (const preference of ["single", "double"] as const) {
   }, info) => {
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    await page.addInitScript(
-      (value) => localStorage.setItem("yoyi.home-feed-layout.v2", value),
-      preference,
-    );
+    await page.addInitScript((value) => {
+      localStorage.setItem("yoyi.home-feed-layout.v2", value);
+      localStorage.setItem("yoyi.desktop-feed-layout.v1", value);
+    }, preference);
     const fixture = await installFixture(page);
     await page.goto("/");
     await expect(page.locator("[data-product-boot]")).toHaveCount(0);
@@ -464,7 +462,9 @@ for (const preference of ["single", "double"] as const) {
         ).toBe(true);
       if (calligraphy)
         await expect(
-          detail.locator("[data-detail-reading-strip]"),
+          detail.locator(
+            '[data-detail-reading-strip]:not([data-detail-reading-variant="desktop-information"])',
+          ),
         ).toHaveAttribute("data-detail-reading-region", "comments");
       else if (await detail.locator("[data-detail-content-pager]").count())
         await expect(

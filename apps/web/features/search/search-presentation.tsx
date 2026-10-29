@@ -27,6 +27,7 @@ export const SearchTrigger = ({
     aria-expanded={open}
     aria-haspopup="dialog"
     aria-label="打开搜索"
+    title="搜索碑刻、书帖"
     className={`${styles.trigger} yoyi-functional-glass`}
     data-search-trigger=""
     data-search-trigger-placement={
@@ -43,6 +44,11 @@ export const SearchTrigger = ({
     type="button"
   >
     <Icon aria-hidden="true" name="search" />
+    {placement === "header" && (
+      <span className={styles.desktopSearchLabel} aria-hidden="true">
+        搜索
+      </span>
+    )}
   </button>
 );
 

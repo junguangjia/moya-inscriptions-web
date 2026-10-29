@@ -1,0 +1,312 @@
+.archive {
+  grid-area: information;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  --desktop-reading-height: 100%;
+}
+.frame {
+  display: grid;
+  grid-template-areas: "canvas index" "footer index";
+  grid-template-columns: minmax(0, 1fr) 44px;
+  grid-template-rows: minmax(0, 1fr) 44px;
+  height: 100%;
+  min-height: 0;
+  gap: 12px 8px;
+  padding: 12px 0 0;
+  border-top: 1px solid var(--yoyi-color-border-subtle);
+  color: var(--yoyi-color-text-primary);
+}
+.frame[data-one-section] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "canvas" "footer";
+}
+.index {
+  grid-area: index;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  overflow: auto;
+  scrollbar-width: none;
+  border-left: 1px solid var(--yoyi-color-border-subtle);
+}
+.index button {
+  position: relative;
+  flex: 0 0 auto;
+  width: 44px;
+  min-height: 64px;
+  display: grid;
+  place-items: center;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--yoyi-color-text-tertiary);
+  font: 500 13px/1.6 var(--yoyi-font-editorial);
+  letter-spacing: 0.18em;
+  writing-mode: vertical-rl;
+  cursor: pointer;
+  transition: color var(--yoyi-duration-normal) var(--yoyi-easing-standard);
+}
+.index button::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 14px;
+  bottom: 14px;
+  width: 2px;
+  background: var(--yoyi-color-seal-red);
+  transform: scaleY(0);
+  transition: transform var(--yoyi-duration-normal) var(--yoyi-easing-standard);
+}
+.index button[aria-selected="true"] {
+  color: var(--yoyi-color-seal-red);
+}
+.index button[aria-selected="true"]::after {
+  transform: scaleY(1);
+}
+.index button:hover {
+  color: var(--yoyi-color-text-primary);
+}
+.index button:focus-visible,
+.footer button:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: -3px;
+}
+.canvas {
+  grid-area: canvas;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+.archive[data-desktop-detail-information]
+  .canvas[data-archive-section]
+  [data-detail-reading-strip] {
+  height: 100%;
+  padding: 0;
+  gap: 0;
+  background: transparent;
+  scrollbar-width: none;
+}
+.archive [data-detail-reading-strip]::-webkit-scrollbar,
+.index::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+.archive[data-desktop-detail-information]
+  .canvas[data-archive-section]
+  [data-detail-reading-information] {
+  padding: 16px 16px 12px 12px;
+  font: 400 var(--yoyi-type-body-size)/2 var(--yoyi-font-editorial);
+  letter-spacing: 0.045em;
+  min-width: 100%;
+}
+.archive[data-desktop-detail-information]
+  .canvas[data-archive-section]
+  [data-detail-reading-information]
+  :where(section, div, dl, ul, li, p, h1, h2, h3, dt, dd):where(
+    :not([data-detail-untitled])
+  ) {
+  margin: 0;
+  padding: 0;
+  position: static;
+  width: auto;
+  max-width: none;
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  display: block;
+  writing-mode: inherit;
+  direction: ltr;
+  font: inherit;
+}
+.archive[data-desktop-detail-information]
+  .canvas[data-archive-section]
+  [data-detail-reading-information]
+  :where(p, dd, li) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.archive[data-desktop-detail-information]
+  .canvas[data-archive-section]
+  [data-detail-title] {
+  font-size: 24px;
+  line-height: 1.7;
+  font-weight: 500;
+  margin-block-end: 20px;
+  letter-spacing: 0.1em;
+}
+.archive[data-desktop-detail-information]
+  .canvas[data-archive-section]
+  [data-detail-reading-information]
+  :where(h2, h3) {
+  font-size: 16px;
+  font-weight: 600;
+  margin-block-end: 16px;
+}
+.archive[data-desktop-detail-information]
+  .canvas[data-archive-section]
+  [data-detail-reading-information]
+  :where(section, dl, ul, li, p) {
+  margin-block-end: 24px;
+}
+.archive[data-desktop-detail-information]
+  .canvas[data-archive-section]
+  [data-detail-reading-information]
+  dl
+  > div {
+  margin-block-end: 20px;
+}
+.archive[data-desktop-detail-information]
+  .canvas[data-archive-section]
+  [data-detail-reading-information]
+  :where(dt, dd) {
+  display: inline;
+}
+.archive[data-desktop-detail-information]
+  .canvas[data-archive-section]
+  [data-detail-reading-information]
+  dt {
+  color: var(--yoyi-color-text-tertiary);
+  font-size: 12px;
+  margin-inline-end: 12px;
+}
+.archive[data-desktop-detail-information]
+  .canvas[data-archive-section]
+  [data-detail-kind-period],
+.archive[data-desktop-detail-information]
+  .canvas[data-archive-section]
+  [data-detail-publication] {
+  font-size: 13px;
+  color: var(--yoyi-color-text-secondary);
+}
+.archive[data-desktop-detail-information]
+  .canvas[data-archive-section]
+  [data-detail-reading-information]
+  strong {
+  font-weight: 600;
+}
+.archive[data-desktop-detail-information]
+  .canvas[data-archive-section]
+  [data-detail-reading-information]
+  a {
+  color: var(--yoyi-color-seal-red);
+  margin-inline: 10px;
+}
+.continuation {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 18px;
+  background: linear-gradient(
+    to right,
+    var(--yoyi-color-background-page),
+    transparent
+  );
+  pointer-events: none;
+}
+.footer {
+  grid-area: footer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  gap: 8px;
+}
+.footer button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--yoyi-color-text-secondary);
+  cursor: pointer;
+}
+.footer button:hover {
+  color: var(--yoyi-color-seal-red);
+}
+.footer button:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+.paging {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+  gap: 8px;
+}
+.footer:not([data-overflow]) .paging {
+  visibility: hidden;
+}
+.progress {
+  display: block;
+  flex: 1;
+  height: 1px;
+  overflow: hidden;
+  background: var(--yoyi-color-border-subtle);
+}
+.progress i {
+  display: block;
+  height: 100%;
+  background: var(--yoyi-color-text-tertiary);
+  transform-origin: right;
+}
+.placeholder {
+  height: 100%;
+}
+.expandedDialog:global(.phase4-dialog) {
+  margin: auto;
+  width: min(calc(100vw - 64px), 1280px);
+  height: min(calc(100svh - 64px), 960px);
+  max-height: none;
+  padding: 0;
+  overflow: hidden;
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-page);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-lg);
+}
+.expandedDialog:global(.phase4-dialog)::backdrop {
+  background: var(--yoyi-color-overlay);
+}
+.expandedDialog:global(.phase4-dialog) > div {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  display: grid;
+  grid-template-rows: 56px minmax(0, 1fr);
+  height: 100%;
+  padding: 0 24px 12px;
+}
+.expandedDialog:global(.phase4-dialog) > div > header {
+  margin: 0;
+  padding: 0;
+  gap: 16px;
+  border: 0;
+}
+.expandedDialog:global(.phase4-dialog) > div > header h2 {
+  font: 500 16px/1.5 var(--yoyi-font-editorial);
+}
+.expandedDialog:global(.phase4-dialog) > div > header button {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+@media (prefers-reduced-motion: reduce) {
+  .index button,
+  .index button::after {
+    transition: none;
+  }
+}

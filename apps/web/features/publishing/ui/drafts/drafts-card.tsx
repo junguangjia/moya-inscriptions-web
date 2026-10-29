@@ -20,6 +20,7 @@ import { publishingClient } from "../../publishing-data";
 import { DraftsPicker } from "./drafts-picker";
 import { isAbort } from "./drafts-intent";
 import { CoverThumb } from "./drafts-shared";
+import { useMasonrySlot } from "../../../home/catalog-masonry";
 import styles from "./drafts.module.css";
 
 import type { PublishingDraftSummary } from "@moya/contracts";
@@ -231,13 +232,18 @@ export const DraftsCard = ({
     return () => window.clearTimeout(timer);
   }, [accountId, author.cache, picker, returnKey]);
 
+  const desktopSlot = useMasonrySlot()?.desktop;
   const newest = state.status === "ready" ? state.newest : null;
   const text = countText(state);
   const label = articleEnabled ? "草稿箱" : "草稿";
   const detail = articleEnabled ? "作品与专题草稿，长按卡片可多选管理" : text;
 
   return (
-    <div className={styles.stack} data-drafts-card-stack="">
+    <div
+      className={styles.stack}
+      data-drafts-card-stack=""
+      data-desktop-drafts={desktopSlot ? "" : undefined}
+    >
       <span
         aria-hidden="true"
         className={styles.stackLayer}

@@ -9,13 +9,20 @@ import {
 } from "./product-boot";
 import {
   FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
+  DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
   THEME_PREFERENCE_STORAGE_KEY,
 } from "./preferences";
+
+const initialWidth = window.innerWidth;
 
 describe("Product Shell pre-hydration boot", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: initialWidth,
+    });
     window.localStorage.clear();
     document.documentElement.removeAttribute("data-theme");
     document.documentElement.removeAttribute("data-theme-preference");
@@ -36,13 +43,16 @@ describe("Product Shell pre-hydration boot", () => {
   it("applies canonical preferences and platform attributes before hydration", () => {
     vi.useFakeTimers();
     window.localStorage.setItem(THEME_PREFERENCE_STORAGE_KEY, "dark");
-    window.localStorage.setItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY, "single");
+    window.localStorage.setItem(
+      DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
+      "double",
+    );
 
     window.eval(PRODUCT_BOOT_SCRIPT);
 
     expect(document.documentElement.dataset.theme).toBe("dark");
     expect(document.documentElement.dataset.themePreference).toBe("dark");
-    expect(document.documentElement.dataset.homeLayout).toBe("single");
+    expect(document.documentElement.dataset.homeLayout).toBe("double");
     expect(document.documentElement.dataset.deviceClass).toBe("desktop");
     expect(document.documentElement.dataset.platform).toMatch(
       /^(phone|tablet|pc)$/,
@@ -140,7 +150,7 @@ describe("Product Shell pre-hydration boot", () => {
     expect(() => window.eval(PRODUCT_BOOT_SCRIPT)).not.toThrow();
     expect(document.documentElement.dataset.themePreference).toBe("light");
     expect(document.documentElement.dataset.theme).toBe("light");
-    expect(document.documentElement.dataset.homeLayout).toBe("double");
+    expect(document.documentElement.dataset.homeLayout).toBe("single");
   });
 
   it("retains an explicit theme when the layout read fails", () => {
@@ -154,7 +164,7 @@ describe("Product Shell pre-hydration boot", () => {
 
     expect(document.documentElement.dataset.themePreference).toBe("dark");
     expect(document.documentElement.dataset.theme).toBe("dark");
-    expect(document.documentElement.dataset.homeLayout).toBe("double");
+    expect(document.documentElement.dataset.homeLayout).toBe("single");
   });
 
   it("falls back safely for invalid stored values", () => {
@@ -166,12 +176,12 @@ describe("Product Shell pre-hydration boot", () => {
 
     expect(document.documentElement.dataset.themePreference).toBe("light");
     expect(document.documentElement.dataset.theme).toBe("light");
-    expect(document.documentElement.dataset.homeLayout).toBe("double");
+    expect(document.documentElement.dataset.homeLayout).toBe("single");
   });
 
   it.each([
     ["no choice on a phone", null, "phone", "single"],
-    ["no choice on a desktop", null, "desktop", "double"],
+    ["no choice on a desktop", null, "desktop", "single"],
     ["no choice on a tablet", null, "tablet", "single"],
     ["an explicit double on a tablet", "double", "tablet", "double"],
     ["an explicit double on a phone", "double", "phone", "double"],
@@ -181,7 +191,12 @@ describe("Product Shell pre-hydration boot", () => {
     (_label, stored, device, expected) => {
       vi.useFakeTimers();
       if (stored !== null)
-        window.localStorage.setItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY, stored);
+        window.localStorage.setItem(
+          device === "desktop"
+            ? DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY
+            : FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
+          stored,
+        );
       const userAgent = vi.spyOn(window.navigator, "userAgent", "get");
       if (device === "phone")
         userAgent.mockReturnValue(
@@ -202,4 +217,41 @@ describe("Product Shell pre-hydration boot", () => {
       userAgent.mockRestore();
     },
   );
+
+  it.each([390, 800, 895, 896, 2560])(
+    "uses the desktop key before paint at width %s, independently of compact layout",
+    (width) => {
+      vi.useFakeTimers();
+      vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue(
+        "Desktop Browser",
+      );
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: width,
+      });
+      window.localStorage.setItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY, "single");
+      window.localStorage.setItem(
+        DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
+        "double",
+      );
+      const before = { ...window.localStorage };
+      window.eval(PRODUCT_BOOT_SCRIPT);
+      expect(document.documentElement.dataset.deviceClass).toBe("desktop");
+      expect(document.documentElement.dataset.homeLayout).toBe("double");
+      expect({ ...window.localStorage }).toEqual(before);
+    },
+  );
+
+  it("does not import an existing phone preference into the desktop default", () => {
+    vi.useFakeTimers();
+    window.localStorage.setItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY, "double");
+    window.eval(PRODUCT_BOOT_SCRIPT);
+    expect(document.documentElement.dataset.homeLayout).toBe("single");
+    expect(
+      window.localStorage.getItem(DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY),
+    ).toBeNull();
+    expect(
+      window.localStorage.getItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY),
+    ).toBe("double");
+  });
 });

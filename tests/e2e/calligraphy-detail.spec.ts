@@ -99,8 +99,16 @@ test("calligraphy Detail has independent complete images and a vertical content-
   await expect(detail).toBeVisible();
   const mobile = (await detail.getAttribute("data-platform")) !== "pc";
   if (!mobile) {
-    await expect(detail).toHaveAttribute("data-detail-mode", "normal");
-    await expect(detail.locator("[data-detail-reading-strip]")).toHaveCount(0);
+    await expect(detail).toHaveAttribute("data-detail-mode", "calligraphy");
+    await expect(
+      detail.locator("[data-desktop-calligraphy-detail]"),
+    ).toBeVisible();
+    await expect(
+      detail.locator("[data-desktop-detail-information]"),
+    ).toHaveCount(1);
+    await expect(
+      detail.locator("[data-desktop-detail-image-pane]"),
+    ).toBeVisible();
     return;
   }
   await expect(detail).toHaveAttribute("data-detail-mode", "calligraphy");
@@ -163,9 +171,10 @@ test("calligraphy Detail has independent complete images and a vertical content-
 test("normal preference retains the existing media and information/comment composition", async ({
   page,
 }, info) => {
-  await page.addInitScript(() =>
-    localStorage.setItem("yoyi.home-feed-layout.v2", "double"),
-  );
+  await page.addInitScript(() => {
+    localStorage.setItem("yoyi.home-feed-layout.v2", "double");
+    localStorage.setItem("yoyi.desktop-feed-layout.v1", "double");
+  });
   await page.goto(url);
   const detail = page.locator('[data-detail-state="loaded"]');
   await expect(detail).toHaveAttribute("data-detail-mode", "normal");

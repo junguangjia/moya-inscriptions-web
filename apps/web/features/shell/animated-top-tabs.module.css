@@ -74,6 +74,78 @@
 .label {
   display: block;
 }
+.labelSlot {
+  display: block;
+}
+
+.viewport[data-orientation="vertical"] {
+  position: fixed;
+  z-index: var(--yoyi-z-index-navigation);
+  top: var(--yoyi-space-7);
+  right: calc(
+    var(--yoyi-desktop-navigation-width) + var(--yoyi-space-5) +
+      var(--yoyi-space-4)
+  );
+  width: var(--yoyi-desktop-category-width);
+  max-height: calc(100dvh - var(--yoyi-space-10));
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-surface);
+  touch-action: pan-y;
+}
+.viewport[data-orientation="vertical"] .track {
+  width: 100%;
+  flex-direction: column;
+  padding: var(--yoyi-space-3);
+  gap: var(--yoyi-space-4);
+}
+.viewport[data-orientation="vertical"] .tab {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  flex-direction: column;
+  gap: var(--yoyi-space-2);
+  padding: var(--yoyi-space-3) var(--yoyi-space-2);
+  border-radius: var(--yoyi-radius-md);
+}
+.viewport[data-orientation="vertical"] .tab[aria-selected="true"] {
+  color: var(--yoyi-color-seal-red);
+  background: var(--yoyi-color-seal-red-muted);
+}
+.viewport[data-orientation="vertical"] .label {
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  font-family: var(--yoyi-font-editorial);
+  letter-spacing: 0.12em;
+}
+.viewport[data-orientation="vertical"] .labelSlot {
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(calc(-1 * var(--yoyi-space-2)));
+  transition:
+    max-height var(--yoyi-duration-normal) var(--yoyi-easing-standard),
+    opacity var(--yoyi-duration-normal) var(--yoyi-easing-standard),
+    transform var(--yoyi-duration-normal) var(--yoyi-easing-standard);
+}
+.viewport[data-orientation="vertical"]
+  .tab[data-label-expanded="true"]
+  .labelSlot {
+  max-height: 3em;
+  opacity: 1;
+  transform: translateY(0);
+}
+.viewport[data-orientation="vertical"] .iconSlot {
+  width: 20px;
+  opacity: 1;
+}
+.viewport[data-orientation="vertical"] .icon {
+  transform: none;
+}
+.viewport[data-orientation="vertical"] .indicator {
+  display: none;
+}
 .indicator {
   position: absolute;
   bottom: 0;
@@ -96,5 +168,9 @@
   .icon,
   .indicator {
     transition: none;
+  }
+  .viewport[data-orientation="vertical"] .labelSlot {
+    transition: none;
+    transform: none;
   }
 }

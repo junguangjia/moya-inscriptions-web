@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createRef } from "react";
+import { act, createRef, Fragment, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,7 +40,13 @@ const Probe = () => {
   stage = useFeedStage();
   return null;
 };
-const mounts = (positionKey?: string) => {
+const mounts = (
+  positionKey?: string,
+  variant:
+    "continuous" | "desktop-information" | "desktop-comments" = "continuous",
+  strict = false,
+) => {
+  const Wrapper = strict ? StrictMode : Fragment;
   const onRegionChange = vi.fn();
   const onRevealReading = vi.fn();
   const host = document.createElement("div");
@@ -52,29 +58,32 @@ const mounts = (positionKey?: string) => {
   const draw = (id = "one") =>
     act(() =>
       root.render(
-        <CatalogDetailReadingStrip
-          ref={ref}
-          detailId={id}
-          id="reading-one"
-          onRegionChange={onRegionChange}
-          onRevealReading={onRevealReading}
-          positionKey={positionKey}
-          information={
-            <>
-              <h1 data-detail-reading-anchor="title">寒山诗</h1>
-              <p data-detail-reading-anchor="body">全部正文</p>
-              <Probe />
-            </>
-          }
-          colophon={
-            withComments ? (
-              <section>
-                <header data-colophon-head="">题跋</header>
-                <p data-colophon-anchor="reply-1">回复</p>
-              </section>
-            ) : undefined
-          }
-        />,
+        <Wrapper>
+          <CatalogDetailReadingStrip
+            ref={ref}
+            detailId={id}
+            id="reading-one"
+            onRegionChange={onRegionChange}
+            onRevealReading={onRevealReading}
+            positionKey={positionKey}
+            variant={variant}
+            information={
+              <>
+                <h1 data-detail-reading-anchor="title">寒山诗</h1>
+                <p data-detail-reading-anchor="body">全部正文</p>
+                <Probe />
+              </>
+            }
+            colophon={
+              withComments ? (
+                <section>
+                  <header data-colophon-head="">题跋</header>
+                  <p data-colophon-anchor="reply-1">回复</p>
+                </section>
+              ) : undefined
+            }
+          />
+        </Wrapper>,
       ),
     );
   draw();
@@ -165,6 +174,92 @@ afterEach(() => {
 });
 
 describe("CatalogDetailReadingStrip", () => {
+  it("does not overwrite a saved category with the provisional zero of a StrictMode mount", () => {
+    const first = mounts("strict-archive:catalog:one", "desktop-information");
+    first.setOffset(420);
+    act(() => first.ref.current!.checkpoint());
+    first.unmount();
+    expect(
+      mounts(
+        "strict-archive:catalog:one",
+        "desktop-information",
+        true,
+      ).offset(),
+    ).toBe(420);
+  });
+  it("uses an auth journey once per reader scope and then keeps newer category checkpoints", () => {
+    authJourney.returned = {
+      offset: 240,
+      text: null,
+      comment: null,
+      region: "media",
+    };
+    const first = mounts(
+      "auth-archive:member:catalog:one",
+      "desktop-information",
+    );
+    expect(first.offset()).toBe(240);
+    first.setOffset(600);
+    act(() => first.ref.current!.checkpoint());
+    first.unmount();
+    const second = mounts(
+      "auth-archive:member:catalog:one",
+      "desktop-information",
+    );
+    expect(second.offset()).toBe(600);
+    second.unmount();
+    // A new legitimate journey must still override an older ordinary cache.
+    authJourney.returned = {
+      offset: 120,
+      text: null,
+      comment: null,
+      region: "media",
+    };
+    expect(
+      mounts("auth-archive:member:catalog:one", "desktop-information").offset(),
+    ).toBe(120);
+  });
+  it("checkpoints an in-flight desktop reading offset before a category is replaced", () => {
+    const first = mounts(
+      "archive-checkpoint:catalog:one:desktop",
+      "desktop-information",
+    );
+    first.setOffset(420);
+    act(() => first.ref.current!.checkpoint());
+    first.unmount();
+    const second = mounts(
+      "archive-checkpoint:catalog:one:desktop",
+      "desktop-information",
+    );
+    expect(second.offset()).toBe(420);
+  });
+  it("pages the desktop colophon from right to left within its real scroll bounds", () => {
+    const view = mounts(undefined, "desktop-comments");
+    expect(view.ref.current!.pagingState()).toEqual({
+      forward: true,
+      backward: false,
+    });
+    act(() => view.ref.current!.scrollByPage("forward"));
+    expect(view.offset()).toBe(240);
+    expect(view.ref.current!.pagingState()).toEqual({
+      forward: true,
+      backward: true,
+    });
+    view.setOffset(1490);
+    act(() => view.ref.current!.scrollByPage("forward"));
+    expect(view.offset()).toBe(1500);
+    expect(view.ref.current!.pagingState()).toEqual({
+      forward: false,
+      backward: true,
+    });
+    view.setOffset(10);
+    act(() => view.ref.current!.scrollByPage("backward"));
+    expect(view.offset()).toBe(0);
+    expect(view.ref.current!.pagingState()).toEqual({
+      forward: true,
+      backward: false,
+    });
+  });
   it("keeps ordinary reply alignment and anchor maintenance horizontal", () => {
     const view = mounts();
     const reply = view.host.querySelector<HTMLElement>(
@@ -398,6 +493,29 @@ describe("CatalogDetailReadingStrip", () => {
     expect(view.host.textContent).toContain("全部正文");
     expect(view.ref.current?.scrollToComments()).toBe(false);
     expect(view.ref.current?.scrollToComment("reply-1")).toBe(false);
+  });
+
+  it("keeps the desktop comments row active at its own right edge", () => {
+    const view = mounts("desktop-comments", "desktop-comments");
+    expect(view.strip.dataset.detailReadingVariant).toBe("desktop-comments");
+    expect(stage?.region).toBe("comments");
+    act(() => {
+      view.ref.current?.scrollToComments();
+      vi.advanceTimersByTime(180);
+    });
+    expect(view.offset()).toBe(0);
+    expect(stage?.region).toBe("comments");
+  });
+
+  it("does not let the desktop upper row consume a pending comments entry", () => {
+    requestDetailComments("one");
+    const upper = mounts("desktop-upper", "desktop-information");
+    expect(detailCommentsRequested("one")).toBe(true);
+    upper.unmount();
+    const lower = mounts("desktop-lower", "desktop-comments");
+    expect(detailCommentsRequested("one")).toBe(false);
+    act(() => vi.advanceTimersByTime(20));
+    expect(lower.onRevealReading).toHaveBeenCalled();
   });
 
   it("keeps a registered comment anchor when the region grows", async () => {

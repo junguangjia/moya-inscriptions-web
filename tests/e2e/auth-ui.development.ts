@@ -667,20 +667,18 @@ test("synthetic detail comments tab survives cancel and browser back", async ({
   ).toBe(401);
 });
 
-test("a wide desktop window is sent from login to Home", async ({
+test("a wide desktop window keeps the real sign-in form", async ({
   page,
 }, testInfo) => {
   test.skip(
     testInfo.project.name !== "desktop-chromium",
-    "Phones keep sign-in; one desktop probe covers the wide-screen redirect",
+    "One explicit desktop size probe; other journeys retain their own device sizes.",
   );
-  // The project signs in at 800px. From 896px the public product is
-  // browse-only and /login goes to Home before paint (pc-browse-only-v1).
   await page.setViewportSize({ width: 1280, height: 720 });
-  await page.goto("/login?return=%2Fdev%2Fcommunity", { waitUntil: "commit" });
-  const home = new URL("/", page.url()).href;
-  await page.waitForURL(home, { waitUntil: "commit" });
-  await expect(page).toHaveURL(home);
+  await page.goto("/login?return=%2Fdev%2Fcommunity");
+  await expect(page).toHaveURL((url) => url.pathname === "/login");
+  await expect(page.locator('[data-auth-mode="sign-in"]')).toBeVisible();
+  await expect(page.locator("body")).toHaveCSS("visibility", "visible");
 });
 
 // Never forward Playwright API call logs containing private Cookie/body data.

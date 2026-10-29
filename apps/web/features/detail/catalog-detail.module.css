@@ -52,6 +52,30 @@
   cursor: pointer;
 }
 
+.headerTitle {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--yoyi-type-body-size);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail[data-desktop-detail] .detailHeader {
+  justify-content: flex-start;
+  gap: var(--yoyi-space-5);
+}
+
+.detail[data-desktop-detail][data-detail-mode="calligraphy"] .detailContent {
+  width: min(100%, var(--yoyi-desktop-reader-max));
+  padding: var(--yoyi-space-5) var(--yoyi-space-7) var(--yoyi-space-10);
+}
+
+.detail[data-desktop-detail][data-detail-mode="calligraphy"] .identityPanel {
+  position: static;
+}
+
 .detailHeader button:hover {
   background: var(--yoyi-color-background-muted);
 }

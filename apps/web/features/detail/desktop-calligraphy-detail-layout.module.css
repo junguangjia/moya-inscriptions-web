@@ -1,0 +1,253 @@
+.layout {
+  display: grid;
+  min-width: 0;
+  gap: var(--yoyi-space-8);
+}
+.firstScreen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--yoyi-space-5);
+  height: calc(100svh - var(--detail-header-height) - var(--yoyi-space-5));
+  min-height: 420px;
+}
+.hero {
+  display: grid;
+  grid-template-areas: "information image";
+  grid-template-columns:
+    minmax(260px, var(--yoyi-desktop-reader-information-width))
+    minmax(0, 1fr);
+  gap: var(--yoyi-space-7);
+  min-height: 0;
+  flex: 1 1 0;
+}
+.mediaColumn {
+  grid-area: image;
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: var(--yoyi-space-3);
+  min-width: 0;
+  min-height: 0;
+}
+.navigation {
+  position: absolute;
+  z-index: 3;
+  top: var(--yoyi-space-2);
+  right: var(--yoyi-space-2);
+  display: flex;
+  gap: var(--yoyi-space-2);
+}
+.navigation button,
+.compose,
+.imageEdges button,
+.colophonHeader button {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--yoyi-radius-md);
+  color: var(--yoyi-color-text-secondary);
+  background: var(--yoyi-color-background-page);
+  cursor: pointer;
+}
+.navigation button:hover,
+.compose:hover,
+.imageEdges button:hover,
+.colophonHeader button:hover {
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-muted);
+}
+.navigation button:focus-visible,
+.compose:focus-visible,
+.imageEdges button:focus-visible,
+.colophonHeader button:focus-visible,
+.colophonCue:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+.media {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  writing-mode: horizontal-tb;
+  direction: ltr;
+}
+.media [data-feed-stage-frame] {
+  height: 100%;
+  min-height: 0;
+  aspect-ratio: auto;
+  flex: 1 1 0;
+}
+.media [data-feed-dots] {
+  flex: 0 0 auto;
+}
+.imageEdges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.imageEdges button {
+  position: absolute;
+  top: 45%;
+  pointer-events: auto;
+}
+.previousImage {
+  right: var(--yoyi-space-3);
+}
+.nextImage {
+  left: var(--yoyi-space-3);
+}
+.imageEdges button:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+.colophonHeader button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.missingMedia {
+  display: grid;
+  height: 100%;
+  width: 100%;
+  place-items: center;
+}
+.actions {
+  min-width: 0;
+  min-height: 44px;
+}
+.actions [data-detail-content-actions] {
+  justify-content: flex-end;
+}
+.colophonCue {
+  display: flex;
+  flex: 0 0 64px;
+  min-height: 64px;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: var(--yoyi-space-5);
+  padding: var(--yoyi-space-4);
+  color: var(--yoyi-color-text-primary);
+  border: 0;
+  border-top: 1px solid var(--yoyi-color-border-subtle);
+  background: transparent;
+  cursor: pointer;
+  font: 500 var(--yoyi-type-body-size)/1.5 var(--yoyi-font-editorial);
+}
+.colophonCue:hover {
+  color: var(--yoyi-color-seal-red);
+}
+.colophonCue [data-icon] {
+  transform: rotate(90deg);
+}
+.cueHint {
+  color: var(--yoyi-color-text-tertiary);
+  font: var(--yoyi-type-metadata-size)/1.5 var(--yoyi-font-interface);
+}
+.lower {
+  position: relative;
+  min-width: 0;
+  padding-top: var(--yoyi-space-7);
+  border-top: 1px solid var(--yoyi-color-border-subtle);
+  scroll-margin-top: calc(var(--detail-header-height) + var(--yoyi-space-5));
+  --desktop-reading-height: var(--yoyi-desktop-reader-colophon-empty);
+}
+.lower:has(
+  [data-colophon-entry],
+  [data-colophon-writing],
+  [data-colophon-skeleton],
+  [data-colophon-input-focused]
+) {
+  --desktop-reading-height: var(--yoyi-desktop-reader-colophon);
+}
+.colophonHeader {
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--yoyi-space-5);
+  margin-bottom: var(--yoyi-space-5);
+}
+.colophonHeader h2,
+.colophonHeader p {
+  margin: 0;
+}
+.colophonHeader h2 {
+  font: 600 var(--yoyi-type-section-title-size)/1.5 var(--yoyi-font-editorial);
+}
+.colophonHeader p {
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-metadata-size);
+}
+.colophonHeader nav {
+  display: flex;
+  gap: var(--yoyi-space-3);
+}
+.lower [data-detail-reading-strip] {
+  scrollbar-width: auto;
+}
+.lower [data-detail-reading-strip]::-webkit-scrollbar {
+  height: 12px;
+}
+.lower [data-feed-colophon] {
+  min-width: 100%;
+  padding-inline: var(--yoyi-space-3);
+  --colophon-top: var(--yoyi-space-3);
+}
+.lower [data-colophon-head] h4 {
+  display: none;
+}
+.lower [data-colophon-input] {
+  padding-block: var(--yoyi-space-3);
+}
+.compose {
+  position: absolute;
+  left: 0;
+  top: calc(76px + var(--yoyi-space-7));
+  display: none;
+}
+.lower:not(
+    :has(
+      [data-colophon-entry],
+      [data-colophon-writing],
+      [data-colophon-skeleton],
+      [data-colophon-input-focused]
+    )
+  ):has([data-colophon-input="write"])
+  .compose {
+  display: grid;
+}
+.lower:not(
+    :has(
+      [data-colophon-entry],
+      [data-colophon-writing],
+      [data-colophon-skeleton],
+      [data-colophon-input-focused]
+    )
+  )
+  [data-colophon-input="write"] {
+  opacity: 0;
+  visibility: visible;
+  pointer-events: none;
+}
+.layout[data-detail-text-only] .hero {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "information";
+}
+.layout[data-detail-text-only] [data-desktop-detail-information] {
+  width: min(100%, var(--yoyi-desktop-prose-max));
+  justify-self: center;
+}
+@media (max-width: 1279px) {
+  .hero {
+    grid-template-columns: 260px minmax(0, 1fr);
+    gap: var(--yoyi-space-5);
+  }
+}

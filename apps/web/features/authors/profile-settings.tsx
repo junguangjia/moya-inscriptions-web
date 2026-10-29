@@ -104,12 +104,14 @@ const ChoiceGroup = <Value extends string>({
   options,
   value,
   onChange,
+  platform,
 }: {
   label: string;
   kind: "theme" | "layout";
   options: readonly { value: Value; label: string; icon?: SettingsIconName }[];
   value: Value;
   onChange: (value: Value) => void;
+  platform?: "phone" | "tablet" | "pc";
 }) => (
   <fieldset className={styles.group}>
     <legend>{label}</legend>
@@ -183,7 +185,10 @@ const ChoiceGroup = <Value extends string>({
       ))}
     </div>
     {kind === "layout" && (value === "single" || value === "double") && (
-      <FeedLayoutPreview value={value === "single" ? "single" : "double"} />
+      <FeedLayoutPreview
+        platform={platform}
+        value={value === "single" ? "single" : "double"}
+      />
     )}
   </fieldset>
 );
@@ -861,7 +866,7 @@ export const ProfileSettings = ({
                     {row(
                       "外观",
                       "display",
-                      `${themeLabels[shell.theme]}${shell.platform === "pc" ? "" : ` · ${feedLayoutLabels[shell.feedLayout]}`}`,
+                      `${themeLabels[shell.theme]} · ${feedLayoutLabels[shell.feedLayout]}`,
                     )}
                   </div>
                 </section>
@@ -974,18 +979,17 @@ export const ProfileSettings = ({
                     }),
                   )}
                 />
-                {shell.platform !== "pc" && (
-                  <ChoiceGroup
-                    label="首页布局"
-                    kind="layout"
-                    value={shell.feedLayout}
-                    onChange={shell.setFeedLayoutPreference}
-                    options={(["single", "double"] as const).map((value) => ({
-                      value,
-                      label: feedLayoutLabels[value],
-                    }))}
-                  />
-                )}
+                <ChoiceGroup
+                  label={shell.desktop ? "电脑显示模式" : "首页布局"}
+                  kind="layout"
+                  platform={shell.platform}
+                  value={shell.feedLayout}
+                  onChange={shell.setFeedLayoutPreference}
+                  options={(["single", "double"] as const).map((value) => ({
+                    value,
+                    label: feedLayoutLabels[value],
+                  }))}
+                />
                 <p className={styles.help}>立即生效，保存在当前浏览器。</p>
               </>
             )}

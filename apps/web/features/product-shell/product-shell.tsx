@@ -51,11 +51,11 @@ import {
 } from "./product-history";
 import {
   DEFAULT_THEME_PREFERENCE,
-  FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
   THEME_PREFERENCE_STORAGE_KEY,
   applyFeedLayoutPreferenceToRoot,
   applyThemePreferenceToRoot,
   defaultFeedLayoutFor,
+  feedLayoutStorageKeyFor,
   nextFeedLayoutPreference,
   nextThemePreference,
   persistPreference,
@@ -93,6 +93,7 @@ import type {
 } from "./product-history";
 import type { FeedLayoutPreference, ThemePreference } from "./preferences";
 import type {
+  DeviceClass,
   PresentationOrientation,
   PresentationPlatform,
   RuntimeNavigatorLike,
@@ -265,9 +266,11 @@ export interface ProductShellContextValue {
   ) => void;
   readonly orientation: PresentationOrientation;
   readonly platform: PresentationPlatform;
+  /** Full desktop composition; compact desktop windows still own desktop preferences. */
+  readonly desktop: boolean;
   /**
-   * Wide screens without an account only browse (pc-browse-only-v1): no
-   * navigation, comments, actions, profiles or editor. False without a policy.
+   * Retained explicit read-only presentation state. The Formal boundary no
+   * longer activates it by device size (#260). Account access is independent.
    */
   readonly browseOnly: boolean;
   /** Whether browse-only applies right now, read live (not from render state). */
@@ -281,6 +284,10 @@ export interface ProductShellContextValue {
     opener: HTMLButtonElement,
   ) => void;
   readonly requestSettings: (opener?: HTMLElement) => void;
+  /** Register the active page's settings surface; disposing a stale intent is safe. */
+  readonly registerSettingsIntent: (
+    handler: (opener: HTMLElement) => void,
+  ) => () => void;
   readonly restoreActiveScrollTop: (top: number) => void;
   readonly settingsOpen: boolean;
   readonly theme: ThemePreference;
@@ -326,7 +333,7 @@ export interface ProductShellProps {
     properties: ProductShellTopicOverlayRenderProps,
   ) => ReactNode;
   readonly showDevelopmentPagerControls?: boolean;
-  /** Only the Formal root passes it (pc-browse-only-v1); absent keeps it off. */
+  /** Legacy explicit compatibility policy; not activated by the Formal root. */
   readonly browseOnlyPolicy?: BrowseOnlyPolicy;
 }
 
@@ -427,6 +434,9 @@ export const ProductShell = ({
   const [authReturnNotice, setAuthReturnNotice] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const settingsBackRef = useRef<HTMLButtonElement>(null);
+  const settingsIntentRef = useRef<((opener: HTMLElement) => void) | null>(
+    null,
+  );
   const detailBackRef = useRef<HTMLButtonElement>(null);
   const topicBackRef = useRef<HTMLButtonElement>(null);
   const detailOpenerRef = useRef<HTMLElement | null>(null);
@@ -522,6 +532,13 @@ export const ProductShell = ({
     useState<PrimaryDestination>("home");
   const [platform, setPlatform] =
     useState<PresentationPlatform>(initialPlatform);
+  // Server markup and the first hydration pass must use the same seed. The
+  // runtime effect below then resolves physical identity (including iPadOS
+  // reporting Macintosh), without replacing the server's navigation tree.
+  const [deviceClass, setDeviceClass] = useState<DeviceClass>(
+    initialPlatform === "pc" ? "desktop" : initialPlatform,
+  );
+  const desktop = deviceClass === "desktop" && platform === "pc";
   // Seeded from the server's platform, so a wide screen renders browse-only
   // before hydration; the client can only relax it (pc-browse-only-v1).
   const [wideLayout, setWideLayout] = useState(() =>
@@ -538,8 +555,12 @@ export const ProductShell = ({
   // phone that becomes a tablet (or back) follows the right default.
   const [storedFeedLayout, setStoredFeedLayout] =
     useState<FeedLayoutPreference | null>(null);
+  const [storedDesktopFeedLayout, setStoredDesktopFeedLayout] =
+    useState<FeedLayoutPreference | null>(null);
   const [feedLayoutRead, setFeedLayoutRead] = useState(false);
-  const feedLayout = storedFeedLayout ?? defaultFeedLayoutFor(platform);
+  const feedLayout =
+    (deviceClass === "desktop" ? storedDesktopFeedLayout : storedFeedLayout) ??
+    defaultFeedLayoutFor(platform);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [activeContent, setActiveContent] = useState<ContentIdentity | null>(
     null,
@@ -1014,6 +1035,15 @@ export const ProductShell = ({
       }
       const sourceDestination = activeDestinationRef.current;
       saveScroll(sourceDestination, platformRef.current);
+      window.history.replaceState(
+        currentProductHistoryState(
+          primaryHistoryState(
+            sourceDestination,
+            scrollPositionsRef.current[sourceDestination],
+          ),
+        ),
+        "",
+      );
       settingsOpenerRef.current = opener;
       window.history.pushState(
         currentProductHistoryState(settingsHistoryState(sourceDestination)),
@@ -1061,9 +1091,31 @@ export const ProductShell = ({
         (document.activeElement instanceof HTMLElement
           ? document.activeElement
           : rootRef.current);
-      if (opener !== null) openSettings(opener);
+      if (
+        opener === null ||
+        settingsOpenRef.current ||
+        feedViewerRef.current !== null ||
+        contentRef.current !== null ||
+        profileRef.current !== null ||
+        editorRef.current !== null ||
+        topicIdRef.current !== null
+      )
+        return;
+      if (settingsIntentRef.current !== null) settingsIntentRef.current(opener);
+      else openSettings(opener);
     },
     [openSettings],
+  );
+
+  const registerSettingsIntent = useCallback(
+    (handler: (opener: HTMLElement) => void) => {
+      settingsIntentRef.current = handler;
+      return () => {
+        if (settingsIntentRef.current === handler)
+          settingsIntentRef.current = null;
+      };
+    },
+    [],
   );
 
   const openTopic = useCallback(
@@ -1976,15 +2028,21 @@ export const ProductShell = ({
     const root = document.documentElement;
     let storedTheme: ThemePreference = DEFAULT_THEME_PREFERENCE;
     let storedFeedLayout: FeedLayoutPreference | null = null;
+    let storedDesktopFeedLayout: FeedLayoutPreference | null = null;
     try {
       const storage = window.localStorage;
       storedTheme = readStoredThemePreference(storage);
       storedFeedLayout = readStoredFeedLayoutPreference(storage);
+      storedDesktopFeedLayout = readStoredFeedLayoutPreference(
+        storage,
+        "desktop",
+      );
     } catch {
       // Accessing localStorage itself may be blocked by browser privacy settings.
     }
     setTheme(storedTheme);
     setStoredFeedLayout(storedFeedLayout);
+    setStoredDesktopFeedLayout(storedDesktopFeedLayout);
     setFeedLayoutRead(true);
     applyThemePreferenceToRoot(root, storedTheme);
 
@@ -2042,6 +2100,9 @@ export const ProductShell = ({
     };
 
     const synchronizeRuntime = () => {
+      const nextDeviceClass = readRuntimeDeviceClass(
+        navigator as NavigatorWithUserAgentData,
+      );
       const nextPlatform = developmentPlatformOverride ?? runtimePlatform();
       const nextOrientation = runtimeOrientation();
       const previousPlatform = platformRef.current;
@@ -2056,13 +2117,14 @@ export const ProductShell = ({
       // A tablet crossing the wide width keeps its platform.
       const nextWide = isWideLayout(nextPlatform, window.innerWidth);
       setWideLayout((current) => (current === nextWide ? current : nextWide));
+      setDeviceClass((current) =>
+        current === nextDeviceClass ? current : nextDeviceClass,
+      );
       setOrientation((current) =>
         current === nextOrientation ? current : nextOrientation,
       );
       document.documentElement.dataset.orientation = nextOrientation;
-      document.documentElement.dataset.deviceClass = readRuntimeDeviceClass(
-        navigator as NavigatorWithUserAgentData,
-      );
+      document.documentElement.dataset.deviceClass = nextDeviceClass;
       synchronizeViewportInset();
     };
 
@@ -2837,17 +2899,33 @@ export const ProductShell = ({
   const setThemePreference = (next: ThemePreference) => {
     setTheme(next);
     applyThemePreferenceToRoot(document.documentElement, next);
-    persistPreference(window.localStorage, THEME_PREFERENCE_STORAGE_KEY, next);
+    try {
+      persistPreference(
+        window.localStorage,
+        THEME_PREFERENCE_STORAGE_KEY,
+        next,
+      );
+    } catch {
+      // Accessing localStorage itself can throw; session state still works.
+    }
   };
 
   const setFeedLayoutPreference = (next: FeedLayoutPreference) => {
-    setStoredFeedLayout(next);
-    applyFeedLayoutPreferenceToRoot(document.documentElement, next);
-    persistPreference(
-      window.localStorage,
-      FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
-      next,
+    const device = readRuntimeDeviceClass(
+      navigator as NavigatorWithUserAgentData,
     );
+    if (device === "desktop") setStoredDesktopFeedLayout(next);
+    else setStoredFeedLayout(next);
+    applyFeedLayoutPreferenceToRoot(document.documentElement, next);
+    try {
+      persistPreference(
+        window.localStorage,
+        feedLayoutStorageKeyFor(device),
+        next,
+      );
+    } catch {
+      // Keep the selected mode for this session when browser storage is blocked.
+    }
   };
 
   const cycleTheme = () => setThemePreference(nextThemePreference(theme));
@@ -2890,6 +2968,7 @@ export const ProductShell = ({
     openTopic,
     orientation,
     platform,
+    desktop,
     browseOnly,
     isBrowseOnlyEnforced,
     readActiveScrollTop,
@@ -2898,6 +2977,7 @@ export const ProductShell = ({
     navigatePrimary: commitDestination,
     registerTopicOpener,
     requestSettings,
+    registerSettingsIntent,
     restoreActiveScrollTop,
     settingsOpen,
     theme,
@@ -2918,6 +2998,7 @@ export const ProductShell = ({
           data-active-destination={activeDestination}
           data-browse-only={browseOnly ? "true" : "false"}
           data-feed-layout={feedLayout}
+          data-desktop={desktop ? "true" : "false"}
           data-detail-open={activeContent === null ? "false" : "true"}
           data-editor-open={editorOpen ? "true" : "false"}
           data-orientation={orientation}
@@ -2943,6 +3024,8 @@ export const ProductShell = ({
           >
             <PrimaryNavigationPager
               activeDestination={activeDestination}
+              desktop={desktop}
+              displaySettingsOnly={desktop && browseOnly}
               // Browse-only has no 用户: unmounting it closes any dialog it
               // owns, which would otherwise stay modal over Home.
               user={browseOnlyEnforced ? null : user}
@@ -2953,6 +3036,7 @@ export const ProductShell = ({
               navigationMinimized={navigationMinimized}
               onNavigationExpand={expandNavigation}
               onDestinationChange={commitDestination}
+              onSettingsIntent={requestSettings}
               platform={platform}
               showDevelopmentPagerControls={showDevelopmentPagerControls}
             />

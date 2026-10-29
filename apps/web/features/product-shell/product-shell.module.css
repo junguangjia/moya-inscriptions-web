@@ -6,6 +6,13 @@
   font-family: var(--yoyi-font-interface);
 }
 
+.productShell[data-desktop="true"] .primaryLayer {
+  padding-right: calc(
+    var(--yoyi-desktop-navigation-width) + var(--yoyi-space-9) +
+      var(--yoyi-desktop-category-width) + var(--yoyi-space-7)
+  );
+}
+
 .primaryLayer {
   min-width: 0;
   min-height: 100dvh;
@@ -103,4 +110,14 @@
 
 :global(html[data-yoyi-boot="ready"]) .loading {
   display: none;
+}
+
+.productShell :global([data-desktop-display-settings]) {
+  position: fixed;
+  z-index: var(--yoyi-z-index-navigation);
+  right: var(--yoyi-space-5);
+  bottom: var(--yoyi-space-7);
+  background: var(--yoyi-color-background-surface);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-lg);
 }

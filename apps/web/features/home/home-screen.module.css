@@ -10,6 +10,28 @@
   outline: none;
 }
 
+.desktopTitle {
+  margin: 0;
+  font-family: var(--yoyi-font-editorial);
+  font-size: var(--yoyi-type-section-title-size);
+  font-weight: 600;
+  line-height: 1.4;
+}
+.homeSurface[data-desktop-presentation="true"] .homeHeader {
+  display: flex;
+  min-height: 88px;
+  align-items: center;
+  gap: var(--yoyi-space-5);
+  padding: var(--yoyi-space-5) var(--yoyi-space-8);
+  border-bottom: 0;
+}
+.homeSurface[data-desktop-presentation="true"] .desktopTitle {
+  margin-right: auto;
+}
+.homeSurface[data-desktop-presentation="true"] .feedPanel {
+  padding: var(--yoyi-space-3) var(--yoyi-space-8) var(--yoyi-space-10);
+}
+
 .homeSurface[data-home-platform="phone"],
 .homeSurface[data-home-platform="tablet"] {
   display: grid;
@@ -1133,4 +1155,36 @@
   width: 44px;
   min-width: 44px;
   height: 44px;
+}
+
+/* Desktop surfaces share tokens; phone and tablet rules remain independent. */
+
+:global(html[data-device-class="desktop"][data-platform="pc"])
+  .homeSurface[data-desktop-presentation="true"]
+  .homeHeader {
+  display: flex;
+  min-height: 88px;
+  gap: var(--yoyi-space-5);
+  padding: var(--yoyi-space-5) var(--yoyi-space-8);
+}
+:global(html[data-device-class="desktop"][data-platform="pc"])
+  .homeSurface[data-desktop-presentation="true"]
+  .homeHeader
+  > button {
+  width: auto;
+}
+:global(html[data-device-class="desktop"][data-platform="pc"])
+  .homeSurface[data-desktop-presentation="true"]
+  .feedPanel {
+  padding: var(--yoyi-space-3) var(--yoyi-space-8) var(--yoyi-space-10);
+}
+@media (max-width: 1279px) {
+  :global(html[data-device-class="desktop"][data-platform="pc"])
+    .homeSurface[data-desktop-presentation="true"]
+    .homeHeader,
+  :global(html[data-device-class="desktop"][data-platform="pc"])
+    .homeSurface[data-desktop-presentation="true"]
+    .feedPanel {
+    padding-inline: var(--yoyi-space-5);
+  }
 }

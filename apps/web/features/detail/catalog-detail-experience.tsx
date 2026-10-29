@@ -35,6 +35,7 @@ export interface CatalogDetailExperienceProps {
   readonly commentSection?: ReactNode;
   readonly colophon?: ReactNode;
   readonly calligraphy?: boolean;
+  readonly desktop?: boolean;
   readonly positionKey?: string | undefined;
   readonly detailActions?: ReactNode;
   readonly initialScrollTop: number;
@@ -68,6 +69,7 @@ export const CatalogDetailExperience = ({
   commentSection,
   colophon,
   calligraphy = false,
+  desktop = false,
   positionKey,
   detailActions,
   initialScrollTop,
@@ -428,6 +430,7 @@ export const CatalogDetailExperience = ({
               commentSection={commentSection}
               colophon={colophon}
               calligraphy={calligraphy}
+              desktop={desktop}
               positionKey={positionKey}
               detailActions={detailActions}
               mediaMotionSuspended={viewerOpen}

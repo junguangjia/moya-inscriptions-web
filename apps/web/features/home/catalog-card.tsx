@@ -26,6 +26,7 @@ import {
 } from "./card-media-parts";
 import { useFeedPostSlot, useMasonrySlot } from "./catalog-masonry";
 import { CatalogFeedPost } from "./catalog-feed-post";
+import { DesktopCardFrame } from "./desktop-card-frame";
 import { useContentQuickActions } from "../quick-actions/content-quick-actions";
 import { QuickActionCardAction } from "../quick-actions/quick-action-card-action";
 
@@ -178,9 +179,22 @@ export const CatalogCardMedia = ({
       : undefined;
   const boxRatio = feedMediaBoxRatio(media, slot?.span === true);
   const framing = slideFraming(media, boxRatio, feed);
-  const fit = framing === undefined ? "cover" : slideFit(media, boxRatio, feed);
-  const positionY =
-    framing === undefined ? undefined : slidePositionY(media, boxRatio, feed);
+  const fit = slot?.desktop
+    ? slot.desktop.cropped
+      ? "cover"
+      : "contain"
+    : framing === undefined
+      ? "cover"
+      : slideFit(media, boxRatio, feed);
+  const positionY = slot?.desktop
+    ? slidePositionY(
+        media,
+        slot.desktop.height / slot.desktop.mediaWidth,
+        media.feed,
+      )
+    : framing === undefined
+      ? undefined
+      : slidePositionY(media, boxRatio, feed);
   return (
     <div
       className={`${styles.media} ${
@@ -246,6 +260,83 @@ export const CatalogCardPresentation = ({
     .filter((value) => value !== undefined)
     .join(" · ");
   const post = useFeedPostSlot() && variant === "feed";
+  const desktop = useMasonrySlot()?.desktop;
+
+  if (desktop)
+    return (
+      <DesktopCardFrame
+        title={item.title}
+        metadata={[metadata, item.province].filter(Boolean).join(" · ")}
+        data-catalog-card=""
+        data-catalog-card-variant={variant}
+        data-catalog-id={item.id}
+        data-catalog-kind={item.kind}
+        media={
+          <CatalogCardMedia
+            media={
+              item.representativeMedia
+                ? {
+                    ...item.representativeMedia,
+                    src: localCatalogMediaSrc(
+                      item.representativeMedia.src,
+                      item.id,
+                      item.representativeMedia.id,
+                    ),
+                    renditions: localCatalogRenditions(
+                      item.representativeMedia.renditions,
+                    ),
+                  }
+                : undefined
+            }
+            title={item.title}
+            variant="feed"
+            priority={priority}
+            {...(onMediaSettled ? { onMediaSettled } : {})}
+          />
+        }
+        action={
+          onOpenCatalog === undefined ? null : quickActions ? (
+            <QuickActionCardAction
+              className={styles.cardAction}
+              content={{ kind: "catalog", id: item.id, title: item.title }}
+              environment={quickActions}
+              onActivate={(opener) => onOpenCatalog(item, opener)}
+            />
+          ) : (
+            <button
+              type="button"
+              aria-label={`打开${item.title}`}
+              data-open-catalog=""
+              className={styles.cardAction}
+              onClick={(event) => {
+                if (suppressActivationRef.current) {
+                  suppressActivationRef.current = false;
+                  event.preventDefault();
+                  return;
+                }
+                onOpenCatalog(item, event.currentTarget);
+              }}
+              onPointerCancel={() => {
+                pointerStartYRef.current = null;
+                suppressActivationRef.current = true;
+              }}
+              onPointerDown={(event) => {
+                pointerStartYRef.current = event.clientY;
+                suppressActivationRef.current = false;
+              }}
+              onPointerMove={(event) => {
+                const y = pointerStartYRef.current;
+                if (y !== null && Math.abs(event.clientY - y) > 8)
+                  suppressActivationRef.current = true;
+              }}
+              onPointerUp={() => {
+                pointerStartYRef.current = null;
+              }}
+            />
+          )
+        }
+      />
+    );
 
   if (post)
     return (

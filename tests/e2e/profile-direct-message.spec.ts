@@ -13,6 +13,16 @@ const participant = {
   handle: "synthetic-participant",
   displayName: "私信测试作者",
 };
+const conversationDialog = async (page: Page) =>
+  page.getByRole("dialog", {
+    name:
+      (await page
+        .locator("[data-product-shell]")
+        .getAttribute("data-desktop")) === "true"
+        ? "消息"
+        : participant.displayName,
+    exact: true,
+  });
 const workId = `work-${"3".repeat(32)}`;
 const work = {
   id: workId,
@@ -188,7 +198,12 @@ for (const source of [
             exact: true,
           })
           .click();
-        await page
+        const desktop =
+          (await page
+            .locator("[data-product-shell]")
+            .getAttribute("data-desktop")) === "true";
+        const conversation = desktop ? page.locator("[data-dm-view]") : page;
+        await conversation
           .getByRole("button", { name: `查看${participant.displayName}的主页` })
           .click();
       }
@@ -205,9 +220,7 @@ for (const source of [
       await page
         .getByRole("button", { name: `给 ${participant.displayName} 发私信` })
         .click();
-      const dialog = page.getByRole("dialog", {
-        name: participant.displayName,
-      });
+      const dialog = await conversationDialog(page);
       await expect(dialog).toBeVisible();
       await expect(
         dialog.getByRole("textbox", { name: "私信内容" }),
@@ -228,6 +241,9 @@ for (const source of [
       await expect(
         page.getByRole("dialog", { name: "消息", exact: true }),
       ).toBeVisible();
+      await expect(
+        page.locator('[data-dm-view="conversation"], [data-dm-view="start"]'),
+      ).toHaveCount(0);
     });
   }
 }
@@ -268,10 +284,7 @@ for (const existing of [false, true]) {
       await page
         .getByRole("button", { name: `给 ${participant.displayName} 发私信` })
         .click();
-      const dialog = page.getByRole("dialog", {
-        name: participant.displayName,
-        exact: true,
-      });
+      const dialog = await conversationDialog(page);
       const input = dialog.getByRole("textbox", { name: "私信内容" });
       await expect(dialog.locator('[data-dm-view="pending"]')).toBeVisible();
       await expect(input).toBeEditable();
@@ -280,7 +293,13 @@ for (const existing of [false, true]) {
         dialog.getByRole("button", { name: "发送", exact: true }),
       ).toBeDisabled();
       const original = await input.elementHandle();
-      expect(reads.filter((path) => path === "messages")).toEqual([]);
+      const desktop =
+        (await page
+          .locator("[data-product-shell]")
+          .getAttribute("data-desktop")) === "true";
+      if (desktop)
+        await expect.poll(() => reads.includes("messages")).toBe(true);
+      else expect(reads.filter((path) => path === "messages")).toEqual([]);
       resolvePair();
       if (existing) {
         await expect
@@ -333,13 +352,18 @@ for (const existing of [false, true]) {
       expect(Math.abs(layout.bottomGap - layout.inset)).toBeLessThanOrEqual(2);
       expect(layout.inputHeight).toBe(44);
       expect(layout.streamOverlap).toBeLessThanOrEqual(1);
-      expect(layout.listFrames.some(Boolean)).toBe(false);
+      // Desktop keeps its conversation list beside the editor; compact views
+      // preserve the accepted single conversation frame without a list flash.
+      expect(layout.listFrames.some(Boolean)).toBe(desktop);
       expect(sends).toEqual([]);
       await page.screenshot({ path: testInfo.outputPath("stable-chat.png") });
       await dialog.getByRole("button", { name: "返回", exact: true }).click();
       await expect(
         page.getByRole("dialog", { name: "消息", exact: true }),
       ).toBeVisible();
+      await expect(
+        page.locator('[data-dm-view="conversation"], [data-dm-view="start"]'),
+      ).toHaveCount(0);
     } finally {
       resolvePair();
       resolveHistory();

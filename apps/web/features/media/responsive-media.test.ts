@@ -382,3 +382,54 @@ describe("sizes per surface", () => {
     for (const value of values) expect(value).not.toMatch(/\bauto\b/u);
   });
 });
+
+describe("desktop calligraphy measured image sizes", () => {
+  it("uses the actual image width, excluding the caption, rather than the old PC column cap", () => {
+    expect(
+      MEDIA_SIZES.feedCard(
+        { width: 1600, height: 1000 },
+        {
+          platform: "pc",
+          columns: 1,
+          span: false,
+          desktop: { mediaWidth: 800, height: 500, cropped: false },
+        },
+      ),
+    ).toBe("800px");
+    expect(
+      MEDIA_SIZES.feedCard(
+        { width: 500, height: 1000 },
+        {
+          platform: "pc",
+          columns: 1,
+          span: false,
+          desktop: { mediaWidth: 200, height: 400, cropped: false },
+        },
+      ),
+    ).toBe("200px");
+  });
+  it("sizes extreme cover crops for their drawn width and whole framing for containment", () => {
+    expect(
+      MEDIA_SIZES.feedCard(
+        { width: 4000, height: 1000 },
+        {
+          platform: "pc",
+          columns: 1,
+          span: false,
+          desktop: { mediaWidth: 560, height: 200, cropped: true },
+        },
+      ),
+    ).toBe("800px");
+    expect(
+      MEDIA_SIZES.feedCard(
+        { width: 100, height: 1000 },
+        {
+          platform: "pc",
+          columns: 1,
+          span: false,
+          desktop: { mediaWidth: 80, height: 200, cropped: false },
+        },
+      ),
+    ).toBe("20px");
+  });
+});

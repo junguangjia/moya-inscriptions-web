@@ -92,3 +92,63 @@
 .information :where([data-detail-reading-anchor]) {
   scroll-margin-right: var(--yoyi-space-6);
 }
+
+/* Desktop has two reading rows, both using the existing native RTL state owner. */
+.strip[data-detail-reading-variant^="desktop-"] {
+  height: var(--desktop-reading-height);
+  gap: var(--yoyi-space-7);
+  align-items: stretch;
+  padding-block: var(--yoyi-space-3);
+}
+
+.strip[data-detail-reading-variant^="desktop-"] .information {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  padding: var(--yoyi-space-3) 0;
+  flex: 0 0 auto;
+}
+
+.strip[data-detail-reading-variant="desktop-comments"] .information {
+  display: none;
+}
+
+.leading {
+  font-size: var(--yoyi-type-body-size);
+}
+
+.strip .leading :where(section, p, h1, div) {
+  position: static;
+  display: block;
+  width: auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  writing-mode: inherit;
+}
+
+.strip .leading h1 {
+  margin-block-end: var(--yoyi-space-5);
+  font-size: var(--yoyi-type-page-title-size);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.strip .leading p {
+  margin-block-end: var(--yoyi-space-3);
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-metadata-size);
+  line-height: 1.65;
+}
+
+.media {
+  height: 100%;
+  flex: 0 0 auto;
+  min-width: 0;
+  direction: ltr;
+  writing-mode: horizontal-tb;
+}

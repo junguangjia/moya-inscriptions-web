@@ -11,6 +11,51 @@
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
+
+.workspace,
+.listSide:not([hidden]),
+.conversationSide {
+  display: contents;
+}
+.workspace[data-desktop="true"] {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  width: 100%;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+.workspace[data-desktop="true"] .listSide {
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--yoyi-color-border-subtle);
+  background: var(--yoyi-color-background-surface);
+}
+.workspace[data-desktop="true"] .conversationSide {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+.selectionPrompt {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--yoyi-space-4);
+  padding: var(--yoyi-space-8);
+  color: var(--yoyi-color-text-secondary);
+  text-align: center;
+}
+.selectionPrompt h3,
+.selectionPrompt p {
+  margin: 0;
+}
+.selectionPrompt h3 {
+  font-family: var(--yoyi-font-editorial);
+  color: var(--yoyi-color-text-primary);
+}
 .panel button:focus-visible,
 .panel textarea:focus-visible {
   outline: 2px solid var(--yoyi-color-focus-ring);

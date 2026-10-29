@@ -36,3 +36,24 @@ export const container = {
   content: "1200px",
   reading: "760px",
 } as const;
+
+/** Desktop presentation geometry, shared by measurement and CSS tokens. */
+export const desktopLayout = {
+  navigationWidth: 72,
+  categoryWidth: 56,
+  workspaceMax: 1440,
+  readerMax: 1920,
+  formMax: 720,
+  messageMax: 1280,
+  feed: {
+    rowHeight: 240,
+    rowMin: 200,
+    rowMax: 300,
+    gap: 20,
+    rowGap: 24,
+    labelWidth: 72,
+    textWidth: 232,
+    minimumRatio: 0.4,
+    maximumRatio: 2.8,
+  },
+} as const;
