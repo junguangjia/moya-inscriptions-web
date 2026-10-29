@@ -38,12 +38,18 @@ export interface CatalogDetailReadingStripHandle {
   readonly scrollToComments: () => boolean;
   readonly scrollToComment: (id: string) => boolean;
   readonly scrollToStart: () => void;
+  readonly scrollToMedia: () => boolean;
+  readonly scrollToInformation: () => void;
 }
 
 export interface CatalogDetailReadingStripProps {
   readonly id?: string | undefined;
   readonly detailId: string;
   readonly information: ReactNode;
+  /** Desktop shares the same reader/colophon state owner in two distinct rows. */
+  readonly variant?: "continuous" | "desktop-information" | "desktop-comments";
+  readonly leading?: ReactNode;
+  readonly media?: ReactNode;
   readonly colophon?: ReactNode;
   readonly label?: string;
   readonly onRegionChange?:
@@ -79,6 +85,9 @@ export const CatalogDetailReadingStrip = forwardRef<
   {
     detailId,
     information,
+    variant = "continuous",
+    leading,
+    media,
     colophon,
     label = "正文与题跋",
     positionKey,
@@ -90,8 +99,12 @@ export const CatalogDetailReadingStrip = forwardRef<
 ) {
   const stripRef = useRef<HTMLDivElement | null>(null);
   const informationRef = useRef<HTMLDivElement | null>(null);
+  const mediaRef = useRef<HTMLDivElement | null>(null);
+  const commentsOnly = variant === "desktop-comments";
   const [strip, setStrip] = useState<HTMLDivElement | null>(null);
-  const [region, setRegion] = useState<"media" | "comments">("media");
+  const [region, setRegion] = useState<"media" | "comments">(
+    commentsOnly ? "comments" : "media",
+  );
   useEffect(() => {
     onRegionChange?.(region === "comments" ? "comments" : "information");
   }, [onRegionChange, region]);
@@ -111,7 +124,7 @@ export const CatalogDetailReadingStrip = forwardRef<
   const navigationOffset = useRef<number | null>(null);
   const navigatingToComments = useRef(false);
   const authPosition = useAuthReturnView(
-    `calligraphy-detail-reading:${detailId}`,
+    `calligraphy-detail-reading:${detailId}${variant === "continuous" ? "" : `:${variant}`}`,
     (): ReadingPosition => ({
       offset: savedOffset.current,
       text: textAnchor.current,
@@ -160,6 +173,7 @@ export const CatalogDetailReadingStrip = forwardRef<
     if (node == null || head == null) return null;
     const gutter =
       Number.parseFloat(getComputedStyle(head).scrollMarginRight) || 0;
+    if (commentsOnly) return 0;
     return Math.max(
       0,
       readOffset() +
@@ -167,7 +181,7 @@ export const CatalogDetailReadingStrip = forwardRef<
         head.getBoundingClientRect().right -
         gutter,
     );
-  }, [readOffset, commentHead]);
+  }, [readOffset, commentHead, commentsOnly]);
 
   const updateRegion = useCallback(() => {
     const node = stripRef.current;
@@ -175,17 +189,18 @@ export const CatalogDetailReadingStrip = forwardRef<
     // The input appears only after the prose has passed the right edge.
     // A partly visible colophon never puts its input over the prose.
     const next =
-      node != null &&
-      head != null &&
-      head.getBoundingClientRect().right >=
-        node.getBoundingClientRect().right -
-          (Number.parseFloat(getComputedStyle(head).scrollMarginRight) || 0) -
-          1
+      commentsOnly ||
+      (node != null &&
+        head != null &&
+        head.getBoundingClientRect().right >=
+          node.getBoundingClientRect().right -
+            (Number.parseFloat(getComputedStyle(head).scrollMarginRight) || 0) -
+            1)
         ? "comments"
         : "media";
     regionRef.current = next;
     setRegion(next);
-  }, [commentHead]);
+  }, [commentHead, commentsOnly]);
 
   const record = useCallback(() => {
     const node = stripRef.current;
@@ -321,6 +336,16 @@ export const CatalogDetailReadingStrip = forwardRef<
         return true;
       },
       scrollToStart: () => scrollToOffset(0),
+      scrollToMedia: () => {
+        const mediaNode = mediaRef.current;
+        if (mediaNode === null) return false;
+        scrollToElement(mediaNode);
+        return true;
+      },
+      scrollToInformation: () => {
+        const informationNode = informationRef.current;
+        if (informationNode !== null) scrollToElement(informationNode);
+      },
     }),
     [scrollToComments, scrollToElement, scrollToOffset],
   );
@@ -396,12 +421,22 @@ export const CatalogDetailReadingStrip = forwardRef<
     savedOffset.current = saved?.offset ?? 0;
     textAnchor.current = saved?.text ?? null;
     savedCommentAnchor.current = saved?.comment ?? null;
-    regionRef.current = saved?.region ?? "media";
+    regionRef.current = saved?.region ?? (commentsOnly ? "comments" : "media");
     setRegion(regionRef.current);
-    commentsRequested.current = detailCommentsRequested(detailId);
-    clearDetailCommentsRequest();
+    if (variant !== "desktop-information") {
+      commentsRequested.current = detailCommentsRequested(detailId);
+      clearDetailCommentsRequest();
+    }
     if (saved === undefined) record();
-  }, [detailId, strip, record, positionKey, returnedPosition]);
+  }, [
+    detailId,
+    strip,
+    record,
+    positionKey,
+    returnedPosition,
+    commentsOnly,
+    variant,
+  ]);
 
   useLayoutEffect(
     () => () => {
@@ -418,9 +453,10 @@ export const CatalogDetailReadingStrip = forwardRef<
         window.cancelAnimationFrame(restoreFrame.current);
       restoreFrame.current = window.requestAnimationFrame(() => {
         restoreFrame.current = null;
-        if (commentsRequested.current && scrollToComments())
+        if (commentsRequested.current && scrollToComments()) {
           commentsRequested.current = false;
-        else restore();
+          if (variant === "desktop-comments") onRevealReading?.();
+        } else restore();
       });
     };
     const resize =
@@ -442,7 +478,7 @@ export const CatalogDetailReadingStrip = forwardRef<
         window.cancelAnimationFrame(restoreFrame.current);
       if (timer.current !== null) window.clearTimeout(timer.current);
     };
-  }, [restore, scrollToComments, strip]);
+  }, [restore, scrollToComments, strip, onRevealReading, variant]);
 
   const stage = useMemo<FeedStageApi>(
     () => ({
@@ -479,6 +515,7 @@ export const CatalogDetailReadingStrip = forwardRef<
         id={id}
         aria-label={label}
         className={styles.strip}
+        data-detail-reading-variant={variant}
         data-detail-reading-strip=""
         data-detail-reading-region={
           region === "comments" ? "comments" : "information"
@@ -536,6 +573,20 @@ export const CatalogDetailReadingStrip = forwardRef<
         role="region"
         tabIndex={0}
       >
+        {leading === undefined ? null : (
+          <div className={`${styles.information} ${styles.leading}`}>
+            {leading}
+          </div>
+        )}
+        {media === undefined ? null : (
+          <div
+            className={styles.media}
+            data-detail-reading-media=""
+            ref={mediaRef}
+          >
+            {media}
+          </div>
+        )}
         <div
           className={styles.information}
           data-detail-reading-information=""

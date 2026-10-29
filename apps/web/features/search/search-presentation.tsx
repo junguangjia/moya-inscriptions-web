@@ -43,6 +43,11 @@ export const SearchTrigger = ({
     type="button"
   >
     <Icon aria-hidden="true" name="search" />
+    {placement === "header" && (
+      <span className={styles.desktopSearchLabel} aria-hidden="true">
+        搜索碑刻、书帖
+      </span>
+    )}
   </button>
 );
 

@@ -55,9 +55,10 @@ const HomeTabs = forwardRef<
   HomeTabMotion,
   {
     activeFeed: HomeFeed;
+    desktop?: boolean;
     onSelect: (feed: HomeFeed) => void;
   }
->(function HomeTabs({ activeFeed, onSelect }, ref) {
+>(function HomeTabs({ activeFeed, onSelect, desktop = false }, ref) {
   const [progress, setProgress] = useState(homeFeeds.indexOf(activeFeed));
   useImperativeHandle(ref, () => ({ setProgress }), []);
   return (
@@ -68,6 +69,7 @@ const HomeTabs = forwardRef<
       onSelect={onSelect}
       ariaLabel="首页内容范围"
       idPrefix="home"
+      orientation={desktop ? "vertical" : "horizontal"}
     />
   );
 });
@@ -174,6 +176,7 @@ export const HomeScreen = ({
   });
   const {
     activeDestination,
+    desktop,
     feedLayout,
     openCatalog,
     platform,
@@ -278,16 +281,21 @@ export const HomeScreen = ({
       data-active-home-feed={activeFeed}
       data-home-platform={platform}
       data-home-surface=""
+      data-desktop-presentation={desktop ? "true" : undefined}
       tabIndex={-1}
     >
       <header
         className={styles.homeHeader}
         data-author-bar={headerEnd ? "" : undefined}
       >
+        {desktop && (
+          <h1 className={styles.desktopTitle}>{feedLabels[activeFeed]}</h1>
+        )}
         {headerStart}
         <HomeTabs
           ref={tabMotion}
           activeFeed={activeFeed}
+          desktop={desktop}
           onSelect={(feed) => pagerRef.current?.scrollToFeed(feed)}
         />
         {headerEnd ?? (

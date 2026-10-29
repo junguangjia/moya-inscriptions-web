@@ -4,10 +4,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
+  DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
   THEME_PREFERENCE_STORAGE_KEY,
   applyFeedLayoutPreferenceToRoot,
   applyThemePreferenceToRoot,
   defaultFeedLayoutFor,
+  feedLayoutStorageKeyFor,
   nextFeedLayoutPreference,
   nextThemePreference,
   parseFeedLayoutPreference,
@@ -37,10 +39,38 @@ describe("Product Shell preferences", () => {
     expect(parseFeedLayoutPreference(value)).toBe(expected);
   });
 
-  it("defaults phone and tablet to calligraphy while PC keeps its automatic layout", () => {
+  it("defaults every device presentation to calligraphy", () => {
     expect(defaultFeedLayoutFor("phone")).toBe("single");
     expect(defaultFeedLayoutFor("tablet")).toBe("single");
-    expect(defaultFeedLayoutFor("pc")).toBe("double");
+    expect(defaultFeedLayoutFor("pc")).toBe("single");
+  });
+
+  it("keeps desktop choices separate from phone/tablet choices", () => {
+    const values = new Map([
+      [FEED_LAYOUT_PREFERENCE_STORAGE_KEY, "double"],
+      [DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY, "single"],
+    ]);
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    };
+    expect(DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY).toBe(
+      "yoyi.desktop-feed-layout.v1",
+    );
+    expect(feedLayoutStorageKeyFor("desktop")).toBe(
+      DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
+    );
+    expect(feedLayoutStorageKeyFor("tablet")).toBe(
+      FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
+    );
+    expect(readStoredFeedLayoutPreference(storage, "desktop")).toBe("single");
+    expect(readStoredFeedLayoutPreference(storage, "phone")).toBe("double");
+    expect(readStoredFeedLayoutPreference(storage, "tablet")).toBe("double");
+    values.delete(DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY);
+    expect(readStoredFeedLayoutPreference(storage, "desktop")).toBeNull();
+    expect(values.get(FEED_LAYOUT_PREFERENCE_STORAGE_KEY)).toBe("double");
+    values.set(DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY, "invalid");
+    expect(readStoredFeedLayoutPreference(storage, "desktop")).toBeNull();
   });
 
   it("uses canonical storage keys and fails closed when storage is unavailable", () => {
@@ -55,6 +85,7 @@ describe("Product Shell preferences", () => {
 
     expect(readStoredThemePreference(storage)).toBe("light");
     expect(readStoredFeedLayoutPreference(storage)).toBeNull();
+    expect(readStoredFeedLayoutPreference(storage, "desktop")).toBeNull();
     expect(() =>
       persistPreference(storage, THEME_PREFERENCE_STORAGE_KEY, "dark"),
     ).not.toThrow();

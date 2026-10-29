@@ -112,21 +112,19 @@ export const SettingsDisplayControls = ({
         <span>{themeLabels[theme]}</span>
       </button>
 
-      {platform === "pc" ? null : (
-        <button
-          type="button"
-          aria-label={`切换布局：当前${feedLayoutLabels[feedLayout]}`}
-          className={`${styles.settingButton} yoyi-icon-button yoyi-icon-button--quiet yoyi-icon-button--md`}
-          data-feed-layout-mode={feedLayout}
-          data-feed-layout-toggle=""
-          onClick={onCycleFeedLayout}
-          title={feedLayoutLabels[feedLayout]}
-        >
-          <Icon name={layoutIcons[feedLayout]} />
-          <span>{feedLayoutLabels[feedLayout]}</span>
-        </button>
-      )}
+      <button
+        type="button"
+        aria-label={`切换布局：当前${feedLayoutLabels[feedLayout]}`}
+        className={`${styles.settingButton} yoyi-icon-button yoyi-icon-button--quiet yoyi-icon-button--md`}
+        data-feed-layout-mode={feedLayout}
+        data-feed-layout-toggle=""
+        onClick={onCycleFeedLayout}
+        title={feedLayoutLabels[feedLayout]}
+      >
+        <Icon name={layoutIcons[feedLayout]} />
+        <span>{feedLayoutLabels[feedLayout]}</span>
+      </button>
     </div>
-    {platform !== "pc" && <FeedLayoutPreview value={feedLayout} />}
+    <FeedLayoutPreview platform={platform} value={feedLayout} />
   </fieldset>
 );

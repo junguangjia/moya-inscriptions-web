@@ -54,6 +54,36 @@ afterEach(async () => {
 });
 
 describe("AnimatedTopTabs", () => {
+  it("uses vertical arrow keys and focus order for the desktop category rail", async () => {
+    await act(async () =>
+      root.render(
+        <AnimatedTopTabs
+          items={items}
+          activeKey="all"
+          onSelect={select}
+          ariaLabel="内容分类"
+          orientation="vertical"
+        />,
+      ),
+    );
+    expect(
+      host.querySelector('[role="tablist"]')?.getAttribute("aria-orientation"),
+    ).toBe("vertical");
+    await act(async () =>
+      tab("all").dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+      ),
+    );
+    expect(select).toHaveBeenLastCalledWith("inscriptions");
+    expect(document.activeElement).toBe(tab("inscriptions"));
+    await act(async () =>
+      tab("inscriptions").dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }),
+      ),
+    );
+    expect(select).toHaveBeenLastCalledWith("all");
+    expect(document.activeElement).toBe(tab("all"));
+  });
   it("keeps accessible tab selection distinct from fractional pager progress", async () => {
     await render("all", 0.5);
     expect(

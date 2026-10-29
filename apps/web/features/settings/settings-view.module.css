@@ -443,3 +443,16 @@ button.row {
 .feedbackImageActions .action {
   padding-inline: var(--yoyi-space-3);
 }
+
+/* Desktop surfaces share tokens; phone and tablet rules remain independent. */
+
+:global(html[data-device-class="desktop"][data-platform="pc"])
+  .dialog[data-settings-platform="pc"] {
+  width: min(var(--yoyi-desktop-form-max), calc(100vw - var(--yoyi-space-11)));
+  height: min(880px, calc(100dvh - var(--yoyi-space-11)));
+  border: 1px solid var(--yoyi-color-border-subtle);
+  box-shadow: var(--yoyi-shadow-dialog);
+}
+:global(html[data-device-class="desktop"][data-platform="pc"]) .page {
+  padding: var(--yoyi-space-8);
+}

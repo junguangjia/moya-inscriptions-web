@@ -40,7 +40,11 @@ const Probe = () => {
   stage = useFeedStage();
   return null;
 };
-const mounts = (positionKey?: string) => {
+const mounts = (
+  positionKey?: string,
+  variant:
+    "continuous" | "desktop-information" | "desktop-comments" = "continuous",
+) => {
   const onRegionChange = vi.fn();
   const onRevealReading = vi.fn();
   const host = document.createElement("div");
@@ -59,6 +63,7 @@ const mounts = (positionKey?: string) => {
           onRegionChange={onRegionChange}
           onRevealReading={onRevealReading}
           positionKey={positionKey}
+          variant={variant}
           information={
             <>
               <h1 data-detail-reading-anchor="title">寒山诗</h1>
@@ -398,6 +403,29 @@ describe("CatalogDetailReadingStrip", () => {
     expect(view.host.textContent).toContain("全部正文");
     expect(view.ref.current?.scrollToComments()).toBe(false);
     expect(view.ref.current?.scrollToComment("reply-1")).toBe(false);
+  });
+
+  it("keeps the desktop comments row active at its own right edge", () => {
+    const view = mounts("desktop-comments", "desktop-comments");
+    expect(view.strip.dataset.detailReadingVariant).toBe("desktop-comments");
+    expect(stage?.region).toBe("comments");
+    act(() => {
+      view.ref.current?.scrollToComments();
+      vi.advanceTimersByTime(180);
+    });
+    expect(view.offset()).toBe(0);
+    expect(stage?.region).toBe("comments");
+  });
+
+  it("does not let the desktop upper row consume a pending comments entry", () => {
+    requestDetailComments("one");
+    const upper = mounts("desktop-upper", "desktop-information");
+    expect(detailCommentsRequested("one")).toBe(true);
+    upper.unmount();
+    const lower = mounts("desktop-lower", "desktop-comments");
+    expect(detailCommentsRequested("one")).toBe(false);
+    act(() => vi.advanceTimersByTime(20));
+    expect(lower.onRevealReading).toHaveBeenCalled();
   });
 
   it("keeps a registered comment anchor when the region grows", async () => {

@@ -1327,3 +1327,46 @@
     transition-duration: 1ms;
   }
 }
+
+/* Desktop surfaces share tokens; phone and tablet rules remain independent. */
+
+:global(html[data-device-class="desktop"][data-platform="pc"]) .page {
+  max-width: var(--yoyi-desktop-workspace-max);
+  margin-inline: auto;
+}
+
+:global(
+    html[data-device-class="desktop"][data-platform="pc"] [data-t02p-qa-harness]
+  )
+  .trigger {
+  right: calc(
+    var(--yoyi-desktop-navigation-width) + var(--yoyi-desktop-category-width) +
+      var(--yoyi-space-11)
+  );
+  top: var(--yoyi-space-7);
+}
+:global(html[data-device-class="desktop"][data-platform="pc"]) .header {
+  --profile-header-height: 76px;
+  padding-inline: var(--yoyi-space-7);
+  gap: var(--yoyi-space-5);
+}
+:global(html[data-device-class="desktop"][data-platform="pc"]) .profile,
+:global(html[data-device-class="desktop"][data-platform="pc"]) .userContent {
+  width: min(100%, var(--yoyi-desktop-workspace-max));
+  margin-inline: auto;
+}
+:global(html[data-device-class="desktop"][data-platform="pc"]) .userContent {
+  padding-inline: var(--yoyi-space-7);
+  padding-bottom: var(--yoyi-space-10);
+}
+:global(html[data-device-class="desktop"][data-platform="pc"]) .tabs {
+  padding-inline: var(--yoyi-space-7);
+  gap: var(--yoyi-space-5);
+  border-bottom: 1px solid var(--yoyi-color-border-subtle);
+}
+:global(html[data-device-class="desktop"][data-platform="pc"])
+  .overlay
+  .header {
+  max-width: var(--yoyi-desktop-workspace-max);
+  margin-inline: auto;
+}

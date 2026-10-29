@@ -10,6 +10,26 @@
   padding-top: 14px;
 }
 
+.stack[data-desktop-drafts] {
+  height: 100%;
+  padding-top: var(--yoyi-space-4);
+}
+.stack[data-desktop-drafts] > article {
+  height: 100%;
+  min-height: 0;
+  border-radius: var(--yoyi-radius-lg);
+}
+.stack[data-desktop-drafts] .cardCover {
+  min-height: 0;
+  flex: 1 1 0;
+  aspect-ratio: auto;
+}
+.stack[data-desktop-drafts] .cardMeta {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 /* Two sheets peeking above the card read as a stack of drafts. */
 .stackLayer {
   position: absolute;

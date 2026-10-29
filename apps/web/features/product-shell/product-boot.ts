@@ -1,5 +1,6 @@
 import {
   DEFAULT_THEME_PREFERENCE,
+  DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
   FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
   THEME_PREFERENCE_STORAGE_KEY,
   defaultFeedLayoutFor,
@@ -14,6 +15,7 @@ export const PRODUCT_BOOT_SCRIPT = `(() => {
   const root = document.documentElement;
   const themeKey = ${JSON.stringify(THEME_PREFERENCE_STORAGE_KEY)};
   const layoutKey = ${JSON.stringify(FEED_LAYOUT_PREFERENCE_STORAGE_KEY)};
+  const desktopLayoutKey = ${JSON.stringify(DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY)};
   const defaultLayouts = ${JSON.stringify({
     phone: defaultFeedLayoutFor("phone"),
     tablet: defaultFeedLayoutFor("tablet"),
@@ -27,6 +29,7 @@ export const PRODUCT_BOOT_SCRIPT = `(() => {
   root.dataset.yoyiBootStarted = String(started);
 
   let layout = null;
+  let desktopLayout = null;
   try {
     const theme = localStorage.getItem(themeKey);
     const preference =
@@ -46,6 +49,12 @@ export const PRODUCT_BOOT_SCRIPT = `(() => {
     if (stored === "single" || stored === "double") layout = stored;
   } catch {
     // An unavailable layout preference uses the platform default.
+  }
+  try {
+    const stored = localStorage.getItem(desktopLayoutKey);
+    if (stored === "single" || stored === "double") desktopLayout = stored;
+  } catch {
+    // Desktop never falls back to the phone/tablet preference.
   }
 
   const synchronizePlatform = () => {
@@ -83,8 +92,10 @@ export const PRODUCT_BOOT_SCRIPT = `(() => {
   };
 
   synchronizePlatform();
-  // Boot and hydration share calligraphy defaults; PC keeps automatic columns.
-  root.dataset.homeLayout = layout ?? defaultLayouts[root.dataset.platform];
+  // Device identity owns the preference; window width only owns presentation.
+  root.dataset.homeLayout =
+    (root.dataset.deviceClass === "desktop" ? desktopLayout : layout) ??
+    defaultLayouts[root.dataset.platform];
   window.YOYI_PRODUCT_BOOT = Object.freeze({ synchronizePlatform });
   window.setTimeout(() => {
     if (root.dataset.yoyiBoot === "pending") root.dataset.yoyiBoot = "ready";

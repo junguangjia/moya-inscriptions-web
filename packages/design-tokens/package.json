@@ -10,10 +10,12 @@
       "types": "./src/index.ts",
       "import": "./dist/index.js"
     },
-    "./theme.css": "./src/theme.css"
+    "./theme.css": "./src/theme.css",
+    "./desktop.css": "./src/desktop.css"
   },
   "sideEffects": [
-    "./src/theme.css"
+    "./src/theme.css",
+    "./src/desktop.css"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

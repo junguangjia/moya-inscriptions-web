@@ -1406,7 +1406,7 @@ describe("PreviewCatalogDetailOverlay in wide-screen browse-only", () => {
       expect(shellAttribute(container, "data-browse-only")).toBe("false");
       expect(
         container.querySelector(
-          "[data-detail-landscape-comments] [data-synthetic-comments]",
+          "[data-desktop-detail-colophon] [data-synthetic-comments]",
         ),
       ).not.toBeNull();
       expect(container.querySelector("[data-synthetic-actions]")).not.toBe(

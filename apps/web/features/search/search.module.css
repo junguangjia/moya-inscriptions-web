@@ -1,6 +1,39 @@
 .root {
   font-family: var(--yoyi-font-interface);
 }
+.desktopSearchLabel {
+  display: none;
+}
+:global(html[data-device-class="desktop"][data-platform="pc"])
+  .trigger[data-search-trigger-placement="header"] {
+  width: min(320px, 30vw);
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--yoyi-space-3);
+  padding-inline: var(--yoyi-space-4);
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-surface);
+  box-shadow: none;
+}
+:global(html[data-device-class="desktop"][data-platform="pc"])
+  .desktopSearchLabel {
+  display: inline;
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-body-small-size);
+}
+:global(html[data-device-class="desktop"][data-platform="pc"]) .panel {
+  inset: var(--yoyi-space-8);
+  width: min(
+    var(--yoyi-desktop-workspace-max),
+    calc(100% - var(--yoyi-space-11))
+  );
+  height: calc(100dvh - var(--yoyi-space-11));
+  margin-inline: auto;
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-lg);
+  box-shadow: var(--yoyi-shadow-dialog);
+}
 .root[data-open] {
   position: fixed;
   z-index: calc(var(--yoyi-z-index-navigation) + 20);

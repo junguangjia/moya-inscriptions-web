@@ -11,6 +11,8 @@ import {
 } from "react";
 
 import styles from "./home-screen.module.css";
+import { useOptionalProductShell } from "../product-shell/product-shell";
+import { DesktopFeed } from "./desktop-feed";
 import {
   layoutHomeMasonry,
   resolveHomeMasonryColumns,
@@ -53,6 +55,8 @@ interface RenderedLayout {
 }
 
 export interface CatalogMasonryProps<T> {
+  /** Editorial/topic cards retain horizontal text and content-sized masonry. */
+  readonly calligraphyCards?: boolean;
   readonly feedLayout: FeedLayoutPreference;
   readonly getKey: (item: T) => string;
   readonly isFullSpan?: (item: T) => boolean;
@@ -76,7 +80,7 @@ const layoutSignature = (
 ) =>
   `${width}:${columns}:${heights.join(",")}:${spans.join(",")}:${spanAtAlignedRows}`;
 
-export const CatalogMasonry = <T,>({
+const NormalCatalogMasonry = <T,>({
   feedLayout,
   getKey,
   isFullSpan = () => false,
@@ -286,3 +290,36 @@ export const CatalogMasonry = <T,>({
     </div>
   );
 };
+
+const DesktopCatalogMasonry = <T,>(props: CatalogMasonryProps<T>) => {
+  const shell = useOptionalProductShell();
+  if (shell?.desktop === true && props.feedLayout === "single")
+    return (
+      <DesktopFeed
+        items={props.items}
+        getKey={props.getKey}
+        renderItem={(item, index, position) => (
+          <MasonrySlotContext.Provider
+            value={{
+              platform: "pc",
+              columns: 1,
+              span: false,
+              desktop: position,
+            }}
+          >
+            {props.renderItem(item, () => undefined, index)}
+          </MasonrySlotContext.Provider>
+        )}
+      />
+    );
+  return <NormalCatalogMasonry {...props} />;
+};
+
+export const CatalogMasonry = <T,>(props: CatalogMasonryProps<T>) =>
+  props.calligraphyCards !== false &&
+  props.platform === "pc" &&
+  props.feedLayout === "single" ? (
+    <DesktopCatalogMasonry {...props} />
+  ) : (
+    <NormalCatalogMasonry {...props} />
+  );

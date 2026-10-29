@@ -6,7 +6,8 @@ import {
 import type { ContentCard as Card } from "@moya/contracts";
 import { CatalogCardMedia, CatalogProvinceBadge } from "../home/catalog-card";
 import type { CatalogCardVariant } from "../home/catalog-card";
-import { useFeedPostSlot } from "../home/catalog-masonry";
+import { useFeedPostSlot, useMasonrySlot } from "../home/catalog-masonry";
+import { DesktopCardFrame } from "../home/desktop-card-frame";
 import type { MediaPriority } from "../media/responsive-media";
 import { QuickActionCardAction } from "../quick-actions/quick-action-card-action";
 import { useProductShell } from "../product-shell/product-shell";
@@ -48,6 +49,89 @@ export const ContentCard = ({
     item.media === null &&
     (item.title !== "" || excerpt !== "");
   const metadata = variant === "inscription" && item.kind === "inscription";
+  const desktop = useMasonrySlot()?.desktop;
+  if (desktop)
+    return (
+      <DesktopCardFrame
+        title={item.title}
+        metadata={[
+          item.target.type === "work"
+            ? "作品"
+            : item.kind === "calligraphy"
+              ? "书帖"
+              : "碑刻",
+          item.province,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
+        preview={excerpt}
+        data-catalog-card-variant={variant}
+        data-card-text-only={textOnly ? "" : undefined}
+        data-card-live={item.live === true && item.media ? "" : undefined}
+        data-content-type={item.target.type}
+        data-content-id={item.target.id}
+        data-catalog-id={
+          item.target.type === "catalog" ? item.target.id : undefined
+        }
+        media={
+          textOnly ? null : (
+            <CatalogCardMedia
+              media={
+                item.media
+                  ? {
+                      ...item.media,
+                      ...(item.target.type === "catalog"
+                        ? {
+                            src: localCatalogMediaSrc(
+                              item.media.src,
+                              item.target.id,
+                              item.media.id,
+                            ),
+                            renditions: localCatalogRenditions(
+                              item.media.renditions,
+                            ),
+                          }
+                        : {}),
+                      alt: label,
+                    }
+                  : undefined
+              }
+              live={item.live === true}
+              title={label}
+              variant="feed"
+              priority={priority}
+              {...(onMediaSettled ? { onMediaSettled } : {})}
+            />
+          )
+        }
+        action={
+          shell.browseOnly ? (
+            <button
+              type="button"
+              aria-label={`打开${label}`}
+              className={styles.cardAction}
+              data-open-catalog={
+                item.target.type === "catalog" ? "" : undefined
+              }
+              onClick={(event) =>
+                shell.openContent(item.target, event.currentTarget)
+              }
+            />
+          ) : (
+            <QuickActionCardAction
+              className={styles.cardAction}
+              content={{
+                kind: item.target.type,
+                id: item.target.id,
+                title: label,
+              }}
+              environment={actions.environment}
+              onActivate={(opener) => shell.openContent(item.target, opener)}
+            />
+          )
+        }
+      />
+    );
   if (post)
     return (
       <FeedPost

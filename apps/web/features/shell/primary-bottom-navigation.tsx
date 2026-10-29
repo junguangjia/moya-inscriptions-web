@@ -10,6 +10,7 @@ import type {
   ReactNode,
 } from "react";
 import styles from "./primary-bottom-navigation.module.css";
+import { Icon } from "@moya/ui";
 
 import type { PresentationPlatform } from "./device-platform";
 import type { PrimaryDestination } from "./primary-shell";
@@ -137,6 +138,8 @@ export const resolvePrimaryNavigationReleaseIndex = (
 ) => clampNavigationIndex(Math.round(previewIndex), itemCount);
 
 export interface PrimaryBottomNavigationProps {
+  readonly desktop?: boolean;
+  readonly onSettingsIntent?: ((opener: HTMLElement) => void) | undefined;
   readonly activeDestination: PrimaryDestination;
   readonly navigationAction?: ReactNode;
   readonly minimized?: boolean;
@@ -191,6 +194,7 @@ export const createPrimaryNavigationEntryElements = (
           type="button"
           aria-current={selected ? "page" : undefined}
           aria-label={label}
+          title={label}
           className={`${styles.entry} yoyi-navigation-entry${
             selected ? " is-active" : ""
           }`}
@@ -264,6 +268,8 @@ const releasePrimaryNavigationPointer = (
 };
 
 export const PrimaryBottomNavigation = ({
+  desktop = false,
+  onSettingsIntent,
   activeDestination,
   navigationAction,
   minimized = false,
@@ -481,6 +487,40 @@ export const PrimaryBottomNavigation = ({
       .querySelector<HTMLButtonElement>('[data-selected="true"]')
       ?.focus({ preventScroll: true });
   }, [activeDestination, minimized]);
+
+  if (desktop) {
+    return (
+      <aside className={styles.desktopDock} data-desktop-navigation="">
+        <nav
+          aria-label="主要内容"
+          data-primary-navigation=""
+          data-platform="pc"
+        >
+          {createPrimaryNavigationEntryElements(
+            activeDestination,
+            onDestinationChange,
+          )}
+        </nav>
+        <div className={styles.desktopTools}>
+          {navigationAction == null ? null : (
+            <div className={styles.desktopAction}>{navigationAction}</div>
+          )}
+          {onSettingsIntent && (
+            <button
+              className="yoyi-icon-button"
+              type="button"
+              aria-label="设置"
+              title="设置"
+              data-desktop-settings=""
+              onClick={(event) => onSettingsIntent(event.currentTarget)}
+            >
+              <Icon name="settings" />
+            </button>
+          )}
+        </div>
+      </aside>
+    );
+  }
 
   return (
     <>

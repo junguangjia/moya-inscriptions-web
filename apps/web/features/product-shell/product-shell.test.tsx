@@ -14,6 +14,7 @@ import { ProductShell, useProductShell } from "./product-shell";
 import { PRODUCT_BOOT_SCRIPT } from "./product-boot";
 import {
   FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
+  DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
   THEME_PREFERENCE_STORAGE_KEY,
 } from "./preferences";
 import { AuthReturnProvider, useAuthReturn } from "../auth/auth-return";
@@ -649,6 +650,7 @@ describe("ProductShell", () => {
     vi.useRealTimers();
     document.body.style.overflow = "";
     document.documentElement.removeAttribute("data-effective-theme");
+    vi.restoreAllMocks();
     observedProductShell = null;
   });
 
@@ -2231,6 +2233,7 @@ describe("ProductShell", () => {
   });
 
   it("loads, applies, cycles, and persists canonical preferences", async () => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("iPhone Mobile");
     window.localStorage.setItem(THEME_PREFERENCE_STORAGE_KEY, "dark");
     window.localStorage.setItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY, "single");
     const { container } = renderProductShell();
@@ -3164,6 +3167,7 @@ describe("ProductShell", () => {
     }
   });
   it("persists explicit choices through the same root and preserves cycle APIs", async () => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("iPhone Mobile");
     renderProductShell(<ProductShellObserver />);
     await act(async () => {
       observedProductShell!.setThemePreference("dark");
@@ -3187,6 +3191,127 @@ describe("ProductShell", () => {
     expect(
       window.localStorage.getItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY),
     ).toBe("double");
+  });
+
+  describe("desktop preference scope", () => {
+    it.each([390, 800, 895, 896, 2560])(
+      "hydrates and writes the desktop key at width %s without changing mobile preferences",
+      async (width) => {
+        vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+          "Desktop Browser",
+        );
+        Object.defineProperty(window, "innerWidth", {
+          configurable: true,
+          value: width,
+        });
+        window.localStorage.setItem(
+          FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
+          "single",
+        );
+        window.localStorage.setItem(
+          DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
+          "double",
+        );
+        window.eval(PRODUCT_BOOT_SCRIPT);
+        expect(document.documentElement.dataset.homeLayout).toBe("double");
+        renderProductShell(<ProductShellObserver />);
+        await act(async () => vi.runAllTimers());
+        expect(observedProductShell?.feedLayout).toBe("double");
+        expect(observedProductShell?.desktop).toBe(width >= 896);
+        act(() => observedProductShell!.setFeedLayoutPreference("single"));
+        expect(
+          window.localStorage.getItem(
+            DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
+          ),
+        ).toBe("single");
+        expect(
+          window.localStorage.getItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY),
+        ).toBe("single");
+        for (const nextWidth of [800, 1280, 390]) {
+          act(() => {
+            Object.defineProperty(window, "innerWidth", {
+              configurable: true,
+              value: nextWidth,
+            });
+            window.dispatchEvent(new Event("resize"));
+          });
+          expect(observedProductShell?.feedLayout).toBe("single");
+          expect(observedProductShell?.desktop).toBe(nextWidth >= 896);
+        }
+      },
+    );
+
+    it("defaults a desktop to calligraphy independently of a saved phone normal mode", async () => {
+      window.localStorage.setItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY, "double");
+      renderProductShell(<ProductShellObserver />);
+      await act(async () => vi.runAllTimers());
+      expect(observedProductShell?.feedLayout).toBe("single");
+      expect(
+        window.localStorage.getItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY),
+      ).toBe("double");
+      expect(
+        window.localStorage.getItem(DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY),
+      ).toBeNull();
+    });
+
+    it("keeps a wide iPad on the existing phone/tablet key", async () => {
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue("iPad");
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: 1280,
+      });
+      window.localStorage.setItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY, "single");
+      window.localStorage.setItem(
+        DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
+        "double",
+      );
+      renderProductShell(<ProductShellObserver />);
+      await act(async () => vi.runAllTimers());
+      expect(observedProductShell?.desktop).toBe(false);
+      expect(observedProductShell?.platform).toBe("tablet");
+      expect(observedProductShell?.feedLayout).toBe("single");
+      act(() => observedProductShell!.setFeedLayoutPreference("double"));
+      expect(
+        window.localStorage.getItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY),
+      ).toBe("double");
+      expect(
+        window.localStorage.getItem(DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY),
+      ).toBe("double");
+    });
+
+    it("keeps session choices usable when access to browser storage is blocked", async () => {
+      vi.spyOn(window, "localStorage", "get").mockImplementation(() => {
+        throw new DOMException("blocked", "SecurityError");
+      });
+      renderProductShell(<ProductShellObserver />);
+      await act(async () => vi.runAllTimers());
+      expect(observedProductShell?.feedLayout).toBe("single");
+      act(() => {
+        observedProductShell!.setFeedLayoutPreference("double");
+        observedProductShell!.setThemePreference("dark");
+      });
+      expect(observedProductShell?.feedLayout).toBe("double");
+      expect(observedProductShell?.theme).toBe("dark");
+    });
+  });
+
+  it("delegates settings to the current page and ignores disposal of an older intent", async () => {
+    const { container } = renderProductShell(<ProductShellObserver />);
+    await act(async () => vi.runAllTimers());
+    const first = vi.fn(),
+      current = vi.fn();
+    const removeFirst = observedProductShell!.registerSettingsIntent(first);
+    const removeCurrent = observedProductShell!.registerSettingsIntent(current);
+    removeFirst();
+    const opener = buttonByLabel(container, "从用户页打开设置");
+    click(opener);
+    expect(first).not.toHaveBeenCalled();
+    expect(current).toHaveBeenCalledExactlyOnceWith(opener);
+    expect(observedProductShell?.settingsOpen).toBe(false);
+    removeCurrent();
+    click(opener);
+    expect(observedProductShell?.settingsOpen).toBe(true);
+    expect(dialog(container)).not.toBeNull();
   });
 
   describe("browse-only (pc-browse-only-v1)", () => {

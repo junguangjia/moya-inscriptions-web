@@ -276,6 +276,22 @@ const ScopedAuthorProfile = ({
   const ownProfile =
     !isPreview && !!profile?.isOwner && profile.id === viewerId;
   useEffect(() => {
+    if (
+      !embedded ||
+      !owner ||
+      !shell.desktop ||
+      shell.activeDestination !== "user"
+    )
+      return;
+    return shell.registerSettingsIntent(() => setModal("settings"));
+  }, [
+    embedded,
+    owner,
+    shell.desktop,
+    shell.activeDestination,
+    shell.registerSettingsIntent,
+  ]);
+  useEffect(() => {
     if ((modal === "edit" || modal === "background") && !ownProfile)
       setModal(null);
   }, [modal, ownProfile]);
@@ -903,7 +919,7 @@ const ScopedAuthorProfile = ({
           </button>
         )}
         <span />
-        {owner ? (
+        {owner && !(embedded && shell.desktop) ? (
           <nav className={styles.profileActions} aria-label="主页管理">
             <button
               type="button"

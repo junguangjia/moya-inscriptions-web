@@ -45,7 +45,9 @@ const LiveDirectMessages = ({
   onDepthChange,
   backRequested,
   onTitleChange,
+  desktop = false,
 }: {
+  readonly desktop?: boolean;
   readonly onOpenProfile: (id: string) => void;
   readonly onDepthChange: (depth: number) => void;
   readonly backRequested: number;
@@ -65,6 +67,7 @@ const LiveDirectMessages = ({
   }, [directEntry]);
   return (
     <DirectMessagePanel
+      desktop={desktop}
       openWith={directEntry?.request ?? openWith}
       onOpenProfile={(userId) => {
         onOpenProfile(userId);

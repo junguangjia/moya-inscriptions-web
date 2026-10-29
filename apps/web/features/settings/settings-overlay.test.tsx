@@ -18,7 +18,7 @@ const renderSettings = (platform: "phone" | "tablet" | "pc") =>
   );
 
 describe("SettingsOverlay", () => {
-  it.each(["phone", "tablet"] as const)(
+  it.each(["phone", "tablet", "pc"] as const)(
     "shows the approved feed layout preference on %s",
     (platform) => {
       const markup = renderSettings(platform);
@@ -28,9 +28,9 @@ describe("SettingsOverlay", () => {
     },
   );
 
-  it("hides the ineffective feed layout preference on PC", () => {
+  it("shows the effective mode and theme controls on PC", () => {
     const markup = renderSettings("pc");
-    expect(markup).not.toContain("data-feed-layout-toggle");
+    expect(markup).toContain("data-feed-layout-toggle");
     expect(markup).toContain("切换主题：当前跟随系统");
     expect(markup).not.toContain("调试日志");
   });

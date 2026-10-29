@@ -887,3 +887,30 @@
 .composePage .composerActions {
   padding-bottom: env(safe-area-inset-bottom);
 }
+
+/* Horizontal editorial reading retains its own measure within the desktop workspace. */
+:global(html[data-device-class="desktop"][data-platform="pc"]) .feed,
+:global(html[data-device-class="desktop"][data-platform="pc"]) .topicPage {
+  width: min(100%, var(--yoyi-desktop-workspace-max));
+  padding-inline: var(--yoyi-space-5);
+}
+:global(html[data-device-class="desktop"][data-platform="pc"]) .newsList,
+:global(html[data-device-class="desktop"][data-platform="pc"]) .specialList {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: var(--yoyi-space-7);
+}
+:global(html[data-device-class="desktop"][data-platform="pc"]) .newsCard {
+  border: 1px solid var(--yoyi-color-border-subtle);
+  box-shadow: none;
+}
+:global(html[data-device-class="desktop"][data-platform="pc"]) .detailHeader {
+  width: min(100%, var(--yoyi-desktop-workspace-max));
+  margin-inline: auto;
+  padding-inline: var(--yoyi-space-7);
+  min-height: 76px;
+}
+:global(html[data-device-class="desktop"][data-platform="pc"]) .article {
+  max-width: var(--yoyi-desktop-prose-max);
+  margin-inline: auto;
+  padding-inline: var(--yoyi-space-7);
+}

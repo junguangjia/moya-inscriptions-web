@@ -171,6 +171,7 @@ export function DiscussionScreen({
   const topics =
     data.state === "populated" ? (
       <CatalogMasonry
+        calligraphyCards={false}
         feedLayout={shell.feedLayout}
         getKey={(topic) => topic.id}
         spanAtAlignedRows
@@ -206,9 +207,11 @@ export function DiscussionScreen({
       className={styles.homeSurface}
       data-home-platform={shell.platform}
       data-discussion-surface=""
+      data-desktop-presentation={shell.desktop ? "true" : undefined}
       data-active-discussion-feed={active}
     >
       <header className={styles.homeHeader} data-author-bar="">
+        {shell.desktop && <h1 className={styles.desktopTitle}>讨论</h1>}
         {headerStart ?? <span />}
         <AnimatedTopTabs
           items={feeds.map((id) => ({
@@ -221,6 +224,7 @@ export function DiscussionScreen({
           onSelect={(id) => pager.current?.scrollToKey(id)}
           ariaLabel="讨论内容范围"
           idPrefix="discussion"
+          orientation={shell.desktop ? "vertical" : "horizontal"}
         />
         {headerEnd ?? <span />}
       </header>

@@ -503,3 +503,25 @@
 .avatarChange > span:last-child {
   display: none;
 }
+
+/* Desktop surfaces share tokens; phone and tablet rules remain independent. */
+@media (min-width: 56rem) {
+  :global(html[data-device-class="desktop"]) .page {
+    padding: var(--yoyi-space-8);
+  }
+  :global(html[data-device-class="desktop"]) .navigation {
+    max-width: var(--yoyi-desktop-workspace-max);
+  }
+  :global(html[data-device-class="desktop"]) .panel {
+    max-width: min(520px, var(--yoyi-desktop-form-max));
+    margin-top: clamp(32px, 6svh, 80px);
+    padding: var(--yoyi-space-8);
+    background: var(--yoyi-color-background-surface);
+    border: 1px solid var(--yoyi-color-border-subtle);
+    border-radius: var(--yoyi-radius-lg);
+    box-shadow: var(--yoyi-shadow-subtle);
+  }
+  :global(html[data-device-class="desktop"]) .intro h1 {
+    font-size: var(--yoyi-type-page-title-size);
+  }
+}

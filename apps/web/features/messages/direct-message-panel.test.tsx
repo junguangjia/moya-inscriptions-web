@@ -187,6 +187,86 @@ const flush = () =>
   });
 
 describe("DirectMessagePanel (content-community-completion-v1)", () => {
+  it("keeps the desktop list and selected conversation together and preserves a draft through compact reflow", async () => {
+    author.viewer = { id: me };
+    authorClient.setAccount(me);
+    state = "active";
+    const onOpenProfile = vi.fn();
+    await act(async () =>
+      root.render(<DirectMessagePanel desktop onOpenProfile={onOpenProfile} />),
+    );
+    await flush();
+    expect(node.textContent).toContain("选择一段对话");
+    await act(async () =>
+      (
+        node.querySelector('button[aria-label^="打开与"]') as HTMLButtonElement
+      ).click(),
+    );
+    await flush();
+    expect(node.querySelector("[data-dm-list]")).not.toBeNull();
+    const textarea = node.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="私信内容"]',
+    )!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!.call(textarea, "尚未发送的草稿");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      root.render(
+        <DirectMessagePanel desktop={false} onOpenProfile={onOpenProfile} />,
+      ),
+    );
+    expect(node.querySelector("textarea")).toBe(textarea);
+    expect(textarea.value).toBe("尚未发送的草稿");
+    expect(node.querySelector("[data-dm-list]")).toBeNull();
+    await act(async () =>
+      root.render(<DirectMessagePanel desktop onOpenProfile={onOpenProfile} />),
+    );
+    expect(node.querySelector("textarea")).toBe(textarea);
+    expect(node.querySelector("[data-dm-list]")).not.toBeNull();
+    expect(
+      calls.some(
+        (c) => c.method === "POST" && c.url.endsWith("/api/community/messages"),
+      ),
+    ).toBe(false);
+  });
+  it("clears the compact host title when the desktop conversation takes its own header", async () => {
+    author.viewer = { id: me };
+    authorClient.setAccount(me);
+    const onTitleChange = vi.fn(),
+      onOpenProfile = vi.fn();
+    await act(async () =>
+      root.render(
+        <DirectMessagePanel
+          onOpenProfile={onOpenProfile}
+          onTitleChange={onTitleChange}
+        />,
+      ),
+    );
+    await flush();
+    await act(async () =>
+      (
+        node.querySelector('button[aria-label^="打开与"]') as HTMLButtonElement
+      ).click(),
+    );
+    await flush();
+    expect(onTitleChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ label: "书法学徒" }),
+    );
+    await act(async () =>
+      root.render(
+        <DirectMessagePanel
+          desktop
+          onOpenProfile={onOpenProfile}
+          onTitleChange={onTitleChange}
+        />,
+      ),
+    );
+    expect(onTitleChange).toHaveBeenLastCalledWith(null);
+  });
   it("shows the truthful signed-out state and makes no request", async () => {
     await act(async () =>
       root.render(<DirectMessagePanel onOpenProfile={vi.fn()} />),

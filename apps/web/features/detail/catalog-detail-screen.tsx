@@ -3,6 +3,7 @@ import { Icon } from "@moya/ui";
 import { CatalogDetailContentPager } from "./catalog-detail-content-pager";
 import { CatalogMediaCarousel } from "./catalog-media-carousel";
 import { CalligraphyDetailLayout } from "./calligraphy-detail-layout";
+import { DesktopCalligraphyDetailLayout } from "./desktop-calligraphy-detail-layout";
 import { VerticalText } from "../authors/vertical-text";
 import styles from "./catalog-detail.module.css";
 
@@ -21,6 +22,7 @@ export interface CatalogDetailScreenProps {
   readonly commentSection?: ReactNode;
   readonly colophon?: ReactNode;
   readonly calligraphy?: boolean;
+  readonly desktop?: boolean;
   readonly positionKey?: string | undefined;
   readonly detailActions?: ReactNode;
   /** True while the Viewer covers the Detail: Live motion in the carousel stops. */
@@ -84,9 +86,13 @@ const WorkPublication = ({
 const DetailIdentity = ({
   detail,
   vertical = false,
+  headingOnly = false,
+  omitHeading = false,
 }: {
   readonly detail: CatalogDetailPresentation;
   readonly vertical?: boolean;
+  readonly headingOnly?: boolean;
+  readonly omitHeading?: boolean;
 }) => {
   const text = (value: string) =>
     vertical ? <VerticalText text={value} /> : value;
@@ -104,7 +110,8 @@ const DetailIdentity = ({
   return (
     <section className={styles.identityPanel} data-detail-info-panel="">
       {/* An untitled work keeps its title empty; only assistive technology gets a name. */}
-      {detail.contentType === "work" && detail.title === "" ? (
+      {omitHeading ? null : detail.contentType === "work" &&
+        detail.title === "" ? (
         <h1 className={styles.visuallyHidden} data-detail-untitled="">
           {UNTITLED_WORK_HEADING}
         </h1>
@@ -116,10 +123,10 @@ const DetailIdentity = ({
           {text(detail.title)}
         </h1>
       )}
-      {detail.contentType !== "work" ? (
+      {!omitHeading && (detail.contentType !== "work" || headingOnly) ? (
         <p className={styles.kindPeriod}>{text(identity)}</p>
       ) : null}
-      {detail.contentType === "work"
+      {!headingOnly && detail.contentType === "work"
         ? (detail.sections ?? [])
             .filter((section) => section.key === "description")
             .map((section) => (
@@ -135,13 +142,13 @@ const DetailIdentity = ({
               </p>
             ))
         : null}
-      {detail.contentType === "work" ? (
+      {!omitHeading && detail.contentType === "work" ? (
         <WorkPublication
           editedAt={detail.editedAt}
           firstPublishedAt={detail.firstPublishedAt}
         />
       ) : null}
-      {detail.summary === undefined ? null : (
+      {headingOnly || detail.summary === undefined ? null : (
         <p
           className={styles.summary}
           data-detail-reading-anchor={vertical ? "summary" : undefined}
@@ -149,7 +156,7 @@ const DetailIdentity = ({
           {text(detail.summary)}
         </p>
       )}
-      {detail.aliases.length === 0 ? null : (
+      {headingOnly || detail.aliases.length === 0 ? null : (
         <div className={styles.aliases}>
           <span>又名</span>
           <p data-detail-reading-anchor={vertical ? "aliases" : undefined}>
@@ -157,7 +164,7 @@ const DetailIdentity = ({
           </p>
         </div>
       )}
-      {detail.facts.length === 0 ? null : (
+      {headingOnly || detail.facts.length === 0 ? null : (
         <section className={styles.factsSection} data-detail-facts="">
           <h2>基本资料</h2>
           <dl className={styles.facts}>
@@ -333,6 +340,7 @@ export const CatalogDetailScreen = ({
   commentSection,
   colophon,
   calligraphy = false,
+  desktop = false,
   positionKey,
   detailActions,
   mediaMotionSuspended = false,
@@ -420,82 +428,102 @@ export const CatalogDetailScreen = ({
       (platform === "pc" ||
         (platform === "tablet" && orientation === "landscape"));
 
-    body = calligraphy ? (
-      <CalligraphyDetailLayout
-        key={detail.id}
-        activeMediaIndex={activeMediaIndex}
-        colophon={colophon}
-        detail={detail}
-        detailActions={detailActions}
-        positionKey={positionKey}
-        information={
-          <>
-            <DetailIdentity detail={detail} vertical />
-            <DetailReadingFlow detail={detail} vertical />
-          </>
-        }
-        onActiveMediaIndexChange={onActiveMediaIndexChange}
-        onOpenViewer={onOpenViewer}
-        viewerOpen={mediaMotionSuspended}
-      />
-    ) : pagedComments ? (
-      <div className={styles.pagedDetail} data-detail-paged-layout="">
-        {media === null ? null : (
-          <div className={styles.pagedMedia} data-detail-paged-media="">
-            {media}
-          </div>
-        )}
-        {detailActions}
-        <CatalogDetailContentPager
-          comments={commentSection}
-          detailId={detail.id}
-          information={information}
+    body =
+      calligraphy && desktop ? (
+        <DesktopCalligraphyDetailLayout
           key={detail.id}
-          platform={platform}
+          activeMediaIndex={activeMediaIndex}
+          colophon={colophon}
+          detail={detail}
+          detailActions={detailActions}
+          positionKey={positionKey}
+          leading={<DetailIdentity detail={detail} vertical headingOnly />}
+          information={
+            <>
+              <DetailIdentity detail={detail} vertical omitHeading />
+              <DetailReadingFlow detail={detail} vertical />
+            </>
+          }
+          onActiveMediaIndexChange={onActiveMediaIndexChange}
+          onOpenViewer={onOpenViewer}
+          viewerOpen={mediaMotionSuspended}
         />
-      </div>
-    ) : wideComments ? (
-      <div className={styles.landscapeDetail} data-detail-landscape-layout="">
-        <div
-          className={styles.landscapeStage}
-          data-detail-text-only={textOnly ? "" : undefined}
-        >
+      ) : calligraphy ? (
+        <CalligraphyDetailLayout
+          key={detail.id}
+          activeMediaIndex={activeMediaIndex}
+          colophon={colophon}
+          detail={detail}
+          detailActions={detailActions}
+          positionKey={positionKey}
+          information={
+            <>
+              <DetailIdentity detail={detail} vertical />
+              <DetailReadingFlow detail={detail} vertical />
+            </>
+          }
+          onActiveMediaIndexChange={onActiveMediaIndexChange}
+          onOpenViewer={onOpenViewer}
+          viewerOpen={mediaMotionSuspended}
+        />
+      ) : pagedComments ? (
+        <div className={styles.pagedDetail} data-detail-paged-layout="">
           {media === null ? null : (
-            <div data-detail-landscape-media="">{media}</div>
+            <div className={styles.pagedMedia} data-detail-paged-media="">
+              {media}
+            </div>
           )}
-          <div className={styles.landscapeInfo}>
+          {detailActions}
+          <CatalogDetailContentPager
+            comments={commentSection}
+            detailId={detail.id}
+            information={information}
+            key={detail.id}
+            platform={platform}
+          />
+        </div>
+      ) : wideComments ? (
+        <div className={styles.landscapeDetail} data-detail-landscape-layout="">
+          <div
+            className={styles.landscapeStage}
+            data-detail-text-only={textOnly ? "" : undefined}
+          >
+            {media === null ? null : (
+              <div data-detail-landscape-media="">{media}</div>
+            )}
+            <div className={styles.landscapeInfo}>
+              <DetailIdentity detail={detail} />
+              {detailActions}
+              {/* Without media the text is the work: it reads in full. */}
+              {textOnly ? (
+                <DetailReadingFlow detail={detail} />
+              ) : (
+                <DetailReadingDisclosure detail={detail} />
+              )}
+            </div>
+          </div>
+          <section
+            aria-label="评论"
+            className={styles.landscapeComments}
+            data-detail-landscape-comments=""
+          >
+            {commentSection}
+          </section>
+        </div>
+      ) : (
+        <>
+          <div
+            className={styles.hero}
+            data-detail-text-only={textOnly ? "" : undefined}
+          >
+            {media}
             <DetailIdentity detail={detail} />
             {detailActions}
-            {/* Without media the text is the work: it reads in full. */}
-            {textOnly ? (
-              <DetailReadingFlow detail={detail} />
-            ) : (
-              <DetailReadingDisclosure detail={detail} />
-            )}
           </div>
-        </div>
-        <section
-          aria-label="评论"
-          className={styles.landscapeComments}
-          data-detail-landscape-comments=""
-        >
+          <DetailReadingFlow detail={detail} />
           {commentSection}
-        </section>
-      </div>
-    ) : (
-      <>
-        <div
-          className={styles.hero}
-          data-detail-text-only={textOnly ? "" : undefined}
-        >
-          {media}
-          <DetailIdentity detail={detail} />
-          {detailActions}
-        </div>
-        <DetailReadingFlow detail={detail} />
-        {commentSection}
-      </>
-    );
+        </>
+      );
   }
 
   return (
@@ -520,6 +548,7 @@ export const CatalogDetailScreen = ({
           : undefined
       }
       data-platform={platform}
+      data-desktop-detail={desktop ? "" : undefined}
       role="dialog"
     >
       <header className={styles.detailHeader}>
@@ -531,7 +560,14 @@ export const CatalogDetailScreen = ({
         >
           <Icon aria-hidden="true" name="back" />
         </button>
-        <span aria-hidden="true" />
+        {desktop &&
+        state.state === "loaded" &&
+        withdrawn === null &&
+        state.detail.title !== "" ? (
+          <p className={styles.headerTitle}>{state.detail.title}</p>
+        ) : (
+          <span aria-hidden="true" />
+        )}
       </header>
       <div className={styles.detailContent}>{body}</div>
     </section>

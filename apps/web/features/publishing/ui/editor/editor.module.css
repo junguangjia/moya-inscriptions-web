@@ -920,3 +920,56 @@
   z-index: var(--yoyi-z-index-overlay);
   background: var(--yoyi-color-background-page);
 }
+
+/* Desktop surfaces share tokens; phone and tablet rules remain independent. */
+
+:global(html[data-device-class="desktop"][data-platform="pc"]) .desktopTop,
+:global(html[data-device-class="desktop"][data-platform="pc"]) .desktopGrid {
+  width: min(100%, var(--yoyi-desktop-workspace-max));
+  padding-inline: var(--yoyi-space-8);
+}
+:global(html[data-device-class="desktop"][data-platform="pc"]) .desktopGrid {
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.9fr);
+  gap: var(--yoyi-space-8);
+}
+:global(html[data-device-class="desktop"][data-platform="pc"])
+  .desktopGrid
+  > .column:first-child {
+  grid-column: 1;
+  grid-row: 1;
+}
+:global(html[data-device-class="desktop"][data-platform="pc"])
+  .desktopGrid
+  > .column:nth-child(2) {
+  grid-column: 1;
+  grid-row: 2;
+}
+:global(html[data-device-class="desktop"][data-platform="pc"])
+  .desktopGrid
+  > .previewColumn {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+:global(html[data-device-class="desktop"][data-platform="pc"])
+  .desktopGrid
+  > .column {
+  padding: var(--yoyi-space-7);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-surface);
+}
+@media (max-width: 1279px) {
+  :global(html[data-device-class="desktop"][data-platform="pc"]) .desktopGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  :global(html[data-device-class="desktop"][data-platform="pc"])
+    .desktopGrid
+    > .column,
+  :global(html[data-device-class="desktop"][data-platform="pc"])
+    .desktopGrid
+    > .previewColumn {
+    grid-column: 1;
+    grid-row: auto;
+    position: static;
+  }
+}

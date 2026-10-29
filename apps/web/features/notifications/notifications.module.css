@@ -240,3 +240,21 @@
   flex: 1 1 0;
   min-height: 0;
 }
+
+/* Desktop surfaces share tokens; phone and tablet rules remain independent. */
+
+:global(html[data-device-class="desktop"][data-platform="pc"])
+  .desktopHome[data-message-live][data-message-view="home"]:has(
+    [data-dm-workspace][data-desktop="true"]
+  ) {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+:global(html[data-device-class="desktop"][data-platform="pc"]) .directRegion {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}

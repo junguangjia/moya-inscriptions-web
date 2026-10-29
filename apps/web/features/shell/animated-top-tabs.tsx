@@ -11,6 +11,7 @@ export interface AnimatedTopTab<Key extends string> {
 }
 
 export interface AnimatedTopTabsProps<Key extends string> {
+  readonly orientation?: "horizontal" | "vertical";
   readonly items: readonly AnimatedTopTab<Key>[];
   readonly activeKey: Key;
   /** Continuous pager position; omit for click-only tab groups. */
@@ -24,6 +25,7 @@ export interface AnimatedTopTabsProps<Key extends string> {
 }
 
 export const AnimatedTopTabs = <Key extends string>({
+  orientation = "horizontal",
   items,
   activeKey,
   progress,
@@ -98,12 +100,21 @@ export const AnimatedTopTabs = <Key extends string>({
       // Scroll only this strip. Resize observation also reveals the part that
       // expands after a click, without reacting to manual horizontal scrolling.
       const delta =
-        item.left < frame.left
-          ? item.left - frame.left
-          : item.right > frame.right
-            ? item.right - frame.right
-            : 0;
-      if (delta) container.scrollLeft += delta;
+        orientation === "vertical"
+          ? item.top < frame.top
+            ? item.top - frame.top
+            : item.bottom > frame.bottom
+              ? item.bottom - frame.bottom
+              : 0
+          : item.left < frame.left
+            ? item.left - frame.left
+            : item.right > frame.right
+              ? item.right - frame.right
+              : 0;
+      if (delta) {
+        if (orientation === "vertical") container.scrollTop += delta;
+        else container.scrollLeft += delta;
+      }
     };
     reveal();
     const observer =
@@ -111,19 +122,21 @@ export const AnimatedTopTabs = <Key extends string>({
     observer?.observe(container);
     observer?.observe(button);
     return () => observer?.disconnect();
-  }, [activeKey, items, settled]);
+  }, [activeKey, items, settled, orientation]);
 
   return (
     <div
       ref={viewport}
       className={`${styles.viewport}${className ? ` ${className}` : ""}`}
       data-animated-top-tabs=""
+      data-orientation={orientation}
     >
       <div
         ref={track}
         className={styles.track}
         role="tablist"
         aria-label={ariaLabel}
+        aria-orientation={orientation}
         data-progress-driven={progressDriven ? "true" : "false"}
       >
         {items.map(({ id, label, icon }, index) => {
@@ -144,6 +157,7 @@ export const AnimatedTopTabs = <Key extends string>({
                 (idPrefix ? `${idPrefix}-panel-${id}` : undefined)
               }
               aria-selected={selected}
+              title={label}
               tabIndex={selected ? 0 : -1}
               className={styles.tab}
               data-tab-key={id}
@@ -151,9 +165,11 @@ export const AnimatedTopTabs = <Key extends string>({
               onClick={() => onSelect(id)}
               onKeyDown={(event) => {
                 const next =
-                  event.key === "ArrowRight"
+                  event.key ===
+                  (orientation === "vertical" ? "ArrowDown" : "ArrowRight")
                     ? (index + 1) % items.length
-                    : event.key === "ArrowLeft"
+                    : event.key ===
+                        (orientation === "vertical" ? "ArrowUp" : "ArrowLeft")
                       ? (index + items.length - 1) % items.length
                       : event.key === "Home"
                         ? 0

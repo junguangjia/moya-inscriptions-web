@@ -1,0 +1,192 @@
+.layout {
+  display: grid;
+  min-width: 0;
+  gap: var(--yoyi-space-5);
+  --desktop-detail-upper-height: var(--yoyi-desktop-reader-upper-empty);
+}
+
+.layout:has([data-colophon-entry]) {
+  --desktop-detail-upper-height: var(--yoyi-desktop-reader-upper);
+}
+
+.navigation {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--yoyi-space-3);
+}
+
+.navigation button,
+.compose {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  padding: 0;
+  place-items: center;
+  color: var(--yoyi-color-text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--yoyi-radius-md);
+  cursor: pointer;
+}
+
+.navigation button:hover,
+.compose:hover {
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-muted);
+}
+
+.navigation button:focus-visible,
+.compose:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.upper,
+.lower {
+  position: relative;
+  min-width: 0;
+  scroll-margin-top: calc(var(--detail-header-height) + var(--yoyi-space-5));
+}
+
+.upper {
+  --desktop-reading-height: var(--desktop-detail-upper-height);
+}
+
+.media {
+  width: min(58vw, var(--yoyi-desktop-reader-media-max));
+  max-width: 100%;
+  height: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  direction: ltr;
+  writing-mode: horizontal-tb;
+}
+
+.media [data-feed-stage-frame] {
+  height: calc(100% - var(--yoyi-space-9));
+  aspect-ratio: auto;
+  flex: 1 1 auto;
+}
+
+.media [data-feed-dots] {
+  flex: 0 0 auto;
+}
+
+.missingMedia {
+  display: grid;
+  width: min(42vw, var(--yoyi-desktop-reader-media-max));
+  height: 100%;
+  place-items: center;
+  direction: ltr;
+}
+
+.actions {
+  min-width: 0;
+  padding-inline: var(--yoyi-space-5);
+}
+
+.actions [data-detail-content-actions] {
+  justify-content: flex-end;
+}
+
+.lower {
+  padding-top: var(--yoyi-space-5);
+  border-top: 1px solid var(--yoyi-color-border-subtle);
+  --desktop-reading-height: var(--yoyi-desktop-reader-colophon-empty);
+}
+
+.lower:has(
+  [data-colophon-entry],
+  [data-colophon-writing],
+  [data-colophon-skeleton],
+  [data-colophon-input-focused]
+) {
+  --desktop-reading-height: var(--yoyi-desktop-reader-colophon);
+}
+
+.lower [data-feed-colophon] {
+  min-width: 100%;
+  padding-inline: var(--yoyi-space-3);
+  --colophon-top: var(--yoyi-space-3);
+}
+
+.lower [data-colophon-head] h4 {
+  font-size: var(--yoyi-type-section-title-size);
+}
+
+.lower:not(
+    :has(
+      [data-colophon-entry],
+      [data-colophon-writing],
+      [data-colophon-skeleton]
+    )
+  )
+  [data-colophon-head]
+  h4 {
+  font-size: var(--yoyi-type-body-size);
+  letter-spacing: 0.1em;
+}
+
+.lower:not(
+    :has(
+      [data-colophon-entry],
+      [data-colophon-writing],
+      [data-colophon-skeleton]
+    )
+  )
+  [data-colophon-head] {
+  flex-direction: column;
+}
+
+.lower [data-colophon-input] {
+  padding-block: var(--yoyi-space-3);
+}
+
+.compose {
+  position: absolute;
+  left: 0;
+  top: var(--yoyi-space-7);
+  display: none;
+}
+
+/* A known empty discussion offers one pencil. Focusing the same existing
+   textarea expands the row; draft and submission state stay in its owner. */
+.lower:not(
+    :has(
+      [data-colophon-entry],
+      [data-colophon-writing],
+      [data-colophon-skeleton],
+      [data-colophon-input-focused]
+    )
+  ):has([data-colophon-input="write"])
+  .compose {
+  display: grid;
+}
+
+.lower:not(
+    :has(
+      [data-colophon-entry],
+      [data-colophon-writing],
+      [data-colophon-skeleton],
+      [data-colophon-input-focused]
+    )
+  )
+  [data-colophon-input="write"] {
+  opacity: 0;
+  visibility: visible;
+  pointer-events: none;
+}
+
+.layout[data-detail-text-only] .upper {
+  --desktop-reading-height: clamp(240px, 38svh, 400px);
+}
+
+@media (min-width: 1920px) {
+  .media {
+    width: min(50vw, var(--yoyi-desktop-reader-media-max));
+  }
+}
