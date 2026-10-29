@@ -12,7 +12,11 @@ import type { ReactNode } from "react";
 import { Icon } from "@moya/ui";
 import { FeedPostStage } from "../authors/feed-post-stage";
 import { MediaFallback } from "../home/card-media-parts";
-import { useAuthReturnView } from "../auth/auth-return";
+import { DesktopArchiveReader } from "./desktop-archive-reader";
+import type {
+  DesktopArchiveReaderHandle,
+  DesktopArchiveSection,
+} from "./desktop-archive-reader";
 import {
   CatalogDetailReadingStrip,
   type CatalogDetailReadingStripHandle,
@@ -22,40 +26,13 @@ import { CatalogDetailScrollContext } from "./catalog-detail-scroll";
 import type { CatalogDetailPresentation } from "./catalog-detail-presentation";
 import styles from "./desktop-calligraphy-detail-layout.module.css";
 
-interface InformationPosition {
-  readonly top: number;
-  readonly groups: readonly { key: string; open: boolean; left: number }[];
-}
-const informationPositions = new Map<string, InformationPosition>();
-const captureInformation = (node: HTMLElement): InformationPosition => ({
-  top: node.scrollTop,
-  groups: [
-    ...node.querySelectorAll<HTMLDetailsElement>(
-      "[data-desktop-information-group]",
-    ),
-  ].map((group) => ({
-    key: group.dataset.desktopInformationGroup!,
-    open: group.open,
-    left:
-      group.querySelector<HTMLElement>("[data-desktop-group-content]")
-        ?.scrollLeft ?? 0,
-  })),
-});
-const saveInformation = (key: string, node: HTMLElement) => {
-  informationPositions.delete(key);
-  informationPositions.set(key, captureInformation(node));
-  if (informationPositions.size > 60)
-    informationPositions.delete(informationPositions.keys().next().value!);
-};
-
 /** Independent image/information viewports above the existing colophon reader. */
 export const DesktopCalligraphyDetailLayout = ({
   activeMediaIndex,
   colophon,
   detail,
   detailActions,
-  information,
-  leading,
+  archiveSections,
   positionKey,
   onActiveMediaIndexChange,
   onOpenViewer,
@@ -65,8 +42,7 @@ export const DesktopCalligraphyDetailLayout = ({
   readonly colophon?: ReactNode;
   readonly detail: CatalogDetailPresentation;
   readonly detailActions?: ReactNode;
-  readonly information: ReactNode;
-  readonly leading: ReactNode;
+  readonly archiveSections: readonly DesktopArchiveSection[];
   readonly positionKey?: string | undefined;
   readonly onActiveMediaIndexChange: (index: number) => void;
   readonly onOpenViewer: (index: number, opener: HTMLElement) => void;
@@ -74,7 +50,7 @@ export const DesktopCalligraphyDetailLayout = ({
 }) => {
   const lower = useRef<CatalogDetailReadingStripHandle>(null);
   const mediaRegion = useRef<HTMLDivElement>(null),
-    informationRegion = useRef<HTMLElement>(null),
+    informationRegion = useRef<DesktopArchiveReaderHandle>(null),
     lowerRegion = useRef<HTMLElement>(null);
   const scroll = useContext(CatalogDetailScrollContext);
   const [canLike, setCanLike] = useState(false);
@@ -125,58 +101,6 @@ export const DesktopCalligraphyDetailLayout = ({
       node.removeEventListener("scroll", measure);
     };
   }, [detail.id, hasColophon]);
-  const informationKey =
-    positionKey === undefined ? undefined : `${positionKey}:r4:information`;
-  const authPosition = useAuthReturnView(
-    `desktop-detail-information:${detail.contentType ?? "catalog"}:${detail.id}`,
-    () =>
-      informationRegion.current
-        ? captureInformation(informationRegion.current)
-        : undefined,
-  );
-  const returnedPosition =
-    authPosition !== undefined &&
-    Number.isFinite(authPosition.top) &&
-    authPosition.top >= 0 &&
-    Array.isArray(authPosition.groups) &&
-    authPosition.groups.every(
-      (group) =>
-        typeof group.key === "string" &&
-        typeof group.open === "boolean" &&
-        Number.isFinite(group.left),
-    )
-      ? authPosition
-      : undefined;
-  useLayoutEffect(() => {
-    const node = informationRegion.current;
-    if (!node || informationKey === undefined) return;
-    const saved = returnedPosition ?? informationPositions.get(informationKey);
-    if (saved) {
-      for (const group of node.querySelectorAll<HTMLDetailsElement>(
-        "[data-desktop-information-group]",
-      )) {
-        const entry = saved.groups.find(
-          (entry) => entry.key === group.dataset.desktopInformationGroup,
-        );
-        if (entry) {
-          group.open = entry.open;
-          const body = group.querySelector<HTMLElement>(
-            "[data-desktop-group-content]",
-          );
-          if (body) body.scrollLeft = entry.left;
-        }
-      }
-      node.scrollTop = saved.top;
-    }
-    const remember = () => saveInformation(informationKey, node);
-    node.addEventListener("toggle", remember, true);
-    node.addEventListener("scroll", remember, true);
-    return () => {
-      remember();
-      node.removeEventListener("toggle", remember, true);
-      node.removeEventListener("scroll", remember, true);
-    };
-  }, [informationKey, returnedPosition]);
   const reveal = useCallback(
     (node: HTMLElement | null) => {
       if (!node) return;
@@ -252,9 +176,7 @@ export const DesktopCalligraphyDetailLayout = ({
                     }
                     title="资料"
                     type="button"
-                    onClick={() =>
-                      informationRegion.current?.focus({ preventScroll: true })
-                    }
+                    onClick={() => informationRegion.current?.focus()}
                   >
                     <Icon name="category" />
                   </button>
@@ -340,25 +262,13 @@ export const DesktopCalligraphyDetailLayout = ({
                 )}
               </div>
             )}
-            <aside
-              className={styles.information}
+            <DesktopArchiveReader
               ref={informationRegion}
-              aria-label={
-                detail.contentType === "work" ? "作品资料" : "馆藏资料"
-              }
-              tabIndex={-1}
-              data-desktop-detail-information=""
-            >
-              <div
-                className={styles.informationHeading}
-                tabIndex={0}
-                role="region"
-                aria-label="题名与身份"
-              >
-                {leading}
-              </div>
-              <div className={styles.informationGroups}>{information}</div>
-            </aside>
+              detailId={`${detail.contentType ?? "catalog"}:${detail.id}`}
+              label={detail.contentType === "work" ? "作品资料" : "馆藏资料"}
+              positionKey={positionKey}
+              sections={archiveSections}
+            />
           </div>
           {hasColophon ? (
             <button

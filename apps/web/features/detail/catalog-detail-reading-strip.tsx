@@ -35,6 +35,7 @@ import {
 import styles from "./catalog-detail-reading-strip.module.css";
 
 export interface CatalogDetailReadingStripHandle {
+  readonly checkpoint: () => void;
   readonly scrollToComments: () => boolean;
   readonly scrollToComment: (id: string) => boolean;
   readonly scrollToStart: () => void;
@@ -76,6 +77,9 @@ interface ReadingPosition {
 }
 // In-memory navigation restoration only: no content, author data or drafts.
 const positions = new Map<string, ReadingPosition>();
+// An exact auth journey seeds each confirmed reader scope once. Subsequent
+// category/dialog mounts keep newer checkpoints made within that returned entry.
+const appliedAuthPositions = new WeakMap<ReadingPosition, Set<string>>();
 const rememberPosition = (key: string, position: ReadingPosition) => {
   positions.delete(key);
   positions.set(key, position);
@@ -126,6 +130,7 @@ export const CatalogDetailReadingStrip = forwardRef<
   const intentUntil = useRef(0);
   const restoring = useRef(false);
   const commentsRequested = useRef(false);
+  const positionRestored = useRef(false);
   const navigationOffset = useRef<number | null>(null);
   const navigatingToComments = useRef(false);
   const authPosition = useAuthReturnView(
@@ -341,6 +346,7 @@ export const CatalogDetailReadingStrip = forwardRef<
         return true;
       },
       scrollToStart: () => scrollToOffset(0),
+      checkpoint: record,
       pagingState: () => {
         const node = stripRef.current;
         const offset = readOffset();
@@ -369,7 +375,7 @@ export const CatalogDetailReadingStrip = forwardRef<
         if (informationNode !== null) scrollToElement(informationNode);
       },
     }),
-    [scrollToComments, scrollToElement, scrollToOffset, readOffset],
+    [scrollToComments, scrollToElement, scrollToOffset, readOffset, record],
   );
 
   const restore = useCallback(() => {
@@ -431,9 +437,24 @@ export const CatalogDetailReadingStrip = forwardRef<
   useLayoutEffect(() => {
     if (strip === null) return;
     legacy.current = strip !== null && isLegacyRtlScroll(strip);
+    const alreadySeeded =
+      returnedPosition !== undefined &&
+      positionKey !== undefined &&
+      appliedAuthPositions.get(returnedPosition)?.has(positionKey);
     const saved =
-      returnedPosition ??
+      (!alreadySeeded ? returnedPosition : undefined) ??
       (positionKey === undefined ? undefined : positions.get(positionKey));
+    if (
+      returnedPosition !== undefined &&
+      positionKey !== undefined &&
+      !alreadySeeded
+    ) {
+      const scopes =
+        appliedAuthPositions.get(returnedPosition) ?? new Set<string>();
+      scopes.add(positionKey);
+      appliedAuthPositions.set(returnedPosition, scopes);
+      rememberPosition(positionKey, returnedPosition);
+    }
     if (strip !== null)
       strip.scrollLeft = stripScrollLeft(
         strip,
@@ -450,6 +471,7 @@ export const CatalogDetailReadingStrip = forwardRef<
       clearDetailCommentsRequest();
     }
     if (saved === undefined) record();
+    positionRestored.current = true;
   }, [
     detailId,
     strip,
@@ -462,8 +484,10 @@ export const CatalogDetailReadingStrip = forwardRef<
 
   useLayoutEffect(
     () => () => {
-      savedOffset.current = readOffset();
-      remember();
+      // StrictMode can clean up a fresh reader before bind's state update has
+      // restored its saved position. That provisional zero must not replace it.
+      // Native scroll and explicit transitions checkpoint while geometry is live.
+      if (positionRestored.current) remember();
     },
     [readOffset, remember],
   );

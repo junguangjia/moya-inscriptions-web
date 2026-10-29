@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createRef } from "react";
+import { act, createRef, Fragment, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -44,7 +44,9 @@ const mounts = (
   positionKey?: string,
   variant:
     "continuous" | "desktop-information" | "desktop-comments" = "continuous",
+  strict = false,
 ) => {
+  const Wrapper = strict ? StrictMode : Fragment;
   const onRegionChange = vi.fn();
   const onRevealReading = vi.fn();
   const host = document.createElement("div");
@@ -56,30 +58,32 @@ const mounts = (
   const draw = (id = "one") =>
     act(() =>
       root.render(
-        <CatalogDetailReadingStrip
-          ref={ref}
-          detailId={id}
-          id="reading-one"
-          onRegionChange={onRegionChange}
-          onRevealReading={onRevealReading}
-          positionKey={positionKey}
-          variant={variant}
-          information={
-            <>
-              <h1 data-detail-reading-anchor="title">寒山诗</h1>
-              <p data-detail-reading-anchor="body">全部正文</p>
-              <Probe />
-            </>
-          }
-          colophon={
-            withComments ? (
-              <section>
-                <header data-colophon-head="">题跋</header>
-                <p data-colophon-anchor="reply-1">回复</p>
-              </section>
-            ) : undefined
-          }
-        />,
+        <Wrapper>
+          <CatalogDetailReadingStrip
+            ref={ref}
+            detailId={id}
+            id="reading-one"
+            onRegionChange={onRegionChange}
+            onRevealReading={onRevealReading}
+            positionKey={positionKey}
+            variant={variant}
+            information={
+              <>
+                <h1 data-detail-reading-anchor="title">寒山诗</h1>
+                <p data-detail-reading-anchor="body">全部正文</p>
+                <Probe />
+              </>
+            }
+            colophon={
+              withComments ? (
+                <section>
+                  <header data-colophon-head="">题跋</header>
+                  <p data-colophon-anchor="reply-1">回复</p>
+                </section>
+              ) : undefined
+            }
+          />
+        </Wrapper>,
       ),
     );
   draw();
@@ -170,6 +174,65 @@ afterEach(() => {
 });
 
 describe("CatalogDetailReadingStrip", () => {
+  it("does not overwrite a saved category with the provisional zero of a StrictMode mount", () => {
+    const first = mounts("strict-archive:catalog:one", "desktop-information");
+    first.setOffset(420);
+    act(() => first.ref.current!.checkpoint());
+    first.unmount();
+    expect(
+      mounts(
+        "strict-archive:catalog:one",
+        "desktop-information",
+        true,
+      ).offset(),
+    ).toBe(420);
+  });
+  it("uses an auth journey once per reader scope and then keeps newer category checkpoints", () => {
+    authJourney.returned = {
+      offset: 240,
+      text: null,
+      comment: null,
+      region: "media",
+    };
+    const first = mounts(
+      "auth-archive:member:catalog:one",
+      "desktop-information",
+    );
+    expect(first.offset()).toBe(240);
+    first.setOffset(600);
+    act(() => first.ref.current!.checkpoint());
+    first.unmount();
+    const second = mounts(
+      "auth-archive:member:catalog:one",
+      "desktop-information",
+    );
+    expect(second.offset()).toBe(600);
+    second.unmount();
+    // A new legitimate journey must still override an older ordinary cache.
+    authJourney.returned = {
+      offset: 120,
+      text: null,
+      comment: null,
+      region: "media",
+    };
+    expect(
+      mounts("auth-archive:member:catalog:one", "desktop-information").offset(),
+    ).toBe(120);
+  });
+  it("checkpoints an in-flight desktop reading offset before a category is replaced", () => {
+    const first = mounts(
+      "archive-checkpoint:catalog:one:desktop",
+      "desktop-information",
+    );
+    first.setOffset(420);
+    act(() => first.ref.current!.checkpoint());
+    first.unmount();
+    const second = mounts(
+      "archive-checkpoint:catalog:one:desktop",
+      "desktop-information",
+    );
+    expect(second.offset()).toBe(420);
+  });
   it("pages the desktop colophon from right to left within its real scroll bounds", () => {
     const view = mounts(undefined, "desktop-comments");
     expect(view.ref.current!.pagingState()).toEqual({

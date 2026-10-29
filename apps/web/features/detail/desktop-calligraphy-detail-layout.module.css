@@ -20,146 +20,6 @@
   min-height: 0;
   flex: 1 1 0;
 }
-.information {
-  grid-area: information;
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  overflow: auto;
-  overscroll-behavior: contain;
-  padding: var(--yoyi-space-5);
-  background: var(--yoyi-color-background-surface);
-  border: 1px solid var(--yoyi-color-border-subtle);
-  border-radius: var(--yoyi-radius-lg);
-  scrollbar-width: thin;
-}
-.information:focus-visible {
-  outline: 2px solid var(--yoyi-color-focus-ring);
-  outline-offset: 2px;
-}
-.information [data-detail-info-panel] {
-  position: static;
-  padding: 0;
-  margin: 0;
-  background: transparent;
-  border: 0;
-  box-shadow: none;
-}
-.informationHeading {
-  height: clamp(120px, 20svh, 180px);
-  overflow-x: auto;
-  margin-bottom: var(--yoyi-space-5);
-  writing-mode: vertical-rl;
-  direction: ltr;
-  text-orientation: mixed;
-  font-family: var(--yoyi-font-editorial);
-}
-.informationHeading [data-detail-info-panel] {
-  height: 100%;
-  width: 100%;
-  writing-mode: inherit;
-}
-.informationHeading [data-detail-title] {
-  margin: 0 0 0 var(--yoyi-space-4);
-  font-size: var(--yoyi-type-section-title-size);
-  line-height: 1.5;
-  font-weight: 600;
-}
-.informationHeading :where(p, time) {
-  color: var(--yoyi-color-text-secondary);
-  font-size: var(--yoyi-type-metadata-size);
-  line-height: 1.7;
-}
-.informationGroups {
-  display: grid;
-  gap: var(--yoyi-space-3);
-}
-.informationGroups > [data-detail-info-panel],
-.informationGroups > div {
-  display: grid;
-  gap: var(--yoyi-space-3);
-}
-.group {
-  min-width: 0;
-  border-top: 1px solid var(--yoyi-color-border-subtle);
-}
-.group > summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 48px;
-  gap: var(--yoyi-space-3);
-  cursor: pointer;
-  list-style: none;
-  font: 600 var(--yoyi-type-label-size)/1.5 var(--yoyi-font-interface);
-}
-.group > summary::-webkit-details-marker {
-  display: none;
-}
-.group > summary [data-icon] {
-  width: 18px;
-  height: 18px;
-  transform: rotate(90deg);
-  transition: transform var(--yoyi-duration-normal) var(--yoyi-easing-standard);
-}
-.group[open] > summary [data-icon] {
-  transform: rotate(-90deg);
-}
-.group > summary:focus-visible {
-  outline: 2px solid var(--yoyi-color-focus-ring);
-  outline-offset: 2px;
-  border-radius: var(--yoyi-radius-sm);
-}
-.groupContent {
-  width: 100%;
-  height: clamp(160px, 26svh, 260px);
-  padding: var(--yoyi-space-3) 0 var(--yoyi-space-4);
-  overflow: auto;
-  overscroll-behavior: contain;
-  writing-mode: vertical-rl;
-  direction: ltr;
-  text-orientation: mixed;
-  font-family: var(--yoyi-font-editorial);
-  scrollbar-width: thin;
-}
-.groupContent:focus-visible,
-.informationHeading:focus-visible {
-  outline: 2px solid var(--yoyi-color-focus-ring);
-  outline-offset: -2px;
-}
-.information .groupContent :where(section, div, dl, ul, li, p, dt, dd) {
-  position: static;
-  display: block;
-  width: auto;
-  max-width: none;
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  background: transparent;
-  writing-mode: inherit;
-  direction: ltr;
-}
-.information .groupContent :where(p, dd, li) {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  line-height: 1.9;
-  font-size: var(--yoyi-type-body-size);
-}
-.information .groupContent :where(dl > div, li) {
-  margin-block-end: var(--yoyi-space-5);
-}
-.information .groupContent dt {
-  color: var(--yoyi-color-text-tertiary);
-  margin-inline-end: var(--yoyi-space-2);
-  font-size: var(--yoyi-type-metadata-size);
-}
-.information .groupContent strong {
-  display: block;
-  margin-inline-end: var(--yoyi-space-3);
-}
 .mediaColumn {
   grid-area: image;
   position: relative;
@@ -381,7 +241,7 @@
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas: "information";
 }
-.layout[data-detail-text-only] .information {
+.layout[data-detail-text-only] [data-desktop-detail-information] {
   width: min(100%, var(--yoyi-desktop-prose-max));
   justify-self: center;
 }
@@ -389,13 +249,5 @@
   .hero {
     grid-template-columns: 260px minmax(0, 1fr);
     gap: var(--yoyi-space-5);
-  }
-  .information {
-    padding: var(--yoyi-space-4);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .group > summary [data-icon] {
-    transition: none;
   }
 }

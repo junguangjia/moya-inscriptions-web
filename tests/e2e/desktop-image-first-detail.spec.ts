@@ -12,7 +12,7 @@ test.beforeEach(async ({}, info) => {
   );
 });
 
-test("large images stay right of expandable information with a below-fold colophon cue", async ({
+test("large images stay right of full-height archive reading with a below-fold colophon cue", async ({
   page,
 }, info) => {
   const errors: string[] = [];
@@ -48,24 +48,24 @@ test("large images stay right of expandable information with a below-fold coloph
     expect((await lower.boundingBox())!.y).toBeGreaterThanOrEqual(height!);
     await expect(
       detail.locator('[data-detail-reading-variant="desktop-information"]'),
-    ).toHaveCount(0);
-    const group = information.locator(
-      '[data-desktop-information-group="transcription"]',
-    );
-    await group.locator("summary").click();
-    await expect(group).toHaveAttribute("open", "");
-    await group.getByRole("region", { name: "释文", exact: true }).focus();
-    await expect(
-      group.getByRole("region", { name: "释文", exact: true }),
-    ).toBeFocused();
+    ).toHaveCount(1);
+    const category = information.getByRole("tab", {
+      name: "释文",
+      exact: true,
+    });
+    await category.click();
+    await expect(category).toHaveAttribute("aria-selected", "true");
+    const archive = information.locator("[data-detail-reading-strip]");
+    await expect(archive).toHaveCSS("scrollbar-width", "none");
+    await expect(archive).toHaveCSS("writing-mode", "horizontal-tb");
+    const canvasHeight = (await archive.boundingBox())!.height;
+    expect(canvasHeight).toBeGreaterThan(a.height * 0.8);
+    await archive.focus();
+    await expect(archive).toBeFocused();
     const expanded = (await image.boundingBox())!;
     expect(expanded.width).toBeCloseTo(b.width, 1);
     expect(expanded.height).toBeCloseTo(b.height, 1);
     expect(expanded.x).toBeCloseTo(b.x, 1);
-    // The sidebar's vertical scroll is independent of the image and page.
-    await information.evaluate((node) => {
-      node.scrollTop = 0;
-    });
     await page.screenshot({
       path: info.outputPath(`image-first-${width}.png`),
       animations: "disabled",
@@ -113,7 +113,7 @@ test("large images stay right of expandable information with a below-fold coloph
   expect(errors).toEqual([]);
 });
 
-test("image selection and information disclosure survive the viewer and detail remount", async ({
+test("image selection and archive category survive the viewer and detail remount", async ({
   page,
 }, info) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -122,10 +122,8 @@ test("image selection and information disclosure survive the viewer and detail r
   const media = detail.locator("[data-detail-calligraphy-media]");
   await expect(media).toBeVisible();
   await expect(detail.locator("[data-desktop-colophon-cue]")).toHaveCount(0);
-  const group = detail.locator(
-    '[data-desktop-information-group="transcription"]',
-  );
-  await group.locator("summary").click();
+  const category = detail.getByRole("tab", { name: "释文", exact: true });
+  await category.click();
   const next = detail.getByRole("button", { name: "下一张图像", exact: true });
   await next.click();
   await expect(media.locator("[data-feed-stage]")).toHaveAttribute(
@@ -141,7 +139,7 @@ test("image selection and information disclosure survive the viewer and detail r
     "data-feed-stage-index",
     "1",
   );
-  await expect(group).toHaveAttribute("open", "");
+  await expect(category).toHaveAttribute("aria-selected", "true");
   await expect(
     media.locator('[data-feed-slide="1"] [data-feed-slide-image]'),
   ).toBeFocused();
@@ -149,13 +147,80 @@ test("image selection and information disclosure survive the viewer and detail r
   await expect(detail).toHaveCount(0);
   await page.goForward();
   await expect(detail).toBeVisible();
-  await expect(group).toHaveAttribute("open", "");
+  await expect(category).toHaveAttribute("aria-selected", "true");
   await expect(media.locator("[data-feed-stage]")).toHaveAttribute(
     "data-feed-stage-index",
     "1",
   );
   await page.screenshot({
     path: info.outputPath("viewer-return.png"),
+    animations: "disabled",
+  });
+});
+
+test("archive uses one native reading owner across categories and expanded reading", async ({
+  page,
+}, info) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/?catalogId=runtime-inscription-multi-media#detail");
+  const detail = page.locator('[data-detail-state="loaded"]');
+  const information = detail.locator("[data-desktop-detail-information]");
+  const image = detail.locator("[data-desktop-detail-image-pane]");
+  const initial = (await image.boundingBox())!;
+  await information.getByRole("tab", { name: "简介", exact: true }).click();
+  const strip = information.locator("[data-detail-reading-strip]");
+  await expect(strip).toHaveCSS("scrollbar-width", "none");
+  const forward = information.getByRole("button", { name: "向左续读资料" });
+  await expect(forward).toBeEnabled();
+  await forward.click();
+  await expect
+    .poll(() => strip.evaluate((node) => Math.abs(node.scrollLeft)))
+    .toBeGreaterThan(40);
+  // Let the native smooth scroll settle before navigating away from this category.
+  await expect(
+    information.getByRole("progressbar", { name: "资料阅读进度" }),
+  ).toHaveAttribute("aria-valuenow", /^[1-9]\d*$/);
+  const offset = await strip.evaluate((node) => Math.abs(node.scrollLeft));
+  await information.getByRole("tab", { name: "释文", exact: true }).click();
+  await information.getByRole("tab", { name: "简介", exact: true }).click();
+  await expect
+    .poll(() => strip.evaluate((node) => Math.abs(node.scrollLeft)))
+    .toBeGreaterThan(40);
+  expect(
+    await strip.evaluate((node) => Math.abs(node.scrollLeft)),
+  ).toBeGreaterThanOrEqual(offset - 2);
+  const expand = information.getByRole("button", { name: "展开资料阅读" });
+  await expand.click();
+  const modal = page.getByRole("dialog", { name: "资料阅读", exact: true });
+  await expect(modal).toBeVisible();
+  await expect(information.locator("[data-detail-reading-strip]")).toHaveCount(
+    1,
+  );
+  expect(
+    (await modal.locator("[data-detail-reading-strip]").boundingBox())!.width,
+  ).toBeGreaterThan(800);
+  const after = (await image.boundingBox())!;
+  expect(after.width).toBeCloseTo(initial.width, 1);
+  expect(after.height).toBeCloseTo(initial.height, 1);
+  await page.screenshot({
+    path: info.outputPath("archive-expanded.png"),
+    animations: "disabled",
+  });
+  await modal.getByRole("tab", { name: "背景", exact: true }).click();
+  await page.goBack();
+  await expect(modal).not.toBeVisible();
+  await expect(detail).toBeVisible();
+  await expect(
+    information.getByRole("tab", { name: "背景", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(expand).toBeFocused();
+  await expand.click();
+  await expect(modal).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(modal).not.toBeVisible();
+  await expect(expand).toBeFocused();
+  await page.screenshot({
+    path: info.outputPath("archive-return.png"),
     animations: "disabled",
   });
 });

@@ -4,9 +4,9 @@ import { CatalogDetailContentPager } from "./catalog-detail-content-pager";
 import { CatalogMediaCarousel } from "./catalog-media-carousel";
 import { CalligraphyDetailLayout } from "./calligraphy-detail-layout";
 import { DesktopCalligraphyDetailLayout } from "./desktop-calligraphy-detail-layout";
+import type { DesktopArchiveSection } from "./desktop-archive-reader";
 import { VerticalText } from "../authors/vertical-text";
 import styles from "./catalog-detail.module.css";
-import desktopStyles from "./desktop-calligraphy-detail-layout.module.css";
 
 import type { ReactNode, RefObject } from "react";
 import type {
@@ -40,44 +40,6 @@ export interface CatalogDetailScreenProps {
 
 /** An accessible-only name for an untitled work; the stored title stays empty. */
 const UNTITLED_WORK_HEADING = "未命名作品";
-
-/** One semantic content renderer, optionally housed in a desktop disclosure. */
-const DetailGroup = ({
-  group,
-  title,
-  collapsible,
-  open = false,
-  children,
-}: {
-  readonly group: string;
-  readonly title: string;
-  readonly collapsible: boolean;
-  readonly open?: boolean;
-  readonly children: ReactNode;
-}) =>
-  collapsible ? (
-    <details
-      className={desktopStyles.group}
-      data-desktop-information-group={group}
-      open={open || undefined}
-    >
-      <summary>
-        <span>{title}</span>
-        <Icon name="next" aria-hidden="true" />
-      </summary>
-      <div
-        className={desktopStyles.groupContent}
-        data-desktop-group-content=""
-        role="region"
-        aria-label={title}
-        tabIndex={0}
-      >
-        {children}
-      </div>
-    </details>
-  ) : (
-    <>{children}</>
-  );
 
 const DetailMessage = ({
   description,
@@ -127,13 +89,11 @@ const DetailIdentity = ({
   vertical = false,
   headingOnly = false,
   omitHeading = false,
-  collapsible = false,
 }: {
   readonly detail: CatalogDetailPresentation;
   readonly vertical?: boolean;
   readonly headingOnly?: boolean;
   readonly omitHeading?: boolean;
-  readonly collapsible?: boolean;
 }) => {
   const text = (value: string) =>
     vertical ? <VerticalText text={value} /> : value;
@@ -165,29 +125,24 @@ const DetailIdentity = ({
         </h1>
       )}
       {!omitHeading && (detail.contentType !== "work" || headingOnly) ? (
-        <p className={styles.kindPeriod}>{text(identity)}</p>
+        <p className={styles.kindPeriod} data-detail-kind-period="">
+          {text(identity)}
+        </p>
       ) : null}
       {!headingOnly && detail.contentType === "work"
         ? (detail.sections ?? [])
             .filter((section) => section.key === "description")
             .map((section) => (
-              <DetailGroup
+              <p
                 key={section.key}
-                group="work-body"
-                title={section.title}
-                collapsible={collapsible}
-                open
+                className={styles.workBody}
+                data-detail-section="description"
+                data-detail-reading-anchor={
+                  vertical ? "description" : undefined
+                }
               >
-                <p
-                  className={styles.workBody}
-                  data-detail-section="description"
-                  data-detail-reading-anchor={
-                    vertical ? "description" : undefined
-                  }
-                >
-                  {text(section.text)}
-                </p>
-              </DetailGroup>
+                {text(section.text)}
+              </p>
             ))
         : null}
       {!omitHeading && detail.contentType === "work" ? (
@@ -197,55 +152,39 @@ const DetailIdentity = ({
         />
       ) : null}
       {headingOnly || detail.summary === undefined ? null : (
-        <DetailGroup
-          group="summary"
-          title="摘要"
-          collapsible={collapsible}
-          open={detail.facts.length === 0}
+        <p
+          className={styles.summary}
+          data-detail-reading-anchor={vertical ? "summary" : undefined}
         >
-          <p
-            className={styles.summary}
-            data-detail-reading-anchor={vertical ? "summary" : undefined}
-          >
-            {text(detail.summary)}
-          </p>
-        </DetailGroup>
+          {text(detail.summary)}
+        </p>
       )}
       {headingOnly || detail.aliases.length === 0 ? null : (
-        <DetailGroup group="aliases" title="又名" collapsible={collapsible}>
-          <div className={styles.aliases}>
-            {collapsible ? null : <span>又名</span>}
-            <p data-detail-reading-anchor={vertical ? "aliases" : undefined}>
-              {text(detail.aliases.join(" · "))}
-            </p>
-          </div>
-        </DetailGroup>
+        <div className={styles.aliases}>
+          <span>又名</span>
+          <p data-detail-reading-anchor={vertical ? "aliases" : undefined}>
+            {text(detail.aliases.join(" · "))}
+          </p>
+        </div>
       )}
       {headingOnly || detail.facts.length === 0 ? null : (
-        <DetailGroup
-          group="facts"
-          title="基本资料"
-          collapsible={collapsible}
-          open
-        >
-          <section className={styles.factsSection} data-detail-facts="">
-            {collapsible ? null : <h2>基本资料</h2>}
-            <dl className={styles.facts}>
-              {detail.facts.map((fact, index) => (
-                <div key={`${fact.label}-${fact.value}-${index}`}>
-                  <dt>{fact.label}</dt>
-                  <dd
-                    data-detail-reading-anchor={
-                      vertical ? `fact-${index}` : undefined
-                    }
-                  >
-                    {text(fact.value)}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          </section>
-        </DetailGroup>
+        <section className={styles.factsSection} data-detail-facts="">
+          <h2>基本资料</h2>
+          <dl className={styles.facts}>
+            {detail.facts.map((fact, index) => (
+              <div key={`${fact.label}-${fact.value}-${index}`}>
+                <dt>{fact.label}</dt>
+                <dd
+                  data-detail-reading-anchor={
+                    vertical ? `fact-${index}` : undefined
+                  }
+                >
+                  {text(fact.value)}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </section>
       )}
     </section>
   );
@@ -265,145 +204,171 @@ const hasReadingFlow = (detail: CatalogDetailPresentation) =>
 const DetailAuthorship = ({
   authorship,
   vertical = false,
-  collapsible = false,
 }: {
   readonly authorship: DetailAuthorshipPresentation;
   readonly vertical?: boolean;
-  readonly collapsible?: boolean;
 }) => (
-  <DetailGroup group="authorship" title="作品性质" collapsible={collapsible}>
-    <section
-      className={styles.readingSection}
-      data-detail-authorship={authorship.kind}
-      data-detail-section="authorship"
-    >
-      {collapsible ? null : <h2>作品性质</h2>}
-      <p data-detail-authorship-label="">{authorship.label}</p>
-      {authorship.references.length === 0 ? null : (
-        <div className={styles.factsSection}>
-          <dl className={styles.facts} data-detail-authorship-references="">
-            {authorship.references.map((reference, index) => (
-              <div key={reference.label}>
-                <dt>{reference.label}</dt>
-                <dd
-                  data-detail-reading-anchor={
-                    vertical ? `authorship-${index}` : undefined
-                  }
-                >
-                  {vertical ? (
-                    <VerticalText text={reference.value} />
-                  ) : (
-                    reference.value
-                  )}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-      )}
-    </section>
-  </DetailGroup>
+  <section
+    className={styles.readingSection}
+    data-detail-authorship={authorship.kind}
+    data-detail-section="authorship"
+  >
+    <h2>作品性质</h2>
+    <p data-detail-authorship-label="">{authorship.label}</p>
+    {authorship.references.length === 0 ? null : (
+      <div className={styles.factsSection}>
+        <dl className={styles.facts} data-detail-authorship-references="">
+          {authorship.references.map((reference, index) => (
+            <div key={reference.label}>
+              <dt>{reference.label}</dt>
+              <dd
+                data-detail-reading-anchor={
+                  vertical ? `authorship-${index}` : undefined
+                }
+              >
+                {vertical ? (
+                  <VerticalText text={reference.value} />
+                ) : (
+                  reference.value
+                )}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    )}
+  </section>
 );
 
 const DetailReadingFlow = ({
   detail,
   vertical = false,
-  collapsible = false,
+  only,
 }: {
   readonly detail: CatalogDetailPresentation;
   readonly vertical?: boolean;
-  readonly collapsible?: boolean;
+  readonly only?: string;
 }) => {
   const sections = (detail.sections ?? []).filter(
-    (section) => detail.contentType !== "work" || section.key !== "description",
+    (section) =>
+      (detail.contentType !== "work" || section.key !== "description") &&
+      (only === undefined || section.key === only),
   );
-  const authorship = authorshipOf(detail);
+  const authorship =
+    only === undefined || only === "authorship" ? authorshipOf(detail) : null;
   if (!hasReadingFlow(detail)) return null;
 
   return (
     <div className={styles.readingFlow}>
       {sections.map((section) => (
-        <DetailGroup
+        <section
           key={section.key}
-          group={section.key}
-          title={section.title}
-          collapsible={collapsible}
-          open={
-            detail.summary === undefined &&
-            detail.facts.length === 0 &&
-            section === sections[0]
-          }
+          className={styles.readingSection}
+          data-detail-section={section.key}
         >
-          <section
-            className={styles.readingSection}
-            data-detail-section={section.key}
-          >
-            {collapsible ? null : <h2>{section.title}</h2>}
-            <p data-detail-reading-anchor={vertical ? section.key : undefined}>
-              {vertical ? <VerticalText text={section.text} /> : section.text}
-            </p>
-          </section>
-        </DetailGroup>
+          <h2>{section.title}</h2>
+          <p data-detail-reading-anchor={vertical ? section.key : undefined}>
+            {vertical ? <VerticalText text={section.text} /> : section.text}
+          </p>
+        </section>
       ))}
       {authorship === null ? null : (
-        <DetailAuthorship
-          authorship={authorship}
-          vertical={vertical}
-          collapsible={collapsible}
-        />
+        <DetailAuthorship authorship={authorship} vertical={vertical} />
       )}
-      {detail.sourceCitations.length === 0 ? null : (
-        <DetailGroup
-          group="sources"
-          title="资料来源"
-          collapsible={collapsible}
-          open={sections.length === 0 && authorship === null}
+      {detail.sourceCitations.length === 0 ||
+      (only !== undefined && only !== "sources") ? null : (
+        <section
+          className={styles.readingSection}
+          data-detail-section="sources"
         >
-          <section
-            className={styles.readingSection}
-            data-detail-section="sources"
-          >
-            {collapsible ? null : <h2>资料来源</h2>}
-            <ul className={styles.sources}>
-              {detail.sourceCitations.map((citation, index) => (
-                <li
-                  key={`${citation.label}-${index}`}
-                  data-detail-reading-anchor={
-                    vertical ? `source-${index}` : undefined
-                  }
-                >
-                  <strong>
+          <h2>资料来源</h2>
+          <ul className={styles.sources}>
+            {detail.sourceCitations.map((citation, index) => (
+              <li
+                key={`${citation.label}-${index}`}
+                data-detail-reading-anchor={
+                  vertical ? `source-${index}` : undefined
+                }
+              >
+                <strong>
+                  {vertical ? (
+                    <VerticalText text={citation.label} />
+                  ) : (
+                    citation.label
+                  )}
+                </strong>
+                {citation.citation === undefined ? null : (
+                  <span>
                     {vertical ? (
-                      <VerticalText text={citation.label} />
+                      <VerticalText text={citation.citation} />
                     ) : (
-                      citation.label
+                      citation.citation
                     )}
-                  </strong>
-                  {citation.citation === undefined ? null : (
-                    <span>
-                      {vertical ? (
-                        <VerticalText text={citation.citation} />
-                      ) : (
-                        citation.citation
-                      )}
-                    </span>
-                  )}
-                  {citation.url === undefined ? null : (
-                    <a href={citation.url} rel="noreferrer" target="_blank">
-                      查看来源
-                    </a>
-                  )}
-                  <span className={styles.citationScope}>
-                    适用于：{citation.scopeLabel}
                   </span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        </DetailGroup>
+                )}
+                {citation.url === undefined ? null : (
+                  <a href={citation.url} rel="noreferrer" target="_blank">
+                    查看来源
+                  </a>
+                )}
+                <span className={styles.citationScope}>
+                  适用于：{citation.scopeLabel}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
     </div>
   );
+};
+
+/** Categories use the same complete semantic renderers as every other mode. */
+const desktopArchiveSections = (
+  detail: CatalogDetailPresentation,
+): readonly DesktopArchiveSection[] => {
+  const sections: DesktopArchiveSection[] = [
+    {
+      key: "overview",
+      label: detail.contentType === "work" ? "作品" : "概览",
+      content: (
+        <>
+          <DetailIdentity detail={detail} vertical headingOnly />
+          <DetailIdentity detail={detail} vertical omitHeading />
+        </>
+      ),
+    },
+  ];
+  const labels = {
+    description: "简介",
+    transcription: "释文",
+    historicalContext: "背景",
+    scholarlyResearch: "研究",
+  } as const;
+  for (const section of detail.sections ?? []) {
+    if (detail.contentType === "work" && section.key === "description")
+      continue;
+    sections.push({
+      key: section.key,
+      label: labels[section.key],
+      content: (
+        <DetailReadingFlow detail={detail} vertical only={section.key} />
+      ),
+    });
+  }
+  if (authorshipOf(detail) !== null)
+    sections.push({
+      key: "authorship",
+      label: "性质",
+      content: <DetailReadingFlow detail={detail} vertical only="authorship" />,
+    });
+  if (detail.sourceCitations.length > 0)
+    sections.push({
+      key: "sources",
+      label: "来源",
+      content: <DetailReadingFlow detail={detail} vertical only="sources" />,
+    });
+  return sections;
 };
 
 /** Wide compositions collapse the reading flow so the media keeps its size;
@@ -529,18 +494,7 @@ export const CatalogDetailScreen = ({
           detail={detail}
           detailActions={detailActions}
           positionKey={positionKey}
-          leading={<DetailIdentity detail={detail} vertical headingOnly />}
-          information={
-            <>
-              <DetailIdentity
-                detail={detail}
-                vertical
-                omitHeading
-                collapsible
-              />
-              <DetailReadingFlow detail={detail} vertical collapsible />
-            </>
-          }
+          archiveSections={desktopArchiveSections(detail)}
           onActiveMediaIndexChange={onActiveMediaIndexChange}
           onOpenViewer={onOpenViewer}
           viewerOpen={mediaMotionSuspended}
