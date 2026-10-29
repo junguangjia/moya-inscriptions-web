@@ -19,7 +19,7 @@ import { homeFeeds, parseHomeFeed } from "./home-feed";
 import styles from "./home-screen.module.css";
 import { listMediaPriority } from "../media/responsive-media";
 import { useProductShell } from "../product-shell/product-shell";
-import { AnimatedCategoryIcon } from "@moya/ui";
+import { AnimatedCategoryIcon, Icon } from "@moya/ui";
 import { AnimatedTopTabs } from "../shell/animated-top-tabs";
 
 import type { ReactNode } from "react";
@@ -44,6 +44,9 @@ const homeTabItems = homeFeeds.map((id) => ({
   label: feedLabels[id],
   ...(id === "discover" ? {} : { icon: <AnimatedCategoryIcon name={id} /> }),
 }));
+const desktopHomeTabItems = homeTabItems.map((item) =>
+  item.id === "discover" ? { ...item, icon: <Icon name="category" /> } : item,
+);
 
 interface HomeTabMotion {
   readonly setProgress: (progress: number) => void;
@@ -63,7 +66,7 @@ const HomeTabs = forwardRef<
   useImperativeHandle(ref, () => ({ setProgress }), []);
   return (
     <AnimatedTopTabs
-      items={homeTabItems}
+      items={desktop ? desktopHomeTabItems : homeTabItems}
       activeKey={activeFeed}
       progress={progress}
       onSelect={onSelect}

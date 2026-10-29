@@ -74,6 +74,9 @@
 .label {
   display: block;
 }
+.labelSlot {
+  display: block;
+}
 
 .viewport[data-orientation="vertical"] {
   position: fixed;
@@ -116,6 +119,23 @@
   font-family: var(--yoyi-font-editorial);
   letter-spacing: 0.12em;
 }
+.viewport[data-orientation="vertical"] .labelSlot {
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(calc(-1 * var(--yoyi-space-2)));
+  transition:
+    max-height var(--yoyi-duration-normal) var(--yoyi-easing-standard),
+    opacity var(--yoyi-duration-normal) var(--yoyi-easing-standard),
+    transform var(--yoyi-duration-normal) var(--yoyi-easing-standard);
+}
+.viewport[data-orientation="vertical"]
+  .tab[data-label-expanded="true"]
+  .labelSlot {
+  max-height: 3em;
+  opacity: 1;
+  transform: translateY(0);
+}
 .viewport[data-orientation="vertical"] .iconSlot {
   width: 20px;
   opacity: 1;
@@ -148,5 +168,9 @@
   .icon,
   .indicator {
     transition: none;
+  }
+  .viewport[data-orientation="vertical"] .labelSlot {
+    transition: none;
+    transform: none;
   }
 }

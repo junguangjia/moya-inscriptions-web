@@ -19,3 +19,18 @@
   --yoyi-desktop-reader-colophon-empty: 96px;
   --yoyi-desktop-reader-media-max: 960px;
 }
+
+/* A short destination must not resize the desktop gallery when its document
+   scrollbar disappears. The fallback also covers older supported WebKit. */
+@media (min-width: 56rem) {
+  html[data-device-class="desktop"] {
+    scrollbar-gutter: stable;
+  }
+  /* Existing modal owners lock body. Leaving html overflow unset while that
+     lock is held preserves the browser's body-to-viewport propagation. */
+  html[data-device-class="desktop"]:not(
+      :has(body[style*="overflow: hidden"], body[style*="overflow-y: hidden"])
+    ) {
+    overflow-y: scroll;
+  }
+}

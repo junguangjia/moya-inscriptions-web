@@ -17,9 +17,6 @@
   font-weight: 600;
   line-height: 1.4;
 }
-.homeSurface[data-desktop-presentation="true"] {
-  padding-right: calc(var(--yoyi-desktop-category-width) + var(--yoyi-space-7));
-}
 .homeSurface[data-desktop-presentation="true"] .homeHeader {
   display: flex;
   min-height: 88px;
@@ -33,12 +30,6 @@
 }
 .homeSurface[data-desktop-presentation="true"] .feedPanel {
   padding: var(--yoyi-space-3) var(--yoyi-space-8) var(--yoyi-space-10);
-}
-.homeSurface[data-desktop-presentation="true"][data-discussion-surface] {
-  max-width: calc(
-    var(--yoyi-desktop-workspace-max) + var(--yoyi-desktop-category-width)
-  );
-  margin-inline: auto;
 }
 
 .homeSurface[data-home-platform="phone"],

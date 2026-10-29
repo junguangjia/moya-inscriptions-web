@@ -1036,6 +1036,15 @@ export const ProductShell = ({
       }
       const sourceDestination = activeDestinationRef.current;
       saveScroll(sourceDestination, platformRef.current);
+      window.history.replaceState(
+        currentProductHistoryState(
+          primaryHistoryState(
+            sourceDestination,
+            scrollPositionsRef.current[sourceDestination],
+          ),
+        ),
+        "",
+      );
       settingsOpenerRef.current = opener;
       window.history.pushState(
         currentProductHistoryState(settingsHistoryState(sourceDestination)),

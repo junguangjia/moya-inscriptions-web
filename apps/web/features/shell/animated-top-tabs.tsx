@@ -51,6 +51,20 @@ export const AnimatedTopTabs = <Key extends string>({
   const progressDriven = progress !== undefined && Number.isFinite(progress);
   const settled = Math.abs(position - selectedIndex) < 0.0001;
   const [indicator, setIndicator] = useState({ left: 0, width: 0 });
+  const [labelState, setLabelState] = useState<{
+    active: Key;
+    expanded: Key | null;
+  }>({ active: activeKey, expanded: null });
+  let expandedKey = labelState.expanded;
+  if (labelState.active !== activeKey) {
+    expandedKey = expandedKey === activeKey ? activeKey : null;
+    setLabelState({ active: activeKey, expanded: expandedKey });
+  }
+  const select = (key: Key) => {
+    if (orientation === "vertical")
+      setLabelState((current) => ({ ...current, expanded: key }));
+    onSelect(key);
+  };
 
   useLayoutEffect(() => {
     const measure = () => {
@@ -157,12 +171,18 @@ export const AnimatedTopTabs = <Key extends string>({
                 (idPrefix ? `${idPrefix}-panel-${id}` : undefined)
               }
               aria-selected={selected}
+              aria-label={label}
               title={label}
               tabIndex={selected ? 0 : -1}
               className={styles.tab}
               data-tab-key={id}
+              data-label-expanded={
+                orientation === "vertical" && expandedKey === id
+                  ? "true"
+                  : undefined
+              }
               style={{ "--top-tab-activation": activation } as CSSProperties}
-              onClick={() => onSelect(id)}
+              onClick={() => select(id)}
               onKeyDown={(event) => {
                 const next =
                   event.key ===
@@ -180,7 +200,7 @@ export const AnimatedTopTabs = <Key extends string>({
                 const item = items[next];
                 if (!item) return;
                 event.preventDefault();
-                onSelect(item.id);
+                select(item.id);
                 buttons.current.get(item.id)?.focus({ preventScroll: true });
               }}
             >
@@ -189,7 +209,13 @@ export const AnimatedTopTabs = <Key extends string>({
                   <span className={styles.icon}>{icon}</span>
                 </span>
               )}
-              <span className={styles.label}>{label}</span>
+              <span
+                className={styles.labelSlot}
+                data-tab-label-slot=""
+                aria-hidden={orientation === "vertical" ? true : undefined}
+              >
+                <span className={styles.label}>{label}</span>
+              </span>
             </button>
           );
         })}

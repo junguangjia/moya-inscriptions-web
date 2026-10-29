@@ -563,6 +563,7 @@ const beforeUnloadPrevented = () => {
   act(() => window.dispatchEvent(event));
   return event.defaultPrevented;
 };
+
 const traverse = (state: unknown) =>
   act(() => {
     window.history.replaceState(state, "");
@@ -601,6 +602,35 @@ const withHistoryMarkers = (state: unknown) => ({
 });
 
 describe("ProductShell", () => {
+  it("checkpoints the primary scroll entry before settings so Back restores the saved position", async () => {
+    const { container } = renderProductShell(<ProductShellObserver />);
+    await act(async () => vi.runAllTimers());
+    const scroller = scrollable(
+      container.querySelector<HTMLElement>(
+        '[data-primary-destination="home"]',
+      )!,
+    );
+    scroller.scrollTop = 213;
+    const replace = vi.spyOn(window.history, "replaceState");
+    const opener = container.querySelector<HTMLButtonElement>(
+      "[data-settings-request-test]",
+    )!;
+    act(() => observedProductShell!.requestSettings(opener));
+    const saved = replace.mock.calls.find(
+      ([state]) => parseProductHistoryState(state)?.kind === "primary",
+    )![0];
+    expect(parseProductHistoryState(saved)).toEqual(
+      primaryHistoryState("home", 213),
+    );
+    await act(async () => {
+      scroller.scrollTop = 0;
+      window.history.replaceState(saved, "", "/dev/t02p");
+      window.dispatchEvent(new PopStateEvent("popstate", { state: saved }));
+    });
+    await act(async () => vi.runAllTimers());
+    expect(scroller.scrollTop).toBe(213);
+    expect(document.activeElement).toBe(opener);
+  });
   beforeEach(() => {
     observedAuthReturn = null;
     vi.useFakeTimers();

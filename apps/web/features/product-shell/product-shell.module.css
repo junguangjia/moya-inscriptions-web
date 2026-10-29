@@ -8,11 +8,9 @@
 
 .productShell[data-desktop="true"] .primaryLayer {
   padding-right: calc(
-    var(--yoyi-desktop-navigation-width) + var(--yoyi-space-9)
+    var(--yoyi-desktop-navigation-width) + var(--yoyi-space-9) +
+      var(--yoyi-desktop-category-width) + var(--yoyi-space-7)
   );
-}
-.productShell[data-desktop="true"][data-browse-only="true"] .primaryLayer {
-  padding-right: 0;
 }
 
 .primaryLayer {

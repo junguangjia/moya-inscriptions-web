@@ -1331,8 +1331,11 @@
 /* Desktop surfaces share tokens; phone and tablet rules remain independent. */
 
 :global(html[data-device-class="desktop"][data-platform="pc"]) .page {
-  max-width: var(--yoyi-desktop-workspace-max);
+  max-width: 100%;
   margin-inline: auto;
+}
+:global(html[data-device-class="desktop"][data-platform="pc"]) .page .header {
+  padding-inline: var(--yoyi-space-8);
 }
 
 :global(
