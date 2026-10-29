@@ -224,13 +224,13 @@ describe("Formal root on a wide screen (pc-browse-only-v1)", () => {
       (element) => element.closest("[hidden]") === null,
     );
 
-  it("renders the pc Formal root browse-only for a visitor without an account", async () => {
+  it("renders the complete pc product for a visitor without an account", async () => {
     readFormalRequestContextMock.mockResolvedValue({ initialPlatform: "pc" });
     const container = await renderStatic();
 
-    expect(browseOnly(container)).toBe("true");
-    expect(navigationHidden(container)).toBe(true);
-    expect(shown(container, "[data-create-work-action]")).toEqual([]);
+    expect(browseOnly(container)).toBe("false");
+    expect(navigationHidden(container)).toBe(false);
+    expect(shown(container, "[data-create-work-action]")).not.toEqual([]);
     expect(shown(container, "[data-search-trigger]")).not.toEqual([]);
     expect(container.textContent).toContain("真实书法样例");
     expect(container.textContent).toContain("豫ICP备");
@@ -293,9 +293,9 @@ describe("Formal root on a wide screen (pc-browse-only-v1)", () => {
       cookie: "a session",
       token: visitorSession,
       status: 401,
-      expected: "true",
+      expected: "false",
     },
-    { cookie: "no session", token: undefined, status: 401, expected: "true" },
+    { cookie: "no session", token: undefined, status: 401, expected: "false" },
   ] as const)(
     "settles pc with $cookie on /me $status as browse-only $expected",
     async ({ token, status, expected }) => {
@@ -306,7 +306,7 @@ describe("Formal root on a wide screen (pc-browse-only-v1)", () => {
         token,
       });
       // The server render cannot know the session yet: browse-only first.
-      expect(browseOnly(await renderStatic())).toBe("true");
+      expect(browseOnly(await renderStatic())).toBe("false");
 
       vi.useFakeTimers();
       vi.stubGlobal(
@@ -367,12 +367,12 @@ describe("Formal root on a wide screen (pc-browse-only-v1)", () => {
         ),
       ).toBe(true);
       expect(browseOnly(container)).toBe(expected);
-      expect(navigationHidden(container)).toBe(expected === "true");
+      expect(navigationHidden(container)).toBe(false);
       expect(shown(container, "[data-search-trigger]")).not.toEqual([]);
     },
   );
 
-  it("spends a ?topic= link refused at 1280px, so 讨论 at 800px does not open it", async () => {
+  it("keeps a real topic link available across desktop and compact reflow", async () => {
     readFormalRequestContextMock.mockResolvedValue({ initialPlatform: "pc" });
     vi.useFakeTimers();
     vi.stubGlobal(
@@ -453,12 +453,10 @@ describe("Formal root on a wide screen (pc-browse-only-v1)", () => {
     await frames();
 
     const shell = container.querySelector<HTMLElement>("[data-product-shell]");
-    expect(browseOnly(container)).toBe("true");
-    expect(shell?.dataset.activeDestination).toBe("home");
-    expect(shell?.dataset.topicOpen).toBe("false");
-    expect(container.querySelector("[data-thread-detail]")).toBeNull();
-    expect(window.location.search).not.toContain("topic=");
-
+    expect(browseOnly(container)).toBe("false");
+    expect(shell?.dataset.topicOpen).toBe("true");
+    expect(container.querySelector("[data-thread-detail]")).not.toBeNull();
+    expect(window.location.search).toContain("topic=");
     act(() => {
       Object.defineProperty(window, "innerWidth", {
         configurable: true,
@@ -468,17 +466,8 @@ describe("Formal root on a wide screen (pc-browse-only-v1)", () => {
     });
     await frames();
     expect(browseOnly(container)).toBe("false");
-    expect(navigationHidden(container)).toBe(false);
-
-    const discussion = container.querySelector<HTMLButtonElement>(
-      '[data-primary-navigation-destination="discussion"]',
-    );
-    expect(discussion).not.toBeNull();
-    act(() => discussion!.click());
-    await frames();
-
-    expect(shell?.dataset.activeDestination).toBe("discussion");
-    expect(shell?.dataset.topicOpen).toBe("false");
-    expect(container.querySelector("[data-thread-detail]")).toBeNull();
+    expect(navigationHidden(container)).toBe(true); // The open topic owns the modal navigation layer.
+    expect(shell?.dataset.topicOpen).toBe("true");
+    expect(window.location.search).toContain("topic=");
   });
 });

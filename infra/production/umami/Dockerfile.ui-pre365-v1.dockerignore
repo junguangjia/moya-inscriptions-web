@@ -23,3 +23,6 @@
 !upstream-chinese.sha256
 !upstream-pg-tls.sha256
 !upstream-pool.sha256
+!visitor-device.patch
+!visitor-device-compat-upstream.sha256
+!visitor-device-compat.sha256

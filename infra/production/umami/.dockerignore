@@ -20,3 +20,6 @@
 !archive-assets.sha256
 !ip-province-fallback.patch
 !ip-province-fallback.sha256
+!visitor-device.patch
+!visitor-device-upstream.sha256
+!visitor-device.sha256

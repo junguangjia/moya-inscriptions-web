@@ -5,6 +5,52 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "clientHints": {
+            "additionalProperties": false,
+            "properties": {
+              "brands": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "brand": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "pattern": "^\\P{Cc}*$",
+                      "type": "string"
+                    },
+                    "version": {
+                      "maxLength": 32,
+                      "pattern": "^\\P{Cc}*$",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["brand", "version"],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "mobile": {
+                "type": "boolean"
+              },
+              "model": {
+                "maxLength": 128,
+                "pattern": "^\\P{Cc}*$",
+                "type": "string"
+              },
+              "platform": {
+                "maxLength": 32,
+                "pattern": "^\\P{Cc}*$",
+                "type": "string"
+              },
+              "platformVersion": {
+                "maxLength": 64,
+                "pattern": "^\\P{Cc}*$",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
           "events": {
             "items": {
               "additionalProperties": false,

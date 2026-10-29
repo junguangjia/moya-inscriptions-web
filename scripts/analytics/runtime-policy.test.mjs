@@ -23,6 +23,7 @@ import {
 } from "./export-umami-runtime.mjs";
 import {
   UMAMI_PG_TLS_HOST_SHA256,
+  UMAMI_VISITOR_DEVICE_SHA256,
   UMAMI_GEOGRAPHY_POLICY,
   UMAMI_CHINA_MAP_SHA256,
 } from "./common.mjs";
@@ -57,6 +58,7 @@ function imageMetadata(policy) {
     "com.artvenn.umami.pool-max": "3",
     "com.artvenn.umami.locale": "zh-CN",
     "com.artvenn.umami.patch-sha256": policy.workspaceIdentitySha256,
+    "com.artvenn.umami.visitor-device-sha256": UMAMI_VISITOR_DEVICE_SHA256,
     "com.artvenn.umami.pg-tls-host-sha256": UMAMI_PG_TLS_HOST_SHA256,
     "com.artvenn.umami.province-fallback-sha256": policy.provinceFallbackSha256,
     "com.artvenn.umami.database-timezone": policy.postgresTimeZone,
@@ -85,13 +87,20 @@ function imageMetadata(policy) {
   };
 }
 
-test("default recipe, source, province patch, environment and systemd bytes are preserved", async () => {
-  for (const [name, expected] of Object.entries(metadata.preservedDefaults))
+test("baseline province, environment and service bytes are preserved outside the approved additive layer", async () => {
+  const changedByApprovedVisitorLayer = new Set([
+    "infra/production/umami/Dockerfile",
+    "infra/production/umami/.dockerignore",
+    "infra/production/umami/source.json",
+  ]);
+  for (const [name, expected] of Object.entries(metadata.preservedDefaults)) {
+    if (changedByApprovedVisitorLayer.has(name)) continue;
     assert.equal(
       hash(await readFile(path.join(repository, name))),
       expected,
       name,
     );
+  }
   assert.equal(
     runtimePolicy().provinceFallbackSha256,
     "19c912fe03a013b817a86253632ac1d4957162cf3194d4cec6c08b10fac7ef6d",

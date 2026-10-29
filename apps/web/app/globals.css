@@ -16,12 +16,6 @@ body {
   margin: 0;
 }
 
-/* A wide screen leaving /login or /register for Home paints nothing of the
-   auth page meanwhile (pc-browse-only-v1). */
-html[data-auth-redirect="home"] body {
-  visibility: hidden;
-}
-
 /* Phone interaction does not show persistent focus frames after taps or
    programmatic return focus. Desktop keyboard focus remains unchanged. */
 @media (hover: none), (pointer: coarse), (max-width: 767px) {

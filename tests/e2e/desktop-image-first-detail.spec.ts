@@ -121,7 +121,7 @@ test("image selection and archive category survive the viewer and detail remount
   const detail = page.locator('[data-detail-state="loaded"]');
   const media = detail.locator("[data-detail-calligraphy-media]");
   await expect(media).toBeVisible();
-  await expect(detail.locator("[data-desktop-colophon-cue]")).toHaveCount(0);
+  await expect(detail.locator("[data-desktop-colophon-cue]")).toBeVisible();
   const category = detail.getByRole("tab", { name: "释文", exact: true });
   await category.click();
   const next = detail.getByRole("button", { name: "下一张图像", exact: true });

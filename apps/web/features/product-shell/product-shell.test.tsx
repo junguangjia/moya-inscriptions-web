@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
 import { act, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { createRoot } from "react-dom/client";
-import { renderToStaticMarkup } from "react-dom/server";
+import { createRoot, hydrateRoot } from "react-dom/client";
+import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/navigation", () => ({
@@ -602,6 +602,54 @@ const withHistoryMarkers = (state: unknown) => ({
 });
 
 describe("ProductShell", () => {
+  it("hydrates a Macintosh iPad from the server seed before selecting its real tablet preferences", async () => {
+    const element = (
+      <ProductShell
+        initialPlatform="pc"
+        home={<ProductShellObserver />}
+        user={<p>user</p>}
+        discussion={<p>discussion</p>}
+      />
+    );
+    const container = document.createElement("div");
+    document.body.append(container);
+    const originalNavigator = navigator;
+    try {
+      vi.stubGlobal("navigator", undefined);
+      container.innerHTML = renderToString(element);
+      vi.stubGlobal("navigator", {
+        userAgent:
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/605.1.15 Version/17.0 Safari/605.1.15",
+        maxTouchPoints: 5,
+      });
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: 1194,
+      });
+      window.localStorage.setItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY, "double");
+      window.localStorage.setItem(
+        DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
+        "single",
+      );
+      const errors: unknown[] = [];
+      await act(async () => {
+        const root = hydrateRoot(container, element, {
+          onRecoverableError: (error) => errors.push(error),
+        });
+        mountedRoots.push(root);
+      });
+      await act(async () => vi.runAllTimers());
+      expect(errors).toEqual([]);
+      expect(observedProductShell?.desktop).toBe(false);
+      expect(observedProductShell?.feedLayout).toBe("double");
+      expect(
+        window.localStorage.getItem(DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY),
+      ).toBe("single");
+    } finally {
+      vi.stubGlobal("navigator", originalNavigator);
+      vi.unstubAllGlobals();
+    }
+  });
   it("checkpoints the primary scroll entry before settings so Back restores the saved position", async () => {
     const { container } = renderProductShell(<ProductShellObserver />);
     await act(async () => vi.runAllTimers());

@@ -269,8 +269,8 @@ export interface ProductShellContextValue {
   /** Full desktop composition; compact desktop windows still own desktop preferences. */
   readonly desktop: boolean;
   /**
-   * Wide screens without an account only browse (pc-browse-only-v1): no
-   * navigation, comments, actions, profiles or editor. False without a policy.
+   * Retained explicit read-only presentation state. The Formal boundary no
+   * longer activates it by device size (#260). Account access is independent.
    */
   readonly browseOnly: boolean;
   /** Whether browse-only applies right now, read live (not from render state). */
@@ -333,7 +333,7 @@ export interface ProductShellProps {
     properties: ProductShellTopicOverlayRenderProps,
   ) => ReactNode;
   readonly showDevelopmentPagerControls?: boolean;
-  /** Only the Formal root passes it (pc-browse-only-v1); absent keeps it off. */
+  /** Legacy explicit compatibility policy; not activated by the Formal root. */
   readonly browseOnlyPolicy?: BrowseOnlyPolicy;
 }
 
@@ -532,12 +532,11 @@ export const ProductShell = ({
     useState<PrimaryDestination>("home");
   const [platform, setPlatform] =
     useState<PresentationPlatform>(initialPlatform);
-  const [deviceClass, setDeviceClass] = useState<DeviceClass>(() =>
-    typeof navigator === "undefined"
-      ? initialPlatform === "pc"
-        ? "desktop"
-        : initialPlatform
-      : readRuntimeDeviceClass(navigator as NavigatorWithUserAgentData),
+  // Server markup and the first hydration pass must use the same seed. The
+  // runtime effect below then resolves physical identity (including iPadOS
+  // reporting Macintosh), without replacing the server's navigation tree.
+  const [deviceClass, setDeviceClass] = useState<DeviceClass>(
+    initialPlatform === "pc" ? "desktop" : initialPlatform,
   );
   const desktop = deviceClass === "desktop" && platform === "pc";
   // Seeded from the server's platform, so a wide screen renders browse-only

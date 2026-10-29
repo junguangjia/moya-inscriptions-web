@@ -136,5 +136,21 @@
     "value": "UTC",
     "options": "-c timezone=UTC",
     "scope": "Umami database connections only; preserve JavaScript TZ, APP_SECRET and DATABASE_URL"
+  },
+  "visitorDevice": {
+    "patch": "visitor-device.patch",
+    "sha256": "05c6347b72c348cb5685e3c509a871689c9ac28f70a8562428009dc07e15b28e",
+    "upstreamHashes": "visitor-device-upstream.sha256",
+    "patchedHashes": "visitor-device.sha256",
+    "compatibilityUpstreamHashes": "visitor-device-compat-upstream.sha256",
+    "compatibilityPatchedHashes": "visitor-device-compat.sha256",
+    "files": 28,
+    "database": "PostgreSQL only; native session/visit/event identities remain unchanged",
+    "visitorKey": "moyaBrowserId: server-accepted canonical browser UUID on each event",
+    "accountKey": "moyaAccountId: server-verified account HMAC; count separately and never add to browser UV",
+    "legacyPolicy": "Missing/invalid/conflicting event keys use explicitly qualified legacy session fallback; exact retained history is reconciled before activation",
+    "devicePolicy": "Existing ua-parser-js 2.0.10, explicit UA shells and optional bounded Client Hints; vendor/model in existing session_data, conflicts remain unknown",
+    "sessionDataKeys": ["moyaDeviceVendor", "moyaDeviceModel"],
+    "conflictValue": "__moya_conflict__"
   }
 }

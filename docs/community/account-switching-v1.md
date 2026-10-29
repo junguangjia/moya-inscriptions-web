@@ -20,7 +20,7 @@ Owner physical-phone acceptance. No Production deployment.
 | Sign out current                 | Signed out; others stay listed                     | Same               | Server revoke of the current account only      |
 | Remove / sign out all            | Server revoke, then removed                        | Same               | Other devices unaffected                       |
 | Other tab after a switch         | Refreshes to the new account; stale writes refused | Same               | No cross-account write                         |
-| PC / wide screen                 | Browse-only (no sign-in)                           | Same               | pc-browse-only-v1                              |
+| PC / wide screen                 | Existing sign-in and account entries available     | Same               | #260; normal account access still applies      |
 | Appeal login failure             | Ordinary session kept                              | Same               | Appeal flow                                    |
 
 ## Session storage
@@ -193,8 +193,9 @@ same-origin checks of the author relay.
 
 ## Known limitations
 
-- On wide screens 添加账号 and 重新登录 open `/login`, which pc-browse-only-v1
-  sends back to Home in public mode.
+- The former wide-screen sign-in restriction is retired by
+  #260; 添加账号 and 重新登录 use the existing authentication and account
+  permissions.
 - Article editor uploads are not visible to the settings guard: they live in the
   article editor's own upload session, which exposes no in-flight signal. The
   editor's leave prompt covers unsaved edits and a pending publication.

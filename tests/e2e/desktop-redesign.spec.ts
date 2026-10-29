@@ -240,28 +240,23 @@ test("desktop zoom equivalents keep navigation and settings reachable", async ({
   }
 });
 
-test("formal anonymous wide-screen restrictions survive the redesign", async ({
+test("formal anonymous desktop keeps navigation, publishing and settings available", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto("/");
-  await expect(page.locator("[data-product-shell]")).toHaveAttribute(
-    "data-browse-only",
-    "true",
-  );
-  await expect(page.locator("[data-desktop-navigation]")).not.toBeVisible();
-  await expect(page.locator("[data-create-work-action]")).toHaveCount(0);
-  await expect(page.locator("[data-desktop-display-settings]")).toHaveCount(1);
-  await page.locator("[data-desktop-display-settings]").click();
+  const shell = page.locator("[data-product-shell]");
+  await expect(shell).toHaveAttribute("data-browse-only", "false");
+  await expect(page.locator("[data-desktop-navigation]")).toBeVisible();
+  await expect(page.locator("[data-create-work-action]")).toBeVisible();
+  const gear = page.locator("[data-desktop-settings]");
+  await gear.click();
   await page.locator("[data-feed-layout-toggle]").click();
   await expect(page.locator("[data-feed-layout-toggle]")).toHaveAttribute(
     "data-feed-layout-mode",
     "double",
   );
   await page.keyboard.press("Escape");
-  await expect(page.locator("[data-desktop-display-settings]")).toBeFocused();
-  await expect(page.locator("[data-product-shell]")).toHaveAttribute(
-    "data-browse-only",
-    "true",
-  );
+  await expect(gear).toBeFocused();
+  await expect(shell).toHaveAttribute("data-browse-only", "false");
 });

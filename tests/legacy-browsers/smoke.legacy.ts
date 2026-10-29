@@ -22,9 +22,7 @@ const click = async (locator: Locator) => {
   await locator.click();
 };
 
-// From 896px the public product is browse-only for visitors without an
-// account (pc-browse-only-v1): no dock, no 讨论/用户, and /login and /register
-// go to Home. Steps that need them run in a desktop window below that width.
+// Compact cases retain their original viewport; desktop navigation is no longer hidden.
 const narrow = (page: Page) =>
   page.setViewportSize({ width: 800, height: 900 });
 
@@ -144,13 +142,15 @@ test("opens a detail and the viewer, then goes back twice", async ({
   await expect(shell(page)).toBeVisible();
 });
 
-test("opens and closes search at 1280 without the dock", async ({ page }) => {
+test("opens and closes search at1280 with the complete navigation", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await enter(page);
-  await expect(shell(page)).toHaveAttribute("data-browse-only", "true");
+  await expect(shell(page)).toHaveAttribute("data-browse-only", "false");
   await expect(
     surface(page).getByRole("navigation", { name: "主要内容" }),
-  ).toBeHidden();
+  ).toBeVisible();
   await click(page.getByRole("button", { name: "打开搜索", exact: true }));
   const search = page.getByRole("dialog", { name: "搜索", exact: true });
   await expect(search).toBeVisible();

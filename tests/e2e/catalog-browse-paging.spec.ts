@@ -16,13 +16,7 @@ const productShell = (page: Page) =>
 const feedSurface = (page: Page, feed: HomeFeed) =>
   productShell(page).locator(`[data-home-feed-panel="${feed}"]`);
 
-// A wide screen without an account only browses (pc-browse-only-v1): Home
-// keeps every feed, but the dock and 讨论 return only below the wide width.
-const wideProjects = new Set([
-  "desktop-chromium",
-  "desktop-webkit",
-  "tablet-landscape-webkit",
-]);
+// Product navigation remains available at every width.
 
 const primaryNavigationLayer = (page: Page) =>
   formalSurface(page).locator("[data-primary-navigation-layer]");
@@ -198,17 +192,13 @@ test.beforeAll(async ({ request }) => {
 
 test("Formal Home catalog feeds progressively load and retain later pages", async ({
   page,
-}, testInfo) => {
+}) => {
   if (pagingRuntime === undefined) throw new Error("Missing paging runtime");
-  const wide = wideProjects.has(testInfo.project.name);
   const response = await page.goto(pagingRuntime.baseUrl);
   expect(response?.status()).toBe(200);
   await expect(formalSurface(page)).toBeVisible();
   // The fixture issues no session cookie, so every visitor is anonymous.
-  await expect(productShell(page)).toHaveAttribute(
-    "data-browse-only",
-    wide ? "true" : "false",
-  );
+  await expect(productShell(page)).toHaveAttribute("data-browse-only", "false");
   await expect(
     feedSurface(page, "discover").locator("[data-catalog-paging-control]"),
   ).toHaveCount(0);
@@ -368,32 +358,10 @@ test("Formal Home catalog feeds progressively load and retain later pages", asyn
   // primary destination must preserve fetched records and their reading offset.
   await selectHomeFeed(page, "碑刻", "inscriptions");
   await expect(inscriptionCards).toHaveCount(55);
-  if (wide) {
-    // Browse-only has no dock and no 讨论. Below the wide width both return,
-    // so the primary round trip runs at 800px, then the wide layout returns.
-    const viewport = page.viewportSize();
-    if (viewport === null) throw new Error("Missing viewport");
-    await expect(primaryNavigationLayer(page)).toBeHidden();
-    await page.setViewportSize({ height: viewport.height, width: 800 });
-    await expect(productShell(page)).toHaveAttribute(
-      "data-browse-only",
-      "false",
-    );
-    await selectPrimary(page, "讨论");
-    await selectPrimary(page, "首页");
-    await page.setViewportSize(viewport);
-    await expect(productShell(page)).toHaveAttribute(
-      "data-browse-only",
-      "true",
-    );
-    await expect(primaryNavigationLayer(page)).toBeHidden();
-    await expect(productShell(page)).toHaveAttribute(
-      "data-active-destination",
-      "home",
-    );
-  } else {
-    await selectPrimary(page, "讨论");
-  }
+  // Desktop navigation is fixed-positioned; its flow wrapper can have no box.
+  await expect(primaryNavigationLayer(page)).not.toHaveAttribute("hidden");
+  await selectPrimary(page, "讨论");
+  await selectPrimary(page, "首页");
   await selectHomeFeed(page, "书帖", "calligraphy");
   await expect(allCards).toHaveCount(48);
   await expect

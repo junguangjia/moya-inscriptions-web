@@ -70,8 +70,8 @@ export interface ProductApplicationProps extends Pick<
   readonly liveNotifications?: boolean;
   readonly articleAuthoring?: boolean;
   /**
-   * Wide screens are browse-only for visitors without an account
-   * (pc-browse-only-v1); absent when the policy does not apply.
+   * Legacy explicit presentation policy for compatibility callers. #260 retires
+   * its activation at the Formal boundary; device size never hides entries.
    */
   readonly wideScreenBrowseOnly?: WideScreenBrowseOnlyHint;
 }

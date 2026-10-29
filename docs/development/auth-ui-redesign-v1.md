@@ -185,16 +185,11 @@ AUTH_UI_ARTIFACT_DIR=.local/auth-ui-e2e/email-first \
   --config e2e/auth-ui.playwright.config.ts
 ```
 
-Wide screens (pc-browse-only-v1): with `MOYA_WIDE_SCREEN_BROWSE_ONLY` at its
-default (on), the public product sends a desktop window or tablet at least 896px
-wide from `/login` and `/register` to `/` before paint, and hides the dock from
-visitors without an account. The desktop project therefore signs in at 800px,
-and each journey (this entry and `AUTH_UI_JOURNEY=password`) asserts the 1280px
-redirect to `/` once. To sign in by hand on a wide desktop, use a window
-narrower than 896px, or start the Development Web with
-`MOYA_WIDE_SCREEN_BROWSE_ONLY=off pnpm dev` (`pnpm dev:all` runs Turbo, whose
-strict environment does not pass the variable through); the redirect probe then
-fails by design.
+Wide screens: #260 retires pc-browse-only-v1. Login and registration stay
+reachable at every width, including with the obsolete environment setting still
+on. Core journeys keep their compact viewport; both auth journeys additionally
+verify the real sign-in form at1280px. Account access and provider availability
+remain Backend-owned.
 
 The entry rejects non-loopback targets, runs one worker without retries, and has
 a shared 299-second deadline. It exercises Chromium and 390/320px WebKit. It

@@ -55,10 +55,8 @@ export default defineConfig({
   projects: [
     {
       name: "desktop-chromium",
-      // A desktop window below the 896px wide layout: from 896px the public
-      // product sends /login and /register to Home and hides the dock for
-      // visitors without an account (pc-browse-only-v1). Each journey's
-      // 1280px redirect probe sets its own size.
+      // Core journeys keep their accepted compact size; an explicit wide
+      // probe verifies the same login form at1280px. #260 retired redirects.
       use: {
         ...devices["Desktop Chrome"],
         browserName: "chromium",
