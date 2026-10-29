@@ -19,6 +19,7 @@ interface RuntimeOptions {
   readonly beacon: (batch: AnalyticsBatch) => boolean;
   readonly onExcluded: () => void;
   readonly shouldCollect?: () => boolean;
+  readonly clientHints?: () => AnalyticsBatch["clientHints"];
 }
 interface Queued {
   event: AnalyticsEvent;
@@ -32,11 +33,20 @@ export const createAnalyticsRuntime = (options: RuntimeOptions) => {
   let stopped = false;
   let nextAttemptAt = 0;
   let generation = 0;
-  const batchOf = (entries: Queued[]): AnalyticsBatch => ({
-    visitorId: options.visitorId,
-    sessionId: options.sessionId,
-    events: entries.map(({ event }) => event),
-  });
+  const batchOf = (entries: Queued[]): AnalyticsBatch => {
+    let clientHints: AnalyticsBatch["clientHints"];
+    try {
+      clientHints = options.clientHints?.();
+    } catch {
+      // Optional device information never disables ordinary event delivery.
+    }
+    return {
+      visitorId: options.visitorId,
+      sessionId: options.sessionId,
+      events: entries.map(({ event }) => event),
+      ...(clientHints === undefined ? {} : { clientHints }),
+    };
+  };
   const take = () => {
     const entries: Queued[] = [];
     while (queue.length && entries.length < 20) {

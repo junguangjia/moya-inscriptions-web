@@ -1,0 +1,1252 @@
+--- a/src/app/(main)/websites/[websiteId]/WebsiteMetricsBar.tsx
++++ b/src/app/(main)/websites/[websiteId]/WebsiteMetricsBar.tsx
+@@ -20,13 +20,39 @@
+     compare: compareMode ? dateCompare?.compare : undefined,
+   });
+ 
+-  const { pageviews, visitors, visits, bounces, totaltime, comparison } = data || {};
++  const {
++    pageviews,
++    visitors,
++    visits,
++    bounces,
++    totaltime,
++    comparison,
++    accountVisitors,
++    legacyPageviews,
++  } = data || {};
+ 
+   const metrics = data
+     ? [
+         {
+           value: visitors,
+-          label: t(labels.visitors),
++          label:
++            accountVisitors === undefined
++              ? t(labels.visitors)
++              : legacyPageviews
++                ? '访客（含旧会话）'
++                : '访客（浏览器）',
++          tooltip:
++            accountVisitors === undefined ? undefined : (
++              <span>
++                整个所选期间按浏览器编号去重；不等同于精确真人数。
++                <br />
++                登录账号：{accountVisitors}（单独去重，不与访客数相加）。
++                <br />
++                {legacyPageviews
++                  ? `有 ${legacyPageviews} 条浏览记录缺少编号，使用原会话回退。`
++                  : '浏览器编号覆盖当前所选浏览记录。'}
++              </span>
++            ),
+           change: visitors - comparison.visitors,
+           formatValue: formatLongNumber,
+         },
+@@ -74,13 +100,14 @@
+       minHeight="136px"
+     >
+       <MetricsBar>
+-        {metrics?.map(({ label, value, prev, change, formatValue, reverseColors }) => {
++        {metrics?.map(({ label, value, prev, change, formatValue, reverseColors, tooltip }) => {
+           return (
+             <MetricCard
+               key={label}
+               value={value}
+               previousValue={prev}
+               label={label}
++              tooltip={tooltip}
+               change={change}
+               formatValue={formatValue}
+               reverseColors={reverseColors}
+--- a/src/app/(main)/websites/[websiteId]/sessions/SessionInfo.tsx
++++ b/src/app/(main)/websites/[websiteId]/sessions/SessionInfo.tsx
+@@ -58,6 +58,17 @@
+         {formatValue(data?.device, 'device')}
+       </Info>
+ 
++      <Info label="设备品牌">
++        {data?.deviceVendor === '__moya_conflict__'
++          ? '未知（设备信息存在冲突）'
++          : data?.deviceVendor || '未知'}
++      </Info>
++      <Info label="设备型号">
++        {data?.deviceModel === '__moya_conflict__'
++          ? '未知（设备信息存在冲突）'
++          : data?.deviceModel || '未知'}
++      </Info>
++
+       {distinctId && stitchedSessionCount > 1 && (
+         <Info label="关联会话" icon={<Network />}>
+           {stitchedSessionCount}
+--- a/src/app/api/send/route.ts
++++ b/src/app/api/send/route.ts
+@@ -5,6 +5,7 @@
+ import { CACHE_TOKEN_TYPE, COLLECTION_TYPE, EVENT_TYPE, FIELD_LENGTH } from '@/lib/constants';
+ import { getSalt, hash, secret, uuid } from '@/lib/crypto';
+ import { getClientInfo, hasBlockedIp } from '@/lib/detect';
++import { saveMoyaDeviceData } from '@/queries/sql/sessions/saveMoyaDeviceData';
+ import { truncateString } from '@/lib/format';
+ import { createToken, parseToken } from '@/lib/jwt';
+ import { fetchWebsite } from '@/lib/load';
+@@ -12,7 +13,13 @@
+ import { badRequest, forbidden, json, serverError } from '@/lib/response';
+ import { anyObjectParam, urlOrPathParam } from '@/lib/schema';
+ import { safeDecodeURI, safeDecodeURIComponent } from '@/lib/url';
+-import { createSession, saveEvent, saveSessionData, saveSessionLink, updateSession } from '@/queries/sql';
++import {
++  createSession,
++  saveEvent,
++  saveSessionData,
++  saveSessionLink,
++  updateSession,
++} from '@/queries/sql';
+ 
+ interface Cache {
+   websiteId: string;
+@@ -134,10 +141,8 @@
+     let sessionLinkId = cache?.sessionLinkId;
+ 
+     // Client info
+-    const { ip, userAgent, device, browser, os, country, region, city } = await getClientInfo(
+-      request,
+-      payload,
+-    );
++    const { ip, userAgent, device, browser, os, country, region, city, deviceVendor, deviceModel } =
++      await getClientInfo(request, payload);
+ 
+     // Bot check
+     if (!process.env.DISABLE_BOT_CHECK && isbot(userAgent)) {
+@@ -182,6 +187,16 @@
+     }
+ 
+     // Visit info
++    if (websiteId && !clickhouse.enabled && (deviceVendor || deviceModel)) {
++      await saveMoyaDeviceData({
++        websiteId,
++        sessionId,
++        vendor: deviceVendor,
++        model: deviceModel,
++        createdAt,
++      });
++    }
++
+     let visitId = cache?.visitId || uuid(sessionId, visitSalt);
+     let iat = cache?.iat || now;
+ 
+@@ -291,7 +306,9 @@
+ 
+         // Events
+         eventName: name,
+-        eventData: data,
++        eventData: data
++          ? Object.fromEntries(Object.entries(data).filter(([key]) => key !== 'moyaClientHints'))
++          : data,
+         tag,
+ 
+         // UTM
+--- a/src/app/api/websites/[websiteId]/analytics-schema.ts
++++ b/src/app/api/websites/[websiteId]/analytics-schema.ts
+@@ -30,6 +30,8 @@
+   .object({
+     pageviews: z.number(),
+     visitors: z.number(),
++    accountVisitors: z.number().int().nonnegative().optional(),
++    legacyPageviews: z.number().int().nonnegative().optional(),
+     visits: z.number(),
+     bounces: z.number(),
+     totaltime: z.number(),
+--- a/src/components/hooks/queries/useWebsiteStatsQuery.ts
++++ b/src/components/hooks/queries/useWebsiteStatsQuery.ts
+@@ -6,6 +6,8 @@
+ export interface WebsiteStatsData {
+   pageviews: number;
+   visitors: number;
++  accountVisitors?: number;
++  legacyPageviews?: number;
+   visits: number;
+   bounces: number;
+   totaltime: number;
+--- /dev/null
++++ b/src/lib/artvenn-device.test.ts
+@@ -0,0 +1,71 @@
++import { describe, expect, it } from 'vitest';
++import { clientHintHeaders, deriveDeviceInfo } from './artvenn-device';
++const chrome =
++  'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36';
++
++describe('evidence-based device labels', () => {
++  it('keeps native browser fallbacks and treats frozen K as unknown', async () => {
++    expect(await deriveDeviceInfo(chrome, undefined, 'chrome')).toMatchObject({
++      browser: 'chrome',
++      vendor: '',
++      model: '',
++    });
++    expect(
++      (await deriveDeviceInfo('Mozilla/5.0 Safari/605.1.15', undefined, 'safari')).browser,
++    ).toBe('safari');
++    expect((await deriveDeviceInfo(chrome, undefined, 'edge-chromium')).browser).toBe(
++      'edge-chromium',
++    );
++  });
++  it('recognizes explicit app/browser shells before generic Chrome', async () => {
++    for (const [token, browser] of [
++      ['MicroMessenger/8.0', 'wechat'],
++      ['MQQBrowser/14.0', 'qqbrowser'],
++      ['HuaweiBrowser/15.0', 'huawei'],
++      ['MiuiBrowser/18.0', 'miui'],
++      ['VivoBrowser/20.0', 'vivo'],
++      ['HeyTapBrowser/10.0', 'oppo'],
++      ['SamsungBrowser/26.0', 'samsung'],
++    ]) {
++      expect((await deriveDeviceInfo(`${chrome} ${token}`, undefined, 'chrome')).browser).toBe(
++        browser,
++      );
++    }
++  });
++  it('uses the pinned parser Client Hints model support without treating browser brand as device vendor', async () => {
++    const hints = {
++      model: 'SM-S918B',
++      platform: 'Android',
++      mobile: true,
++      brands: [{ brand: 'Google Chrome', version: '131' }],
++    };
++    expect(await deriveDeviceInfo(chrome, hints, 'chrome')).toMatchObject({
++      browser: 'chrome',
++      vendor: 'Samsung',
++      model: 'SM-S918B',
++      device: 'mobile',
++    });
++    const vendorBrowser = await deriveDeviceInfo(
++      `${chrome} HuaweiBrowser/15.0`,
++      undefined,
++      'chrome',
++    );
++    expect(vendorBrowser.browser).toBe('huawei');
++    expect(vendorBrowser.vendor).toBe('');
++  });
++  it('keeps optional malformed/empty hints harmless and bounded', async () => {
++    expect(
++      clientHintHeaders({
++        model: 'x'.repeat(129),
++        platform: 'Android\nX: injected',
++        mobile: 'yes',
++        brands: Array(9).fill({ brand: 'Chrome', version: '1' }),
++      }),
++    ).toEqual({});
++    expect(await deriveDeviceInfo(chrome, { model: '', platform: '' }, 'chrome')).toMatchObject({
++      browser: 'chrome',
++      model: '',
++    });
++    expect(clientHintHeaders(null)).toEqual({});
++  });
++});
+--- /dev/null
++++ b/src/lib/artvenn-device.ts
+@@ -0,0 +1,104 @@
++import { UAParser } from 'ua-parser-js';
++
++export interface MoyaClientHints {
++  brands?: { brand: string; version: string }[];
++  platform?: string;
++  platformVersion?: string;
++  mobile?: boolean;
++  model?: string;
++}
++const clean = (value: unknown, max: number) =>
++  typeof value === 'string' && value.length <= max && !/[\u0000-\u001f\u007f]/u.test(value)
++    ? value.trim()
++    : '';
++const shells: [RegExp, string][] = [
++  [/MicroMessenger(?:[ /;]|$)/iu, 'wechat'],
++  [/(?:MQQBrowser|QQBrowser)(?:[ /;]|$)/iu, 'qqbrowser'],
++  [/(?:HuaweiBrowser|HWBROWSER)(?:[ /;]|$)/iu, 'huawei'],
++  [/MiuiBrowser(?:[ /;]|$)/iu, 'miui'],
++  [/VivoBrowser(?:[ /;]|$)/iu, 'vivo'],
++  [/(?:HeyTapBrowser|OppoBrowser)(?:[ /;]|$)/iu, 'oppo'],
++  [/SamsungBrowser(?:[ /;]|$)/iu, 'samsung'],
++  [/(?:UCBrowser|UCWEB)(?:[ /;]|$)/iu, 'uc'],
++  [/Quark(?:[ /;]|$)/iu, 'quark'],
++  [/(?:baidubrowser|baiduboxapp)(?:[ /;]|$)/iu, 'baidu'],
++  [/AlipayClient(?:[ /;]|$)/iu, 'alipay'],
++  [/DingTalk(?:[ /;]|$)/iu, 'dingtalk'],
++];
++
++export function clientHintHeaders(value: unknown): Record<string, string> {
++  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
++  const input = value as MoyaClientHints;
++  const headers: Record<string, string> = {};
++  for (const [field, header, max] of [
++    ['platform', 'sec-ch-ua-platform', 32],
++    ['platformVersion', 'sec-ch-ua-platform-version', 64],
++    ['model', 'sec-ch-ua-model', 128],
++  ] as const) {
++    const text = clean(input[field], max);
++    if (text) headers[header] = JSON.stringify(text);
++  }
++  if (typeof input.mobile === 'boolean') headers['sec-ch-ua-mobile'] = input.mobile ? '?1' : '?0';
++  if (Array.isArray(input.brands) && input.brands.length <= 8) {
++    const brands = input.brands.flatMap(item => {
++      const brand = clean(item?.brand, 64),
++        version = clean(item?.version, 32);
++      return brand && version ? [`${JSON.stringify(brand)};v=${JSON.stringify(version)}`] : [];
++    });
++    if (brands.length) headers['sec-ch-ua'] = brands.join(', ');
++  }
++  return headers;
++}
++
++/** Labels only. Neither UA nor hints ever supply a visitor/account identifier. */
++export async function deriveDeviceInfo(
++  userAgent: string,
++  hints?: unknown,
++  fallbackBrowser?: string,
++) {
++  const ua = typeof userAgent === 'string' ? userAgent.slice(0, 512) : '';
++  const headers = clientHintHeaders(hints);
++  const parsed = await new UAParser(ua, headers).getResult().withClientHints();
++  const shell = shells.find(([pattern]) => pattern.test(ua))?.[1];
++  const parsedBrowsers: Record<string, string> = {
++    Chrome: 'chrome',
++    'Mobile Chrome': 'chrome',
++    Chromium: 'chrome',
++    Edge: 'edge-chromium',
++    Firefox: 'firefox',
++    Safari: 'safari',
++    'Mobile Safari': 'ios',
++    'Samsung Internet': 'samsung',
++    'MIUI Browser': 'miui',
++    'Huawei Browser': 'huawei',
++    'Vivo Browser': 'vivo',
++    'OPPO Browser': 'oppo',
++    QQBrowser: 'qqbrowser',
++    'UC Browser': 'uc',
++    WeChat: 'wechat',
++  };
++  const fallback = clean(fallbackBrowser, 20);
++  const parsedBrowser = parsedBrowsers[parsed.browser.name ?? ''];
++  const genericFallback = !fallback || ['chrome', 'browser', 'chromium-webview'].includes(fallback);
++  const browser =
++    shell ||
++    (genericFallback ? parsedBrowser : undefined) ||
++    fallback ||
++    parsedBrowser ||
++    'browser';
++  const candidateModel = clean(parsed.device.model, 128);
++  const model = /^(?:k|unknown|generic|device|android|mobile|tablet|desktop)$/iu.test(
++    candidateModel,
++  )
++    ? ''
++    : candidateModel;
++  // Vendor comes from the UA/model parser, never from a browser brand such as HuaweiBrowser.
++  const vendor = clean(parsed.device.vendor, 64);
++  const type = parsed.device.type;
++  return {
++    browser,
++    vendor,
++    model,
++    device: type === 'mobile' || type === 'tablet' ? type : undefined,
++  };
++}
+--- /dev/null
++++ b/src/lib/artvenn-visitors.postgres.test.ts
+@@ -0,0 +1,222 @@
++import { createRequire } from 'node:module';
++import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
++const require = createRequire(import.meta.url);
++const { Client } = createRequire(require.resolve('@prisma/adapter-pg'))('pg');
++const url = process.env.ARTVENN_TEST_DATABASE_URL;
++const website = '00000000-0000-4000-8000-000000000001';
++const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
++let db: any;
++const query = async (sql: string, params: Record<string, any>) => {
++  const values: any[] = [];
++  const bound = sql.replace(/\{\{([a-zA-Z]+)(::[a-zA-Z]+)?\}\}/gu, (_, key, cast = '') => {
++    const value = params[key];
++    values.push(value instanceof Date ? value.toISOString() : value);
++    return `$${values.length}${cast}`;
++  });
++  return (await db.query(bound, values)).rows;
++};
++const filters = (input: Record<string, any>) => ({
++  filterQuery: input.path ? 'and website_event.url_path = {{path}}' : '',
++  joinSessionQuery:
++    'join session on session.session_id = website_event.session_id and session.website_id = website_event.website_id',
++  cohortQuery: '',
++  excludeBounceQuery: '',
++  dateQuery: 'and website_event.created_at between {{startDate}} and {{endDate}}',
++  queryParams: input,
++});
++vi.mock('@/lib/db', () => ({
++  PRISMA: 'prisma',
++  CLICKHOUSE: 'clickhouse',
++  runQuery: (q: any) => q.prisma(),
++}));
++vi.mock('@/lib/prisma', () => ({
++  default: {
++    rawQuery: (sql: string, params: Record<string, any>) => query(sql, params),
++    writeRawQuery: (sql: string, params: Record<string, any>) => query(sql, params),
++    parseFilters: (input: Record<string, any>) => filters(input),
++    getDateSQL: () => `to_char(website_event.created_at, 'YYYY-MM-DD')`,
++    getDateWeeklySQL: () => `to_char(website_event.created_at, 'ID:HH24')`,
++    getTimestampDiffSQL: (a: string, b: string) => `extract(epoch from (${b} - ${a}))`,
++  },
++}));
++vi.mock('@/lib/clickhouse', () => ({ default: {} }));
++import { saveMoyaDeviceData } from '@/queries/sql/sessions/saveMoyaDeviceData';
++import { getActiveVisitors } from '@/queries/sql/getActiveVisitors';
++import { getRealtimeData } from '@/queries/sql/getRealtimeData';
++import { getWebsiteStats } from '@/queries/sql/getWebsiteStats';
++import { getSessionStats } from '@/queries/sql/sessions/getSessionStats';
++import { getSessionMetrics } from '@/queries/sql/sessions/getSessionMetrics';
++import { getPageviewMetrics } from '@/queries/sql/pageviews/getPageviewMetrics';
++import { getSessionExpandedMetrics } from '@/queries/sql/sessions/getSessionExpandedMetrics';
++import { getPageviewExpandedMetrics } from '@/queries/sql/pageviews/getPageviewExpandedMetrics';
++import { getChannelMetrics } from '@/queries/sql/getChannelMetrics';
++import { getChannelExpandedMetrics } from '@/queries/sql/getChannelExpandedMetrics';
++import { getWebsiteListCharts } from '@/queries/sql/getWebsiteListCharts';
++const window = {
++  startDate: new Date('2026-10-20T00:00:00Z'),
++  endDate: new Date('2026-10-21T23:59:59Z'),
++};
++
++describe.skipIf(!url)('stable browser UV against disposable PostgreSQL', () => {
++  beforeAll(async () => {
++    db = new Client({ connectionString: url, connectionTimeoutMillis: 3000 });
++    await db.connect();
++    const identity = (await db.query('select current_database() as name')).rows[0].name;
++    if (!identity.startsWith('moya_test_analytics_visitors_device_v1_'))
++      throw new Error('TASK_DATABASE_REQUIRED');
++    await db.query(`BEGIN; SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout='500ms'; SET LOCAL timezone='UTC';
++      CREATE TEMP TABLE session(session_id uuid, website_id uuid, browser text, device text, country text, region text, city text, os text, language text, screen text);
++      CREATE TEMP TABLE website_event(event_id uuid, website_id uuid, session_id uuid, visit_id uuid, event_type int, event_name text, created_at timestamp, url_path text, url_query text, hostname text, referrer_domain text, utm_medium text, utm_source text);
++      CREATE TEMP TABLE event_data(website_event_id uuid, website_id uuid, data_key text, string_value text);
++      CREATE TEMP TABLE session_data(session_data_id uuid, website_id uuid, session_id uuid, data_key text, data_type int, string_value text, created_at timestamp, UNIQUE(session_id,data_key));`);
++    for (let sid = 1; sid <= 5; sid++)
++      await db.query(
++        `insert into session values($1,$2,'chrome','mobile','CN','CN-SH','Shanghai','Android OS','zh-CN','')`,
++        [uuid(100 + sid), website],
++      );
++    const rows = [
++      [1, 1, 1, 1, '2026-10-20T00:00:00Z', '/repeat', 1, null],
++      [2, 1, 1, 1, '2026-10-20T00:00:10Z', '/repeat', 1, null],
++      [3, 1, 1, 2, '2026-10-20T00:00:15Z', '/repeat', 1, null],
++      [4, 2, 2, 1, '2026-10-21T00:00:00Z', '/repeat', 1, 'a'.repeat(40)],
++      [5, 3, 3, 1, '2026-10-21T00:00:10Z', '/shared', 2, 'b'.repeat(40)],
++      [6, 3, 3, 1, '2026-10-21T00:00:20Z', '/shared', 3, 'b'.repeat(40)],
++      [7, 4, 4, 1, '2026-10-21T00:00:40Z', '/repeat', 1, 'a'.repeat(40)],
++      [8, 5, 5, 2, '2026-10-21T00:00:50Z', '/custom', 4, null],
++    ];
++    for (const [id, sid, visit, type, at, path, browser, account] of rows) {
++      await db.query(
++        `insert into website_event values($1,$2,$3,$4,$5,$6,$7,$8,'','product.example.test','','','')`,
++        [
++          uuid(Number(id) + 200),
++          website,
++          uuid(Number(sid) + 100),
++          uuid(Number(visit) + 300),
++          type,
++          type === 2 ? 'content_open' : '',
++          at,
++          path,
++        ],
++      );
++      await db.query(`insert into event_data values($1,$2,'moyaBrowserId',$3)`, [
++        uuid(Number(id) + 200),
++        website,
++        uuid(Number(browser) + 400),
++      ]);
++      if (account)
++        await db.query(`insert into event_data values($1,$2,'moyaAccountId',$3)`, [
++          uuid(Number(id) + 200),
++          website,
++          account,
++        ]);
++    }
++  });
++  afterAll(async () => {
++    if (db) {
++      await db.query('ROLLBACK');
++      await db.end();
++    }
++  });
++  it('counts the whole selected period independently of visits and daily buckets', async () => {
++    const stats: any = await getWebsiteStats(website, window);
++    expect(Number(stats.visitors)).toBe(3);
++    expect(Number(stats.accountVisitors)).toBe(2);
++    expect(Number(stats.pageviews)).toBe(6);
++    expect(Number(stats.visits)).toBe(4);
++    expect(Number(stats.bounces)).toBe(2);
++    expect(Number(stats.totaltime)).toBe(20);
++    expect(Number(stats.legacyPageviews)).toBe(0);
++    const series = await getSessionStats(website, window);
++    expect(series.map((p: any) => Number(p.y))).toEqual([1, 3]);
++    expect(series.reduce((n: number, p: any) => n + Number(p.y), 0)).toBe(4);
++    expect((await getRealtimeData(website, window)).totals.visitors).toBe(3);
++    vi.useFakeTimers({ toFake: ['Date'] });
++    vi.setSystemTime(new Date('2026-10-21T00:04:00Z'));
++    // Active visitors preserves custom-only recent activity; primary period UV requires pageviews.
++    try {
++      expect(Number((await getActiveVisitors(website))?.visitors)).toBe(4);
++    } finally {
++      vi.useRealTimers();
++    }
++  });
++  it('keeps same browser across native identities and distinct browsers sharing one native identity', async () => {
++    expect(Number((await getWebsiteStats(website, { ...window, path: '/repeat' })).visitors)).toBe(
++      1,
++    );
++    expect(Number((await getWebsiteStats(website, { ...window, path: '/shared' })).visitors)).toBe(
++      2,
++    );
++    for (const [fn, type] of [
++      [getSessionMetrics, 'browser'],
++      [getPageviewMetrics, 'path'],
++    ] as const) {
++      const data = await fn(website, { type }, window);
++      expect(data.map((r: any) => Number(r.y))).toContain(type === 'browser' ? 3 : 1);
++    }
++    for (const [fn, type] of [
++      [getSessionExpandedMetrics, 'browser'],
++      [getPageviewExpandedMetrics, 'path'],
++    ] as const) {
++      const data = await fn(website, { type }, window);
++      expect(data.map((r: any) => Number(r.visitors))).toContain(type === 'browser' ? 3 : 1);
++      expect(data.reduce((sum: number, r: any) => sum + Number(r.pageviews), 0)).toBe(6);
++    }
++    expect(Number((await getChannelMetrics(website, window))[0].y)).toBe(3);
++    const channel = (await getChannelExpandedMetrics(website, window))[0];
++    expect(Number(channel.visitors)).toBe(3);
++    expect(Number(channel.pageviews)).toBe(6);
++    expect(Number(channel.visits)).toBe(4);
++    expect(Number(channel.bounces)).toBe(2);
++    expect(Number(channel.totaltime)).toBe(20);
++    expect((await getWebsiteListCharts([website], window))[website].total).toBe(3);
++  });
++  it('marks conflicting device models unknown instead of overwriting one browser with another', async () => {
++    const input = {
++      websiteId: website,
++      sessionId: uuid(103),
++      vendor: 'Samsung',
++      model: 'SM-S918B',
++      createdAt: window.startDate,
++    };
++    await saveMoyaDeviceData(input);
++    await saveMoyaDeviceData({ ...input, model: 'SM-S916B' });
++    await saveMoyaDeviceData(input);
++    const data = (
++      await db.query(
++        'select data_key,string_value from session_data where session_id=$1 order by data_key',
++        [uuid(103)],
++      )
++    ).rows;
++    expect(data).toEqual([
++      { data_key: 'moyaDeviceModel', string_value: '__moya_conflict__' },
++      { data_key: 'moyaDeviceVendor', string_value: 'Samsung' },
++    ]);
++    expect(Number((await getWebsiteStats(website, window)).visitors)).toBe(3);
++  });
++  it('falls back explicitly on missing, invalid or conflicting browser metadata without multiplying rows', async () => {
++    await db.query(`insert into event_data values($1,$2,'moyaBrowserId',$3)`, [
++      uuid(201),
++      website,
++      uuid(999),
++    ]);
++    for (const kind of ['conflicting', 'invalid', 'missing']) {
++      if (kind !== 'conflicting') {
++        await db.query(
++          "delete from event_data where website_event_id=$1 and data_key='moyaBrowserId'",
++          [uuid(201)],
++        );
++        if (kind === 'invalid')
++          await db.query("insert into event_data values($1,$2,'moyaBrowserId','invalid')", [
++            uuid(201),
++            website,
++          ]);
++      }
++      const stats: any = await getWebsiteStats(website, window);
++      expect(Number(stats.visitors)).toBe(4);
++      expect(Number(stats.legacyPageviews)).toBe(1);
++      expect(Number(stats.pageviews)).toBe(6);
++      expect(Number(stats.visits)).toBe(4);
++      expect(Number(stats.totaltime)).toBe(20);
++    }
++  });
++});
+--- /dev/null
++++ b/src/lib/artvenn-visitors.ts
+@@ -0,0 +1,27 @@
++/** Per-event first-party keys; native session/visit identities remain unchanged. */
++export const moyaVisitorJoin = `
++  left join lateral (
++    select
++      case when count(*) filter (where d.data_key = 'moyaBrowserId') = 1
++        and min(d.string_value) filter (where d.data_key = 'moyaBrowserId') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
++        then lower(min(d.string_value) filter (where d.data_key = 'moyaBrowserId')) end as browser_key,
++      case when count(*) filter (where d.data_key = 'moyaAccountId') = 1
++        and min(d.string_value) filter (where d.data_key = 'moyaAccountId') ~ '^[0-9a-f]{40}$'
++        then min(d.string_value) filter (where d.data_key = 'moyaAccountId') end as account_key
++    from event_data d
++    where d.website_id = website_event.website_id
++      and d.website_event_id = website_event.event_id
++      and d.data_key in ('moyaBrowserId', 'moyaAccountId')
++  ) moya_visitor on true`;
++
++export const moyaBrowserKey = `coalesce(moya_visitor.browser_key, 'legacy:' || website_event.session_id::text)`;
++export const moyaVisitorKeys = `jsonb_agg(distinct ${moyaBrowserKey}) filter (where website_event.event_type NOT IN (2, 5))`;
++export const moyaAccountKeys = `jsonb_agg(distinct moya_visitor.account_key) filter (where website_event.event_type NOT IN (2, 5) and moya_visitor.account_key is not null)`;
++
++/** Flatten only key arrays, independently of native visit/PV/bounce/time aggregates. */
++export function moyaCountKeys(column: string) {
++  if (!/^[a-z_]+\.[a-z_]+$/u.test(column)) throw new Error('INVALID_VISITOR_KEY_COLUMN');
++  return `(select count(distinct moya_key.value)
++    from jsonb_array_elements_text(jsonb_path_query_array(
++      coalesce(jsonb_agg(${column}), '[]'::jsonb), '$[*][*]')) moya_key(value))`;
++}
+--- a/src/lib/constants.ts
++++ b/src/lib/constants.ts
+@@ -301,6 +301,16 @@
+ } as const;
+ 
+ export const BROWSERS = {
++  wechat: '微信内置浏览器',
++  qqbrowser: 'QQ 浏览器',
++  huawei: '华为浏览器',
++  vivo: 'vivo 浏览器',
++  oppo: 'OPPO 浏览器',
++  uc: 'UC 浏览器',
++  quark: '夸克浏览器',
++  baidu: '百度应用内浏览器',
++  alipay: '支付宝内置浏览器',
++  dingtalk: '钉钉内置浏览器',
+   android: 'Android',
+   aol: 'AOL',
+   bb10: 'BlackBerry 10',
+--- a/src/lib/detect.ts
++++ b/src/lib/detect.ts
+@@ -1,4 +1,5 @@
+ import path from 'node:path';
++import { deriveDeviceInfo } from './artvenn-device';
+ import { browserName, detectOS } from 'detect-browser';
+ import ipaddr from 'ipaddr.js';
+ import isLocalhost from 'is-localhost-ip';
+@@ -141,11 +142,27 @@
+   const country = safeDecodeURIComponent(location?.country);
+   const region = safeDecodeURIComponent(location?.region);
+   const city = safeDecodeURIComponent(location?.city);
+-  const browser = payload?.browser ?? browserName(userAgent);
++  const deviceInfo = await deriveDeviceInfo(
++    userAgent,
++    payload?.data?.moyaClientHints,
++    browserName(userAgent),
++  );
++  const browser = payload?.browser ?? deviceInfo.browser;
+   const os = payload?.os ?? (detectOS(userAgent) as string);
+-  const device = payload?.device ?? getDevice(userAgent, payload?.screen);
++  const device = payload?.device ?? deviceInfo.device ?? getDevice(userAgent, payload?.screen);
+ 
+-  return { userAgent, browser, os, ip, country, region, city, device };
++  return {
++    userAgent,
++    browser,
++    os,
++    ip,
++    country,
++    region,
++    city,
++    device,
++    deviceVendor: deviceInfo.vendor,
++    deviceModel: deviceInfo.model,
++  };
+ }
+ 
+ export function hasBlockedIp(clientIp: string) {
+--- a/src/lib/types.ts
++++ b/src/lib/types.ts
+@@ -335,6 +335,7 @@
+ }
+ 
+ export interface RealtimeActivity {
++  visitorKey?: string;
+   sessionId: string;
+   eventName: string;
+   createdAt: Date | string;
+--- a/src/queries/sql/getActiveVisitors.ts
++++ b/src/queries/sql/getActiveVisitors.ts
+@@ -1,3 +1,4 @@
++import { moyaVisitorJoin, moyaBrowserKey } from '@/lib/artvenn-visitors';
+ import { subMinutes } from 'date-fns';
+ import clickhouse from '@/lib/clickhouse';
+ import { CLICKHOUSE, PRISMA, runQuery } from '@/lib/db';
+@@ -21,10 +22,11 @@
+ 
+   const result = await rawQuery(
+     `
+-    select count(distinct session_id) as "visitors"
++    select count(distinct ${moyaBrowserKey}) as "visitors"
+     from website_event
++    ${moyaVisitorJoin}
+     where website_id = {{websiteId::uuid}}
+-    and created_at >= {{startDate}}
++    and website_event.created_at >= {{startDate}}
+     `,
+     { websiteId, startDate },
+     FUNCTION_NAME,
+--- a/src/queries/sql/getChannelExpandedMetrics.ts
++++ b/src/queries/sql/getChannelExpandedMetrics.ts
+@@ -1,3 +1,4 @@
++import { moyaVisitorJoin, moyaBrowserKey, moyaCountKeys } from '@/lib/artvenn-visitors';
+ import clickhouse from '@/lib/clickhouse';
+ import {
+   EMAIL_DOMAINS,
+@@ -84,11 +85,13 @@
+             website_event.utm_medium,
+             website_event.utm_source,
+             website_event.session_id,
++            ${moyaBrowserKey} as browser_key,
+             website_event.visit_id,
+             website_event.hostname,
+             website_event.event_id,
+             website_event.created_at
+         from website_event
++        ${moyaVisitorJoin}
+         ${cohortQuery}
+         ${excludeBounceQuery}
+         ${joinSessionQuery}
+@@ -141,6 +144,7 @@
+           session_id,
+           visit_id,
+           count(*) as c,
++          jsonb_agg(distinct browser_key) as visitor_keys,
+           min(created_at) as min_time,
+           max(created_at) as max_time
+         from prefix
+@@ -150,7 +154,7 @@
+       select
+         visit_channels.name,
+         sum(visit_stats.c) as "pageviews",
+-        count(distinct visit_stats.session_id) as "visitors",
++        ${moyaCountKeys('visit_stats.visitor_keys')} as "visitors",
+         count(distinct visit_stats.visit_id) as "visits",
+         ${bounceQuery}
+         sum(${getTimestampDiffSQL('visit_stats.min_time', 'visit_stats.max_time')}) as "totaltime"
+--- a/src/queries/sql/getChannelMetrics.ts
++++ b/src/queries/sql/getChannelMetrics.ts
+@@ -1,3 +1,4 @@
++import { moyaVisitorJoin, moyaBrowserKey } from '@/lib/artvenn-visitors';
+ import clickhouse from '@/lib/clickhouse';
+ import {
+   EMAIL_DOMAINS,
+@@ -41,11 +42,13 @@
+           website_event.utm_medium,
+           website_event.utm_source,
+           website_event.session_id,
++          ${moyaBrowserKey} as browser_key,
+           website_event.visit_id,
+           website_event.event_id,
+           website_event.created_at,
+           website_event.hostname
+       from website_event
++      ${moyaVisitorJoin}
+       ${cohortQuery}
+       ${excludeBounceQuery}
+       ${joinSessionQuery}
+@@ -93,9 +96,10 @@
+       ) as ranked_channels
+       where row_num = 1)
+ 
+-    select x, count(distinct session_id) y
++    select visit_channels.x, count(distinct prefix.browser_key) y
+     from visit_channels
+-    group by x
++    join prefix on prefix.session_id = visit_channels.session_id and prefix.visit_id = visit_channels.visit_id
++    group by visit_channels.x
+     order by y desc;
+     `,
+     queryParams,
+--- a/src/queries/sql/getRealtimeActivity.ts
++++ b/src/queries/sql/getRealtimeActivity.ts
+@@ -1,3 +1,4 @@
++import { moyaVisitorJoin, moyaBrowserKey } from '@/lib/artvenn-visitors';
+ import clickhouse from '@/lib/clickhouse';
+ import { EVENT_TYPE } from '@/lib/constants';
+ import { CLICKHOUSE, PRISMA, runQuery } from '@/lib/db';
+@@ -26,6 +27,7 @@
+     `
+     select
+         website_event.session_id as "sessionId",
++        ${moyaBrowserKey} as "visitorKey",
+         website_event.event_name as "eventName",
+         website_event.created_at as "createdAt",
+         session.browser,
+@@ -36,6 +38,7 @@
+         website_event.referrer_domain as "referrerDomain",
+         website_event.hostname
+     from website_event
++    ${moyaVisitorJoin}
+     ${cohortQuery}
+     inner join session
+       on session.session_id = website_event.session_id
+--- a/src/queries/sql/getRealtimeData.ts
++++ b/src/queries/sql/getRealtimeData.ts
+@@ -1,3 +1,4 @@
++import { getWebsiteStats } from '@/queries/sql/getWebsiteStats';
+ import type { QueryFilters, RealtimeActivity, RealtimeData, RealtimeEvent } from '@/lib/types';
+ import { getRealtimeActivity } from '@/queries/sql/getRealtimeActivity';
+ import { getPageviewStats } from '@/queries/sql/pageviews/getPageviewStats';
+@@ -17,10 +18,11 @@
+   websiteId: string,
+   filters: QueryFilters,
+ ): Promise<RealtimeData> {
+-  const [activity, pageviews, sessions] = await Promise.all([
++  const [activity, pageviews, sessions, overview] = await Promise.all([
+     getRealtimeActivity(websiteId, filters),
+     getPageviewStats(websiteId, filters),
+     getSessionStats(websiteId, filters),
++    getWebsiteStats(websiteId, filters),
+   ]);
+ 
+   const uniques = new Set();
+@@ -38,8 +40,9 @@
+       const { countries, urls, referrers, events } = obj;
+       const { sessionId, urlPath, referrerDomain, country, eventName } = event;
+ 
+-      if (!uniques.has(sessionId)) {
+-        uniques.add(sessionId);
++      const visitorKey = event.visitorKey || sessionId;
++      if (!uniques.has(visitorKey)) {
++        uniques.add(visitorKey);
+         increment(countries, country);
+ 
+         events.push({ __type: 'session', ...event });
+@@ -71,7 +74,7 @@
+     },
+     totals: {
+       views: pageviews.reduce((sum: number, { y }: { y: number }) => Number(sum) + Number(y), 0),
+-      visitors: sessions.reduce((sum: number, { y }: { y: number }) => Number(sum) + Number(y), 0),
++      visitors: Number(overview.visitors),
+       events: activity.filter(e => e.eventName).length,
+       countries: Object.keys(countries).length,
+     },
+--- a/src/queries/sql/getWebsiteListCharts.ts
++++ b/src/queries/sql/getWebsiteListCharts.ts
+@@ -1,3 +1,4 @@
++import { moyaVisitorJoin, moyaBrowserKey } from '@/lib/artvenn-visitors';
+ import { addHours } from 'date-fns';
+ import { formatInTimeZone } from 'date-fns-tz';
+ import clickhouse from '@/lib/clickhouse';
+@@ -86,13 +87,14 @@
+     select
+       "websiteId",
+       x,
+-      count(distinct session_id) as y
++      count(distinct visitor_key) as y
+     from (
+       select
+         website_event.website_id as "websiteId",
+         ${bucketSql} as x,
+-        website_event.session_id
++        ${moyaBrowserKey} as visitor_key
+       from website_event
++      ${moyaVisitorJoin}
+       where website_event.website_id = any({{websiteIds}}::uuid[])
+         ${eventTypeQuery}
+         and website_event.created_at between {{startDate}} and {{endDate}}
+@@ -143,21 +145,19 @@
+   );
+ }
+ 
+-function formatResults(
+-  {
+-    points,
+-    websiteIds,
+-    startDate,
+-    endDate,
+-    timezone,
+-  }: {
+-    points: WebsiteListChartPoint[];
+-    websiteIds: string[];
+-    startDate: Date;
+-    endDate: Date;
+-    timezone: string;
+-  },
+-) {
++function formatResults({
++  points,
++  websiteIds,
++  startDate,
++  endDate,
++  timezone,
++}: {
++  points: WebsiteListChartPoint[];
++  websiteIds: string[];
++  startDate: Date;
++  endDate: Date;
++  timezone: string;
++}) {
+   const buckets: string[] = [];
+ 
+   for (
+--- a/src/queries/sql/getWebsiteStats.ts
++++ b/src/queries/sql/getWebsiteStats.ts
+@@ -1,3 +1,9 @@
++import {
++  moyaVisitorJoin,
++  moyaVisitorKeys,
++  moyaAccountKeys,
++  moyaCountKeys,
++} from '@/lib/artvenn-visitors';
+ import clickhouse from '@/lib/clickhouse';
+ import { EVENT_COLUMNS, EVENT_TYPE } from '@/lib/constants';
+ import { CLICKHOUSE, PRISMA, runQuery } from '@/lib/db';
+@@ -9,6 +15,8 @@
+ export interface WebsiteStatsData {
+   pageviews: number;
+   visitors: number;
++  accountVisitors?: number;
++  legacyPageviews?: number;
+   visits: number;
+   bounces: number;
+   totaltime: number;
+@@ -16,7 +24,7 @@
+ 
+ export async function getWebsiteStats(
+   ...args: [websiteId: string, filters: QueryFilters]
+-): Promise<WebsiteStatsData[]> {
++): Promise<WebsiteStatsData> {
+   return runQuery({
+     [PRISMA]: () => relationalQuery(...args),
+     [CLICKHOUSE]: () => clickhouseQuery(...args),
+@@ -26,7 +34,7 @@
+ async function relationalQuery(
+   websiteId: string,
+   filters: QueryFilters,
+-): Promise<WebsiteStatsData[]> {
++): Promise<WebsiteStatsData> {
+   const { getTimestampDiffSQL, parseFilters, rawQuery } = prisma;
+   const { filterQuery, joinSessionQuery, cohortQuery, excludeBounceQuery, queryParams } =
+     parseFilters({
+@@ -44,7 +52,9 @@
+       `
+       select
+         cast(coalesce(sum(t.c), 0) as bigint) as "pageviews",
+-        count(distinct t.session_id) as "visitors",
++        ${moyaCountKeys('t.visitor_keys')} as "visitors",
++        ${moyaCountKeys('t.account_keys')} as "accountVisitors",
++        cast(coalesce(sum(t.legacy_pageviews), 0) as bigint) as "legacyPageviews",
+         count(distinct t.visit_id) as "visits",
+         ${excludeBounce ? '0' : 'coalesce(sum(case when t.c = 1 and t.has_custom_event = 0 then 1 else 0 end), 0)'} as "bounces",
+         cast(coalesce(sum(${getTimestampDiffSQL('t.min_time', 't.max_time')}), 0) as bigint) as "totaltime"
+@@ -52,11 +62,15 @@
+         select
+           website_event.session_id,
+           website_event.visit_id,
++          ${moyaVisitorKeys} as visitor_keys,
++          ${moyaAccountKeys} as account_keys,
++          sum(case when website_event.event_type NOT IN (2, 5) and moya_visitor.browser_key is null then 1 else 0 end) as legacy_pageviews,
+           sum(case when website_event.event_type NOT IN (2, 5) then 1 else 0 end) as "c",
+           min(case when website_event.event_type NOT IN (2, 5) then website_event.created_at end) as "min_time",
+           max(case when website_event.event_type NOT IN (2, 5) then website_event.created_at end) as "max_time",
+           max(case when website_event.event_type = ${EVENT_TYPE.customEvent} then 1 else 0 end) as "has_custom_event"
+         from website_event
++        ${moyaVisitorJoin}
+         ${cohortQuery}
+         ${excludeBounceQuery}
+         ${joinSessionQuery}
+@@ -94,7 +108,9 @@
+     `
+     select
+       cast(coalesce(sum(t.c), 0) as bigint) as "pageviews",
+-      count(distinct t.session_id) as "visitors",
++      ${moyaCountKeys('t.visitor_keys')} as "visitors",
++        ${moyaCountKeys('t.account_keys')} as "accountVisitors",
++        cast(coalesce(sum(t.legacy_pageviews), 0) as bigint) as "legacyPageviews",
+       count(distinct t.visit_id) as "visits",
+       ${bounceQuery} as "bounces",
+       cast(coalesce(sum(${getTimestampDiffSQL('t.min_time', 't.max_time')}), 0) as bigint) as "totaltime"
+@@ -102,10 +118,14 @@
+       select
+         website_event.session_id,
+         website_event.visit_id,
++          ${moyaVisitorKeys} as visitor_keys,
++          ${moyaAccountKeys} as account_keys,
++          sum(case when website_event.event_type NOT IN (2, 5) and moya_visitor.browser_key is null then 1 else 0 end) as legacy_pageviews,
+         count(*) as "c",
+         min(website_event.created_at) as "min_time",
+         max(website_event.created_at) as "max_time"
+       from website_event
++      ${moyaVisitorJoin}
+       ${cohortQuery}
+       ${excludeBounceQuery}
+       ${joinSessionQuery}
+@@ -125,7 +145,7 @@
+ async function clickhouseQuery(
+   websiteId: string,
+   filters: QueryFilters,
+-): Promise<WebsiteStatsData[]> {
++): Promise<WebsiteStatsData> {
+   const { rawQuery, parseFilters } = clickhouse;
+   const { filterQuery, cohortQuery, excludeBounceQuery, queryParams } = parseFilters({
+     ...filters,
+@@ -137,9 +157,7 @@
+   const hasEventFilters =
+     EVENT_COLUMNS.some(item => Object.keys(filters).includes(item)) ||
+     !!filters.eventPropertyFilters?.length;
+-  const bounceQuery = excludeBounce
+-    ? '0'
+-    : 'sumIf(1, t.c = 1 and t.has_custom_event = 0)';
++  const bounceQuery = excludeBounce ? '0' : 'sumIf(1, t.c = 1 and t.has_custom_event = 0)';
+ 
+   if (hasEventFilters) {
+     sql = `
+@@ -165,14 +183,18 @@
+         ${filterQuery}
+       group by session_id, visit_id
+     ) as t
+-    ${excludeBounce ? '' : `left join (
++    ${
++      excludeBounce
++        ? ''
++        : `left join (
+       select session_id, visit_id, toUInt8(1) as has_custom_event
+       from website_event
+       where website_id = {websiteId:UUID}
+         and created_at between {startDate:DateTime64} and {endDate:DateTime64}
+         and event_type = ${EVENT_TYPE.customEvent}
+       group by session_id, visit_id
+-    ) as e using (session_id, visit_id)`};
++    ) as e using (session_id, visit_id)`
++    };
+     `;
+   } else {
+     sql = `
+--- a/src/queries/sql/getWeeklyTraffic.ts
++++ b/src/queries/sql/getWeeklyTraffic.ts
+@@ -1,3 +1,4 @@
++import { moyaVisitorJoin, moyaBrowserKey } from '@/lib/artvenn-visitors';
+ import clickhouse from '@/lib/clickhouse';
+ import { EVENT_COLUMNS } from '@/lib/constants';
+ import { CLICKHOUSE, PRISMA, runQuery } from '@/lib/db';
+@@ -28,8 +29,9 @@
+     `
+     select
+       ${getDateWeeklySQL('website_event.created_at', timezone)} as time,
+-      count(distinct website_event.session_id) as value
++      count(distinct ${moyaBrowserKey}) as value
+     from website_event
++    ${moyaVisitorJoin}
+     ${cohortQuery}
+     ${excludeBounceQuery}
+     ${joinSessionQuery}
+--- a/src/queries/sql/pageviews/getPageviewExpandedMetrics.ts
++++ b/src/queries/sql/pageviews/getPageviewExpandedMetrics.ts
+@@ -1,9 +1,6 @@
++import { moyaVisitorJoin, moyaVisitorKeys, moyaCountKeys } from '@/lib/artvenn-visitors';
+ import clickhouse from '@/lib/clickhouse';
+-import {
+-  FILTER_COLUMNS,
+-  GROUPED_DOMAINS,
+-  SESSION_COLUMNS,
+-} from '@/lib/constants';
++import { FILTER_COLUMNS, GROUPED_DOMAINS, SESSION_COLUMNS } from '@/lib/constants';
+ import { CLICKHOUSE, PRISMA, runQuery } from '@/lib/db';
+ import prisma from '@/lib/prisma';
+ import type { QueryFilters } from '@/lib/types';
+@@ -98,7 +95,7 @@
+     select
+       name,
+       sum(t.c) as "pageviews",
+-      count(distinct t.session_id) as "visitors",
++      ${moyaCountKeys('t.visitor_keys')} as "visitors",
+       count(distinct t.visit_id) as "visits",
+       0 as "bounces",
+       0 as "totaltime"
+@@ -107,8 +104,10 @@
+         ${selectColumn} as "name",
+         website_event.session_id,
+         website_event.visit_id,
++        ${moyaVisitorKeys} as visitor_keys,
+         count(*) as "c"
+       from website_event
++      ${moyaVisitorJoin}
+       ${cohortQuery}
+       ${excludeBounceQuery}
+       ${joinSessionQuery}
+--- a/src/queries/sql/pageviews/getPageviewMetrics.ts
++++ b/src/queries/sql/pageviews/getPageviewMetrics.ts
+@@ -1,3 +1,4 @@
++import { moyaVisitorJoin, moyaBrowserKey } from '@/lib/artvenn-visitors';
+ import clickhouse from '@/lib/clickhouse';
+ import { EVENT_COLUMNS, FILTER_COLUMNS, SESSION_COLUMNS } from '@/lib/constants';
+ import { CLICKHOUSE, PRISMA, runQuery } from '@/lib/db';
+@@ -83,8 +84,9 @@
+   return rawQuery(
+     `
+     select ${selectColumn} x,
+-      count(distinct website_event.session_id) as y
++      count(distinct ${moyaBrowserKey}) as y
+     from website_event
++    ${moyaVisitorJoin}
+     ${cohortQuery}
+     ${excludeBounceQuery}
+     ${joinSessionQuery}
+--- a/src/queries/sql/sessions/artvenn-geography-context.test.ts
++++ b/src/queries/sql/sessions/artvenn-geography-context.test.ts
+@@ -8,6 +8,16 @@
+   runQuery: (queries: Record<string, () => unknown>) => queries.prisma(),
+ }));
+ vi.mock('@/lib/clickhouse', () => ({ default: {} }));
++// These geography-only SQLite fixtures predate browser metadata and therefore all
++// use the production legacy SID fallback. PostgreSQL identity behavior is covered
++// separately by artvenn-visitors.postgres.test.ts against the real dialect.
++vi.mock('@/lib/artvenn-visitors', () => ({
++  moyaVisitorJoin: '',
++  moyaBrowserKey: "'legacy:' || website_event.session_id",
++  moyaVisitorKeys: "max('legacy:' || website_event.session_id)",
++  moyaCountKeys: (column: string) => `count(distinct ${column})`,
++}));
++
+ vi.mock('@/lib/prisma', () => ({
+   default: {
+     rawQuery: runtime.rawQuery,
+--- a/src/queries/sql/sessions/getSessionExpandedMetrics.ts
++++ b/src/queries/sql/sessions/getSessionExpandedMetrics.ts
+@@ -1,3 +1,4 @@
++import { moyaVisitorJoin, moyaVisitorKeys, moyaCountKeys } from '@/lib/artvenn-visitors';
+ import { geographySearchSql } from '@/lib/artvenn-geography-search';
+ import { getArtVennGeographySql } from '@/lib/artvenn-geography-sql';
+ import clickhouse from '@/lib/clickhouse';
+@@ -86,7 +87,7 @@
+       ${includeCountry ? 'country,' : ''}
+       ${type === 'city' ? `case when count(distinct coalesce(t.region, '')) = 1 then min(t.region) else null end as region,` : ''}
+       sum(t.c) as "pageviews",
+-      count(distinct t.session_id) as "visitors",
++      ${moyaCountKeys('t.visitor_keys')} as "visitors",
+       count(distinct t.visit_id) as "visits",
+       ${bounceQuery}
+       sum(${getTimestampDiffSQL('t.min_time', 't.max_time')}) as "totaltime"
+@@ -97,10 +98,12 @@
+         ${type === 'city' ? 'min(session.region) as region,' : ''}
+         website_event.session_id,
+         website_event.visit_id,
++        ${moyaVisitorKeys} as visitor_keys,
+         count(*) as "c",
+         min(website_event.created_at) as "min_time",
+         max(website_event.created_at) as "max_time"
+       from website_event
++      ${moyaVisitorJoin}
+       ${cohortQuery}
+       ${excludeBounceQuery}
+       ${joinSessionQuery}
+--- a/src/queries/sql/sessions/getSessionMetrics.ts
++++ b/src/queries/sql/sessions/getSessionMetrics.ts
+@@ -1,3 +1,4 @@
++import { moyaVisitorJoin, moyaBrowserKey } from '@/lib/artvenn-visitors';
+ import { getArtVennGeographySql } from '@/lib/artvenn-geography-sql';
+ import clickhouse from '@/lib/clickhouse';
+ import { EVENT_COLUMNS, FILTER_COLUMNS, SESSION_COLUMNS } from '@/lib/constants';
+@@ -56,10 +57,11 @@
+     `
+     select 
+       ${column} x,
+-      count(distinct website_event.session_id) y
++      count(distinct ${moyaBrowserKey}) y
+       ${includeCountry ? `, ${countryColumn} as country` : ''}
+       ${type === 'city' ? `, case when count(distinct coalesce(session.region, '')) = 1 then min(session.region) else null end as region` : ''}
+     from website_event
++    ${moyaVisitorJoin}
+     ${cohortQuery}
+     ${excludeBounceQuery}
+     ${joinSessionQuery}
+@@ -99,7 +101,7 @@
+ 
+   let sql = '';
+ 
+-  if (EVENT_COLUMNS.some((item) => Object.keys(filters).includes(item))) {
++  if (EVENT_COLUMNS.some(item => Object.keys(filters).includes(item))) {
+     sql = `
+     select
+       ${column} x,
+--- a/src/queries/sql/sessions/getSessionStats.ts
++++ b/src/queries/sql/sessions/getSessionStats.ts
+@@ -1,3 +1,4 @@
++import { moyaVisitorJoin, moyaBrowserKey } from '@/lib/artvenn-visitors';
+ import clickhouse from '@/lib/clickhouse';
+ import { EVENT_COLUMNS } from '@/lib/constants';
+ import { CLICKHOUSE, PRISMA, runQuery } from '@/lib/db';
+@@ -26,8 +27,9 @@
+     `
+     select
+       ${getDateSQL('website_event.created_at', unit, timezone)} x,
+-      count(distinct website_event.session_id) y
++      count(distinct ${moyaBrowserKey}) y
+     from website_event
++    ${moyaVisitorJoin}
+     ${cohortQuery}
+     ${excludeBounceQuery}
+     ${joinSessionQuery}
+--- a/src/queries/sql/sessions/getWebsiteSession.ts
++++ b/src/queries/sql/sessions/getWebsiteSession.ts
+@@ -18,6 +18,12 @@
+   return rawQuery(
+     `
+     select id,
++      (select max(d.string_value) from session_data d
++        where d.website_id = t.website_id and d.session_id = t.id
++          and d.data_key = 'moyaDeviceVendor') as "deviceVendor",
++      (select max(d.string_value) from session_data d
++        where d.website_id = t.website_id and d.session_id = t.id
++          and d.data_key = 'moyaDeviceModel') as "deviceModel",
+       distinct_id as "distinctId",
+       website_id as "websiteId",
+       browser,
+--- /dev/null
++++ b/src/queries/sql/sessions/saveMoyaDeviceData.ts
+@@ -0,0 +1,48 @@
++import { DATA_TYPE } from '@/lib/constants';
++import { uuid } from '@/lib/crypto';
++import prisma from '@/lib/prisma';
++export const MOYA_DEVICE_CONFLICT = '__moya_conflict__';
++
++/** Descriptive session metadata is never allowed to overwrite conflicting positive evidence. */
++export async function saveMoyaDeviceData({
++  websiteId,
++  sessionId,
++  vendor,
++  model,
++  createdAt,
++}: {
++  websiteId: string;
++  sessionId: string;
++  vendor?: string;
++  model?: string;
++  createdAt: Date;
++}) {
++  for (const [dataKey, stringValue] of [
++    ['moyaDeviceVendor', vendor],
++    ['moyaDeviceModel', model],
++  ]) {
++    if (!stringValue) continue;
++    await prisma.writeRawQuery(
++      `
++      insert into session_data (session_data_id, website_id, session_id, data_key, data_type, string_value, created_at)
++      values ({{id::uuid}}, {{websiteId::uuid}}, {{sessionId::uuid}}, {{dataKey}}, {{dataType}}, {{stringValue}}, {{createdAt}})
++      on conflict (session_id, data_key) do update set string_value =
++        case when session_data.string_value is null or session_data.string_value = '' then excluded.string_value
++          when session_data.string_value = excluded.string_value then session_data.string_value
++          else '__moya_conflict__' end
++      where session_data.website_id = excluded.website_id
++        and session_data.string_value is distinct from excluded.string_value
++    `,
++      {
++        id: uuid(),
++        websiteId,
++        sessionId,
++        dataKey,
++        dataType: DATA_TYPE.string,
++        stringValue,
++        createdAt,
++      },
++      'saveMoyaDeviceData',
++    );
++  }
++}

@@ -1,5 +1,7 @@
 "use client";
 
+import { analyticsClientHintsSchema } from "@moya/contracts/analytics";
+import type { AnalyticsBatch } from "@moya/contracts/analytics";
 import {
   beaconAnalyticsBatch,
   sendAnalyticsBatch,
@@ -15,6 +17,43 @@ import type { AnalyticsInput, AnalyticsRuntime } from "./runtime";
 let runtime: AnalyticsRuntime | null = null;
 const contexts = new Map<string, Partial<AnalyticsInput>>();
 const key = (type: string, id: string) => `${type}:${id}`;
+
+const clientHintValues = (value: unknown): AnalyticsBatch["clientHints"] => {
+  if (value === null || typeof value !== "object") return undefined;
+  const source = value as Record<string, unknown>;
+  const selected = Object.fromEntries(
+    ["brands", "platform", "platformVersion", "mobile", "model"]
+      .filter((field) => source[field] !== undefined)
+      .map((field) => [field, source[field]]),
+  );
+  const result = analyticsClientHintsSchema.safeParse(selected);
+  return result.success && Object.keys(result.data).length > 0
+    ? result.data
+    : undefined;
+};
+
+/** Read once without awaiting device hints before the first event or ordinary flush. */
+export const createAnalyticsClientHintsReader = (source: unknown) => {
+  let current: AnalyticsBatch["clientHints"];
+  try {
+    const data = (source as { userAgentData?: unknown } | null)?.userAgentData;
+    current = clientHintValues(data);
+    const method = (data as Record<string, unknown> | undefined)
+      ?.getHighEntropyValues;
+    if (typeof method === "function")
+      void Promise.resolve(method.call(data, ["model", "platformVersion"]))
+        .then((value: unknown) => {
+          const detailed = clientHintValues(value);
+          if (detailed) current = { ...current, ...detailed };
+        })
+        .catch(() => {
+          /* Basic metadata and ordinary collection remain available. */
+        });
+  } catch {
+    /* Missing, blocked or malformed platform APIs are optional. */
+  }
+  return () => current;
+};
 
 export const markAnalyticsExcluded = () => {
   try {
@@ -64,6 +103,7 @@ export const startAnalytics = (enabled: boolean): AnalyticsRuntime | null => {
       send: sendAnalyticsBatch,
       beacon: beaconAnalyticsBatch,
       onExcluded: markAnalyticsExcluded,
+      clientHints: createAnalyticsClientHintsReader(navigator),
       shouldCollect: () => {
         try {
           return window.localStorage.getItem(ANALYTICS_DISABLED_KEY) === null;

@@ -87,7 +87,14 @@ describe("bounded analytics contract", () => {
   });
   it("rejects caller identity/IP claims, unknown events, oversized batches and unpaired targets", () => {
     expect(analyticsBatchSchema.safeParse(batch()).success).toBe(true);
-    for (const field of ["userId", "ip", "owner", "country"])
+    for (const field of [
+      "userId",
+      "ip",
+      "owner",
+      "country",
+      "moyaBrowserId",
+      "moyaAccountId",
+    ])
       expect(
         analyticsBatchSchema.safeParse({ ...batch(), [field]: "forged" })
           .success,
@@ -98,6 +105,9 @@ describe("bounded analytics contract", () => {
       { ...base.events[0], name: "autocapture" },
       { ...base.events[0], targetId: undefined },
       { ...base.events[0], searchQuery: "a".repeat(101) },
+      { ...base.events[0], moyaBrowserId: randomUUID() },
+      { ...base.events[0], moyaAccountId: "forged-account" },
+      { ...base.events[0], moyaClientHints: { model: "forged" } },
     ])
       expect(
         analyticsBatchSchema.safeParse({ ...base, events: [event] }).success,
@@ -108,6 +118,45 @@ describe("bounded analytics contract", () => {
         events: Array.from({ length: 21 }, () => base.events[0]),
       }).success,
     ).toBe(false);
+  });
+  it("accepts only bounded descriptive Client Hints, without caller identity or fingerprint fields", () => {
+    const base = batch();
+    const hints = {
+      brands: [{ brand: " Chromium ", version: "130" }],
+      platform: " Android ",
+      platformVersion: "14.0.0",
+      model: " Pixel 8 ",
+      mobile: true,
+    };
+    expect(
+      analyticsBatchSchema.parse({ ...base, clientHints: hints }).clientHints,
+    ).toEqual({
+      ...hints,
+      brands: [{ brand: "Chromium", version: "130" }],
+      platform: "Android",
+      model: "Pixel 8",
+    });
+    for (const clientHints of [
+      { model: "a".repeat(129) },
+      { platform: "a".repeat(33) },
+      { platformVersion: "a".repeat(65) },
+      {
+        brands: Array.from({ length: 9 }, () => ({
+          brand: "Chrome",
+          version: "130",
+        })),
+      },
+      { brands: [{ brand: "a".repeat(65), version: "130" }] },
+      { brands: [{ brand: "Chrome", version: "a".repeat(33) }] },
+      { mobile: "true" },
+      { model: "value\nwith-control" },
+      { architecture: "arm" },
+      { deviceId: randomUUID() },
+      { moyaBrowserId: randomUUID() },
+    ])
+      expect(
+        analyticsBatchSchema.safeParse({ ...base, clientHints }).success,
+      ).toBe(false);
   });
 });
 describe("server-owned analytics classification", () => {

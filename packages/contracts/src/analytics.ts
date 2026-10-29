@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-/** Dedicated first-party telemetry boundary; never accepts client identity or IP claims. */
+/** Dedicated first-party telemetry boundary; never accepts account identity or IP claims. */
 export const analyticsEventSchema = z
   .strictObject({
     eventId: z.uuid(),
@@ -47,10 +47,35 @@ export const analyticsEventSchema = z
       });
   });
 
+const clientHintText = (maximum: number) =>
+  z
+    .string()
+    .trim()
+    .max(maximum)
+    .regex(/^\P{Cc}*$/u);
+
+/** Optional descriptive metadata, never an input to visitor or account identity. */
+export const analyticsClientHintsSchema = z.strictObject({
+  brands: z
+    .array(
+      z.strictObject({
+        brand: clientHintText(64).min(1),
+        version: clientHintText(32),
+      }),
+    )
+    .max(8)
+    .optional(),
+  platform: clientHintText(32).optional(),
+  platformVersion: clientHintText(64).optional(),
+  mobile: z.boolean().optional(),
+  model: clientHintText(128).optional(),
+});
+
 export const analyticsBatchSchema = z.strictObject({
   visitorId: z.uuid(),
   sessionId: z.uuid(),
   events: z.array(analyticsEventSchema).min(1).max(20),
+  clientHints: analyticsClientHintsSchema.optional(),
 });
 export const analyticsBatchResultSchema = z.strictObject({
   accepted: z.number().int().min(0).max(20),
@@ -97,6 +122,7 @@ export const analyticsIpObservationsSchema = z.strictObject({
 });
 export type AnalyticsEvent = z.infer<typeof analyticsEventSchema>;
 export type AnalyticsBatch = z.infer<typeof analyticsBatchSchema>;
+export type AnalyticsClientHints = z.infer<typeof analyticsClientHintsSchema>;
 export type AnalyticsBatchResult = z.infer<typeof analyticsBatchResultSchema>;
 export type AnalyticsStatus = z.infer<typeof analyticsStatusSchema>;
 export type AnalyticsIpObservations = z.infer<
