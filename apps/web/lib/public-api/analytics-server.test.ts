@@ -124,6 +124,42 @@ describe("analytics trusted relay", () => {
       `Bearer ${syntheticSession}`,
     );
   });
+  it("relays validated optional hints but rejects reserved identity metadata", async () => {
+    const enriched = {
+      ...batch,
+      clientHints: {
+        brands: [{ brand: "Chrome", version: "130" }],
+        platform: "Android",
+        model: "Pixel 8",
+        mobile: true,
+      },
+    };
+    expect((await relayServerAnalytics(request({}, enriched))).status).toBe(
+      200,
+    );
+    expect(JSON.parse(String(send.mock.calls[0]![1].body))).toEqual(enriched);
+    expect(
+      (
+        await relayServerAnalytics(
+          request({}, { ...enriched, moyaAccountId: "forged" }),
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await relayServerAnalytics(
+          request(
+            {},
+            {
+              ...enriched,
+              clientHints: { ...enriched.clientHints, architecture: "arm" },
+            },
+          ),
+        )
+      ).status,
+    ).toBe(400);
+    expect(send).toHaveBeenCalledOnce();
+  });
   it("does not trust a browser exclusion header without the device cookie", async () => {
     await relayServerAnalytics(request({ "x-moya-analytics-excluded": "1" }));
     expect(

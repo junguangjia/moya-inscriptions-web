@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
-# Explicit #360 UI-only compatibility build. Current #365 Dockerfile is unchanged.
-# Business source is the pinned live9d recipe; only eight reviewed UI files vary.
+# Verify the pinned ui-pre365-v1 baseline before applying the separately pinned
+# visitor/device analytics layer. Existing environment/identity policy is retained.
 FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS standalone-builder
 WORKDIR /app
 ADD --checksum=sha256:dfdc154f23fe52ffd8fbf13c0544ea880e5ef01463f57d06954512b41c50a93a https://codeload.github.com/umami-software/umami/tar.gz/ec0ff50388c264ed8ce46f00967e92f7e71476ae /tmp/umami.tar.gz
@@ -65,8 +65,16 @@ RUN echo '5aef1ff2ff9805b66d00b437c6ed4d1b7861396620167ee408f90ac343d6216c  /tmp
     && echo '905227061911b151030a469957f52f2392198cbfe1ac79d05196d979e7fa7436  /tmp/ui-pre365-v1-source.json' | sha256sum -c - \
     && echo '5409b442949b55ea40293a1ce41609f4e3a169dd16d167b160ebbc46edb7478f  /tmp/ui-pre365-v1-protected.sha256' | sha256sum -c - \
     && node /tmp/ui-pre365-v1-verify.mjs --root /app --metadata /tmp/ui-pre365-v1-source.json --inventory /tmp/ui-pre365-v1-protected.sha256
+# Task-approved analytics layer; baseline/province verification above remains intact.
+COPY visitor-device.patch visitor-device-compat-upstream.sha256 visitor-device-compat.sha256 /tmp/
+RUN echo '05c6347b72c348cb5685e3c509a871689c9ac28f70a8562428009dc07e15b28e  /tmp/visitor-device.patch' | sha256sum -c - \
+    && echo '26286de74b7d49bff6c8e34167f503ad0f2d270756c6a5ffc4ccc55c7c23e804  /tmp/visitor-device-compat-upstream.sha256' | sha256sum -c - \
+    && echo 'c75504a52078e9ba7c0be1e956ebec9579b89174ce3f03d6a205fb49c0e1f720  /tmp/visitor-device-compat.sha256' | sha256sum -c - \
+    && sha256sum -c /tmp/visitor-device-compat-upstream.sha256 \
+    && patch -p1 --fuzz=0 < /tmp/visitor-device.patch \
+    && sha256sum -c /tmp/visitor-device-compat.sha256
 ENV SKIP_BUILD_GEO=1
-RUN pnpm exec vitest run src/lib/format.test.ts src/lib/artvenn-ip-province.test.ts src/lib/artvenn-labels.test.ts src/lib/artvenn-geography.test.ts src/components/hooks/useFormat.test.ts src/lib/artvenn-china-map.test.ts src/components/metrics/artvenn-geography-lists.test.tsx src/queries/sql/sessions/artvenn-geography-context.test.ts src/components/metrics/MetricLabel.test.tsx src/components/metrics/WorldMap.test.tsx src/components/metrics/WorldMap.geometry.test.tsx 'src/app/(main)/boards/[boardId]/BoardViewHeader.test.tsx' src/components/metrics/MetricsExpandedTable.accessibility.test.tsx 'src/app/api/websites/[websiteId]/metrics/artvenn-display.test.ts' 'src/app/(main)/App.archive.test.tsx' 'src/app/(main)/ArchiveShell.test.tsx' 'src/app/(main)/websites/[websiteId]/ArchiveReportNav.test.tsx' 'src/app/(main)/websites/[websiteId]/WebsiteHeader.archive.test.tsx' 'src/app/(main)/ArchiveContextNav.test.tsx' 'src/app/(main)/ArchiveContinuousNavigation.test.tsx' 'src/lib/archive-analysis.test.ts' 'src/components/hooks/archive-analysis-scope.test.tsx' 'src/components/metrics/WeeklyTraffic.test.tsx' 'src/components/common/DataGrid.archive.test.tsx' 'src/components/input/WebsiteFilterButton.archive.test.tsx' 'src/app/(main)/websites/[websiteId]/ArchiveAnalysis.test.tsx' 'src/app/(main)/websites/[websiteId]/WebsitePage.composed.test.tsx' 'src/app/(main)/websites/[websiteId]/compare/CompareTables.archive.test.tsx' 'src/app/(main)/websites/[websiteId]/WebsiteExpandedView.archive.test.tsx' 'src/app/(main)/websites/[websiteId]/(reports)/retention/RetentionPage.archive.test.tsx' 'src/components/charts/DeferredChart.test.tsx' 'src/components/common/LoadingPanel.refresh.test.tsx' 'src/app/(main)/websites/WebsiteProvider.archive.test.tsx' 'src/components/common/ErrorBoundary.archive.test.tsx' 'src/lib/archive-theme.test.ts' --maxWorkers=1 \
+RUN pnpm exec vitest run src/lib/format.test.ts src/lib/artvenn-device.test.ts src/lib/artvenn-visitors.postgres.test.ts src/lib/artvenn-ip-province.test.ts src/lib/artvenn-labels.test.ts src/lib/artvenn-geography.test.ts src/components/hooks/useFormat.test.ts src/lib/artvenn-china-map.test.ts src/components/metrics/artvenn-geography-lists.test.tsx src/queries/sql/sessions/artvenn-geography-context.test.ts src/components/metrics/MetricLabel.test.tsx src/components/metrics/WorldMap.test.tsx src/components/metrics/WorldMap.geometry.test.tsx 'src/app/(main)/boards/[boardId]/BoardViewHeader.test.tsx' src/components/metrics/MetricsExpandedTable.accessibility.test.tsx 'src/app/api/websites/[websiteId]/metrics/artvenn-display.test.ts' 'src/app/(main)/App.archive.test.tsx' 'src/app/(main)/ArchiveShell.test.tsx' 'src/app/(main)/websites/[websiteId]/ArchiveReportNav.test.tsx' 'src/app/(main)/websites/[websiteId]/WebsiteHeader.archive.test.tsx' 'src/app/(main)/ArchiveContextNav.test.tsx' 'src/app/(main)/ArchiveContinuousNavigation.test.tsx' 'src/lib/archive-analysis.test.ts' 'src/components/hooks/archive-analysis-scope.test.tsx' 'src/components/metrics/WeeklyTraffic.test.tsx' 'src/components/common/DataGrid.archive.test.tsx' 'src/components/input/WebsiteFilterButton.archive.test.tsx' 'src/app/(main)/websites/[websiteId]/ArchiveAnalysis.test.tsx' 'src/app/(main)/websites/[websiteId]/WebsitePage.composed.test.tsx' 'src/app/(main)/websites/[websiteId]/compare/CompareTables.archive.test.tsx' 'src/app/(main)/websites/[websiteId]/WebsiteExpandedView.archive.test.tsx' 'src/app/(main)/websites/[websiteId]/(reports)/retention/RetentionPage.archive.test.tsx' 'src/components/charts/DeferredChart.test.tsx' 'src/components/common/LoadingPanel.refresh.test.tsx' 'src/app/(main)/websites/WebsiteProvider.archive.test.tsx' 'src/components/common/ErrorBoundary.archive.test.tsx' 'src/lib/archive-theme.test.ts' --maxWorkers=1 \
     && pnpm build:docker
 
 FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS standalone
@@ -75,6 +83,7 @@ LABEL org.opencontainers.image.title="ArtVenn private Umami standalone artifact"
     org.opencontainers.image.source="https://github.com/umami-software/umami" \
     org.opencontainers.image.revision="ec0ff50388c264ed8ce46f00967e92f7e71476ae" \
     com.artvenn.umami.patch-sha256="96e842017bdd90b3b67044f4606805f15389525fc5d71654ff99bb0832618029" \
+    com.artvenn.umami.visitor-device-sha256="05c6347b72c348cb5685e3c509a871689c9ac28f70a8562428009dc07e15b28e" \
     com.artvenn.umami.pg-tls-host-sha256="ad0a70c6fc8820bb613a8437c634b6a0a6a04cc3cc36175ab72590d2733c24e6" \
     com.artvenn.umami.province-fallback-sha256="ee0442474fe367cd426f58ffc7f253320b58f550395c8104419567078acaf8f2" \
     com.artvenn.umami.runtime-policy="ui-pre365-v1" \

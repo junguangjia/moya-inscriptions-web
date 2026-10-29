@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { ANALYTICS_IP_RETENTION_DAYS } from "@moya/contracts/analytics";
+import {
+  ANALYTICS_IP_RETENTION_DAYS,
+  analyticsClientHintsSchema,
+} from "@moya/contracts/analytics";
 import type {
   AnalyticsBatch,
   AnalyticsIpObservations,
@@ -49,6 +52,7 @@ export class PostgresAnalyticsAdapter implements AnalyticsPort {
     batch: AnalyticsBatch,
     context: AnalyticsWriteContext,
   ): Promise<number> {
+    const hints = analyticsClientHintsSchema.safeParse(batch.clientHints);
     return this.transaction(async (db) => {
       const result = await db.query<{ event_id: string }>(
         `
@@ -58,7 +62,12 @@ export class PostgresAnalyticsAdapter implements AnalyticsPort {
         FROM jsonb_array_elements($1::jsonb) e
         ON CONFLICT (event_id) DO NOTHING RETURNING event_id`,
         [
-          JSON.stringify(batch.events),
+          JSON.stringify(
+            batch.events.map((event) => ({
+              ...event,
+              ...(hints.success ? { moyaClientHints: hints.data } : {}),
+            })),
+          ),
           batch.visitorId,
           batch.sessionId,
           context.userId,
@@ -228,11 +237,13 @@ export class PostgresAnalyticsAdapter implements AnalyticsPort {
           attempts: number;
           event_data: AnalyticsBatch["events"][number];
           distinct_id: string;
+          visitor_id: string;
+          user_id: string | null;
           ip: string;
           user_agent: string;
         }>(
           `
-        SELECT o.event_id,o.attempts,e.event_data,e.distinct_id,host(i.ip) AS ip,i.user_agent
+        SELECT o.event_id,o.attempts,e.event_data,e.distinct_id,e.visitor_id,e.user_id,host(i.ip) AS ip,i.user_agent
         FROM community.analytics_outbox o JOIN community.analytics_events e USING(event_id)
         JOIN community.analytics_ip_observations i ON i.id=o.observation_id
         WHERE o.failed_at IS NULL AND o.next_attempt_at<=$1::timestamptz AND i.expires_at>$1::timestamptz
@@ -242,6 +253,20 @@ export class PostgresAnalyticsAdapter implements AnalyticsPort {
       ).rows;
       return rows.map((row) => {
         const event = row.event_data;
+        const data: Record<string, unknown> = {
+          ...event,
+          eventId: row.event_id,
+        };
+        const hints = analyticsClientHintsSchema.safeParse(
+          data.moyaClientHints,
+        );
+        // Reserved metadata always comes from canonical server-side columns.
+        delete data.moyaBrowserId;
+        delete data.moyaAccountId;
+        delete data.moyaClientHints;
+        data.moyaBrowserId = row.visitor_id;
+        if (row.user_id !== null) data.moyaAccountId = row.distinct_id;
+        if (hints.success) data.moyaClientHints = hints.data;
         const url =
           event.surface === "home" && event.targetType === undefined
             ? "/"
@@ -256,7 +281,7 @@ export class PostgresAnalyticsAdapter implements AnalyticsPort {
             timestamp: Math.floor(new Date(event.occurredAt).getTime() / 1000),
             url,
             ...(event.name === "page_view" ? {} : { name: event.name }),
-            data: { ...event, eventId: row.event_id },
+            data,
           },
         };
       });

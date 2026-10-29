@@ -7,7 +7,7 @@ import {
 } from "./runtime";
 
 const id = "11111111-1111-4111-8111-111111111111";
-const setup = () => {
+const setup = (clientHints?: () => AnalyticsBatch["clientHints"]) => {
   let time = 0;
   const send = vi.fn<
     (batch: AnalyticsBatch) => Promise<{ accepted: number; excluded: boolean }>
@@ -22,6 +22,7 @@ const setup = () => {
     send,
     beacon,
     onExcluded,
+    ...(clientHints ? { clientHints } : {}),
   });
   return {
     runtime,
@@ -36,7 +37,17 @@ const setup = () => {
 
 describe("bounded product event queue", () => {
   it("splits valid Unicode-rich events within the actual ingress byte budget", async () => {
-    const { runtime, send } = setup();
+    const hints = {
+      brands: Array.from({ length: 8 }, () => ({
+        brand: "字".repeat(64),
+        version: "版".repeat(32),
+      })),
+      platform: "系".repeat(32),
+      platformVersion: "版".repeat(64),
+      model: "机".repeat(128),
+      mobile: true,
+    };
+    const { runtime, send } = setup(() => hints);
     for (let i = 0; i < 20; i++)
       runtime.track({
         name: "content_impression",
@@ -58,6 +69,16 @@ describe("bounded product event queue", () => {
       expect(
         new TextEncoder().encode(JSON.stringify(batch)).length,
       ).toBeLessThanOrEqual(32768);
+    expect(send.mock.calls[0]![0].clientHints).toEqual(hints);
+  });
+  it("does not let an optional metadata reader prevent ordinary delivery", async () => {
+    const { runtime, send } = setup(() => {
+      throw new Error("optional metadata unavailable");
+    });
+    runtime.track({ name: "page_view", surface: "home" });
+    await runtime.flush();
+    expect(send).toHaveBeenCalledOnce();
+    expect(send.mock.calls[0]![0]).not.toHaveProperty("clientHints");
   });
   it("makes no empty request and batches only when twenty events or the flush arrive", async () => {
     const { runtime, send } = setup();

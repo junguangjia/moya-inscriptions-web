@@ -4,6 +4,7 @@ import { URL } from "node:url";
 import {
   AnalyticsToolError,
   UMAMI_WORKSPACE_IDENTITY,
+  UMAMI_VISITOR_DEVICE_SHA256,
   UMAMI_PROVINCE_FALLBACK_SHA256,
   UMAMI_POSTGRES_TIMEZONE,
   UMAMI_SOURCE_COMMIT,
@@ -22,6 +23,7 @@ export function runtimePolicy(value) {
       id: "current",
       dockerfile: "Dockerfile",
       workspaceIdentitySha256: UMAMI_WORKSPACE_IDENTITY,
+      visitorDevicePatchSha256: UMAMI_VISITOR_DEVICE_SHA256,
       provinceFallbackSha256: UMAMI_PROVINCE_FALLBACK_SHA256,
       postgresTimeZone: UMAMI_POSTGRES_TIMEZONE,
     };
@@ -59,6 +61,7 @@ export function runtimePolicy(value) {
       id: COMPATIBILITY_POLICY,
       dockerfile: "Dockerfile.ui-pre365-v1",
       workspaceIdentitySha256: metadata.workspaceIdentitySha256,
+      visitorDevicePatchSha256: UMAMI_VISITOR_DEVICE_SHA256,
       provinceFallbackSha256: legacyProvince,
       postgresTimeZone: "inherit",
       businessSourceBaseline: metadata.baselineCommit,

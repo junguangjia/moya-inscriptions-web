@@ -213,6 +213,100 @@ describe("canonical analytics PostgreSQL ingestion", () => {
       ).rowCount,
     ).toBe(0);
   });
+  it("forwards canonical browser keys across login while keeping equal-UA/IP browsers distinct and hints optional", async () => {
+    const anonymous = input();
+    anonymous.clientHints = {
+      brands: [{ brand: "Chromium", version: "130" }],
+      platform: "Android",
+      model: " Pixel 8 ",
+      mobile: true,
+    };
+    const signedIn = input();
+    signedIn.visitorId = anonymous.visitorId;
+    signedIn.clientHints = anonymous.clientHints;
+    const otherBrowser = input();
+    const events = [anonymous, signedIn, otherBrowser];
+    let received = now.getTime();
+    const service = new AnalyticsService(
+      adapter,
+      {
+        enabled: true,
+        production: true,
+        excludedUserIds: new Set(),
+        ownerExclusionConfigured: true,
+        hmacKey: randomBytes(32).toString("base64url"),
+        forwardingConfigured: true,
+        eventRetentionDays: 180,
+      },
+      () => new Date(received++),
+    );
+    for (const [index, batch] of events.entries())
+      expect(
+        await service.collect(batch, {
+          userId: index === 1 ? "synthetic-reader" : null,
+          excluded: false,
+          ip: context().ip,
+          userAgent: context().userAgent,
+        }),
+      ).toEqual({ accepted: 1, excluded: false });
+    const stored = (
+      await pool.query<{ event_data: Record<string, unknown> }>(
+        "SELECT event_data FROM community.analytics_events WHERE event_id=$1::uuid",
+        [anonymous.events[0]!.eventId],
+      )
+    ).rows[0]!.event_data;
+    expect(stored.moyaClientHints).toEqual({
+      ...anonymous.clientHints,
+      model: "Pixel 8",
+    });
+    expect(stored).not.toHaveProperty("moyaBrowserId");
+    expect(stored).not.toHaveProperty("moyaAccountId");
+    // Even an out-of-band legacy metadata claim cannot override canonical identity.
+    await pool.query(
+      "UPDATE community.analytics_events SET event_data=event_data || $2::jsonb WHERE event_id=$1::uuid",
+      [
+        anonymous.events[0]!.eventId,
+        JSON.stringify({
+          moyaBrowserId: "forged-browser",
+          moyaAccountId: "forged-account",
+          moyaClientHints: { model: "a".repeat(129) },
+        }),
+      ],
+    );
+    const ids = events.map((batch) => batch.events[0]!.eventId);
+    await adapter.withDeliveryLock(async (delivery) => {
+      const forwarded = new Map(
+        (await delivery.pending(100, new Date(received)))
+          .filter((event) => ids.includes(event.eventId))
+          .map((event) => [event.eventId, event.payload]),
+      );
+      expect(forwarded.size).toBe(3);
+      const a = forwarded.get(ids[0]!)!;
+      const b = forwarded.get(ids[1]!)!;
+      const c = forwarded.get(ids[2]!)!;
+      const aData = a.data as Record<string, unknown>;
+      const bData = b.data as Record<string, unknown>;
+      const cData = c.data as Record<string, unknown>;
+      expect(aData.moyaBrowserId).toBe(anonymous.visitorId);
+      expect(bData.moyaBrowserId).toBe(anonymous.visitorId);
+      expect(cData.moyaBrowserId).toBe(otherBrowser.visitorId);
+      expect(cData.moyaBrowserId).not.toBe(aData.moyaBrowserId);
+      expect(aData).not.toHaveProperty("moyaAccountId");
+      expect(cData).not.toHaveProperty("moyaAccountId");
+      expect(bData.moyaAccountId).toBe(b.id);
+      expect(bData.moyaAccountId).toMatch(/^[0-9a-f]{40}$/u);
+      expect(a.id).not.toBe(b.id);
+      expect(aData).not.toHaveProperty("moyaClientHints");
+      expect(cData).not.toHaveProperty("moyaClientHints");
+      expect(bData.moyaClientHints).toEqual({
+        ...signedIn.clientHints,
+        model: "Pixel 8",
+      });
+      expect(a.ip).toBe(c.ip);
+      expect(a.userAgent).toBe(c.userAgent);
+      await delivery.delivered(ids, new Date(received));
+    });
+  });
   it("excludes Owner and test identities before either canonical or IP persistence", async () => {
     const service = new AnalyticsService(
       adapter,

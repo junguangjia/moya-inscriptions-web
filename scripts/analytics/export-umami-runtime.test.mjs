@@ -19,6 +19,7 @@ import { test } from "node:test";
 
 import {
   UMAMI_WORKSPACE_IDENTITY,
+  UMAMI_VISITOR_DEVICE_SHA256,
   UMAMI_GEOGRAPHY_POLICY,
   UMAMI_CHINA_MAP_SHA256,
   UMAMI_PG_TLS_HOST_SHA256,
@@ -37,6 +38,7 @@ const labels = {
   "com.artvenn.umami.pool-max": "3",
   "com.artvenn.umami.locale": "zh-CN",
   "com.artvenn.umami.patch-sha256": UMAMI_WORKSPACE_IDENTITY,
+  "com.artvenn.umami.visitor-device-sha256": UMAMI_VISITOR_DEVICE_SHA256,
   "com.artvenn.umami.pg-tls-host-sha256": UMAMI_PG_TLS_HOST_SHA256,
   "com.artvenn.umami.province-fallback-sha256": UMAMI_PROVINCE_FALLBACK_SHA256,
   "com.artvenn.umami.database-timezone": UMAMI_POSTGRES_TIMEZONE,
