@@ -15,6 +15,9 @@ test.beforeEach(async ({}, info) => {
 test("desktop gallery adapts CSS viewports without changing source order or image geometry", async ({
   page,
 }, info) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("yoyi.desktop-feed-layout.v1", "single"),
+  );
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
   const counts: number[] = [];
@@ -90,34 +93,48 @@ test("desktop settings persist independently across compact reflow", async ({
   );
   await page.goto("/dev/t02p");
   const shell = page.locator("[data-product-shell]");
-  await expect(shell).toHaveAttribute("data-feed-layout", "single");
+  await expect(shell).toHaveAttribute("data-feed-layout", "double");
+  expect(
+    await page.evaluate(() =>
+      localStorage.getItem("yoyi.desktop-feed-layout.v1"),
+    ),
+  ).toBeNull();
   await expect(page.locator("[data-desktop-settings]")).toHaveCount(1);
   await page.locator("[data-desktop-settings]").click();
   await page.locator("[data-feed-layout-toggle]").click();
   await expect(page.locator("[data-feed-layout-toggle]")).toHaveAttribute(
     "data-feed-layout-mode",
-    "double",
+    "single",
   );
-  await page.keyboard.press("Escape");
-  await page.setViewportSize({ width: 800, height: 720 });
-  await expect(shell).toHaveAttribute("data-desktop", "false");
-  await expect(shell).toHaveAttribute("data-feed-layout", "double");
-  await page.setViewportSize({ width: 2560, height: 1440 });
-  await page.reload();
-  await expect(shell).toHaveAttribute("data-desktop", "true");
-  await expect(shell).toHaveAttribute("data-feed-layout", "double");
   expect(
     await page.evaluate(() => [
       localStorage.getItem("yoyi.desktop-feed-layout.v1"),
       localStorage.getItem("yoyi.home-feed-layout.v2"),
     ]),
-  ).toEqual(["double", "double"]);
-  await expect(page.locator("[data-desktop-feed]")).toHaveCount(0);
+  ).toEqual(["single", "double"]);
+  await page.keyboard.press("Escape");
+  await page.setViewportSize({ width: 800, height: 720 });
+  await expect(shell).toHaveAttribute("data-desktop", "false");
+  await expect(shell).toHaveAttribute("data-feed-layout", "single");
+  await page.setViewportSize({ width: 2560, height: 1440 });
+  await page.reload();
+  await expect(shell).toHaveAttribute("data-desktop", "true");
+  await expect(shell).toHaveAttribute("data-feed-layout", "single");
+  expect(
+    await page.evaluate(() => [
+      localStorage.getItem("yoyi.desktop-feed-layout.v1"),
+      localStorage.getItem("yoyi.home-feed-layout.v2"),
+    ]),
+  ).toEqual(["single", "double"]);
+  await expect(page.locator("[data-desktop-feed]").first()).toBeVisible();
 });
 
 test("catalog detail separates the upper and lower reader and restores the gallery opener", async ({
   page,
 }, info) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("yoyi.desktop-feed-layout.v1", "single"),
+  );
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(qa);
   const opener = page
@@ -249,12 +266,13 @@ test("formal anonymous desktop keeps navigation, publishing and settings availab
   await expect(shell).toHaveAttribute("data-browse-only", "false");
   await expect(page.locator("[data-desktop-navigation]")).toBeVisible();
   await expect(page.locator("[data-create-work-action]")).toBeVisible();
+  await expect(shell).toHaveAttribute("data-feed-layout", "double");
   const gear = page.locator("[data-desktop-settings]");
   await gear.click();
   await page.locator("[data-feed-layout-toggle]").click();
   await expect(page.locator("[data-feed-layout-toggle]")).toHaveAttribute(
     "data-feed-layout-mode",
-    "double",
+    "single",
   );
   await page.keyboard.press("Escape");
   await expect(gear).toBeFocused();

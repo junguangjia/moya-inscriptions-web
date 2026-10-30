@@ -560,7 +560,7 @@ export const ProductShell = ({
   const [feedLayoutRead, setFeedLayoutRead] = useState(false);
   const feedLayout =
     (deviceClass === "desktop" ? storedDesktopFeedLayout : storedFeedLayout) ??
-    defaultFeedLayoutFor(platform);
+    defaultFeedLayoutFor(platform, deviceClass);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [activeContent, setActiveContent] = useState<ContentIdentity | null>(
     null,

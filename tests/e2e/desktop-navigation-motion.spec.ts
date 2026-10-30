@@ -86,6 +86,9 @@ test("secondary rail respects reduced motion and vertical keyboard selection", a
 test("long and short menu destinations keep one desktop frame and stable gallery geometry", async ({
   page,
 }, info) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("yoyi.desktop-feed-layout.v1", "single"),
+  );
   for (const width of [1440, 3440]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto(qa);
@@ -182,6 +185,9 @@ test("long and short menu destinations keep one desktop frame and stable gallery
 test("desktop document gutter preserves settings and search background scroll locks", async ({
   page,
 }) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("yoyi.desktop-feed-layout.v1", "single"),
+  );
   await page.setViewportSize({ width: 1440, height: 720 });
   await page.goto(qa);
   await expect(page.locator("html")).toHaveAttribute("data-yoyi-boot", "ready");

@@ -15,6 +15,9 @@ test.beforeEach(async ({}, info) => {
 test("large images stay right of full-height archive reading with a below-fold colophon cue", async ({
   page,
 }, info) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("yoyi.desktop-feed-layout.v1", "single"),
+  );
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   for (const [width, height] of [
@@ -116,6 +119,9 @@ test("large images stay right of full-height archive reading with a below-fold c
 test("image selection and archive category survive the viewer and detail remount", async ({
   page,
 }, info) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("yoyi.desktop-feed-layout.v1", "single"),
+  );
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?catalogId=runtime-inscription-multi-media#detail");
   const detail = page.locator('[data-detail-state="loaded"]');
@@ -161,6 +167,9 @@ test("image selection and archive category survive the viewer and detail remount
 test("archive uses one native reading owner across categories and expanded reading", async ({
   page,
 }, info) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("yoyi.desktop-feed-layout.v1", "single"),
+  );
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?catalogId=runtime-inscription-multi-media#detail");
   const detail = page.locator('[data-detail-state="loaded"]');
