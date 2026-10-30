@@ -50,6 +50,7 @@ vi.mock("next/navigation", () => ({
 
 import { PreviewCatalogDetailOverlay } from "./preview-catalog-detail-overlay";
 import { ProductShell, useProductShell } from "../product-shell/product-shell";
+import { DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY } from "../product-shell/preferences";
 import {
   AuthReturnProvider,
   useAuthReturn,
@@ -1187,6 +1188,9 @@ describe("PreviewCatalogDetailOverlay in wide-screen browse-only", () => {
       value: width,
     });
   beforeEach(() => {
+    // These compatibility cases exercise the explicitly selected book reader;
+    // an unconfigured desktop now starts in the ordinary layout.
+    localStorage.setItem(DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY, "single");
     // The phone Detail pages comments in the Embla-backed pager.
     class InertObserver {
       disconnect() {}
@@ -1197,6 +1201,7 @@ describe("PreviewCatalogDetailOverlay in wide-screen browse-only", () => {
     vi.stubGlobal("ResizeObserver", InertObserver);
   });
   afterEach(() => {
+    localStorage.removeItem(DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY);
     vi.unstubAllGlobals();
     if (nativeInnerWidth === undefined)
       delete (window as { innerWidth?: number }).innerWidth;
