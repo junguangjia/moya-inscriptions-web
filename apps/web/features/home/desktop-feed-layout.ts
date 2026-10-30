@@ -3,6 +3,7 @@ import { desktopLayout } from "@moya/design-tokens";
 export interface DesktopFeedMedia {
   readonly ratio: number | null;
   readonly cropped: boolean;
+  readonly preserveContain?: boolean;
 }
 export interface DesktopFeedPosition extends DesktopFeedMedia {
   readonly x: number;
@@ -18,6 +19,8 @@ export const desktopFeedMedia = (item: unknown): DesktopFeedMedia => {
   const media = (record?.media ?? record?.representativeMedia) as
     { width?: number; height?: number; feed?: { fit?: string } } | undefined;
   const target = record?.target as { type?: string } | undefined;
+  // A missing-image placeholder is never an actionable cropped preview.
+  const preserveContain = !media || media.feed?.fit === "contain";
   if (target?.type === "work" && !media) return { ratio: null, cropped: false };
   const raw = Number(media?.width) / Number(media?.height);
   if (
@@ -26,15 +29,32 @@ export const desktopFeedMedia = (item: unknown): DesktopFeedMedia => {
     Number(media?.height) <= 0 ||
     raw <= 0
   )
-    return { ratio: 1, cropped: false };
+    return {
+      ratio: 1,
+      cropped: false,
+      ...(preserveContain ? { preserveContain: true } : {}),
+    };
   const ratio = Math.max(
     desktopLayout.feed.minimumRatio,
     Math.min(desktopLayout.feed.maximumRatio, raw),
   );
-  return { ratio, cropped: ratio !== raw && media?.feed?.fit !== "contain" };
+  return {
+    ratio,
+    cropped: ratio !== raw && !preserveContain,
+    ...(preserveContain ? { preserveContain: true } : {}),
+  };
 };
 
-/** Sequential justified rows, starting at the right; the final row never stretches. */
+/**
+ * Globally balance the loaded sequence, including its final row, in O(n * k).
+ * k is bounded by the viewport and each card's fixed caption. Every candidate
+ * fills the row; source media, source records and ordering are unchanged.
+ * Prefer complete partitions within 200–300px, then 160–360px. A sparse sequence
+ * that cannot fill within those bounds becomes a feature preview capped at
+ * 720px, using the existing explicit crop indication. A saved contain choice
+ * keeps the whole image inside that same bounded, full-width card.
+ * Text-only rows share the available width and retain the target height.
+ */
 export const layoutDesktopFeed = (
   items: readonly DesktopFeedMedia[],
   width: number,
@@ -42,64 +62,116 @@ export const layoutDesktopFeed = (
   readonly height: number;
   readonly positions: readonly DesktopFeedPosition[];
 } => {
-  if (!Number.isFinite(width) || width <= 0)
+  if (!Number.isFinite(width) || width <= 0 || !items.length)
     return { height: 0, positions: [] };
   const s = desktopLayout.feed;
-  const positions: DesktopFeedPosition[] = [];
-  const fixed = (item: DesktopFeedMedia) =>
-    item.ratio === null ? Math.min(width, s.textWidth) : s.labelWidth;
-  const natural = (item: DesktopFeedMedia, height: number) =>
-    fixed(item) + (item.ratio ?? 0) * height;
-  const rowWidth = (row: readonly DesktopFeedMedia[], height: number) =>
-    row.reduce((sum, item) => sum + natural(item, height), 0) +
-    s.gap * Math.max(0, row.length - 1);
-  const fit = (row: readonly DesktopFeedMedia[]) => {
-    const ratio = row.reduce((sum, item) => sum + (item.ratio ?? 0), 0);
-    return ratio === 0
-      ? s.rowHeight
-      : (width -
-          row.reduce((sum, item) => sum + fixed(item), 0) -
-          s.gap * (row.length - 1)) /
-          ratio;
-  };
-  let offset = 0;
-  let y = 0;
-  while (offset < items.length) {
-    let count = 1;
-    while (
-      offset + count < items.length &&
-      rowWidth(items.slice(offset, offset + count), s.rowHeight) < width
-    )
-      count += 1;
-    const candidate = items.slice(offset, offset + count);
-    const tail =
-      offset + count === items.length &&
-      rowWidth(candidate, s.rowHeight) <= width;
-    if (!tail && count > 1) {
-      const previous = items.slice(offset, offset + count - 1);
-      const a = fit(previous),
-        b = fit(candidate);
-      // Prefer a readable row over squeezing the next item into a low strip.
-      if (
-        (candidate.every((item) => item.ratio === null) &&
-          rowWidth(candidate, s.rowHeight) > width) ||
-        b < s.rowMin ||
-        (a <= s.rowMax && Math.abs(a - s.rowHeight) < Math.abs(b - s.rowHeight))
-      )
-        count -= 1;
+  const softMin = s.rowMin * 0.8;
+  const softMax = s.rowMax * 1.2;
+  const featureMax = s.featureMax;
+  const textMin = s.textWidth * 0.85;
+  const textMax = s.textWidth * 1.35;
+  const ratios = [0],
+    fixed = [0];
+  // A transient host narrower than the label still receives finite geometry;
+  // the desktop shell normally provides much more than this minimum width.
+  const labelWidth = Math.min(s.labelWidth, width / 2);
+  for (const item of items) {
+    ratios.push(ratios.at(-1)! + (item.ratio ?? 0));
+    fixed.push(
+      fixed.at(-1)! +
+        (item.ratio === null ? Math.min(width, s.textWidth) : labelWidth),
+    );
+  }
+  interface Choice {
+    count: number;
+    height: number;
+    textWidth: number;
+  }
+  interface Cost {
+    soft: number;
+    preferred: number;
+    balance: number;
+  }
+  // Use the hard positive-width boundary, not the soft image-height target:
+  // otherwise a legal short complete row can be pruned while a taller split wins.
+  const maximumCount = Math.max(
+    1,
+    Math.floor((width + s.gap) / (labelWidth + s.gap)),
+  );
+  const outside = (value: number, minimum: number, maximum: number) =>
+    value < minimum
+      ? ((minimum - value) / minimum) ** 2
+      : value > maximum
+        ? ((value - maximum) / maximum) ** 2
+        : 0;
+  const better = (candidate: Cost, current: Cost) => {
+    for (const field of ["soft", "preferred", "balance"] as const) {
+      const difference = candidate[field] - current[field];
+      if (Math.abs(difference) > 0.000000001) return difference < 0;
     }
-    const row = items.slice(offset, offset + count);
-    let height = Math.min(s.rowMax, tail ? s.rowHeight : fit(row));
-    // All-text rows are fixed-width. A very narrow host must still fit one card.
-    if (row.every((item) => item.ratio === null)) height = s.rowHeight;
-    height = Math.max(1, height);
+    return false;
+  };
+  const costs: Cost[] = Array(items.length + 1);
+  const choices: Choice[] = Array(items.length);
+  costs[items.length] = { soft: 0, preferred: 0, balance: 0 };
+  for (let offset = items.length - 1; offset >= 0; offset--) {
+    let best: Cost = { soft: Infinity, preferred: Infinity, balance: Infinity };
+    for (
+      let count = 1;
+      count <= Math.min(items.length - offset, maximumCount);
+      count++
+    ) {
+      const end = offset + count;
+      const ratio = ratios[end]! - ratios[offset]!;
+      const base = fixed[end]! - fixed[offset]!;
+      const gaps = s.gap * (count - 1);
+      const available = width - base - gaps;
+      if (ratio > 0 && available <= 0) break;
+      const height = ratio > 0 ? available / ratio : s.rowHeight;
+      const textWidth =
+        ratio > 0 ? Math.min(width, s.textWidth) : (width - gaps) / count;
+      if (textWidth <= 0) break;
+      const next = costs[end]!;
+      const deviation = (height - s.rowHeight) / s.rowHeight;
+      const textDeviation =
+        ratio === 0 ? (textWidth - s.textWidth) / s.textWidth : 0;
+      const cost: Cost = {
+        soft:
+          next.soft +
+          outside(height, softMin, softMax) +
+          (ratio === 0 ? outside(textWidth, textMin, textMax) : 0),
+        preferred: next.preferred + outside(height, s.rowMin, s.rowMax),
+        balance:
+          next.balance +
+          0.2 +
+          deviation * deviation +
+          textDeviation * textDeviation,
+      };
+      if (better(cost, best)) {
+        best = cost;
+        choices[offset] = { count, height, textWidth };
+      }
+    }
+    costs[offset] = best;
+  }
+  const positions: DesktopFeedPosition[] = [];
+  let offset = 0,
+    y = 0;
+  while (offset < items.length) {
+    const row = choices[offset]!;
+    const height = Math.min(featureMax, row.height);
     let right = width;
-    for (const item of row) {
-      const cardWidth = Math.min(width, natural(item, height));
-      const mediaWidth = Math.max(0, cardWidth - s.labelWidth);
+    for (let index = offset; index < offset + row.count; index++) {
+      const item = items[index]!;
+      const mediaWidth = item.ratio === null ? 0 : item.ratio * row.height;
+      const cardWidth =
+        item.ratio === null ? row.textWidth : labelWidth + mediaWidth;
       right -= cardWidth;
       positions.push({
         ...item,
+        cropped: item.preserveContain
+          ? false
+          : item.cropped || (item.ratio !== null && row.height > featureMax),
         x: Math.max(0, right),
         y,
         width: cardWidth,
@@ -109,32 +181,7 @@ export const layoutDesktopFeed = (
       right -= s.gap;
     }
     y += height + s.rowGap;
-    offset += count;
+    offset += row.count;
   }
   return { positions, height: Math.max(0, y - s.rowGap) };
-};
-
-/** Appending a page never refits an already displayed terminal row. */
-export const layoutDesktopFeedBatches = (
-  items: readonly DesktopFeedMedia[],
-  width: number,
-  batchEnds: readonly number[],
-): ReturnType<typeof layoutDesktopFeed> => {
-  const positions: DesktopFeedPosition[] = [];
-  let start = 0,
-    height = 0;
-  for (const end of batchEnds) {
-    const batch = layoutDesktopFeed(items.slice(start, end), width);
-    if (batch.positions.length) {
-      positions.push(
-        ...batch.positions.map((position) => ({
-          ...position,
-          y: position.y + height,
-        })),
-      );
-      height += batch.height + desktopLayout.feed.rowGap;
-    }
-    start = end;
-  }
-  return { positions, height: Math.max(0, height - desktopLayout.feed.rowGap) };
 };

@@ -672,6 +672,7 @@ export const ProductShell = ({
       restoreFrameRef.current = null;
     }
     scrollRestorePendingRef.current = false;
+    rootRef.current?.removeAttribute("data-scroll-restoring");
     restoreInputCleanupRef.current?.();
     restoreInputCleanupRef.current = null;
   }, []);
@@ -682,6 +683,7 @@ export const ProductShell = ({
       presentationPlatform: PresentationPlatform,
     ) => {
       cancelScrollRestore();
+      rootRef.current?.setAttribute("data-scroll-restoring", "");
       const desired = scrollPositionsRef.current[destination];
       // During document-to-panel layout changes, Home registers its first
       // panel in the upcoming layout effect. Bind it when it becomes available.

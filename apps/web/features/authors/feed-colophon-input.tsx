@@ -469,6 +469,13 @@ export const FeedColophonInput = forwardRef<
       if (frameId === null) frameId = window.requestAnimationFrame(fit);
     };
     fit();
+    // Desktop can expand the reader from its compact empty state while this
+    // same input keeps focus. Viewport events alone miss that local resize.
+    const resize =
+      typeof ResizeObserver === "function"
+        ? new ResizeObserver(schedule)
+        : null;
+    resize?.observe(strip);
     viewport?.addEventListener("resize", schedule);
     viewport?.addEventListener("scroll", schedule, { passive: true });
     window.addEventListener("resize", schedule);
@@ -478,6 +485,7 @@ export const FeedColophonInput = forwardRef<
       passive: true,
     });
     return () => {
+      resize?.disconnect();
       viewport?.removeEventListener("resize", schedule);
       viewport?.removeEventListener("scroll", schedule);
       window.removeEventListener("resize", schedule);

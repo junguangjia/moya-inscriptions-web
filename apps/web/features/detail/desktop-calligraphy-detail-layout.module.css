@@ -1,7 +1,7 @@
 .layout {
   display: grid;
   min-width: 0;
-  gap: var(--yoyi-space-8);
+  gap: 0;
 }
 .firstScreen {
   display: flex;
@@ -127,13 +127,13 @@
 }
 .colophonCue {
   display: flex;
-  flex: 0 0 64px;
-  min-height: 64px;
+  flex: 0 0 44px;
+  min-height: 44px;
   width: 100%;
   align-items: center;
   justify-content: center;
   gap: var(--yoyi-space-5);
-  padding: var(--yoyi-space-4);
+  padding: var(--yoyi-space-2) var(--yoyi-space-4);
   color: var(--yoyi-color-text-primary);
   border: 0;
   border-top: 1px solid var(--yoyi-color-border-subtle);
@@ -154,12 +154,13 @@
 .lower {
   position: relative;
   min-width: 0;
-  padding-top: var(--yoyi-space-7);
-  border-top: 1px solid var(--yoyi-color-border-subtle);
+  padding-block: var(--yoyi-space-6);
   scroll-margin-top: calc(var(--detail-header-height) + var(--yoyi-space-5));
   --desktop-reading-height: var(--yoyi-desktop-reader-colophon-empty);
 }
 .lower:has(
+  [data-colophon-state="content"],
+  [data-colophon-state="loading"],
   [data-colophon-entry],
   [data-colophon-writing],
   [data-colophon-skeleton],
@@ -173,7 +174,8 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--yoyi-space-5);
-  margin-bottom: var(--yoyi-space-5);
+  min-height: 44px;
+  margin-bottom: var(--yoyi-space-3);
 }
 .colophonHeader h2,
 .colophonHeader p {
@@ -191,10 +193,10 @@
   gap: var(--yoyi-space-3);
 }
 .lower [data-detail-reading-strip] {
-  scrollbar-width: auto;
+  scrollbar-width: none;
 }
 .lower [data-detail-reading-strip]::-webkit-scrollbar {
-  height: 12px;
+  display: none;
 }
 .lower [data-feed-colophon] {
   min-width: 100%;
@@ -209,12 +211,22 @@
 }
 .compose {
   position: absolute;
-  left: 0;
-  top: calc(76px + var(--yoyi-space-7));
+  left: var(--yoyi-space-6);
+  bottom: calc(var(--yoyi-space-6) + 34px);
+  top: auto;
+  z-index: 2;
   display: none;
+  width: auto;
+  gap: var(--yoyi-space-2);
+  padding-inline: var(--yoyi-space-4);
+  color: var(--yoyi-color-text-inverse);
+  background: var(--yoyi-color-seal-red);
+  font-family: var(--yoyi-font-interface);
 }
 .lower:not(
     :has(
+      [data-colophon-state="content"],
+      [data-colophon-state="loading"],
       [data-colophon-entry],
       [data-colophon-writing],
       [data-colophon-skeleton],
@@ -222,10 +234,12 @@
     )
   ):has([data-colophon-input="write"])
   .compose {
-  display: grid;
+  display: flex;
 }
 .lower:not(
     :has(
+      [data-colophon-state="content"],
+      [data-colophon-state="loading"],
       [data-colophon-entry],
       [data-colophon-writing],
       [data-colophon-skeleton],
@@ -236,6 +250,195 @@
   opacity: 0;
   visibility: visible;
   pointer-events: none;
+}
+
+/* With no readable text, the section is a composed status/action row. Once
+   writing starts or comments arrive, the same owner expands into a tall book. */
+.lower:not(
+  :has(
+    [data-colophon-state="content"],
+    [data-colophon-state="loading"],
+    [data-colophon-writing],
+    [data-colophon-input-focused]
+  )
+) {
+  border-top: 1px solid var(--yoyi-color-border-subtle);
+}
+.lower:not(
+    :has(
+      [data-colophon-state="content"],
+      [data-colophon-state="loading"],
+      [data-colophon-writing],
+      [data-colophon-input-focused]
+    )
+  )
+  .colophonHeader
+  :is(p, nav) {
+  display: none;
+}
+.lower:not(
+    :has(
+      [data-colophon-state="content"],
+      [data-colophon-state="loading"],
+      [data-colophon-writing],
+      [data-colophon-input-focused]
+    )
+  )
+  [data-feed-colophon] {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "action message";
+  align-items: center;
+  gap: var(--yoyi-space-5);
+  width: 100%;
+  min-width: 100%;
+  padding: var(--yoyi-space-4) var(--yoyi-space-6);
+  writing-mode: horizontal-tb;
+  direction: ltr;
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-muted);
+}
+.lower:not(
+    :has(
+      [data-colophon-state="content"],
+      [data-colophon-state="loading"],
+      [data-colophon-writing],
+      [data-colophon-input-focused]
+    )
+  )
+  [data-colophon-head] {
+  grid-area: message;
+  justify-self: end;
+  margin: 0;
+  color: var(--yoyi-color-text-secondary);
+}
+.lower:not(
+    :has(
+      [data-colophon-state="content"],
+      [data-colophon-state="loading"],
+      [data-colophon-writing],
+      [data-colophon-input-focused]
+    )
+  )
+  :is([data-colophon-list], [data-colophon-sentinel]) {
+  display: none;
+}
+.lower:not(
+    :has(
+      [data-colophon-state="content"],
+      [data-colophon-state="loading"],
+      [data-colophon-writing],
+      [data-colophon-input-focused]
+    )
+  )
+  [data-colophon-input-anchor] {
+  position: static;
+  grid-area: action;
+  width: auto;
+  height: auto;
+  block-size: auto;
+  min-height: 0;
+}
+.lower:not(
+    :has(
+      [data-colophon-state="content"],
+      [data-colophon-state="loading"],
+      [data-colophon-writing],
+      [data-colophon-input-focused]
+    )
+  )
+  [data-colophon-input] {
+  position: static;
+  height: auto;
+  min-width: 0;
+  max-width: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  writing-mode: horizontal-tb;
+}
+.lower:not(
+    :has(
+      [data-colophon-state="content"],
+      [data-colophon-state="loading"],
+      [data-colophon-writing],
+      [data-colophon-input-focused]
+    )
+  )
+  [data-colophon-input]::after {
+  content: none;
+}
+.lower:not(
+    :has(
+      [data-colophon-state="content"],
+      [data-colophon-state="loading"],
+      [data-colophon-writing],
+      [data-colophon-input-focused]
+    )
+  )
+  :is(
+    [data-colophon-sign-in],
+    [data-colophon-closed],
+    [data-colophon-viewer-unavailable],
+    [data-colophon-notice]
+  ) {
+  max-height: none;
+  margin: 0;
+  padding: var(--yoyi-space-3) var(--yoyi-space-4);
+  writing-mode: horizontal-tb;
+  -webkit-writing-mode: horizontal-tb;
+  letter-spacing: normal;
+  white-space: normal;
+  line-height: 1.5;
+}
+.lower:not(
+    :has(
+      [data-colophon-state="content"],
+      [data-colophon-state="loading"],
+      [data-colophon-writing],
+      [data-colophon-input-focused]
+    )
+  )
+  [data-colophon-sign-in] {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  border-radius: var(--yoyi-radius-full);
+  background: var(--yoyi-color-background-page);
+}
+.lower:not(
+    :has(
+      [data-colophon-state="content"],
+      [data-colophon-state="loading"],
+      [data-colophon-writing],
+      [data-colophon-input-focused]
+    )
+  )
+  [data-colophon-end] {
+  grid-area: message;
+  justify-self: end;
+  margin: 0;
+  padding: 0;
+  font-family: var(--yoyi-font-interface);
+  letter-spacing: normal;
+}
+.lower:not(
+    :has(
+      [data-colophon-state="content"],
+      [data-colophon-state="loading"],
+      [data-colophon-writing],
+      [data-colophon-input-focused]
+    )
+  )
+  [data-colophon-end]
+  button {
+  writing-mode: horizontal-tb;
+  letter-spacing: normal;
+}
+.lower:has([data-colophon-state="error"], [data-colophon-state="closed"])
+  [data-colophon-head] {
+  display: none;
 }
 .layout[data-detail-text-only] .hero {
   grid-template-columns: minmax(0, 1fr);

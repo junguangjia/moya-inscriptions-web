@@ -809,6 +809,16 @@ export const FeedColophonPresentation = ({
   };
 
   const count = shown.page > 0 ? shown.visibleTotal : fallbackCount;
+  const colophonState =
+    shown.hot.length > 0 || shown.items.length > 0
+      ? "content"
+      : shown.unavailable
+        ? "closed"
+        : shown.readError !== null
+          ? "error"
+          : reading
+            ? "loading"
+            : "empty";
   const end = shown.unavailable ? (
     <p data-colophon-unavailable="">此处暂不开放题跋</p>
   ) : shown.readError !== null ? (
@@ -836,6 +846,7 @@ export const FeedColophonPresentation = ({
       className={styles.colophon}
       data-colophon-writing={writing ? "" : undefined}
       data-feed-colophon=""
+      data-colophon-state={colophonState}
       data-colophon-presentation={presentation}
       onCopy={(event) => {
         // Copies what the reader selected, digits and all (see the helper).
