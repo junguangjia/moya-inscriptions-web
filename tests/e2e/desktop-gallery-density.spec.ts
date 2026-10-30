@@ -60,15 +60,22 @@ for (const width of [3440, 5120]) {
       const y = Math.round(item.y);
       rows.set(y, [...(rows.get(y) ?? []), item]);
     }
-    const last = Math.max(...rows.keys());
-    for (const [y, row] of rows) {
-      if (y === last) continue;
+    for (const row of rows.values()) {
       expect(Math.min(...row.map((n) => n.x))).toBeLessThan(1);
       expect(Math.max(...row.map((n) => n.x + n.w))).toBeGreaterThan(
         geometry.width - 1,
       );
       for (let i = 1; i < row.length; i++)
-        expect(row[i]!.x + row[i]!.w).toBeLessThanOrEqual(row[i - 1]!.x - 19);
+        expect(
+          Math.abs(row[i - 1]!.x - row[i]!.x - row[i]!.w - 12),
+        ).toBeLessThan(1);
+    }
+    const ordered = [...rows].sort(([a], [b]) => a - b);
+    for (let i = 1; i < ordered.length; i++) {
+      const [previousY, previous] = ordered[i - 1]!;
+      expect(
+        Math.abs(ordered[i]![0] - previousY - previous[0]!.h - 16),
+      ).toBeLessThan(1);
     }
     expect(new Set(geometry.items.map((n) => n.key)).size).toBe(
       geometry.items.length,

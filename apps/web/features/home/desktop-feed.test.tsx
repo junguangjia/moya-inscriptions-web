@@ -165,8 +165,23 @@ const box = (left: number, top: number, width: number, height: number) =>
       return {};
     },
   }) as DOMRect;
-const anchorFixture = () => {
-  let width = 3440;
+const anchorFixture = ({
+  initialCount = 49,
+  count = 61,
+  initialWidth = 3440,
+  ratios = [0.5],
+  initiallyHidden = false,
+} = {}) => {
+  let width = initialWidth;
+  const frames = new Map<number, FrameRequestCallback>();
+  let frameId = 0;
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+    frames.set(++frameId, callback);
+    return frameId;
+  });
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+    frames.delete(id);
+  });
   let resize: () => void = () => undefined;
   class Observer {
     constructor(callback: () => void) {
@@ -178,10 +193,31 @@ const anchorFixture = () => {
   vi.stubGlobal("ResizeObserver", Observer);
   const owner = document.createElement("div");
   owner.style.overflowY = "auto";
+  if (initiallyHidden) owner.setAttribute("hidden", "");
   const target = document.createElement("div");
-  owner.append(target);
+  // Match DiscoveryFeed's real phase4-load min-height, not an arbitrary spacer.
+  const footer = document.createElement("div");
+  footer.className = "phase4-load";
+  footer.style.minHeight = "60px";
+  const more = document.createElement("button");
+  more.textContent = "加载更多";
+  footer.append(more);
+  owner.append(target, footer);
   document.body.append(owner);
+  let scrollTop = 0;
+  const scrollWrites: number[] = [];
   Object.defineProperties(owner, {
+    scrollTop: {
+      configurable: true,
+      get: () => scrollTop,
+      set: (next: number) => {
+        scrollTop = Math.min(
+          Math.max(0, owner.scrollHeight - owner.clientHeight),
+          Math.max(0, next),
+        );
+        scrollWrites.push(scrollTop);
+      },
+    },
     clientHeight: { configurable: true, value: 100 },
     scrollHeight: {
       configurable: true,
@@ -189,12 +225,22 @@ const anchorFixture = () => {
         Number.parseFloat(
           target.querySelector<HTMLElement>("[data-desktop-feed]")?.style
             .height ?? "0",
-        ),
+        ) + 60,
     },
   });
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
     function (this: HTMLElement) {
       if (this === owner) return box(0, 0, width, 100);
+      if (this === footer)
+        return box(
+          0,
+          Number.parseFloat(
+            target.querySelector<HTMLElement>("[data-desktop-feed]")!.style
+              .height,
+          ) - owner.scrollTop,
+          width,
+          60,
+        );
       if (this.matches("[data-desktop-feed-item]"))
         return box(
           Number.parseFloat(this.style.left),
@@ -207,24 +253,33 @@ const anchorFixture = () => {
           0,
           -owner.scrollTop,
           width,
-          Number.parseFloat(this.style.height) || 240,
+          this.style.height === ""
+            ? this.children.length > 0
+              ? 240
+              : 0
+            : Number.parseFloat(this.style.height),
         );
       return box(0, 0, width, 100);
     },
   );
   const root = createRoot(target);
   roots.push(root);
-  const all = Array.from({ length: 37 }, (_, index) => ({
+  const all = Array.from({ length: count }, (_, index) => ({
     id: String(index),
-    media: { width: 500, height: 1000 },
+    media: { width: ratios[index % ratios.length]! * 1000, height: 1000 },
   }));
-  const draw = (items = all.slice(0, 25)) =>
+  const draw = (items = all.slice(0, initialCount), prefix = "") =>
     act(() =>
       root.render(
         <DesktopFeed
           items={items}
           getKey={(item) => item.id}
-          renderItem={(item) => <button>{item.id}</button>}
+          renderItem={(item) => (
+            <button>
+              {prefix}
+              {item.id}
+            </button>
+          )}
         />,
       ),
     );
@@ -235,10 +290,27 @@ const anchorFixture = () => {
   return {
     owner,
     target,
+    footer,
     all,
     draw,
     node,
     scroll,
+    scrollWrites,
+    pendingFrames: frames,
+    frames: async (count = 1) => {
+      for (let index = 0; index < count; index++)
+        await act(async () => {
+          await Promise.resolve();
+          const tasks = [...frames.values()];
+          frames.clear();
+          for (const task of tasks) task(performance.now());
+          await Promise.resolve();
+        });
+    },
+    unmount: () => {
+      roots.splice(roots.indexOf(root), 1);
+      act(() => root.unmount());
+    },
     resize: (next: number) => {
       width = next;
       act(() => resize());
@@ -248,14 +320,16 @@ const anchorFixture = () => {
 describe("desktop feed viewport anchoring", () => {
   it("fills the previous tail on append while keeping its visible content at the same viewport offset", () => {
     const view = anchorFixture();
-    view.owner.scrollTop = 310;
+    view.owner.scrollTop = Number.parseFloat(view.node("16").style.top) + 50;
     view.scroll();
-    const offset = view.node("15").getBoundingClientRect().top;
-    const oldY = Number.parseFloat(view.node("15").style.top);
+    const offset = view.node("16").getBoundingClientRect().top;
+    expect(offset).toBeLessThan(view.owner.clientHeight);
+    expect(view.node("16").getBoundingClientRect().bottom).toBeGreaterThan(0);
+    const oldY = Number.parseFloat(view.node("16").style.top);
     const focus = vi.spyOn(HTMLElement.prototype, "focus");
     view.draw(view.all);
-    expect(Number.parseFloat(view.node("15").style.top)).not.toBe(oldY);
-    expect(view.node("15").getBoundingClientRect().top).toBeCloseTo(offset);
+    expect(Number.parseFloat(view.node("16").style.top)).not.toBe(oldY);
+    expect(view.node("16").getBoundingClientRect().top).toBeCloseTo(offset);
     expect(focus).not.toHaveBeenCalled();
     expect(
       [...view.target.querySelectorAll("button")].map((n) => n.textContent),
@@ -263,11 +337,13 @@ describe("desktop feed viewport anchoring", () => {
   });
   it("preserves a visible focused card without programmatically moving focus", () => {
     const view = anchorFixture();
-    view.owner.scrollTop = 310;
+    view.owner.scrollTop = Number.parseFloat(view.node("17").style.top) + 50;
     const button = view.node("17").querySelector<HTMLButtonElement>("button")!;
     button.focus();
     view.scroll();
     const offset = view.node("17").getBoundingClientRect().top;
+    expect(offset).toBeLessThan(view.owner.clientHeight);
+    expect(view.node("17").getBoundingClientRect().bottom).toBeGreaterThan(0);
     const focus = vi.spyOn(HTMLElement.prototype, "focus");
     view.draw(view.all);
     expect(document.activeElement).toBe(button);
@@ -284,9 +360,27 @@ describe("desktop feed viewport anchoring", () => {
     view.draw(view.all);
     expect(view.owner.scrollTop).toBe(310);
   });
+  it("keeps a deeply clipped focused card visible when rebalancing makes its row shorter", () => {
+    const view = anchorFixture();
+    const initial = view.node("17").getBoundingClientRect();
+    view.owner.scrollTop = initial.top + initial.height - 50;
+    expect(view.owner.scrollTop).toBe(initial.top + initial.height - 50);
+    const button = view.node("17").querySelector<HTMLButtonElement>("button")!;
+    button.focus();
+    view.scroll();
+    expect(view.node("17").getBoundingClientRect().bottom).toBeGreaterThan(0);
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
+    view.draw(view.all);
+    expect(document.activeElement).toBe(button);
+    expect(view.node("17").getBoundingClientRect().bottom).toBeGreaterThan(0);
+    expect(view.node("17").getBoundingClientRect().top).toBeLessThan(
+      view.owner.clientHeight,
+    );
+    expect(focus).not.toHaveBeenCalled();
+  });
   it("compensates through the existing scroll owner when the container resizes", () => {
     const view = anchorFixture();
-    view.owner.scrollTop = 310;
+    view.owner.scrollTop = Number.parseFloat(view.node("15").style.top) + 50;
     view.scroll();
     const offset = view.node("15").getBoundingClientRect().top;
     view.resize(4920);
@@ -303,5 +397,287 @@ describe("desktop feed viewport anchoring", () => {
     view.scroll();
     view.draw(view.all.map((item) => ({ ...item, id: "new-" + item.id })));
     expect(view.owner.scrollTop).toBe(310);
+  });
+});
+
+const coveredFixture = () =>
+  anchorFixture({
+    initialCount: 24,
+    count: 36,
+    initialWidth: 1440,
+    ratios: [0.4, 2.8, 0.5, 1, 1.6, 0.6, 2.8, 0.625, 2.4, 1, 0.65],
+  });
+const cardsShown = (target: HTMLElement) =>
+  [
+    ...target.querySelectorAll<HTMLButtonElement>(
+      "[data-desktop-feed-item] button",
+    ),
+  ].map((node) => node.textContent);
+const focusVisibleOpener = (view: ReturnType<typeof anchorFixture>) => {
+  const opener = view.node("21").querySelector<HTMLButtonElement>("button")!;
+  const desired = Number.parseFloat(view.node("21").style.top) + 20;
+  view.owner.scrollTop = desired;
+  expect(view.owner.scrollTop).toBe(desired);
+  opener.focus({ preventScroll: true });
+  view.scroll();
+  return {
+    opener,
+    top: opener.parentElement!.getBoundingClientRect().top,
+    physical: view.owner.scrollTop,
+  };
+};
+describe("desktop feed covered presentation buffer", () => {
+  it("holds an append committed with inert, then waits for the shell physical restore before keeping the same opener offset", async () => {
+    const view = coveredFixture();
+    const { opener, top, physical } = focusVisibleOpener(view);
+    const oldGeometry = view.node("21").style.cssText;
+    view.owner.setAttribute("inert", "");
+    view.scrollWrites.length = 0;
+    view.draw(view.all);
+    expect(cardsShown(view.target)).toHaveLength(24);
+    expect(view.node("21").style.cssText).toBe(oldGeometry);
+    expect(view.scrollWrites).toEqual([]);
+    const back = document.createElement("button");
+    document.body.append(back);
+    back.focus();
+    view.owner.setAttribute("data-scroll-restoring", "");
+    view.owner.removeAttribute("inert");
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
+    window.requestAnimationFrame(() =>
+      window.requestAnimationFrame(() => {
+        view.owner.scrollTop = physical;
+        opener.focus({ preventScroll: true });
+        window.requestAnimationFrame(() =>
+          view.owner.removeAttribute("data-scroll-restoring"),
+        );
+      }),
+    );
+    await view.frames(3);
+    expect(cardsShown(view.target)).toHaveLength(24);
+    expect(view.node("21").style.cssText).toBe(oldGeometry);
+    expect(view.scrollWrites).toEqual([physical]);
+    await view.frames(2);
+    expect(cardsShown(view.target)).toEqual(view.all.map((item) => item.id));
+    expect(view.node("21").style.cssText).not.toBe(oldGeometry);
+    expect(view.node("21").getBoundingClientRect().top).toBeCloseTo(top);
+    expect(document.activeElement).toBe(opener);
+    expect(focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+    expect(view.owner.scrollTop).toBeLessThanOrEqual(
+      view.owner.scrollHeight - view.owner.clientHeight,
+    );
+  });
+  it("reserves pending layout extent so the real pagination footer leaves its 300px observer margin while cards remain held", () => {
+    const view = coveredFixture();
+    focusVisibleOpener(view);
+    const host = view.target.querySelector<HTMLElement>("[data-desktop-feed]")!;
+    const oldHeight = Number.parseFloat(host.style.height);
+    const oldPositions = [
+      ...view.target.querySelectorAll<HTMLElement>("[data-desktop-feed-item]"),
+    ].map((node) => node.style.cssText);
+    expect(view.footer.getBoundingClientRect().top).toBeLessThan(
+      view.owner.clientHeight + 300,
+    );
+    view.owner.setAttribute("inert", "");
+    view.scrollWrites.length = 0;
+    view.draw(view.all);
+    expect(Number.parseFloat(host.style.height)).toBeGreaterThan(oldHeight);
+    expect(view.footer.getBoundingClientRect().top).toBeGreaterThan(
+      view.owner.clientHeight + 300,
+    );
+    expect(cardsShown(view.target)).toHaveLength(24);
+    expect(
+      [
+        ...view.target.querySelectorAll<HTMLElement>(
+          "[data-desktop-feed-item]",
+        ),
+      ].map((node) => node.style.cssText),
+    ).toEqual(oldPositions);
+    expect(view.scrollWrites).toEqual([]);
+    expect(view.owner.scrollTop).toBeLessThanOrEqual(
+      view.owner.scrollHeight - view.owner.clientHeight,
+    );
+  });
+  it("does not reserve less than the displayed extent when a covered pending filter is shorter", () => {
+    const view = coveredFixture();
+    focusVisibleOpener(view);
+    const host = view.target.querySelector<HTMLElement>("[data-desktop-feed]")!;
+    const oldHeight = Number.parseFloat(host.style.height);
+    view.owner.setAttribute("inert", "");
+    view.scrollWrites.length = 0;
+    view.draw(view.all.slice(0, 2));
+    expect(Number.parseFloat(host.style.height)).toBe(oldHeight);
+    expect(cardsShown(view.target)).toHaveLength(24);
+    expect(view.scrollWrites).toEqual([]);
+    expect(view.owner.scrollTop).toBeLessThanOrEqual(
+      view.owner.scrollHeight - view.owner.clientHeight,
+    );
+  });
+  it.each(["inert", "hidden", "aria-hidden"])(
+    "retains the shown records and width while covered by %s",
+    async (attribute) => {
+      const view = coveredFixture();
+      const { opener, top } = focusVisibleOpener(view);
+      const geometry = view.node("21").style.cssText;
+      view.owner.setAttribute(
+        attribute,
+        attribute === "aria-hidden" ? "true" : "",
+      );
+      view.scrollWrites.length = 0;
+      view.draw(view.all);
+      view.resize(1920);
+      await view.frames(4);
+      expect(cardsShown(view.target)).toHaveLength(24);
+      expect(view.node("21").style.cssText).toBe(geometry);
+      expect(view.scrollWrites).toEqual([]);
+      view.owner.removeAttribute(attribute);
+      await view.frames(2);
+      expect(cardsShown(view.target)).toHaveLength(36);
+      expect(document.activeElement).toBe(opener);
+      expect(view.node("21").getBoundingClientRect().top).toBeCloseTo(top);
+    },
+  );
+  it.each(["close", "remove"])(
+    "holds behind an external native dialog until %s",
+    async (action) => {
+      const view = coveredFixture();
+      const { opener, top } = focusVisibleOpener(view);
+      const dialog = document.createElement("dialog");
+      dialog.setAttribute("open", "");
+      document.body.append(dialog);
+      view.scrollWrites.length = 0;
+      view.draw(view.all);
+      await view.frames(2);
+      expect(cardsShown(view.target)).toHaveLength(24);
+      expect(view.scrollWrites).toEqual([]);
+      if (action === "close") dialog.removeAttribute("open");
+      else dialog.remove();
+      await view.frames(2);
+      expect(cardsShown(view.target)).toHaveLength(36);
+      expect(document.activeElement).toBe(opener);
+      expect(view.node("21").getBoundingClientRect().top).toBeCloseTo(top);
+    },
+  );
+  it("holds the previous render callback with its records until the pending presentation is eligible", async () => {
+    const view = coveredFixture();
+    focusVisibleOpener(view);
+    view.owner.setAttribute("inert", "");
+    view.draw(view.all, "pending:");
+    expect(cardsShown(view.target)).toEqual(
+      view.all.slice(0, 24).map((item) => item.id),
+    );
+    view.owner.removeAttribute("inert");
+    await view.frames(2);
+    expect(cardsShown(view.target)).toEqual(
+      view.all.map((item) => "pending:" + item.id),
+    );
+  });
+  it("cancels a pending visible release when a new cover appears during the quiet frames", async () => {
+    const view = coveredFixture();
+    focusVisibleOpener(view);
+    view.owner.setAttribute("inert", "");
+    view.draw(view.all);
+    view.owner.removeAttribute("inert");
+    await view.frames(1);
+    view.owner.setAttribute("inert", "");
+    await view.frames(2);
+    expect(cardsShown(view.target)).toHaveLength(24);
+    view.owner.removeAttribute("inert");
+    await view.frames(2);
+    expect(cardsShown(view.target)).toHaveLength(36);
+  });
+  it("applies a replaced filter after return without transferring the old source anchor", async () => {
+    const view = coveredFixture();
+    focusVisibleOpener(view);
+    view.owner.setAttribute("inert", "");
+    const replaced = view.all.map((item) => ({
+      ...item,
+      id: "new-" + item.id,
+    }));
+    view.draw(replaced);
+    expect(cardsShown(view.target)).toHaveLength(24);
+    view.owner.removeAttribute("inert");
+    view.scrollWrites.length = 0;
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
+    await view.frames(2);
+    expect(cardsShown(view.target)).toEqual(replaced.map((item) => item.id));
+    expect(view.scrollWrites).toEqual([]);
+    expect(focus).not.toHaveBeenCalled();
+  });
+  it("cancels visibility frames and observers when unmounted", async () => {
+    const view = coveredFixture();
+    focusVisibleOpener(view);
+    view.owner.setAttribute("inert", "");
+    view.draw(view.all);
+    view.owner.removeAttribute("inert");
+    await view.frames(1);
+    expect(view.pendingFrames.size).toBeGreaterThan(0);
+    view.unmount();
+    expect(view.pendingFrames.size).toBe(0);
+    view.scrollWrites.length = 0;
+    view.owner.setAttribute("inert", "");
+    view.owner.removeAttribute("inert");
+    await view.frames(3);
+    expect(view.pendingFrames.size).toBe(0);
+    expect(view.scrollWrites).toEqual([]);
+  });
+});
+
+describe("desktop feed empty presentation readiness", () => {
+  it("accepts active empty content followed by populated content with a truthful zero-height feed", () => {
+    const view = anchorFixture({
+      initialCount: 0,
+      count: 12,
+      initialWidth: 1440,
+    });
+    const host = view.target.querySelector<HTMLElement>("[data-desktop-feed]")!;
+    expect(host.getBoundingClientRect().height).toBe(0);
+    expect(cardsShown(view.target)).toEqual([]);
+    view.draw(view.all);
+    expect(cardsShown(view.target)).toEqual(view.all.map((item) => item.id));
+    expect(host.getBoundingClientRect().height).toBeGreaterThan(0);
+  });
+  it("clears displayed records when the active result becomes empty instead of retaining stale cards", () => {
+    const view = anchorFixture();
+    expect(cardsShown(view.target).length).toBeGreaterThan(0);
+    view.draw([]);
+    expect(cardsShown(view.target)).toEqual([]);
+    expect(
+      view.target
+        .querySelector<HTMLElement>("[data-desktop-feed]")!
+        .getBoundingClientRect().height,
+    ).toBe(0);
+  });
+  it("keeps an initially hidden empty result held until visible, then applies pending data", async () => {
+    const view = anchorFixture({
+      initialCount: 0,
+      count: 12,
+      initialWidth: 1440,
+      initiallyHidden: true,
+    });
+    expect(
+      view.target
+        .querySelector<HTMLElement>("[data-desktop-feed]")!
+        .getBoundingClientRect().height,
+    ).toBe(0);
+    view.draw(view.all);
+    await view.frames(3);
+    expect(cardsShown(view.target)).toEqual([]);
+    view.owner.removeAttribute("hidden");
+    await view.frames(2);
+    expect(cardsShown(view.target)).toEqual(view.all.map((item) => item.id));
+  });
+  it("rechecks a held empty presentation when CSS width returns without an attribute or measured-width state change", async () => {
+    const view = anchorFixture({
+      initialCount: 0,
+      count: 12,
+      initialWidth: 1440,
+    });
+    view.resize(0);
+    await view.frames(1);
+    view.draw(view.all);
+    expect(cardsShown(view.target)).toEqual([]);
+    view.resize(1440);
+    await view.frames(2);
+    expect(cardsShown(view.target)).toEqual(view.all.map((item) => item.id));
   });
 });

@@ -3,6 +3,7 @@ import { desktopLayout } from "@moya/design-tokens";
 export interface DesktopFeedMedia {
   readonly ratio: number | null;
   readonly cropped: boolean;
+  readonly preserveContain?: boolean;
 }
 export interface DesktopFeedPosition extends DesktopFeedMedia {
   readonly x: number;
@@ -18,6 +19,8 @@ export const desktopFeedMedia = (item: unknown): DesktopFeedMedia => {
   const media = (record?.media ?? record?.representativeMedia) as
     { width?: number; height?: number; feed?: { fit?: string } } | undefined;
   const target = record?.target as { type?: string } | undefined;
+  // A missing-image placeholder is never an actionable cropped preview.
+  const preserveContain = !media || media.feed?.fit === "contain";
   if (target?.type === "work" && !media) return { ratio: null, cropped: false };
   const raw = Number(media?.width) / Number(media?.height);
   if (
@@ -26,15 +29,32 @@ export const desktopFeedMedia = (item: unknown): DesktopFeedMedia => {
     Number(media?.height) <= 0 ||
     raw <= 0
   )
-    return { ratio: 1, cropped: false };
+    return {
+      ratio: 1,
+      cropped: false,
+      ...(preserveContain ? { preserveContain: true } : {}),
+    };
   const ratio = Math.max(
     desktopLayout.feed.minimumRatio,
     Math.min(desktopLayout.feed.maximumRatio, raw),
   );
-  return { ratio, cropped: ratio !== raw && media?.feed?.fit !== "contain" };
+  return {
+    ratio,
+    cropped: ratio !== raw && !preserveContain,
+    ...(preserveContain ? { preserveContain: true } : {}),
+  };
 };
 
-/** A bounded two-row lookahead: only the open tail can change when more data arrives. */
+/**
+ * Globally balance the loaded sequence, including its final row, in O(n * k).
+ * k is bounded by the viewport and each card's fixed caption. Every candidate
+ * fills the row; source media, source records and ordering are unchanged.
+ * Prefer complete partitions within 200–300px, then 160–360px. A sparse sequence
+ * that cannot fill within those bounds becomes a feature preview capped at
+ * 720px, using the existing explicit crop indication. A saved contain choice
+ * keeps the whole image inside that same bounded, full-width card.
+ * Text-only rows share the available width and retain the target height.
+ */
 export const layoutDesktopFeed = (
   items: readonly DesktopFeedMedia[],
   width: number,
@@ -47,36 +67,55 @@ export const layoutDesktopFeed = (
   const s = desktopLayout.feed;
   const softMin = s.rowMin * 0.8;
   const softMax = s.rowMax * 1.2;
+  const featureMax = s.featureMax;
+  const textMin = s.textWidth * 0.85;
+  const textMax = s.textWidth * 1.35;
   const ratios = [0],
     fixed = [0];
+  // A transient host narrower than the label still receives finite geometry;
+  // the desktop shell normally provides much more than this minimum width.
+  const labelWidth = Math.min(s.labelWidth, width / 2);
   for (const item of items) {
     ratios.push(ratios.at(-1)! + (item.ratio ?? 0));
     fixed.push(
       fixed.at(-1)! +
-        (item.ratio === null ? Math.min(width, s.textWidth) : s.labelWidth),
+        (item.ratio === null ? Math.min(width, s.textWidth) : labelWidth),
     );
   }
-  interface Row {
+  interface Choice {
     count: number;
     height: number;
     textWidth: number;
-    cost: number;
-    justified: boolean;
-    naturalTail: boolean;
   }
+  interface Cost {
+    soft: number;
+    preferred: number;
+    balance: number;
+  }
+  // Use the hard positive-width boundary, not the soft image-height target:
+  // otherwise a legal short complete row can be pruned while a taller split wins.
   const maximumCount = Math.max(
     1,
-    Math.ceil(
-      (width + s.gap) /
-        (Math.min(s.textWidth * 0.85, s.labelWidth + s.minimumRatio * softMin) +
-          s.gap),
-    ) + 1,
+    Math.floor((width + s.gap) / (labelWidth + s.gap)),
   );
-  const cache = new Map<number, readonly Row[]>();
-  const candidates = (offset: number): readonly Row[] => {
-    const known = cache.get(offset);
-    if (known) return known;
-    const result: Row[] = [];
+  const outside = (value: number, minimum: number, maximum: number) =>
+    value < minimum
+      ? ((minimum - value) / minimum) ** 2
+      : value > maximum
+        ? ((value - maximum) / maximum) ** 2
+        : 0;
+  const better = (candidate: Cost, current: Cost) => {
+    for (const field of ["soft", "preferred", "balance"] as const) {
+      const difference = candidate[field] - current[field];
+      if (Math.abs(difference) > 0.000000001) return difference < 0;
+    }
+    return false;
+  };
+  const costs: Cost[] = Array(items.length + 1);
+  const choices: Choice[] = Array(items.length);
+  costs[items.length] = { soft: 0, preferred: 0, balance: 0 };
+  for (let offset = items.length - 1; offset >= 0; offset--) {
+    let best: Cost = { soft: Infinity, preferred: Infinity, balance: Infinity };
     for (
       let count = 1;
       count <= Math.min(items.length - offset, maximumCount);
@@ -86,122 +125,62 @@ export const layoutDesktopFeed = (
       const ratio = ratios[end]! - ratios[offset]!;
       const base = fixed[end]! - fixed[offset]!;
       const gaps = s.gap * (count - 1);
-      const naturalWidth = base + ratio * s.rowHeight + gaps;
-      const naturalTail = end === items.length && naturalWidth <= width;
-      let height: number = s.rowHeight,
-        textWidth = Math.min(width, s.textWidth),
-        used: number;
-      if (ratio === 0) {
-        if (!naturalTail) {
-          const fit = (width - gaps) / count;
-          if (fit < s.textWidth * 0.85) continue;
-          textWidth = Math.min(s.textWidth * 1.35, fit);
-        }
-        used = textWidth * count + gaps;
-      } else {
-        const fit = (width - base - gaps) / ratio;
-        if (!naturalTail) {
-          if (fit < softMin && count > 1) continue;
-          height = fit <= softMax ? Math.max(1, fit) : s.rowMax;
-        }
-        used = base + ratio * height + gaps;
-      }
-      if (used > width + 0.01 && count > 1) continue;
-      const blank = Math.max(0, width - used) / width;
+      const available = width - base - gaps;
+      if (ratio > 0 && available <= 0) break;
+      const height = ratio > 0 ? available / ratio : s.rowHeight;
+      const textWidth =
+        ratio > 0 ? Math.min(width, s.textWidth) : (width - gaps) / count;
+      if (textWidth <= 0) break;
+      const next = costs[end]!;
       const deviation = (height - s.rowHeight) / s.rowHeight;
-      const outside =
-        height < s.rowMin
-          ? (s.rowMin - height) / s.rowMin
-          : height > s.rowMax
-            ? (height - s.rowMax) / s.rowMax
-            : 0;
       const textDeviation =
         ratio === 0 ? (textWidth - s.textWidth) / s.textWidth : 0;
-      result.push({
-        count,
-        height,
-        textWidth,
-        naturalTail,
-        justified: blank < 0.00001,
-        cost:
-          0.35 +
+      const cost: Cost = {
+        soft:
+          next.soft +
+          outside(height, softMin, softMax) +
+          (ratio === 0 ? outside(textWidth, textMin, textMax) : 0),
+        preferred: next.preferred + outside(height, s.rowMin, s.rowMax),
+        balance:
+          next.balance +
+          0.2 +
           deviation * deviation +
-          4 * outside * outside +
-          textDeviation * textDeviation +
-          (naturalTail ? 0.8 : 8) * blank * blank,
-      });
+          textDeviation * textDeviation,
+      };
+      if (better(cost, best)) {
+        best = cost;
+        choices[offset] = { count, height, textWidth };
+      }
     }
-    // Respect the preferred height whenever a full-width readable row exists.
-    // Soft bounds are for otherwise impossible mixed-ratio combinations only.
-    const readableFull = result.some(
-      (row) =>
-        row.justified && row.height >= s.rowMin && row.height <= s.rowMax,
-    );
-    const usable = readableFull
-      ? result.filter(
-          (row) =>
-            row.naturalTail ||
-            (row.justified && row.height >= s.rowMin && row.height <= s.rowMax),
-        )
-      : result;
-    cache.set(offset, usable);
-    return usable;
-  };
-  const immediate = new Map<number, number>();
-  const nextCost = (offset: number) => {
-    if (offset === items.length) return 0;
-    if (!immediate.has(offset))
-      immediate.set(
-        offset,
-        Math.min(...candidates(offset).map((row) => row.cost)),
-      );
-    return immediate.get(offset)!;
-  };
+    costs[offset] = best;
+  }
   const positions: DesktopFeedPosition[] = [];
   let offset = 0,
     y = 0;
   while (offset < items.length) {
-    let best: Row | undefined,
-      bestCost = Infinity;
-    for (const row of candidates(offset)) {
-      const cost = row.cost + nextCost(offset + row.count);
-      if (
-        cost < bestCost - 0.0000001 ||
-        (Math.abs(cost - bestCost) < 0.0000001 &&
-          row.count > (best?.count ?? 0))
-      ) {
-        best = row;
-        bestCost = cost;
-      }
-    }
-    // One item is always representable, even inside a temporarily narrow host.
-    const row = best ?? {
-      count: 1,
-      height: s.rowHeight,
-      textWidth: Math.min(width, s.textWidth),
-    };
+    const row = choices[offset]!;
+    const height = Math.min(featureMax, row.height);
     let right = width;
     for (let index = offset; index < offset + row.count; index++) {
       const item = items[index]!;
-      const cardWidth = Math.min(
-        width,
-        item.ratio === null
-          ? row.textWidth
-          : s.labelWidth + item.ratio * row.height,
-      );
+      const mediaWidth = item.ratio === null ? 0 : item.ratio * row.height;
+      const cardWidth =
+        item.ratio === null ? row.textWidth : labelWidth + mediaWidth;
       right -= cardWidth;
       positions.push({
         ...item,
+        cropped: item.preserveContain
+          ? false
+          : item.cropped || (item.ratio !== null && row.height > featureMax),
         x: Math.max(0, right),
         y,
         width: cardWidth,
-        height: row.height,
-        mediaWidth:
-          item.ratio === null ? 0 : Math.max(0, cardWidth - s.labelWidth),
+        height,
+        mediaWidth,
       });
       right -= s.gap;
     }
-    y += row.height + s.rowGap;
+    y += height + s.rowGap;
     offset += row.count;
   }
   return { positions, height: Math.max(0, y - s.rowGap) };

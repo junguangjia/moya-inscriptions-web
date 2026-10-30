@@ -10,6 +10,7 @@ import type { DesktopFeedPosition } from "./desktop-feed-layout";
 interface ViewportAnchor {
   key: string;
   offset: number;
+  height: number;
   owner: HTMLElement;
 }
 const documentScroller = () =>
@@ -30,8 +31,12 @@ const eligible = (node: HTMLElement) => {
   const dialogs = document.querySelectorAll<HTMLDialogElement>("dialog[open]");
   const top = dialogs.item(dialogs.length - 1);
   const box = node.getBoundingClientRect();
-  return !(top && !top.contains(node)) && box.width > 0 && box.height > 0;
+  // An active empty list legitimately measures zero height. Only its width
+  // and cover state determine whether its presentation can accept new data.
+  return !(top && !top.contains(node)) && box.width > 0;
 };
+const ready = (node: HTMLElement) =>
+  eligible(node) && !node.closest("[data-scroll-restoring]");
 const viewport = (owner: HTMLElement) =>
   owner === documentScroller()
     ? { top: 0, bottom: window.innerHeight }
@@ -58,23 +63,54 @@ export const DesktopFeed = <T,>({
 }) => {
   const host = useRef<HTMLDivElement>(null);
   const nodes = useRef(new Map<string, HTMLDivElement>());
-  const [width, setWidth] = useState(0);
-  const keys = items.map(getKey);
+  const [measuredWidth, setWidth] = useState(0);
+  const [holding, setHolding] = useState(false);
+  const holdingRef = useRef(false);
+  // Presentation references only: pending data stays with its existing owner.
+  const displayed = useRef({ items, getKey, renderItem, width: 0 });
+  const visible = holding
+    ? displayed.current
+    : { items, getKey, renderItem, width: measuredWidth };
+  const width = visible.width;
+  const keys = visible.items.map(visible.getKey);
   const keySignature = keys.join("\u0000");
   const committed = useRef({ keys, width: 0 });
   const anchor = useRef<ViewportAnchor | null>(null);
   const capture = useRef<() => void>(() => undefined);
   const inputRevision = useRef(0);
   const followup = useRef<number | null>(null);
-  const layout = useMemo(
-    () => layoutDesktopFeed(items.map(desktopFeedMedia), width),
-    [items, width],
+  const visibilityFrame = useRef<number | null>(null);
+  const checkVisibility = useRef<() => void>(() => undefined);
+  const hold = () => {
+    if (visibilityFrame.current !== null)
+      window.cancelAnimationFrame(visibilityFrame.current);
+    visibilityFrame.current = null;
+    if (!holdingRef.current) {
+      holdingRef.current = true;
+      setHolding(true);
+    }
+  };
+  const pendingLayout = useMemo(
+    () => layoutDesktopFeed(items.map(desktopFeedMedia), measuredWidth),
+    [items, measuredWidth],
   );
+  const layout = useMemo(
+    () =>
+      holding
+        ? layoutDesktopFeed(visible.items.map(desktopFeedMedia), width)
+        : pendingLayout,
+    [holding, visible.items, width, pendingLayout],
+  );
+  // Advance an existing pagination footer without mounting covered cards.
+  // Never shrink the old extent while the shell restores its physical offset.
+  const height = holding
+    ? Math.max(layout.height, pendingLayout.height)
+    : layout.height;
 
   useLayoutEffect(() => {
     const remember = () => {
       const root = host.current;
-      if (!root || !eligible(root)) return;
+      if (!root || !ready(root)) return;
       const owner = scrollOwner(root),
         frame = viewport(owner);
       const available = committed.current.keys
@@ -90,15 +126,57 @@ export const DesktopFeed = <T,>({
       const selected =
         available.find(({ node }) => node.contains(document.activeElement)) ??
         available[0];
-      anchor.current = selected
-        ? {
-            key: selected.key,
-            offset: selected.node.getBoundingClientRect().top - frame.top,
-            owner,
-          }
-        : null;
+      const box = selected?.node.getBoundingClientRect();
+      anchor.current =
+        selected && box
+          ? {
+              key: selected.key,
+              offset: box.top - frame.top,
+              height: box.height,
+              owner,
+            }
+          : null;
     };
     capture.current = remember;
+    const queueVisibility = () => {
+      if (visibilityFrame.current !== null) return;
+      visibilityFrame.current = window.requestAnimationFrame(() => {
+        visibilityFrame.current = null;
+        const root = host.current;
+        if (!root || !ready(root)) {
+          if (root) hold();
+          return;
+        }
+        if (!holdingRef.current) return;
+        // The shell's physical restore owns its complete, bounded lifecycle.
+        // Only after its marker clears do two quiet frames settle focus/layout.
+        visibilityFrame.current = window.requestAnimationFrame(() => {
+          visibilityFrame.current = null;
+          const current = host.current;
+          if (!current || !ready(current)) {
+            if (current) hold();
+            return;
+          }
+          remember();
+          holdingRef.current = false;
+          setHolding(false);
+        });
+      });
+    };
+    checkVisibility.current = queueVisibility;
+    const visibilityObserver = new MutationObserver(queueVisibility);
+    visibilityObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: [
+        "hidden",
+        "inert",
+        "aria-hidden",
+        "open",
+        "data-scroll-restoring",
+      ],
+      childList: true,
+      subtree: true,
+    });
     const measure = () => {
       remember();
       const next = host.current?.getBoundingClientRect().width ?? 0;
@@ -106,6 +184,9 @@ export const DesktopFeed = <T,>({
         setWidth((current) =>
           Math.abs(next - current) > 0.5 ? next : current,
         );
+      // CSS can reveal the same measured width without an attribute mutation
+      // or a React state change; release its held presentation then as well.
+      queueVisibility();
     };
     const input = () => {
       inputRevision.current += 1;
@@ -127,6 +208,11 @@ export const DesktopFeed = <T,>({
     if (host.current) observer?.observe(host.current);
     return () => {
       observer?.disconnect();
+      visibilityObserver.disconnect();
+      if (visibilityFrame.current !== null)
+        window.cancelAnimationFrame(visibilityFrame.current);
+      visibilityFrame.current = null;
+      checkVisibility.current = () => undefined;
       window.removeEventListener("scroll", remember, true);
       for (const name of [
         "wheel",
@@ -142,6 +228,16 @@ export const DesktopFeed = <T,>({
 
   useLayoutEffect(() => {
     const root = host.current;
+    if (!root || !ready(root) || holdingRef.current) {
+      if (followup.current !== null)
+        window.cancelAnimationFrame(followup.current);
+      followup.current = null;
+      if (root && !ready(root)) hold();
+      else checkVisibility.current();
+      // A modal and append can commit together. Re-render the last eligible
+      // snapshot synchronously before paint; never commit the covered geometry.
+      return;
+    }
     const previous = committed.current;
     const sameSourcePrefix =
       keys.length >= previous.keys.length &&
@@ -149,7 +245,7 @@ export const DesktopFeed = <T,>({
     const saved = anchor.current;
     const canRestore =
       root &&
-      eligible(root) &&
+      ready(root) &&
       previous.width > 0 &&
       width > 0 &&
       sameSourcePrefix &&
@@ -162,16 +258,21 @@ export const DesktopFeed = <T,>({
       const restore = () => {
         if (
           !host.current ||
-          !eligible(host.current) ||
+          !ready(host.current) ||
           scrollOwner(host.current) !== saved.owner
         )
           return false;
         const node = nodes.current.get(saved.key);
         if (!node) return false;
-        const delta =
-          node.getBoundingClientRect().top -
-          viewport(saved.owner).top -
-          saved.offset;
+        const box = node.getBoundingClientRect();
+        // A much shorter row must not leave the previously visible card
+        // wholly above the viewport. Keep its clipped reading proportion then;
+        // otherwise retain the existing exact top offset.
+        const offset =
+          saved.offset < 0 && box.height + saved.offset <= 0 && saved.height > 0
+            ? (saved.offset * box.height) / saved.height
+            : saved.offset;
+        const delta = box.top - viewport(saved.owner).top - offset;
         if (Math.abs(delta) <= 0.5) return false;
         const desired = saved.owner.scrollTop + delta;
         const maximum = Math.max(
@@ -191,10 +292,11 @@ export const DesktopFeed = <T,>({
           capture.current();
         });
       }
-    } else if (!root || !eligible(root)) anchor.current = null;
+    }
     committed.current = { keys, width };
+    displayed.current = visible;
     capture.current();
-  }, [layout, width, keySignature]);
+  }, [layout, width, keySignature, holding]);
 
   return (
     <div
@@ -203,9 +305,9 @@ export const DesktopFeed = <T,>({
       className={styles.feed}
       data-desktop-feed=""
       data-layout-ready={width > 0 ? "true" : "false"}
-      style={width > 0 ? { height: layout.height } : undefined}
+      style={width > 0 ? { height } : undefined}
     >
-      {items.map((item, index) => {
+      {visible.items.map((item, index) => {
         const media = desktopFeedMedia(item);
         const mediaWidth = (media.ratio ?? 0) * desktopLayout.feed.rowHeight;
         const position = layout.positions[index] ?? {
@@ -219,7 +321,7 @@ export const DesktopFeed = <T,>({
           height: desktopLayout.feed.rowHeight,
           mediaWidth,
         };
-        const key = getKey(item);
+        const key = visible.getKey(item);
         return (
           <div
             key={key}
@@ -239,7 +341,7 @@ export const DesktopFeed = <T,>({
               height: position.height,
             }}
           >
-            {renderItem(item, index, position)}
+            {visible.renderItem(item, index, position)}
           </div>
         );
       })}
