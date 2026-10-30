@@ -279,6 +279,41 @@ describe("FeedColophon", () => {
     expect(h.options).toHaveLength(0);
     expect($("[data-comment-id='qa-one']")).not.toBeNull();
   });
+
+  it.each([
+    ["empty", {}],
+    ["loading", { loading: true, page: 0 }],
+    ["error", { readError: "暂时无法读取题跋" }],
+    ["closed", { unavailable: true }],
+    [
+      "content",
+      { items: [comment("kept", writer)], readError: "下一页读取失败" },
+    ],
+  ] as const)(
+    "exposes %s geometry without hiding already loaded comments",
+    (state, changes) => {
+      const thread = makeThread(changes);
+      act(() =>
+        root.render(
+          <FeedColophonPresentation
+            target={target}
+            title="题跋状态"
+            thread={thread}
+            presentation="detail"
+          />,
+        ),
+      );
+      expect(
+        $("[data-feed-colophon]")?.getAttribute("data-colophon-state"),
+      ).toBe(state);
+      if (state === "content") {
+        expect($("[data-comment-id='kept']")).not.toBeNull();
+        expect($("[data-colophon-read-error]")?.textContent).toBe(
+          "下一页读取失败",
+        );
+      }
+    },
+  );
   it("reads nothing until the reader nears the colophons, then reads once", () => {
     h.thread = makeThread({ page: 0, totalPages: 0, loading: true });
     render();

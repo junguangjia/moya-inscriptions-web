@@ -344,16 +344,23 @@ export const DesktopCalligraphyDetailLayout = ({
               className={styles.compose}
               onClick={() => {
                 revealComments();
-                lowerRegion.current
-                  ?.querySelector<HTMLTextAreaElement>(
+                const input =
+                  lowerRegion.current?.querySelector<HTMLTextAreaElement>(
                     "[data-colophon-input-box]",
-                  )
-                  ?.focus();
+                  );
+                input?.focus();
+                // The empty reader grows in response to focus. Its old scroll
+                // range may clamp the first reveal; align again after layout.
+                requestAnimationFrame(() => {
+                  if (input && document.activeElement === input)
+                    revealComments();
+                });
               }}
               title="写题跋"
               type="button"
             >
               <Icon name="edit" />
+              <span>写题跋</span>
             </button>
           </section>
         ) : null}

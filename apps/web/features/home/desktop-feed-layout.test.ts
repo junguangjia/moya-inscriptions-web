@@ -1,29 +1,42 @@
 import { describe, expect, it } from "vitest";
-import {
-  desktopFeedMedia,
-  layoutDesktopFeed,
-  layoutDesktopFeedBatches,
-} from "./desktop-feed-layout";
+import { desktopFeedMedia, layoutDesktopFeed } from "./desktop-feed-layout";
 
 const image = (ratio: number) => ({ ratio, cropped: false });
 const text = { ratio: null, cropped: false };
 
 describe("desktop calligraphy sequential rows", () => {
-  it("keeps an earlier page's geometry when another page appends, and reflows each batch on resize", () => {
-    const items = [
-      0.4, 1, 2.8, 0.6, 1.6, 1, 0.6, 1, 0.625, 2.4, 1, 1, 0.5, 1.5, 0.65, 2.8,
-      0.4, 2.4,
-    ].map(image);
-    const before = layoutDesktopFeedBatches(items.slice(0, 12), 672, [12]);
-    const after = layoutDesktopFeedBatches(items, 672, [12, 18]);
-    expect(after.positions.slice(0, 12)).toEqual(before.positions);
-    expect(after.positions[12]!.y).toBe(before.height + 24);
-    const resized = layoutDesktopFeedBatches(items, 1296, [12, 18]);
-    expect(resized.positions).toHaveLength(items.length);
-    expect(resized.positions[12]!.y).toBeGreaterThan(resized.positions[11]!.y);
-    expect(
-      resized.positions.every((p) => p.x >= 0 && p.x + p.width <= 1296.001),
-    ).toBe(true);
+  it.each([3440, 4920])(
+    "fills across former page boundaries at %spx instead of repeating sparse bands",
+    (width) => {
+      const items = Array.from({ length: 36 }, () => image(0.5));
+      const { positions } = layoutDesktopFeed(items, width);
+      const lastY = positions.at(-1)!.y;
+      const rows = [...new Set(positions.map((p) => p.y))];
+      expect(positions[12]!.y).toBe(positions[0]!.y);
+      for (const y of rows.filter((y) => y !== lastY))
+        expect(
+          Math.min(...positions.filter((p) => p.y === y).map((p) => p.x)),
+        ).toBeCloseTo(0);
+      expect(rows.length).toBeLessThanOrEqual(3);
+    },
+  );
+  it("uses a bounded soft height for an otherwise impossible full mixed-ratio row", () => {
+    const positions = layoutDesktopFeed(
+      [0.4, 2.8, 2.8].map(image),
+      1296,
+    ).positions;
+    expect(new Set(positions.map((p) => p.y)).size).toBe(1);
+    expect(positions[0]!.height).toBeCloseTo(173.3333333);
+    expect(positions.at(-1)!.x).toBeCloseTo(0);
+    positions.forEach((p) =>
+      expect(p.mediaWidth / p.height).toBeCloseTo(p.ratio!),
+    );
+  });
+  it("does not repartition a distant complete prefix just because the open tail appends", () => {
+    const items = Array.from({ length: 92 }, () => image(0.5));
+    const before = layoutDesktopFeed(items.slice(0, 80), 3440).positions;
+    const after = layoutDesktopFeed(items, 3440).positions;
+    expect(after.slice(0, 32)).toEqual(before.slice(0, 32));
   });
   it.each([768, 1296, 1920, 3440])(
     "keeps source/DOM order and images in bounds at %spx",
@@ -51,8 +64,8 @@ describe("desktop calligraphy sequential rows", () => {
         expect(p.ratio).toBe(items[i]!.ratio);
         expect(p.x).toBeGreaterThanOrEqual(0);
         expect(p.x + p.width).toBeLessThanOrEqual(width + 0.001);
-        expect(p.height).toBeGreaterThan(0);
-        expect(p.height).toBeLessThanOrEqual(300);
+        expect(p.height).toBeGreaterThanOrEqual(160);
+        expect(p.height).toBeLessThanOrEqual(360);
         if (p.ratio) expect(p.mediaWidth / p.height).toBeCloseTo(p.ratio);
         const previous = positions[i - 1];
         if (previous) {
@@ -76,10 +89,18 @@ describe("desktop calligraphy sequential rows", () => {
     ).positions;
     expect(p).toHaveLength(11);
     for (const item of p) {
-      expect(item.width).toBe(232);
+      expect(item.width).toBeGreaterThanOrEqual(232 * 0.85);
+      expect(item.width).toBeLessThanOrEqual(232 * 1.35);
       expect(item.x + item.width).toBeLessThanOrEqual(900);
     }
-    expect(p[3]!.y).toBeGreaterThan(p[2]!.y);
+    expect(p.at(-1)!.y).toBeGreaterThan(p[0]!.y);
+    const lastY = p.at(-1)!.y;
+    for (const y of [...new Set(p.map((item) => item.y))].filter(
+      (y) => y !== lastY,
+    ))
+      expect(
+        Math.min(...p.filter((item) => item.y === y).map((item) => item.x)),
+      ).toBeCloseTo(0);
   });
   it("sanitizes dimensions and distinguishes absent covers from text-only works", () => {
     expect(desktopFeedMedia({ media: { width: NaN, height: 0 } })).toEqual(

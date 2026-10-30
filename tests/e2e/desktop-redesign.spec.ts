@@ -65,7 +65,7 @@ test("desktop gallery adapts CSS viewports without changing source order or imag
       const b = geometry.bounds[i]!;
       expect(b.x).toBeGreaterThanOrEqual(-1);
       expect(b.x + b.w).toBeLessThanOrEqual(width! + 1);
-      expect(b.h).toBeLessThanOrEqual(301);
+      expect(b.h).toBeLessThanOrEqual(361);
       const a = geometry.bounds[i - 1];
       if (a && Math.abs(a.y - b.y) < 1)
         expect(b.x + b.w).toBeLessThanOrEqual(a.x - 19);

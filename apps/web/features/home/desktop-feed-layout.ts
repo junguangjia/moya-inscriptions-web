@@ -34,7 +34,7 @@ export const desktopFeedMedia = (item: unknown): DesktopFeedMedia => {
   return { ratio, cropped: ratio !== raw && media?.feed?.fit !== "contain" };
 };
 
-/** Sequential justified rows, starting at the right; the final row never stretches. */
+/** A bounded two-row lookahead: only the open tail can change when more data arrives. */
 export const layoutDesktopFeed = (
   items: readonly DesktopFeedMedia[],
   width: number,
@@ -42,99 +42,167 @@ export const layoutDesktopFeed = (
   readonly height: number;
   readonly positions: readonly DesktopFeedPosition[];
 } => {
-  if (!Number.isFinite(width) || width <= 0)
+  if (!Number.isFinite(width) || width <= 0 || !items.length)
     return { height: 0, positions: [] };
   const s = desktopLayout.feed;
-  const positions: DesktopFeedPosition[] = [];
-  const fixed = (item: DesktopFeedMedia) =>
-    item.ratio === null ? Math.min(width, s.textWidth) : s.labelWidth;
-  const natural = (item: DesktopFeedMedia, height: number) =>
-    fixed(item) + (item.ratio ?? 0) * height;
-  const rowWidth = (row: readonly DesktopFeedMedia[], height: number) =>
-    row.reduce((sum, item) => sum + natural(item, height), 0) +
-    s.gap * Math.max(0, row.length - 1);
-  const fit = (row: readonly DesktopFeedMedia[]) => {
-    const ratio = row.reduce((sum, item) => sum + (item.ratio ?? 0), 0);
-    return ratio === 0
-      ? s.rowHeight
-      : (width -
-          row.reduce((sum, item) => sum + fixed(item), 0) -
-          s.gap * (row.length - 1)) /
-          ratio;
-  };
-  let offset = 0;
-  let y = 0;
-  while (offset < items.length) {
-    let count = 1;
-    while (
-      offset + count < items.length &&
-      rowWidth(items.slice(offset, offset + count), s.rowHeight) < width
-    )
-      count += 1;
-    const candidate = items.slice(offset, offset + count);
-    const tail =
-      offset + count === items.length &&
-      rowWidth(candidate, s.rowHeight) <= width;
-    if (!tail && count > 1) {
-      const previous = items.slice(offset, offset + count - 1);
-      const a = fit(previous),
-        b = fit(candidate);
-      // Prefer a readable row over squeezing the next item into a low strip.
-      if (
-        (candidate.every((item) => item.ratio === null) &&
-          rowWidth(candidate, s.rowHeight) > width) ||
-        b < s.rowMin ||
-        (a <= s.rowMax && Math.abs(a - s.rowHeight) < Math.abs(b - s.rowHeight))
-      )
-        count -= 1;
+  const softMin = s.rowMin * 0.8;
+  const softMax = s.rowMax * 1.2;
+  const ratios = [0],
+    fixed = [0];
+  for (const item of items) {
+    ratios.push(ratios.at(-1)! + (item.ratio ?? 0));
+    fixed.push(
+      fixed.at(-1)! +
+        (item.ratio === null ? Math.min(width, s.textWidth) : s.labelWidth),
+    );
+  }
+  interface Row {
+    count: number;
+    height: number;
+    textWidth: number;
+    cost: number;
+    justified: boolean;
+    naturalTail: boolean;
+  }
+  const maximumCount = Math.max(
+    1,
+    Math.ceil(
+      (width + s.gap) /
+        (Math.min(s.textWidth * 0.85, s.labelWidth + s.minimumRatio * softMin) +
+          s.gap),
+    ) + 1,
+  );
+  const cache = new Map<number, readonly Row[]>();
+  const candidates = (offset: number): readonly Row[] => {
+    const known = cache.get(offset);
+    if (known) return known;
+    const result: Row[] = [];
+    for (
+      let count = 1;
+      count <= Math.min(items.length - offset, maximumCount);
+      count++
+    ) {
+      const end = offset + count;
+      const ratio = ratios[end]! - ratios[offset]!;
+      const base = fixed[end]! - fixed[offset]!;
+      const gaps = s.gap * (count - 1);
+      const naturalWidth = base + ratio * s.rowHeight + gaps;
+      const naturalTail = end === items.length && naturalWidth <= width;
+      let height: number = s.rowHeight,
+        textWidth = Math.min(width, s.textWidth),
+        used: number;
+      if (ratio === 0) {
+        if (!naturalTail) {
+          const fit = (width - gaps) / count;
+          if (fit < s.textWidth * 0.85) continue;
+          textWidth = Math.min(s.textWidth * 1.35, fit);
+        }
+        used = textWidth * count + gaps;
+      } else {
+        const fit = (width - base - gaps) / ratio;
+        if (!naturalTail) {
+          if (fit < softMin && count > 1) continue;
+          height = fit <= softMax ? Math.max(1, fit) : s.rowMax;
+        }
+        used = base + ratio * height + gaps;
+      }
+      if (used > width + 0.01 && count > 1) continue;
+      const blank = Math.max(0, width - used) / width;
+      const deviation = (height - s.rowHeight) / s.rowHeight;
+      const outside =
+        height < s.rowMin
+          ? (s.rowMin - height) / s.rowMin
+          : height > s.rowMax
+            ? (height - s.rowMax) / s.rowMax
+            : 0;
+      const textDeviation =
+        ratio === 0 ? (textWidth - s.textWidth) / s.textWidth : 0;
+      result.push({
+        count,
+        height,
+        textWidth,
+        naturalTail,
+        justified: blank < 0.00001,
+        cost:
+          0.35 +
+          deviation * deviation +
+          4 * outside * outside +
+          textDeviation * textDeviation +
+          (naturalTail ? 0.8 : 8) * blank * blank,
+      });
     }
-    const row = items.slice(offset, offset + count);
-    let height = Math.min(s.rowMax, tail ? s.rowHeight : fit(row));
-    // All-text rows are fixed-width. A very narrow host must still fit one card.
-    if (row.every((item) => item.ratio === null)) height = s.rowHeight;
-    height = Math.max(1, height);
+    // Respect the preferred height whenever a full-width readable row exists.
+    // Soft bounds are for otherwise impossible mixed-ratio combinations only.
+    const readableFull = result.some(
+      (row) =>
+        row.justified && row.height >= s.rowMin && row.height <= s.rowMax,
+    );
+    const usable = readableFull
+      ? result.filter(
+          (row) =>
+            row.naturalTail ||
+            (row.justified && row.height >= s.rowMin && row.height <= s.rowMax),
+        )
+      : result;
+    cache.set(offset, usable);
+    return usable;
+  };
+  const immediate = new Map<number, number>();
+  const nextCost = (offset: number) => {
+    if (offset === items.length) return 0;
+    if (!immediate.has(offset))
+      immediate.set(
+        offset,
+        Math.min(...candidates(offset).map((row) => row.cost)),
+      );
+    return immediate.get(offset)!;
+  };
+  const positions: DesktopFeedPosition[] = [];
+  let offset = 0,
+    y = 0;
+  while (offset < items.length) {
+    let best: Row | undefined,
+      bestCost = Infinity;
+    for (const row of candidates(offset)) {
+      const cost = row.cost + nextCost(offset + row.count);
+      if (
+        cost < bestCost - 0.0000001 ||
+        (Math.abs(cost - bestCost) < 0.0000001 &&
+          row.count > (best?.count ?? 0))
+      ) {
+        best = row;
+        bestCost = cost;
+      }
+    }
+    // One item is always representable, even inside a temporarily narrow host.
+    const row = best ?? {
+      count: 1,
+      height: s.rowHeight,
+      textWidth: Math.min(width, s.textWidth),
+    };
     let right = width;
-    for (const item of row) {
-      const cardWidth = Math.min(width, natural(item, height));
-      const mediaWidth = Math.max(0, cardWidth - s.labelWidth);
+    for (let index = offset; index < offset + row.count; index++) {
+      const item = items[index]!;
+      const cardWidth = Math.min(
+        width,
+        item.ratio === null
+          ? row.textWidth
+          : s.labelWidth + item.ratio * row.height,
+      );
       right -= cardWidth;
       positions.push({
         ...item,
         x: Math.max(0, right),
         y,
         width: cardWidth,
-        height,
-        mediaWidth,
+        height: row.height,
+        mediaWidth:
+          item.ratio === null ? 0 : Math.max(0, cardWidth - s.labelWidth),
       });
       right -= s.gap;
     }
-    y += height + s.rowGap;
-    offset += count;
+    y += row.height + s.rowGap;
+    offset += row.count;
   }
   return { positions, height: Math.max(0, y - s.rowGap) };
-};
-
-/** Appending a page never refits an already displayed terminal row. */
-export const layoutDesktopFeedBatches = (
-  items: readonly DesktopFeedMedia[],
-  width: number,
-  batchEnds: readonly number[],
-): ReturnType<typeof layoutDesktopFeed> => {
-  const positions: DesktopFeedPosition[] = [];
-  let start = 0,
-    height = 0;
-  for (const end of batchEnds) {
-    const batch = layoutDesktopFeed(items.slice(start, end), width);
-    if (batch.positions.length) {
-      positions.push(
-        ...batch.positions.map((position) => ({
-          ...position,
-          y: position.y + height,
-        })),
-      );
-      height += batch.height + desktopLayout.feed.rowGap;
-    }
-    start = end;
-  }
-  return { positions, height: Math.max(0, height - desktopLayout.feed.rowGap) };
 };
