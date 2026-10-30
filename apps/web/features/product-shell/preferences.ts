@@ -47,13 +47,13 @@ export const parseFeedLayoutPreference = (
     : null;
 
 /**
- * Desktop opens in normal mode; phone and tablet retain calligraphy.
+ * Calligraphy is the default; an explicit normal choice remains authoritative.
  * Physical device identity owns this default even in a compact PC window.
  */
 const defaultFeedLayouts = {
   phone: "single",
   tablet: "single",
-  pc: "double",
+  pc: "single",
 } as const satisfies Record<PresentationPlatform, FeedLayoutPreference>;
 export const defaultFeedLayoutFor = (
   platform: PresentationPlatform,

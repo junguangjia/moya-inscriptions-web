@@ -20,10 +20,16 @@ export const DesktopCardFrame = ({
   readonly action?: ReactNode;
 }) => {
   const slot = useMasonrySlot()?.desktop;
+  const excerpt = preview?.trim() ?? "";
   return (
     <article {...attributes} className={styles.card} role="listitem">
       <div className={styles.caption}>
         {title === "" ? null : <h3 className={styles.title}>{title}</h3>}
+        {media && excerpt !== "" ? (
+          <p className={styles.excerpt} data-card-caption-excerpt="">
+            {excerpt}
+          </p>
+        ) : null}
         {metadata === "" ? null : <p className={styles.metadata}>{metadata}</p>}
       </div>
       {media ? (

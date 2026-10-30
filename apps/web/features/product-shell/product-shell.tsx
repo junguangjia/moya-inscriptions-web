@@ -437,6 +437,10 @@ export const ProductShell = ({
   const settingsIntentRef = useRef<((opener: HTMLElement) => void) | null>(
     null,
   );
+  const pendingSettingsIntentRef = useRef<{
+    handler: (opener: HTMLElement) => void;
+    opener: HTMLElement;
+  } | null>(null);
   const detailBackRef = useRef<HTMLButtonElement>(null);
   const topicBackRef = useRef<HTMLButtonElement>(null);
   const detailOpenerRef = useRef<HTMLElement | null>(null);
@@ -984,6 +988,18 @@ export const ProductShell = ({
   const setSettingsVisibility = useCallback((open: boolean) => {
     settingsOpenRef.current = open;
     setSettingsOpen(open);
+    if (!open && pendingSettingsIntentRef.current) {
+      const pending = pendingSettingsIntentRef.current;
+      pendingSettingsIntentRef.current = null;
+      queueMicrotask(() => {
+        if (
+          settingsIntentRef.current === pending.handler &&
+          rootRef.current?.isConnected &&
+          parseProductHistoryState(window.history.state)?.kind === "primary"
+        )
+          pending.handler(pending.opener);
+      });
+    }
   }, []);
 
   const setDetailVisibility = useCallback((target: ContentIdentity | null) => {
@@ -1112,12 +1128,26 @@ export const ProductShell = ({
   const registerSettingsIntent = useCallback(
     (handler: (opener: HTMLElement) => void) => {
       settingsIntentRef.current = handler;
+      // Consume the legacy root entry before AuthorDialog creates its own.
+      // Replacing it with another primary entry would duplicate the source
+      // page and lose its recorded scroll position on the following Back.
+      if (settingsOpenRef.current && rootRef.current) {
+        const alreadyPending = pendingSettingsIntentRef.current !== null;
+        pendingSettingsIntentRef.current = {
+          handler,
+          opener:
+            pendingSettingsIntentRef.current?.opener ??
+            settingsOpenerRef.current ??
+            rootRef.current,
+        };
+        if (!alreadyPending) closeSettings();
+      }
       return () => {
         if (settingsIntentRef.current === handler)
           settingsIntentRef.current = null;
       };
     },
-    [],
+    [closeSettings],
   );
 
   const openTopic = useCallback(
@@ -3042,8 +3072,8 @@ export const ProductShell = ({
               platform={platform}
               showDevelopmentPagerControls={showDevelopmentPagerControls}
             />
-            {primaryUtility}
           </div>
+          {primaryUtility}
 
           {authReturnNotice !== null ? (
             <div

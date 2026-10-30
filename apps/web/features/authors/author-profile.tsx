@@ -192,6 +192,8 @@ interface AuthorProfilePresentationProps {
   readonly insideDialog?: boolean | undefined;
   /** Primary-page action; overlay profiles retain their Back button. */
   readonly headerStart?: ReactNode;
+  /** The Formal product's complete settings host lives outside this page. */
+  readonly onOpenSettings?: ((opener?: HTMLElement) => void) | undefined;
 }
 const ScopedAuthorProfile = ({
   state,
@@ -202,6 +204,7 @@ const ScopedAuthorProfile = ({
   preview,
   insideDialog = false,
   headerStart,
+  onOpenSettings,
 }: ProductShellProfileOverlayRenderProps &
   AuthorProfilePresentationProps & { embedded?: boolean }) => {
   const directEntry = useDirectMessageEntry();
@@ -279,6 +282,7 @@ const ScopedAuthorProfile = ({
     if (
       !embedded ||
       !owner ||
+      onOpenSettings !== undefined ||
       !shell.desktop ||
       shell.activeDestination !== "user"
     )
@@ -287,6 +291,7 @@ const ScopedAuthorProfile = ({
   }, [
     embedded,
     owner,
+    onOpenSettings,
     shell.desktop,
     shell.activeDestination,
     shell.registerSettingsIntent,
@@ -925,7 +930,11 @@ const ScopedAuthorProfile = ({
               type="button"
               aria-label="设置"
               className="yoyi-icon-button"
-              onClick={() => setModal("settings")}
+              onClick={(event) =>
+                onOpenSettings
+                  ? onOpenSettings(event.currentTarget)
+                  : setModal("settings")
+              }
             >
               <Icon name="settings" />
             </button>
@@ -1562,10 +1571,12 @@ export const AuthorProfileOverlay = (
 export const AuthorProfilePage = ({
   onBack,
   headerStart,
+  onOpenSettings,
   entryId = "primary-user",
 }: {
   onBack: () => void;
   headerStart?: ReactNode;
+  onOpenSettings?: ((opener?: HTMLElement) => void) | undefined;
   entryId?: string;
 }) => {
   const author = useAuthors();
@@ -1574,6 +1585,7 @@ export const AuthorProfilePage = ({
       key={`${author.viewer?.id ?? "guest"}:${entryId}`}
       onBack={onBack}
       headerStart={headerStart}
+      onOpenSettings={onOpenSettings}
       entryId={entryId}
     />
   );
@@ -1581,10 +1593,12 @@ export const AuthorProfilePage = ({
 const ScopedAuthorProfilePage = ({
   onBack,
   headerStart,
+  onOpenSettings,
   entryId,
 }: {
   onBack: () => void;
   headerStart?: ReactNode;
+  onOpenSettings?: ((opener?: HTMLElement) => void) | undefined;
   entryId: string;
 }) => {
   const author = useAuthors();
@@ -1606,6 +1620,7 @@ const ScopedAuthorProfilePage = ({
     <ScopedAuthorProfile
       embedded
       headerStart={headerStart}
+      onOpenSettings={onOpenSettings}
       state={{
         kind: "profile",
         version: 2,

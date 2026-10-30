@@ -1,295 +1,217 @@
 import { describe, expect, it } from "vitest";
 import { desktopLayout } from "@moya/design-tokens";
-import { desktopFeedMedia, layoutDesktopFeed } from "./desktop-feed-layout";
-import type {
-  DesktopFeedMedia,
-  DesktopFeedPosition,
+import {
+  desktopFeedMedia,
+  layoutDesktopFeed,
+  resolveDesktopFeedColumns,
 } from "./desktop-feed-layout";
+import type { DesktopFeedMedia } from "./desktop-feed-layout";
 
 const image = (ratio: number): DesktopFeedMedia => ({ ratio, cropped: false });
 const text: DesktopFeedMedia = { ratio: null, cropped: false };
-const widths = [1024, 1440, 3440, 5120];
+const widths = [896, 1024, 1440, 1920, 2560, 3440, 5120];
 const counts = [1, 2, 3, 11, 12, 13, 23, 24, 36, 53];
 const mixed = [0.4, 2.8, 0.5, 1, 1.6, 0.6, 2.8, 0.625, 2.4, 1, 0.65];
-const rows = (positions: readonly DesktopFeedPosition[]) => {
-  const result: DesktopFeedPosition[][] = [];
-  for (const position of positions) {
-    if (result.at(-1)?.[0]?.y !== position.y) result.push([]);
-    result.at(-1)!.push(position);
-  }
-  return result;
-};
-const expectCompleteRows = (
-  items: readonly DesktopFeedMedia[],
-  width: number,
-) => {
+const assertMasonry = (items: readonly DesktopFeedMedia[], width: number) => {
   const layout = layoutDesktopFeed(items, width);
   expect(layout.positions).toHaveLength(items.length);
   expect(layout.positions.map(({ ratio }) => ratio)).toEqual(
     items.map(({ ratio }) => ratio),
   );
-  const grouped = rows(layout.positions);
-  grouped.forEach((row, rowIndex) => {
-    expect(row[0]!.x + row[0]!.width).toBeCloseTo(width, 6);
-    expect(row.at(-1)!.x).toBeCloseTo(0, 6);
-    row.forEach((position, index) => {
-      expect(Number.isFinite(position.height)).toBe(true);
-      expect(position.height).toBeGreaterThan(0);
-      expect(position.height).toBeLessThanOrEqual(720);
-      expect(position.height).toBe(row[0]!.height);
-      expect(position.width).toBeGreaterThan(0);
-      expect(position.x).toBeGreaterThanOrEqual(0);
-      expect(position.x + position.width).toBeLessThanOrEqual(width + 0.000001);
-      if (position.ratio !== null) {
-        const naturalHeight = position.mediaWidth / position.ratio;
-        if (naturalHeight > 720 + 0.000001) {
-          expect(position.height).toBe(720);
-          expect(position.cropped).toBe(!position.preserveContain);
-        } else expect(naturalHeight).toBeCloseTo(position.height, 8);
-        expect(position.width - position.mediaWidth).toBeCloseTo(72, 8);
-      } else expect(position.mediaWidth).toBe(0);
-      if (index > 0)
-        expect(row[index - 1]!.x - position.x - position.width).toBeCloseTo(
-          12,
-          6,
-        );
-    });
-    if (rowIndex > 0) {
-      const previous = grouped[rowIndex - 1]![0]!;
-      expect(row[0]!.y - previous.y - previous.height).toBeCloseTo(16, 6);
+  const columns = resolveDesktopFeedColumns(width);
+  const cardWidth = (width - (columns - 1) * 12) / columns;
+  const bottoms = Array.from({ length: columns }, () => 0);
+  layout.positions.forEach((position, index) => {
+    expect(Number.isFinite(position.height)).toBe(true);
+    expect(position.height).toBeGreaterThan(0);
+    expect(position.height).toBeLessThanOrEqual(720);
+    expect(position.width).toBeCloseTo(cardWidth, 8);
+    expect(position.x).toBeGreaterThanOrEqual(0);
+    expect(position.x + position.width).toBeLessThanOrEqual(width + 0.000001);
+    const column = Math.max(
+      0,
+      Math.round((width - position.x - position.width) / (cardWidth + 12)),
+    );
+    expect(position.y).toBeCloseTo(Math.min(...bottoms), 8);
+    expect(column).toBe(bottoms.indexOf(Math.min(...bottoms)));
+    expect(position.y).toBeCloseTo(bottoms[column]!, 8);
+    bottoms[column] = position.y + position.height + 12;
+    if (position.ratio === null) {
+      expect(position.height).toBe(240);
+      expect(position.mediaWidth).toBe(0);
+    } else {
+      expect(position.width - position.mediaWidth).toBeCloseTo(72, 8);
+      const naturalHeight = position.mediaWidth / position.ratio;
+      expect(position.height).toBeCloseTo(Math.min(720, naturalHeight), 8);
+      expect(position.cropped).toBe(
+        items[index]!.preserveContain
+          ? false
+          : items[index]!.cropped || naturalHeight > 720,
+      );
     }
+    if (index > 0)
+      expect(position.y).toBeGreaterThanOrEqual(
+        layout.positions[index - 1]!.y - 0.000001,
+      );
   });
   expect(layout.height).toBeCloseTo(
-    grouped.at(-1)![0]!.y + grouped.at(-1)![0]!.height,
-    6,
+    Math.max(...layout.positions.map((p) => p.y + p.height)),
+    8,
   );
-  return grouped;
+  return layout;
 };
 
-describe("desktop globally justified source-order rows", () => {
-  it("uses the shared fine gutters", () => {
+describe("desktop natural-aspect RTL masonry", () => {
+  it("uses the shared fine gutters and readable image width target", () => {
     expect(desktopLayout.feed.gap).toBe(12);
-    expect(desktopLayout.feed.rowGap).toBe(16);
+    expect(desktopLayout.feed.rowGap).toBe(12);
+    expect(desktopLayout.feed.mediaTargetWidth).toBe(270);
   });
   it.each(
     widths.flatMap((width) => counts.map((count) => [width, count] as const)),
   )(
-    "fills both edges of every mixed row at %spx with %s source records",
+    "packs consecutive mixed records without skipped column holes at %spx with %s items",
     (width, count) => {
       const items = Array.from({ length: count }, (_, index) =>
-        image(mixed[index % mixed.length]!),
+        index % 9 === 8 ? text : image(mixed[index % mixed.length]!),
       );
-      const source = structuredClone(items);
-      expectCompleteRows(items, width);
-      expect(items).toEqual(source);
+      const unchanged = structuredClone(items);
+      assertMasonry(items, width);
+      expect(items).toEqual(unchanged);
     },
   );
-  it.each(widths)(
-    "fills portrait and text-only pages, including sparse pages at %spx",
-    (width) => {
-      for (const count of counts) {
-        expectCompleteRows(
-          Array.from({ length: count }, () => image(0.4)),
-          width,
-        );
-        expectCompleteRows(
-          Array.from({ length: count }, () => text),
-          width,
-        );
-      }
-    },
-  );
-  it("rebalances earlier row breaks to avoid a short terminal band", () => {
-    const grouped = expectCompleteRows(
-      Array.from({ length: 53 }, () => image(0.5)),
-      3440,
-    );
-    expect(grouped).toHaveLength(3);
-    expect(grouped.map((row) => row.length).sort((a, b) => a - b)).toEqual([
-      17, 18, 18,
-    ]);
-    grouped.forEach((row) => {
-      expect(row[0]!.height).toBeGreaterThanOrEqual(200);
-      expect(row[0]!.height).toBeLessThanOrEqual(300);
-    });
+  it("places each source item into the next shortest column with rightmost ties", () => {
+    const layout = layoutDesktopFeed([1, 0.5, 2, 1, 2].map(image), 1050);
     expect(
-      Math.max(...grouped.map((row) => row[0]!.height)) -
-        Math.min(...grouped.map((row) => row[0]!.height)),
-    ).toBeLessThan(30);
+      layout.positions.map(({ x, y, height }) => ({ x, y, height })),
+    ).toEqual([
+      { x: 708, y: 0, height: 270 },
+      { x: 354, y: 0, height: 540 },
+      { x: 0, y: 0, height: 135 },
+      { x: 0, y: 147, height: 270 },
+      { x: 708, y: 282, height: 135 },
+    ]);
+    expect(layout.height).toBe(540);
   });
-  it("chooses a globally readable partition instead of a locally attractive but short tail", () => {
-    const grouped = expectCompleteRows(
-      Array.from({ length: 13 }, () => image(0.5)),
-      1440,
+  it.each([1024, 1440, 1920, 2560, 3440, 5120])(
+    "keeps image widths readable and lets their heights vary at %spx",
+    (width) => {
+      const positions = layoutDesktopFeed(
+        [0.5, 1, 2.4].map(image),
+        width,
+      ).positions;
+      expect(positions[0]!.mediaWidth).toBeGreaterThanOrEqual(220);
+      expect(positions[0]!.mediaWidth).toBeLessThanOrEqual(320);
+      expect(new Set(positions.map((p) => p.mediaWidth)).size).toBe(1);
+      expect(new Set(positions.map((p) => p.height)).size).toBe(3);
+      positions.forEach((p) =>
+        expect(p.mediaWidth / p.height).toBeCloseTo(p.ratio!, 8),
+      );
+    },
+  );
+  it("continues adding columns on an ultrawide display instead of enlarging eight cards without bounds", () => {
+    expect(resolveDesktopFeedColumns(3440)).toBeGreaterThan(8);
+    expect(resolveDesktopFeedColumns(5120)).toBeGreaterThan(
+      resolveDesktopFeedColumns(3440),
     );
-    expect(grouped.map((row) => row.length).sort()).toEqual([6, 7]);
-    grouped.forEach((row) => {
-      expect(row[0]!.height).toBeGreaterThanOrEqual(160);
-      expect(row[0]!.height).toBeLessThanOrEqual(360);
-    });
   });
-  it("does not prune a legal short row at the old soft-height candidate boundary", () => {
-    const before = expectCompleteRows(
-      Array.from({ length: 36 }, () => image(0.4)),
-      5120,
-    );
-    const after = expectCompleteRows(
-      Array.from({ length: 37 }, () => image(0.4)),
-      5120,
-    );
-    expect(before).toHaveLength(1);
-    expect(after).toHaveLength(1);
-    expect(after[0]![0]!.height).toBeCloseTo(
-      (5120 - 37 * 72 - 36 * 12) / (37 * 0.4),
-    );
-    expect(after[0]![0]!.height).toBeLessThan(before[0]![0]!.height);
-  });
-  it("uses a soft height when no preferred-height mixed partition can fill", () => {
-    const grouped = expectCompleteRows([0.4, 2.8, 2.8].map(image), 1296);
-    expect(grouped).toHaveLength(1);
-    expect(grouped[0]![0]!.height).toBeCloseTo(176);
-  });
-  it("prefers two readable landscape rows to an undersized complete row", () => {
-    const grouped = expectCompleteRows([image(2.8), image(2.8)], 1024);
-    expect(grouped).toHaveLength(2);
-    grouped.forEach((row) => expect(row[0]!.height).toBe(340));
-  });
-  it("uses an explicitly cropped bounded feature for a lone portrait without stretching image pixels", () => {
-    const item = image(0.4);
-    const grouped = expectCompleteRows([item], 1440);
-    expect(grouped).toHaveLength(1);
-    expect(grouped[0]).toHaveLength(1);
-    expect(grouped[0]![0]!.height).toBe(720);
-    expect(grouped[0]![0]!.mediaWidth).toBe(1368);
-    expect(grouped[0]![0]!.cropped).toBe(true);
-  });
-  it("bounds sparse portraits in full-width cards and exposes the existing crop indication", () => {
-    const grouped = expectCompleteRows(
-      [image(0.4), image(0.4), image(0.4)],
-      5120,
-    );
-    expect(grouped).toHaveLength(1);
-    expect(grouped[0]![0]!.height).toBe(720);
-    grouped[0]!.forEach((position) => expect(position.cropped).toBe(true));
-  });
-  it("preserves an explicit keep-whole choice within the bounded full-width sparse card", () => {
-    const item = desktopFeedMedia({
-      media: { width: 400, height: 1000, feed: { fit: "contain" } },
-    });
-    const grouped = expectCompleteRows([item], 5120);
-    expect(grouped[0]![0]!.height).toBe(720);
-    expect(grouped[0]![0]!.mediaWidth).toBe(5048);
-    expect(grouped[0]![0]!.preserveContain).toBe(true);
-    expect(grouped[0]![0]!.cropped).toBe(false);
-  });
-  it("keeps an explicit contain choice authoritative even when dimensions need a safe fallback", () => {
-    const item = desktopFeedMedia({
-      media: { width: 0, height: 0, feed: { fit: "contain" } },
-    });
-    const grouped = expectCompleteRows([item], 1440);
-    expect(grouped[0]![0]!.ratio).toBe(1);
-    expect(grouped[0]![0]!.height).toBe(720);
-    expect(grouped[0]![0]!.cropped).toBe(false);
-  });
-  it("does not invent a crop when a proportional sparse feature fits below the cap", () => {
-    const grouped = expectCompleteRows([image(2.8)], 1440);
-    expect(grouped[0]![0]!.height).toBeCloseTo(1368 / 2.8);
-    expect(grouped[0]![0]!.cropped).toBe(false);
-  });
-  it("gives a sparse text-only row the real available width without fabricating media", () => {
-    const grouped = expectCompleteRows([text], 5120);
-    expect(grouped).toHaveLength(1);
-    expect(grouped[0]![0]!.width).toBe(5120);
-    expect(grouped[0]![0]!.height).toBe(240);
-    expect(grouped[0]![0]!.mediaWidth).toBe(0);
-  });
-  it("keeps text-only row widths bounded when enough excerpts exist", () => {
-    const grouped = expectCompleteRows(
-      Array.from({ length: 11 }, () => text),
-      900,
-    );
-    expect(grouped.length).toBeGreaterThan(1);
-    grouped.flat().forEach((position) => {
-      expect(position.width).toBeGreaterThanOrEqual(232 * 0.85);
-      expect(position.width).toBeLessThanOrEqual(232 * 1.35);
-    });
-  });
-  it("preserves source order and framing while balancing media beside genuine text posts", () => {
+  it.each([1, 2, 3])(
+    "keeps %s sparse result cards at the ordinary size, starting on the right",
+    (count) => {
+      const few = layoutDesktopFeed(
+        Array.from({ length: count }, () => image(0.4)),
+        1440,
+      );
+      const full = layoutDesktopFeed(
+        Array.from({ length: 36 }, () => image(0.4)),
+        1440,
+      );
+      expect(few.positions).toEqual(full.positions.slice(0, count));
+      expect(few.positions[0]!.x + few.positions[0]!.width).toBe(1440);
+      expect(few.positions[0]!.width).toBe(351);
+      expect(few.positions[0]!.height).toBe(697.5);
+      expect(few.positions.at(-1)!.x).toBeGreaterThan(0);
+    },
+  );
+  it("keeps every existing card stable while all subsequent API pages append", () => {
     const items = Array.from({ length: 53 }, (_, index) =>
-      index % 5 === 0 ? text : image(mixed[index % mixed.length]!),
+      image(mixed[index % mixed.length]!),
     );
-    expectCompleteRows(items, 1440);
-  });
-  it("keeps every row in the preferred or soft band whenever any complete ordered partition can", () => {
-    const feasible = (
-      items: readonly DesktopFeedMedia[],
-      width: number,
-      minimum: number,
-      maximum: number,
-    ) => {
-      const answers = new Map<number, boolean>();
-      const visit = (offset: number): boolean => {
-        if (offset === items.length) return true;
-        if (answers.has(offset)) return answers.get(offset)!;
-        let ratio = 0;
-        for (let end = offset + 1; end <= items.length; end++) {
-          ratio += items[end - 1]!.ratio!;
-          const count = end - offset;
-          const height = (width - count * 72 - (count - 1) * 12) / ratio;
-          if (height >= minimum && height <= maximum && visit(end)) {
-            answers.set(offset, true);
-            return true;
-          }
-        }
-        answers.set(offset, false);
-        return false;
-      };
-      return visit(0);
-    };
     for (const width of widths) {
-      for (let seed = 0; seed < 24; seed++) {
-        const items = Array.from({ length: 9 }, (_, index) =>
-          image(mixed[(seed * 3 + index * 7) % mixed.length]!),
-        );
-        const grouped = rows(layoutDesktopFeed(items, width).positions);
-        for (const [minimum, maximum] of [
-          [160, 360],
-          [200, 300],
-        ] as const)
-          if (feasible(items, width, minimum, maximum))
-            grouped.forEach((row) => {
-              expect(row[0]!.height).toBeGreaterThanOrEqual(minimum - 0.000001);
-              expect(row[0]!.height).toBeLessThanOrEqual(maximum + 0.000001);
-            });
+      for (const count of [12, 24, 36]) {
+        const old = layoutDesktopFeed(items.slice(0, count), width);
+        const next = layoutDesktopFeed(items, width);
+        expect(next.positions.slice(0, count)).toEqual(old.positions);
       }
     }
   });
-  it("handles a large sequence with bounded candidate rows and no accumulated left-edge error", () => {
-    const items = Array.from({ length: 1000 }, (_, index) =>
-      index % 17 === 0 ? text : image(mixed[index % mixed.length]!),
+  it("allows natural uneven column bottoms without a stretched final row or filler", () => {
+    const layout = assertMasonry(
+      [image(1), image(0.5), image(2), text, image(1.6)],
+      1050,
     );
-    const grouped = expectCompleteRows(items, 5120);
-    expect(grouped.length).toBeGreaterThan(1);
-    grouped.forEach((row) => {
-      expect(row[0]!.height).toBeGreaterThanOrEqual(160);
-      expect(row[0]!.height).toBeLessThanOrEqual(360);
-    });
+    expect(layout.positions).toHaveLength(5);
+    expect(
+      new Set(layout.positions.map((p) => p.y + p.height)).size,
+    ).toBeGreaterThan(1);
   });
-  it("sanitizes dimensions and distinguishes absent covers from text-only works", () => {
+  it("keeps a complete text-only sequence as real vertical excerpt cards", () => {
+    const positions = assertMasonry(
+      Array.from({ length: 24 }, () => text),
+      1440,
+    ).positions;
+    expect(positions.every((p) => p.mediaWidth === 0 && p.height === 240)).toBe(
+      true,
+    );
+  });
+  it("retains the bounded extreme preview hint while an explicit contain intent wins", () => {
+    const cropped = layoutDesktopFeed([image(0.4)], 800).positions[0]!;
+    expect(cropped.height).toBe(720);
+    expect(cropped.cropped).toBe(true);
+    const contained = desktopFeedMedia({
+      media: { width: 100, height: 2000, feed: { fit: "contain" } },
+    });
+    const whole = layoutDesktopFeed([contained], 800).positions[0]!;
+    expect(whole.height).toBe(720);
+    expect(whole.preserveContain).toBe(true);
+    expect(whole.cropped).toBe(false);
+    expect(whole.mediaWidth).toBe(cropped.mediaWidth);
+  });
+  it.each([1, 32, 96, 144, 320])(
+    "keeps transient narrow %spx measurement finite",
+    (width) => {
+      const layout = layoutDesktopFeed([image(0.4), text, image(2.8)], width);
+      layout.positions.forEach((p) => {
+        expect(
+          Number.isFinite(p.x + p.y + p.width + p.height + p.mediaWidth),
+        ).toBe(true);
+        expect(p.x).toBeGreaterThanOrEqual(0);
+        expect(p.x + p.width).toBeLessThanOrEqual(width + 0.000001);
+        expect(p.width).toBeGreaterThan(0);
+      });
+    },
+  );
+  it("handles empty and unavailable dimensions without inventing content", () => {
+    expect(layoutDesktopFeed([], 1440)).toEqual({ height: 0, positions: [] });
+    expect(layoutDesktopFeed([image(1)], 0)).toEqual({
+      height: 0,
+      positions: [],
+    });
+    expect(layoutDesktopFeed([image(1)], Infinity)).toEqual({
+      height: 0,
+      positions: [],
+    });
     expect(desktopFeedMedia({ media: { width: NaN, height: 0 } })).toEqual(
       image(1),
     );
-    expect(
-      desktopFeedMedia({ target: { type: "catalog" }, media: null }),
-    ).toEqual({ ...image(1), preserveContain: true });
     expect(desktopFeedMedia({ target: { type: "work" }, media: null })).toEqual(
       text,
     );
-    expect(layoutDesktopFeed([image(1)], 0).positions).toEqual([]);
-    expect(layoutDesktopFeed([image(1)], Infinity).positions).toEqual([]);
-    expect(layoutDesktopFeed([], 1440).height).toBe(0);
+    expect(
+      desktopFeedMedia({ target: { type: "catalog" }, media: null }),
+    ).toEqual({ ratio: 1, cropped: false, preserveContain: true });
   });
-  it("marks extreme crops while honoring the author's keep-whole framing", () => {
+  it("keeps extreme ratio mapping and explicit author framing unchanged", () => {
     expect(desktopFeedMedia({ media: { width: 100, height: 2000 } })).toEqual({
       ratio: 0.4,
       cropped: true,
@@ -300,15 +222,16 @@ describe("desktop globally justified source-order rows", () => {
     });
     expect(
       desktopFeedMedia({
-        media: { width: 100, height: 2000, feed: { fit: "contain" } },
+        media: { width: 0, height: 0, feed: { fit: "contain" } },
       }),
-    ).toEqual({ ratio: 0.4, cropped: false, preserveContain: true });
+    ).toEqual({ ratio: 1, cropped: false, preserveContain: true });
   });
-  it("does not promise a cropped full-image preview for a missing Catalog image", () => {
-    const missing = desktopFeedMedia({ target: { type: "catalog" } });
-    const result = layoutDesktopFeed([missing], 1440).positions[0]!;
-    expect(result.x).toBeCloseTo(0);
-    expect(result.width).toBeCloseTo(1440);
-    expect(result.cropped).toBe(false);
+  it("packs a large sequence with the same ordered per-column invariants", () => {
+    assertMasonry(
+      Array.from({ length: 1000 }, (_, index) =>
+        index % 17 === 0 ? text : image(mixed[index % mixed.length]!),
+      ),
+      5120,
+    );
   });
 });

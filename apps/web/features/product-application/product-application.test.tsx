@@ -7,13 +7,15 @@ import { MessageTrigger } from "../authors/message-center";
 import { DiscussionSection } from "../authors/discussion-section";
 import { loadWorkDetail, peekWorkDetail } from "../authors/work-detail";
 import { CreateWorkAction } from "../publishing/create-action";
+import { ProductSettingsHost } from "../settings/product-settings-host";
 import { renderEditorOverlay } from "../publishing/ui/editor/editor-overlay";
 import {
   CatalogSearchHeaderAction,
   CatalogSearchNavigationAction,
 } from "../search/catalog-search";
 
-import type { ReactElement } from "react";
+import { Children, isValidElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 
 import type { T02pProductPreviewProps } from "../product-preview/t02p-product-preview";
 
@@ -57,6 +59,36 @@ beforeEach(() => {
 });
 
 describe("ProductApplication", () => {
+  it("shares one complete settings host with the primary profile entry", () => {
+    renderToStaticMarkup(
+      <ProductApplication
+        comments={{ signInHref: "/login" }}
+        authorCommunity
+        initialPlatform="pc"
+        states={states}
+        productUtility={<span data-existing-utility="" />}
+      />,
+    );
+    const props = lastPreviewProps();
+    const utility = props.productUtility as ReactElement<{
+      children: ReactNode;
+    }>;
+    const children = Children.toArray(utility.props.children);
+    const hosts = children.filter(
+      (child) => isValidElement(child) && child.type === ProductSettingsHost,
+    );
+    expect(hosts).toHaveLength(1);
+    const host = hosts[0] as ReactElement<{
+      onOpen: () => void;
+      open: boolean;
+    }>;
+    const user = props.userPage as ReactElement<{ onOpenSettings: () => void }>;
+    expect(user.props.onOpenSettings).toBe(host.props.onOpen);
+    expect(host.props.open).toBe(false);
+    expect(
+      children.some((child) => isValidElement(child) && child.type === "span"),
+    ).toBe(true);
+  });
   it("keeps the accepted Detail without a comment section when comments are not composed", () => {
     const markup = renderToStaticMarkup(
       <ProductApplication

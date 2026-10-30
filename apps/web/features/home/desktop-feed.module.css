@@ -39,35 +39,49 @@
   outline-offset: 2px;
 }
 .caption {
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: stretch;
+  gap: var(--yoyi-space-1);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  padding: var(--yoyi-space-3);
+  padding: var(--yoyi-space-3) var(--yoyi-space-2);
   color: var(--yoyi-color-text-primary);
   background: var(--yoyi-color-background-elevated);
   font-family: var(--yoyi-font-editorial);
+  writing-mode: horizontal-tb;
+  direction: ltr;
+}
+.title,
+.metadata,
+.excerpt {
+  min-width: 0;
+  min-height: 0;
+  max-inline-size: 100%;
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   writing-mode: vertical-rl;
   direction: ltr;
 }
 .title {
-  max-inline-size: 100%;
-  margin: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  flex: 0 0 20px;
   font-size: var(--yoyi-type-card-title-size);
   font-weight: 600;
-  line-height: 1.45;
+  line-height: 1.25;
+}
+.excerpt {
+  flex: 1 1 20px;
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.4;
+  color: var(--yoyi-color-text-secondary);
 }
 .metadata {
-  max-inline-size: 100%;
-  margin: 0;
-  margin-block-start: var(--yoyi-space-2);
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  flex: 0 0 14px;
   font-size: var(--yoyi-type-metadata-size);
-  line-height: 1.5;
+  line-height: 1.15;
   color: var(--yoyi-color-text-tertiary);
 }
 .media {

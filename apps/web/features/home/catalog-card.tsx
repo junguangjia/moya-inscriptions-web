@@ -266,6 +266,7 @@ export const CatalogCardPresentation = ({
     return (
       <DesktopCardFrame
         title={item.title}
+        {...(item.summary ? { preview: item.summary } : {})}
         metadata={[metadata, item.province].filter(Boolean).join(" · ")}
         data-catalog-card=""
         data-catalog-card-variant={variant}

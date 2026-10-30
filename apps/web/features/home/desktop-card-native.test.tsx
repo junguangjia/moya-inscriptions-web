@@ -3,7 +3,12 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Root } from "react-dom/client";
-import type { ContentCard as Card } from "@moya/contracts";
+import type {
+  CatalogId,
+  CatalogSummary,
+  MediaId,
+  ContentCard as Card,
+} from "@moya/contracts";
 import type { MediaSlot } from "../media/responsive-media";
 const { shell, slot } = vi.hoisted(() => ({
   shell: { openContent: vi.fn(), browseOnly: false },
@@ -22,6 +27,7 @@ vi.mock("../authors/content-actions", () => ({
   }),
 }));
 import { ContentCard } from "../authors/content-card";
+import { CatalogCardPresentation } from "./catalog-card";
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
@@ -62,6 +68,42 @@ const render = (overrides: Partial<Card> = {}) => {
   return host;
 };
 describe("desktop native content card", () => {
+  it("passes the Catalog category's real summary into the vertical caption", () => {
+    render();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    roots.push(root);
+    const item: CatalogSummary = {
+      aliases: [],
+      id: "catalog-synthetic-caption" as CatalogId,
+      kind: "inscription",
+      title: "合成题刻",
+      summary: "馆藏列表已有的实际摘要",
+      representativeMedia: {
+        ...source,
+        id: "media-synthetic-caption" as MediaId,
+        kind: "image",
+        alt: "合成馆藏图像",
+      },
+    };
+    const open = vi.fn();
+    act(() =>
+      root.render(
+        <CatalogCardPresentation
+          item={item}
+          variant="feed"
+          onOpenCatalog={open}
+        />,
+      ),
+    );
+    expect(host.querySelector("[data-card-caption-excerpt]")?.textContent).toBe(
+      item.summary,
+    );
+    const opener = host.querySelector<HTMLButtonElement>("button")!;
+    act(() => opener.click());
+    expect(open).toHaveBeenCalledWith(item, opener);
+  });
   it("opens the same identity with the existing quick-action opener and resolved media", () => {
     const host = render();
     expect(host.querySelector("img")?.getAttribute("src")).toBe(source.src);

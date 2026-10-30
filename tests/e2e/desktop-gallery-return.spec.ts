@@ -57,9 +57,14 @@ for (const overlay of ["detail", "settings"] as const) {
         exact: true,
       });
       await expect(dialog).toBeVisible();
-      await expect(
-        page.locator("[data-product-primary-layer]"),
-      ).toHaveAttribute("inert", "");
+      if (overlay === "detail")
+        await expect(
+          page.locator("[data-product-primary-layer]"),
+        ).toHaveAttribute("inert", "");
+      else
+        expect(await dialog.evaluate((node) => node.matches(":modal"))).toBe(
+          true,
+        );
       const arrived = page.waitForResponse((response) => {
         const url = new URL(response.url());
         return (

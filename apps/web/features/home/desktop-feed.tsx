@@ -69,7 +69,14 @@ export const DesktopFeed = <T,>({
   // Presentation references only: pending data stays with its existing owner.
   const displayed = useRef({ items, getKey, renderItem, width: 0 });
   const visible = holding
-    ? displayed.current
+    ? {
+        ...displayed.current,
+        // A never-measured hidden panel has no old geometry to protect.
+        // Prepare its held data at the known width before its first reveal;
+        // later positive-width snapshots keep the existing strict buffer.
+        width:
+          displayed.current.width > 0 ? displayed.current.width : measuredWidth,
+      }
     : { items, getKey, renderItem, width: measuredWidth };
   const width = visible.width;
   const keys = visible.items.map(visible.getKey);
