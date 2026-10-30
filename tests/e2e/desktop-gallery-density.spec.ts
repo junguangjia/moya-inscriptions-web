@@ -66,7 +66,14 @@ for (const width of [3440, 5120]) {
           const b = n.getBoundingClientRect();
           const article = n.querySelector<HTMLElement>('[role="listitem"]')!;
           const frame = article.getBoundingClientRect();
-          const caption = article.firstElementChild!.getBoundingClientRect();
+          const captionNode = article.querySelector<HTMLElement>(
+            "[data-card-caption]",
+          )!;
+          const caption = captionNode.getBoundingClientRect();
+          const image = article
+            .querySelector<HTMLElement>("[data-card-media-frame]")!
+            .getBoundingClientRect();
+          const surface = getComputedStyle(article);
           const title = article.querySelector("h3");
           const excerpt = article.querySelector("[data-card-caption-excerpt]");
           return {
@@ -81,6 +88,17 @@ for (const width of [3440, 5120]) {
               Math.abs(frame.width - b.width),
               Math.abs(frame.height - b.height),
             ),
+            mediaFrameError: Math.max(
+              Math.abs(image.x - frame.x),
+              Math.abs(image.y - frame.y),
+              Math.abs(image.width - frame.width),
+              Math.abs(image.height - frame.height),
+            ),
+            borderWidth: surface.borderWidth,
+            outlineWidth: surface.outlineWidth,
+            shadow: surface.boxShadow,
+            captionPosition: getComputedStyle(captionNode).position,
+            captionPointerEvents: getComputedStyle(captionNode).pointerEvents,
             captionRightError: Math.abs(caption.right - frame.right),
             captionWidth: caption.width,
             titleWriting: title ? getComputedStyle(title).writingMode : null,
@@ -96,6 +114,12 @@ for (const width of [3440, 5120]) {
       const x = Math.round(item.x);
       columns.set(x, [...(columns.get(x) ?? []), item]);
       expect(item.frameError).toBeLessThan(1);
+      expect(item.mediaFrameError).toBeLessThan(1);
+      expect(item.borderWidth).toBe("0px");
+      expect(item.outlineWidth).toBe("0px");
+      expect(item.shadow).not.toBe("none");
+      expect(item.captionPosition).toBe("absolute");
+      expect(item.captionPointerEvents).toBe("none");
       expect(item.captionRightError).toBeLessThan(1);
       expect(item.captionWidth).toBeCloseTo(72, 0);
       if (item.titleWriting) expect(item.titleWriting).toBe("vertical-rl");

@@ -262,17 +262,14 @@ const AuthorProduct = ({
                 renderInscriptions={(active) => (
                   <FilteredInscriptions active={active} />
                 )}
-                productUtility={
-                  <>
-                    {preview.productUtility}
-                    <ProductSettingsHost
-                      open={settingsOpen}
-                      onOpen={openSettings}
-                      onClose={closeSettings}
-                      initialOpener={settingsOpener}
-                      onDeparture={departSettings}
-                    />
-                  </>
+                settingsHost={
+                  <ProductSettingsHost
+                    open={settingsOpen}
+                    onOpen={openSettings}
+                    onClose={closeSettings}
+                    initialOpener={settingsOpener}
+                    onDeparture={departSettings}
+                  />
                 }
                 userPage={<UserPage onOpenSettings={openSettings} />}
                 headerStart={<CatalogSearchHeaderAction />}

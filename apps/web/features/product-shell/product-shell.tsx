@@ -316,6 +316,8 @@ export interface ProductShellProps {
   readonly initialPlatform: PresentationPlatform;
   readonly discussion: ReactNode;
   readonly primaryUtility?: ReactNode;
+  /** The unified modal host must also work over an inert profile/detail. */
+  readonly settingsHost?: ReactNode;
   readonly navigationAction?: ReactNode;
   readonly renderProfileOverlay?: (
     properties: ProductShellProfileOverlayRenderProps,
@@ -421,6 +423,7 @@ export const ProductShell = ({
   initialPlatform,
   discussion,
   primaryUtility,
+  settingsHost,
   navigationAction,
   renderDetailOverlay,
   renderEditorOverlay,
@@ -3072,8 +3075,9 @@ export const ProductShell = ({
               platform={platform}
               showDevelopmentPagerControls={showDevelopmentPagerControls}
             />
+            {primaryUtility}
           </div>
-          {primaryUtility}
+          {settingsHost}
 
           {authReturnNotice !== null ? (
             <div

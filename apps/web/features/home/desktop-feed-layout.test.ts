@@ -5,6 +5,7 @@ import {
   layoutDesktopFeed,
   resolveDesktopFeedColumns,
 } from "./desktop-feed-layout";
+import { HOME_PC_MIN_CARD_WIDTH } from "./catalog-masonry-layout";
 import type { DesktopFeedMedia } from "./desktop-feed-layout";
 
 const image = (ratio: number): DesktopFeedMedia => ({ ratio, cropped: false });
@@ -40,7 +41,7 @@ const assertMasonry = (items: readonly DesktopFeedMedia[], width: number) => {
       expect(position.height).toBe(240);
       expect(position.mediaWidth).toBe(0);
     } else {
-      expect(position.width - position.mediaWidth).toBeCloseTo(72, 8);
+      expect(position.width - position.mediaWidth).toBeCloseTo(0, 8);
       const naturalHeight = position.mediaWidth / position.ratio;
       expect(position.height).toBeCloseTo(Math.min(720, naturalHeight), 8);
       expect(position.cropped).toBe(
@@ -65,7 +66,7 @@ describe("desktop natural-aspect RTL masonry", () => {
   it("uses the shared fine gutters and readable image width target", () => {
     expect(desktopLayout.feed.gap).toBe(12);
     expect(desktopLayout.feed.rowGap).toBe(12);
-    expect(desktopLayout.feed.mediaTargetWidth).toBe(270);
+    expect(HOME_PC_MIN_CARD_WIDTH).toBe(220);
   });
   it.each(
     widths.flatMap((width) => counts.map((count) => [width, count] as const)),
@@ -80,18 +81,34 @@ describe("desktop natural-aspect RTL masonry", () => {
       expect(items).toEqual(unchanged);
     },
   );
+  it.each([
+    [896, 3],
+    [1024, 4],
+    [1440, 6],
+    [1920, 8],
+    [3440, 14],
+    [5120, 22],
+  ])(
+    "shares normal column density without reserving caption width at %spx",
+    (width, columns) => {
+      expect(resolveDesktopFeedColumns(width!)).toBe(columns);
+      const position = layoutDesktopFeed([image(1)], width!).positions[0]!;
+      expect(position.mediaWidth).toBe(position.width);
+      expect(position.height).toBe(position.width);
+    },
+  );
   it("places each source item into the next shortest column with rightmost ties", () => {
     const layout = layoutDesktopFeed([1, 0.5, 2, 1, 2].map(image), 1050);
     expect(
       layout.positions.map(({ x, y, height }) => ({ x, y, height })),
     ).toEqual([
-      { x: 708, y: 0, height: 270 },
-      { x: 354, y: 0, height: 540 },
-      { x: 0, y: 0, height: 135 },
-      { x: 0, y: 147, height: 270 },
-      { x: 708, y: 282, height: 135 },
+      { x: 796.5, y: 0, height: 253.5 },
+      { x: 531, y: 0, height: 507 },
+      { x: 265.5, y: 0, height: 126.75 },
+      { x: 0, y: 0, height: 253.5 },
+      { x: 265.5, y: 138.75, height: 126.75 },
     ]);
-    expect(layout.height).toBe(540);
+    expect(layout.height).toBe(507);
   });
   it.each([1024, 1440, 1920, 2560, 3440, 5120])(
     "keeps image widths readable and lets their heights vary at %spx",
@@ -128,8 +145,8 @@ describe("desktop natural-aspect RTL masonry", () => {
       );
       expect(few.positions).toEqual(full.positions.slice(0, count));
       expect(few.positions[0]!.x + few.positions[0]!.width).toBe(1440);
-      expect(few.positions[0]!.width).toBe(351);
-      expect(few.positions[0]!.height).toBe(697.5);
+      expect(few.positions[0]!.width).toBe(230);
+      expect(few.positions[0]!.height).toBe(575);
       expect(few.positions.at(-1)!.x).toBeGreaterThan(0);
     },
   );
@@ -165,13 +182,13 @@ describe("desktop natural-aspect RTL masonry", () => {
     );
   });
   it("retains the bounded extreme preview hint while an explicit contain intent wins", () => {
-    const cropped = layoutDesktopFeed([image(0.4)], 800).positions[0]!;
+    const cropped = layoutDesktopFeed([image(0.4)], 896).positions[0]!;
     expect(cropped.height).toBe(720);
     expect(cropped.cropped).toBe(true);
     const contained = desktopFeedMedia({
       media: { width: 100, height: 2000, feed: { fit: "contain" } },
     });
-    const whole = layoutDesktopFeed([contained], 800).positions[0]!;
+    const whole = layoutDesktopFeed([contained], 896).positions[0]!;
     expect(whole.height).toBe(720);
     expect(whole.preserveContain).toBe(true);
     expect(whole.cropped).toBe(false);

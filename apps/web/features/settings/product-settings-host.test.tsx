@@ -17,28 +17,38 @@ type EditorProps = {
   onClose: () => void;
   onSaved: () => void;
 };
-const { author, profileRead, shell, intent, captures } = vi.hoisted(() => ({
-  author: {
-    viewer: null as { id: string } | null,
-    checking: false,
-    sessionError: false,
-    revision: 0,
-    cache: new Map<string, unknown>(),
-    refresh: vi.fn(),
-    mutate: vi.fn(),
-  },
-  profileRead: vi.fn(),
-  shell: {
-    activeDestination: "home",
-    settingsOpen: false,
-    registerSettingsIntent: vi.fn(),
-  },
-  intent: { current: null as ((opener: HTMLElement) => void) | null },
-  captures: { settings: [] as SettingsProps[], editors: [] as EditorProps[] },
-}));
+const { author, profileRead, shell, intent, captures, AuthorRequestError } =
+  vi.hoisted(() => ({
+    AuthorRequestError: class AuthorRequestError extends Error {
+      constructor(
+        readonly status: number,
+        message: string,
+      ) {
+        super(message);
+      }
+    },
+    author: {
+      viewer: null as { id: string } | null,
+      checking: false,
+      sessionError: false,
+      revision: 0,
+      cache: new Map<string, unknown>(),
+      refresh: vi.fn(),
+      mutate: vi.fn(),
+    },
+    profileRead: vi.fn(),
+    shell: {
+      activeDestination: "home",
+      settingsOpen: false,
+      registerSettingsIntent: vi.fn(),
+    },
+    intent: { current: null as ((opener: HTMLElement) => void) | null },
+    captures: { settings: [] as SettingsProps[], editors: [] as EditorProps[] },
+  }));
 vi.mock("../authors/author-context", () => ({ useAuthors: () => author }));
 vi.mock("../authors/author-data", () => ({
   authorClient: { profile: profileRead },
+  AuthorRequestError,
 }));
 vi.mock("../product-shell/product-shell", () => ({
   useProductShell: () => shell,
@@ -299,7 +309,9 @@ describe("complete product settings host", () => {
       .mockReturnValueOnce(second.promise);
     const view = await render();
     await view.open();
-    await act(async () => first.reject(new Error("账户资料读取失败")));
+    await act(async () =>
+      first.reject(new AuthorRequestError(503, "账户资料读取失败")),
+    );
     expect(view.props().profile).toBeNull();
     expect(view.props().accountRead).toMatchObject({
       loading: false,
@@ -485,4 +497,31 @@ describe("complete product settings host", () => {
     await view.flush();
     expect(document.activeElement).toBe(view.gear);
   });
+});
+
+describe("non-transport settings read failures", () => {
+  it.each([
+    new SyntaxError("Unexpected token in synthetic profile JSON"),
+    Object.assign(
+      new Error(
+        '[{"code":"invalid_type","path":["profile"],"message":"expected object"}]',
+      ),
+      { name: "ZodError" },
+    ),
+  ])(
+    "uses safe product copy for a %s instead of rendering parser/schema details",
+    async (failure) => {
+      author.viewer = { id: actorA };
+      profileRead.mockRejectedValue(failure);
+      const view = await render();
+      await view.open();
+      expect(view.props().profile).toBeNull();
+      expect(view.props().accountRead).toMatchObject({
+        loading: false,
+        error: "账户资料暂时无法读取，请重试。",
+      });
+      expect(view.props().accountRead.error).not.toContain(failure.message);
+      expect(view.props().onEdit).toBeUndefined();
+    },
+  );
 });

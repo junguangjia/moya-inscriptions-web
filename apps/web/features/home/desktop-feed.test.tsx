@@ -115,6 +115,32 @@ describe("desktop feed isolation and native openers", () => {
     expect(markup).toContain("第二帖");
     expect(markup.indexOf("第一帖")).toBeLessThan(markup.indexOf("第二帖"));
   });
+  it("does not reserve image width for a caption before client measurement", () => {
+    const container = document.createElement("div");
+    container.innerHTML = renderToStaticMarkup(
+      <DesktopFeed
+        items={[cards[1]!]}
+        getKey={(item) => item.id}
+        renderItem={(_item, _index, slot) => (
+          <span data-unmeasured-media-width={slot.mediaWidth} />
+        )}
+      />,
+    );
+    expect(
+      container
+        .querySelector("[data-desktop-feed]")
+        ?.getAttribute("data-layout-ready"),
+    ).toBe("false");
+    const card = container.querySelector<HTMLElement>(
+      "[data-desktop-feed-item]",
+    )!;
+    const media = container.querySelector<HTMLElement>(
+      "[data-unmeasured-media-width]",
+    )!;
+    expect(Number.parseFloat(card.style.width)).toBe(
+      Number(media.dataset.unmeasuredMediaWidth),
+    );
+  });
   it("preserves source DOM order, shows real text and opens the selected content", () => {
     const { target, open } = render();
     expect(
@@ -376,7 +402,7 @@ describe("desktop feed viewport anchoring", () => {
     expect(view.owner.scrollTop).toBe(310);
   });
   it("keeps a deeply clipped focused card visible when rebalancing makes its row shorter", () => {
-    const view = anchorFixture();
+    const view = anchorFixture({ initialWidth: 896 });
     const initial = view.node("17").getBoundingClientRect();
     view.owner.scrollTop = initial.top + initial.height - 50;
     expect(view.owner.scrollTop).toBe(initial.top + initial.height - 50);
@@ -385,7 +411,7 @@ describe("desktop feed viewport anchoring", () => {
     view.scroll();
     expect(view.node("17").getBoundingClientRect().bottom).toBeGreaterThan(0);
     const focus = vi.spyOn(HTMLElement.prototype, "focus");
-    view.resize(880);
+    view.resize(1440);
     expect(view.node("17").getBoundingClientRect().height).toBeLessThan(
       initial.height,
     );
@@ -714,7 +740,7 @@ describe("desktop feed cold first layout bootstrap", () => {
     });
     const host = view.target.querySelector<HTMLElement>("[data-desktop-feed]")!;
     expect(host.dataset.layoutReady).toBe("true");
-    expect(Number.parseFloat(view.node("0").style.width)).toBe(351);
+    expect(Number.parseFloat(view.node("0").style.width)).toBe(230);
     const styles = [
       ...view.target.querySelectorAll<HTMLElement>("[data-desktop-feed-item]"),
     ].map((n) => n.style.cssText);
@@ -761,7 +787,7 @@ describe("desktop feed cold first layout bootstrap", () => {
     view.resize(1440);
     expect(host.dataset.layoutReady).toBe("true");
     const geometry = view.node("0").style.cssText;
-    expect(Number.parseFloat(view.node("0").style.width)).toBe(351);
+    expect(Number.parseFloat(view.node("0").style.width)).toBe(230);
     expect(view.owner.hasAttribute("inert")).toBe(true);
     view.owner.removeAttribute("inert");
     view.owner.removeAttribute("aria-hidden");

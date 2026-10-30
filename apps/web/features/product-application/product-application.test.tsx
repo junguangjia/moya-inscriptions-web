@@ -14,8 +14,7 @@ import {
   CatalogSearchNavigationAction,
 } from "../search/catalog-search";
 
-import { Children, isValidElement } from "react";
-import type { ReactElement, ReactNode } from "react";
+import type { ReactElement } from "react";
 
 import type { T02pProductPreviewProps } from "../product-preview/t02p-product-preview";
 
@@ -70,24 +69,15 @@ describe("ProductApplication", () => {
       />,
     );
     const props = lastPreviewProps();
-    const utility = props.productUtility as ReactElement<{
-      children: ReactNode;
-    }>;
-    const children = Children.toArray(utility.props.children);
-    const hosts = children.filter(
-      (child) => isValidElement(child) && child.type === ProductSettingsHost,
-    );
-    expect(hosts).toHaveLength(1);
-    const host = hosts[0] as ReactElement<{
+    const host = props.settingsHost as ReactElement<{
       onOpen: () => void;
       open: boolean;
     }>;
+    expect(host.type).toBe(ProductSettingsHost);
     const user = props.userPage as ReactElement<{ onOpenSettings: () => void }>;
     expect(user.props.onOpenSettings).toBe(host.props.onOpen);
     expect(host.props.open).toBe(false);
-    expect(
-      children.some((child) => isValidElement(child) && child.type === "span"),
-    ).toBe(true);
+    expect((props.productUtility as ReactElement).type).toBe("span");
   });
   it("keeps the accepted Detail without a comment section when comments are not composed", () => {
     const markup = renderToStaticMarkup(

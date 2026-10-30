@@ -9,7 +9,7 @@ import {
 } from "react";
 import type { AuthorProfile } from "@moya/contracts";
 import { useAuthors } from "../authors/author-context";
-import { authorClient } from "../authors/author-data";
+import { authorClient, AuthorRequestError } from "../authors/author-data";
 import { ProfileEditor } from "../authors/profile-editor";
 import { ProfileSettings } from "../authors/profile-settings";
 import { useProductShell } from "../product-shell/product-shell";
@@ -126,9 +126,9 @@ export const ProductSettingsHost = ({
             actor,
             profile: old.actor === actor ? old.profile : null,
             error:
-              reason instanceof Error
+              reason instanceof AuthorRequestError
                 ? reason.message
-                : "账户资料暂时无法读取。",
+                : "账户资料暂时无法读取，请重试。",
           }));
       },
     );

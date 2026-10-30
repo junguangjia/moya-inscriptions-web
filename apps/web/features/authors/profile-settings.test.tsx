@@ -10,6 +10,7 @@ const {
   people,
   command,
   mutate,
+  refresh,
   setThemePreference,
   setFeedLayoutPreference,
   session,
@@ -32,11 +33,12 @@ const {
   people: vi.fn(),
   command: vi.fn(),
   mutate: vi.fn(),
+  refresh: vi.fn(),
   setThemePreference: vi.fn(),
   setFeedLayoutPreference: vi.fn(),
   session: { id: "user-00000000000000000000000000000001" },
   presentation: { platform: "phone" },
-  identity: { guest: false },
+  identity: { guest: false, checking: false, sessionError: false },
   accountsList: vi.fn(),
   switcherProps: [] as Record<string, unknown>[],
 }));
@@ -56,6 +58,9 @@ vi.mock("./author-context", () => ({
   useAuthors: () => ({
     signInHref: "/login",
     viewer: identity.guest ? null : session,
+    checking: identity.checking,
+    sessionError: identity.sessionError,
+    refresh,
     mutate,
   }),
 }));
@@ -127,6 +132,9 @@ beforeEach(() => {
   session.id = profile.id;
   presentation.platform = "phone";
   identity.guest = false;
+  identity.checking = false;
+  identity.sessionError = false;
+  refresh.mockReset().mockResolvedValue(undefined);
   switcherProps.length = 0;
   accountsList.mockResolvedValue({ state: "unavailable" });
   people.mockResolvedValue({ items: [], page: 1, pageSize: 20, total: 0 });
@@ -1458,4 +1466,36 @@ describe("切换账号 in settings (account-switching-v1)", () => {
       expect(node.textContent).toContain("切换账号");
     },
   );
+});
+
+describe("legacy local settings account retry", () => {
+  it("delegates an owned local session-error retry to the existing async refresh without claiming success", async () => {
+    identity.sessionError = true;
+    const pending = deferred<void>();
+    refresh.mockReturnValue(pending.promise);
+    const view = await render(profile);
+    expect(view.node.textContent).toContain("账户状态暂时无法确认，请重试。");
+    await click(view.node, "重试");
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(view.node.textContent).toContain("账户状态暂时无法确认，请重试。");
+    expect(command).not.toHaveBeenCalled();
+    expect(view.onSaved).not.toHaveBeenCalled();
+    // The provider owns errors/identity. A completed retry whose provider
+    // still reports failure must not manufacture a successful account read.
+    await act(async () => pending.resolve(undefined));
+    expect(view.node.textContent).toContain("账户状态暂时无法确认，请重试。");
+    expect(command).not.toHaveBeenCalled();
+  });
+  it("keeps the unified host retry authoritative when accountRead is provided", async () => {
+    const retry = vi.fn();
+    const view = await render(profile, {
+      loading: false,
+      error: "合成账户读取失败",
+      onRetry: retry,
+    });
+    await click(view.node, "重试");
+    expect(retry).toHaveBeenCalledOnce();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(command).not.toHaveBeenCalled();
+  });
 });

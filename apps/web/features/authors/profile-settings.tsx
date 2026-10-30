@@ -878,7 +878,9 @@ export const ProfileSettings = ({
                 <button
                   type="button"
                   className={styles.action}
-                  onClick={() => accountRead?.onRetry()}
+                  onClick={() =>
+                    accountRead ? accountRead.onRetry() : void author.refresh()
+                  }
                 >
                   重试
                 </button>

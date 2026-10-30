@@ -22,8 +22,13 @@ export const DesktopCardFrame = ({
   const slot = useMasonrySlot()?.desktop;
   const excerpt = preview?.trim() ?? "";
   return (
-    <article {...attributes} className={styles.card} role="listitem">
-      <div className={styles.caption}>
+    <article
+      {...attributes}
+      className={styles.card}
+      data-card-media={media ? "true" : "false"}
+      role="listitem"
+    >
+      <div className={styles.caption} data-card-caption="">
         {title === "" ? null : <h3 className={styles.title}>{title}</h3>}
         {media && excerpt !== "" ? (
           <p className={styles.excerpt} data-card-caption-excerpt="">
@@ -35,6 +40,7 @@ export const DesktopCardFrame = ({
       {media ? (
         <div
           className={styles.media}
+          data-card-media-frame=""
           style={
             {
               "--desktop-media-fit": slot?.cropped ? "cover" : "contain",

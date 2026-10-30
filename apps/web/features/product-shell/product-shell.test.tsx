@@ -602,6 +602,60 @@ const withHistoryMarkers = (state: unknown) => ({
 });
 
 describe("ProductShell", () => {
+  it.each(["detail", "topic", "profile", "editor"])(
+    "isolates background utilities when %s opens, with only the settings host outside",
+    async (overlay) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+      mountedRoots.push(root);
+      act(() =>
+        root.render(
+          <ProductShell
+            initialPlatform="pc"
+            home={<ProductShellObserver />}
+            discussion={<p>discussion</p>}
+            user={<p>user</p>}
+            articleEditorEnabled
+            renderEditorOverlay={() => <section role="dialog">editor</section>}
+            renderDetailOverlay={() => <section role="dialog">detail</section>}
+            renderTopicOverlay={() => <section role="dialog">topic</section>}
+            renderProfileOverlay={() => (
+              <section role="dialog">profile</section>
+            )}
+            primaryUtility={<button data-background-utility="">utility</button>}
+            settingsHost={<span data-unified-settings-host="" />}
+          />,
+        ),
+      );
+      await act(async () => vi.runAllTimers());
+      const utility = container.querySelector<HTMLButtonElement>(
+        "[data-background-utility]",
+      )!;
+      expect(utility.closest("[inert]")).toBeNull();
+      if (overlay === "topic") {
+        act(() => observedProductShell!.navigatePrimary("discussion"));
+        await act(async () => vi.runAllTimers());
+        expect(observedProductShell!.activeDestination).toBe("discussion");
+      }
+      act(() => {
+        const shell = observedProductShell!;
+        if (overlay === "detail") shell.openCatalog("catalog-one", utility);
+        else if (overlay === "topic") shell.openTopic("topic-one", utility, 0);
+        else if (overlay === "profile") shell.openProfile(null, utility);
+        else expect(shell.openEditor({ type: "new" }, utility)).toBe(true);
+      });
+      await act(async () => vi.runAllTimers());
+      expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+      expect(utility.closest("[inert]")).not.toBeNull();
+      const host = container.querySelector("[data-unified-settings-host]");
+      expect(host).not.toBeNull();
+      expect(
+        host!.closest('[inert], [hidden], [aria-hidden="true"]'),
+      ).toBeNull();
+    },
+  );
+
   it("hydrates a Macintosh iPad from the server seed before selecting its real tablet preferences", async () => {
     const element = (
       <ProductShell

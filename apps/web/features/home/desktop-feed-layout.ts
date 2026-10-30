@@ -1,5 +1,8 @@
 import { desktopLayout } from "@moya/design-tokens";
-import { layoutHomeMasonry } from "./catalog-masonry-layout";
+import {
+  HOME_PC_MIN_CARD_WIDTH,
+  layoutHomeMasonry,
+} from "./catalog-masonry-layout";
 
 export interface DesktopFeedMedia {
   readonly ratio: number | null;
@@ -46,13 +49,13 @@ export const desktopFeedMedia = (item: unknown): DesktopFeedMedia => {
   };
 };
 
-/** Keep the image itself readable after reserving its independent title rail. */
+/** Match normal card density; ultrawide feeds keep adding readable columns. */
 export const resolveDesktopFeedColumns = (width: number): number => {
   if (!Number.isFinite(width) || width <= 0) return 1;
   const s = desktopLayout.feed;
   return Math.max(
     1,
-    Math.round((width + s.gap) / (s.mediaTargetWidth + s.labelWidth + s.gap)),
+    Math.floor((width + s.gap) / (HOME_PC_MIN_CARD_WIDTH + s.gap)),
   );
 };
 
@@ -75,8 +78,7 @@ export const layoutDesktopFeed = (
   const s = desktopLayout.feed;
   const columns = resolveDesktopFeedColumns(width);
   const cardWidth = (width - s.gap * (columns - 1)) / columns;
-  const labelWidth = Math.min(s.labelWidth, cardWidth / 2);
-  const imageWidth = cardWidth - labelWidth;
+  const imageWidth = cardWidth;
   const naturalHeights = items.map((item) =>
     item.ratio === null ? s.rowHeight : imageWidth / item.ratio,
   );
