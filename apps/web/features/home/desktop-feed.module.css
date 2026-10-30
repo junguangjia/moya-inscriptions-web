@@ -32,6 +32,7 @@
   overflow: hidden;
   border-radius: var(--yoyi-radius-lg);
   border: 0;
+  outline: 0;
   background: var(--yoyi-color-background-surface);
   box-shadow: var(--yoyi-shadow-subtle);
 }
