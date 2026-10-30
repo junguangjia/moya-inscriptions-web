@@ -39,10 +39,12 @@ describe("Product Shell preferences", () => {
     expect(parseFeedLayoutPreference(value)).toBe(expected);
   });
 
-  it("defaults every device presentation to calligraphy", () => {
+  it("defaults desktop to normal while retaining phone and tablet calligraphy", () => {
     expect(defaultFeedLayoutFor("phone")).toBe("single");
     expect(defaultFeedLayoutFor("tablet")).toBe("single");
-    expect(defaultFeedLayoutFor("pc")).toBe("single");
+    expect(defaultFeedLayoutFor("pc")).toBe("double");
+    expect(defaultFeedLayoutFor("phone", "desktop")).toBe("double");
+    expect(defaultFeedLayoutFor("tablet", "desktop")).toBe("double");
   });
 
   it("keeps desktop choices separate from phone/tablet choices", () => {

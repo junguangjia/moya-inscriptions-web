@@ -91,9 +91,10 @@ test("calligraphy Detail has independent complete images and a vertical content-
 }, info) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.addInitScript(() =>
-    localStorage.setItem("yoyi.home-feed-layout.v2", "single"),
-  );
+  await page.addInitScript(() => {
+    localStorage.setItem("yoyi.home-feed-layout.v2", "single");
+    localStorage.setItem("yoyi.desktop-feed-layout.v1", "single");
+  });
   await page.goto(url);
   const detail = page.locator('[data-detail-state="loaded"]');
   await expect(detail).toBeVisible();

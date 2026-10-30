@@ -95,7 +95,7 @@ export const PRODUCT_BOOT_SCRIPT = `(() => {
   // Device identity owns the preference; window width only owns presentation.
   root.dataset.homeLayout =
     (root.dataset.deviceClass === "desktop" ? desktopLayout : layout) ??
-    defaultLayouts[root.dataset.platform];
+    defaultLayouts[root.dataset.deviceClass === "desktop" ? "pc" : root.dataset.platform];
   window.YOYI_PRODUCT_BOOT = Object.freeze({ synchronizePlatform });
   window.setTimeout(() => {
     if (root.dataset.yoyiBoot === "pending") root.dataset.yoyiBoot = "ready";

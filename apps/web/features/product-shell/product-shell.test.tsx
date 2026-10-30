@@ -2248,6 +2248,9 @@ describe("ProductShell", () => {
   ] as const)(
     "hydrates legacy %s preferences to defaults at width %s and retains subsequent choices",
     async (legacyTheme, width) => {
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+        width < 768 ? "iPhone Mobile" : "iPad",
+      );
       Object.defineProperty(window, "innerWidth", {
         configurable: true,
         value: width,
@@ -3319,18 +3322,33 @@ describe("ProductShell", () => {
       },
     );
 
-    it("defaults a desktop to calligraphy independently of a saved phone normal mode", async () => {
-      window.localStorage.setItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY, "double");
-      renderProductShell(<ProductShellObserver />);
-      await act(async () => vi.runAllTimers());
-      expect(observedProductShell?.feedLayout).toBe("single");
-      expect(
-        window.localStorage.getItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY),
-      ).toBe("double");
-      expect(
-        window.localStorage.getItem(DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY),
-      ).toBeNull();
-    });
+    it.each([390, 800, 895, 896, 2560])(
+      "defaults a desktop to normal at width %s independently of the phone mode",
+      async (width) => {
+        vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+          "Desktop Browser",
+        );
+        Object.defineProperty(window, "innerWidth", {
+          configurable: true,
+          value: width,
+        });
+        window.localStorage.setItem(
+          FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
+          "single",
+        );
+        renderProductShell(<ProductShellObserver />);
+        await act(async () => vi.runAllTimers());
+        expect(observedProductShell?.feedLayout).toBe("double");
+        expect(
+          window.localStorage.getItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY),
+        ).toBe("single");
+        expect(
+          window.localStorage.getItem(
+            DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
+          ),
+        ).toBeNull();
+      },
+    );
 
     it("keeps a wide iPad on the existing phone/tablet key", async () => {
       vi.spyOn(navigator, "userAgent", "get").mockReturnValue("iPad");
@@ -3363,12 +3381,12 @@ describe("ProductShell", () => {
       });
       renderProductShell(<ProductShellObserver />);
       await act(async () => vi.runAllTimers());
-      expect(observedProductShell?.feedLayout).toBe("single");
+      expect(observedProductShell?.feedLayout).toBe("double");
       act(() => {
-        observedProductShell!.setFeedLayoutPreference("double");
+        observedProductShell!.setFeedLayoutPreference("single");
         observedProductShell!.setThemePreference("dark");
       });
-      expect(observedProductShell?.feedLayout).toBe("double");
+      expect(observedProductShell?.feedLayout).toBe("single");
       expect(observedProductShell?.theme).toBe("dark");
     });
   });

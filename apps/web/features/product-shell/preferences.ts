@@ -47,17 +47,19 @@ export const parseFeedLayoutPreference = (
     : null;
 
 /**
- * Every device opens in calligraphy mode. Desktop keeps its own explicit
- * preference even when a narrow window uses the compact presentation.
+ * Desktop opens in normal mode; phone and tablet retain calligraphy.
+ * Physical device identity owns this default even in a compact PC window.
  */
 const defaultFeedLayouts = {
   phone: "single",
   tablet: "single",
-  pc: "single",
+  pc: "double",
 } as const satisfies Record<PresentationPlatform, FeedLayoutPreference>;
 export const defaultFeedLayoutFor = (
   platform: PresentationPlatform,
-): FeedLayoutPreference => defaultFeedLayouts[platform];
+  device: DeviceClass = platform === "pc" ? "desktop" : platform,
+): FeedLayoutPreference =>
+  defaultFeedLayouts[device === "desktop" ? "pc" : platform];
 
 /** Storage scope follows the device, never a resizable presentation width. */
 export const feedLayoutStorageKeyFor = (device: DeviceClass): string =>
