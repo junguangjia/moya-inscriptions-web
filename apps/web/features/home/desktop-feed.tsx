@@ -322,7 +322,9 @@ export const DesktopFeed = <T,>({
           x: 0,
           y: 0,
           width:
-            media.ratio === null ? desktopLayout.feed.textWidth : mediaWidth,
+            media.ratio === null
+              ? desktopLayout.feed.textWidth
+              : mediaWidth + desktopLayout.feed.labelWidth,
           height: desktopLayout.feed.rowHeight,
           mediaWidth,
         };

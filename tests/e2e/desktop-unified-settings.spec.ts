@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
+import { readPagingWebPort } from "./support/e2e-ports";
 
 // Browser-only synthetic identities; no real Session, mail or account writes.
 const actor = {
@@ -221,5 +222,79 @@ test("guest edit intent survives login and offers the real editor with fresh own
   await expect(
     editor.getByRole("textbox", { name: "简介", exact: true }),
   ).toHaveValue(ownProfile.bio);
+  // The editor replaces Settings, so its native modal must retain the lock.
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.style.overflowY))
+    .toBe("hidden");
   expect(writes).toEqual(["auth/passwords/login"]);
+});
+
+test("settings to editor retains the desktop viewport lock and returns its exact state", async ({
+  page,
+}) => {
+  const writes = await installIdentity(page, true);
+  await page.setViewportSize({ width: 1024, height: 720 });
+  // Use the existing paged fixture so this journey has real scrollable content.
+  await page.goto(`http://127.0.0.1:${readPagingWebPort()}/?feed=inscriptions`);
+  await ready(page);
+  await expect(
+    page.locator('[data-home-feed-panel="inscriptions"] [data-desktop-feed]'),
+  ).toHaveAttribute("data-layout-ready", "true");
+  await expect(page.locator("[data-product-shell]")).not.toHaveAttribute(
+    "data-scroll-restoring",
+    "",
+  );
+  // Isolate viewport locking from the number/shape of records in this fixture.
+  // Scroll with real input so any bounded initial restoration relinquishes.
+  await page.addStyleTag({
+    content: "[data-product-shell] { min-height: 200vh; }",
+  });
+  const initial = await page.evaluate(() => ({
+    value: document.documentElement.style.getPropertyValue("overflow-y"),
+    priority: document.documentElement.style.getPropertyPriority("overflow-y"),
+  }));
+  await page.mouse.move(5, 350);
+  await page.mouse.wheel(0, 300);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(300);
+  const before = await page.evaluate(() => window.scrollY);
+  const gear = page.locator("[data-desktop-settings]");
+  await gear.click();
+  await settings(page)
+    .getByRole("button", { name: "编辑信息", exact: true })
+    .click();
+  const editor = page.getByRole("dialog", { name: "编辑资料", exact: true });
+  await expect(editor).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.style.overflowY))
+    .toBe("hidden");
+  await editor.locator("header").hover();
+  await page.mouse.wheel(0, 600);
+  const positions = await page.evaluate(
+    () =>
+      new Promise<number[]>((resolve) => {
+        const samples: number[] = [];
+        const start = performance.now();
+        const sample = () => {
+          samples.push(window.scrollY);
+          if (performance.now() - start >= 200) resolve(samples);
+          else requestAnimationFrame(sample);
+        };
+        sample();
+      }),
+  );
+  expect(positions.every((value) => Math.abs(value - before) < 1)).toBe(true);
+  await editor.getByRole("button", { name: "返回", exact: true }).click();
+  await expect(settings(page)).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(settings(page)).toHaveCount(0);
+  await expect(gear).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(before);
+  expect(
+    await page.evaluate(() => ({
+      value: document.documentElement.style.getPropertyValue("overflow-y"),
+      priority:
+        document.documentElement.style.getPropertyPriority("overflow-y"),
+    })),
+  ).toEqual(initial);
+  expect(writes).toEqual([]);
 });

@@ -229,6 +229,12 @@ test("desktop document gutter preserves settings and search background scroll lo
       .locator('[data-home-feed-panel="discover"] [data-desktop-feed]')
       .first(),
   ).toHaveAttribute("data-layout-ready", "true");
+  // This programmatic fixture scroll must follow the initial history restore.
+  // Native user scroll input already cancels that bounded restore.
+  await expect(page.locator("[data-product-shell]")).not.toHaveAttribute(
+    "data-scroll-restoring",
+    "",
+  );
   await page.evaluate(() => window.scrollTo(0, 150));
   await expect
     .poll(() => page.evaluate(() => window.scrollY))

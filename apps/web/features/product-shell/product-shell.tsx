@@ -20,6 +20,7 @@ import { Button, LoadingScreen } from "@moya/ui";
 
 import styles from "./product-shell.module.css";
 import { requestIdentity } from "../shell/request-identity";
+import { acquireDesktopViewportScrollLock } from "../shell/desktop-viewport-scroll-lock";
 
 import { PRODUCT_LOADING_MINIMUM_MS } from "./product-boot";
 import {
@@ -283,7 +284,10 @@ export interface ProductShellContextValue {
     topicId: string,
     opener: HTMLButtonElement,
   ) => void;
-  readonly requestSettings: (opener?: HTMLElement) => void;
+  readonly requestSettings: (
+    opener?: HTMLElement,
+    onOpen?: (opener: HTMLElement) => void,
+  ) => void;
   /** Register the active page's settings surface; disposing a stale intent is safe. */
   readonly registerSettingsIntent: (
     handler: (opener: HTMLElement) => void,
@@ -1042,6 +1046,37 @@ export const ProductShell = ({
     [],
   );
 
+  const saveCurrentEntry = useCallback(() => {
+    if (detailHistoryTimerRef.current !== null) {
+      window.clearTimeout(detailHistoryTimerRef.current);
+      detailHistoryTimerRef.current = null;
+    }
+    const current = parseProductHistoryState(window.history.state);
+    if (current?.kind === "detail" || current?.kind === "viewer")
+      window.history.replaceState(
+        currentProductHistoryState({
+          ...current,
+          detailScrollTop: detailScrollTopRef.current,
+        }),
+        "",
+      );
+    else if (current?.kind === "profile" && profileRef.current)
+      window.history.replaceState(
+        currentProductHistoryState(profileRef.current),
+        "",
+      );
+    else {
+      const destination = activeDestinationRef.current;
+      saveScroll(destination, platformRef.current);
+      window.history.replaceState(
+        currentProductHistoryState(
+          primaryHistoryState(destination, readActiveScrollTop()),
+        ),
+        "",
+        primaryLocation(window.location),
+      );
+    }
+  }, [readActiveScrollTop, saveScroll]);
   const openSettings = useCallback(
     (opener: HTMLElement) => {
       if (
@@ -1106,7 +1141,7 @@ export const ProductShell = ({
   }, [closeSettings, settingsOpen]);
 
   const requestSettings = useCallback(
-    (requestedOpener?: HTMLElement) => {
+    (requestedOpener?: HTMLElement, onOpen?: (opener: HTMLElement) => void) => {
       const opener =
         requestedOpener ??
         (document.activeElement instanceof HTMLElement
@@ -1117,15 +1152,19 @@ export const ProductShell = ({
         settingsOpenRef.current ||
         feedViewerRef.current !== null ||
         contentRef.current !== null ||
-        profileRef.current !== null ||
+        (profileRef.current !== null && onOpen === undefined) ||
         editorRef.current !== null ||
         topicIdRef.current !== null
       )
         return;
-      if (settingsIntentRef.current !== null) settingsIntentRef.current(opener);
-      else openSettings(opener);
+      const intent = onOpen ?? settingsIntentRef.current;
+      if (intent !== null) {
+        // The native modal owns its entry, so record its predecessor first.
+        saveCurrentEntry();
+        intent(opener);
+      } else openSettings(opener);
     },
-    [openSettings],
+    [openSettings, saveCurrentEntry],
   );
 
   const registerSettingsIntent = useCallback(
@@ -1259,37 +1298,6 @@ export const ProductShell = ({
     },
     [],
   );
-  const saveCurrentEntry = useCallback(() => {
-    if (detailHistoryTimerRef.current !== null) {
-      window.clearTimeout(detailHistoryTimerRef.current);
-      detailHistoryTimerRef.current = null;
-    }
-    const current = parseProductHistoryState(window.history.state);
-    if (current?.kind === "detail" || current?.kind === "viewer")
-      window.history.replaceState(
-        currentProductHistoryState({
-          ...current,
-          detailScrollTop: detailScrollTopRef.current,
-        }),
-        "",
-      );
-    else if (current?.kind === "profile" && profileRef.current)
-      window.history.replaceState(
-        currentProductHistoryState(profileRef.current),
-        "",
-      );
-    else {
-      const destination = activeDestinationRef.current;
-      saveScroll(destination, platformRef.current);
-      window.history.replaceState(
-        currentProductHistoryState(
-          primaryHistoryState(destination, readActiveScrollTop()),
-        ),
-        "",
-        primaryLocation(window.location),
-      );
-    }
-  }, [readActiveScrollTop, saveScroll]);
   const authReturnView = useAuthReturnView("shell", () => {
     const stored = parseProductHistoryState(window.history.state);
     const history =
@@ -2893,9 +2901,11 @@ export const ProductShell = ({
     else if (editorOpen) editorBackRef.current?.focus();
     else topicBackRef.current?.focus();
     const previousOverflow = document.body.style.overflow;
+    const releaseViewport = acquireDesktopViewportScrollLock();
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = previousOverflow;
+      releaseViewport();
     };
   }, [
     activeContent,

@@ -10,7 +10,8 @@
   --yoyi-desktop-card-label-width: 72px;
   --yoyi-desktop-feed-row-height: 240px;
   --yoyi-desktop-feed-row-min: 200px;
-  --yoyi-desktop-feed-row-max: 300px;
+  --yoyi-desktop-feed-row-max: 320px;
+  --yoyi-desktop-feed-row-hard-max: 360px;
   --yoyi-desktop-feed-gap: 12px;
   --yoyi-desktop-feed-row-gap: 12px;
   --yoyi-desktop-reader-upper: clamp(320px, 48svh, 600px);

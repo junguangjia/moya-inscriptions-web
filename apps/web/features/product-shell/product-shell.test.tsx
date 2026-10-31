@@ -3487,6 +3487,40 @@ describe("ProductShell", () => {
     expect(back).toHaveBeenCalledOnce();
   });
 
+  it("records the desktop predecessor before a delegated settings modal owns history", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1440,
+    });
+    const { container } = renderProductShell(<ProductShellObserver />);
+    await act(async () => vi.runAllTimers());
+    expect(observedProductShell!.platform).toBe("pc");
+    const opener = buttonByLabel(container, "从用户页打开设置");
+    document.documentElement.scrollTop = 300;
+    const native = vi.fn(() => {
+      expect(parseProductHistoryState(window.history.state)).toMatchObject({
+        kind: "primary",
+        scrollTop: 300,
+      });
+      window.history.pushState(
+        { ...window.history.state, phase4Dialog: "synthetic-settings" },
+        "",
+        window.location.href,
+      );
+    });
+    act(() => observedProductShell!.registerSettingsIntent(native));
+    const entries = window.history.length;
+    try {
+      act(() => observedProductShell!.requestSettings(opener));
+      expect(native).toHaveBeenCalledExactlyOnceWith(opener);
+      expect(window.history.length).toBe(entries + 1);
+      expect(window.history.state.phase4Dialog).toBe("synthetic-settings");
+      expect(observedProductShell!.settingsOpen).toBe(false);
+    } finally {
+      document.documentElement.scrollTop = 0;
+    }
+  });
+
   it("delegates settings to the current page and ignores disposal of an older intent", async () => {
     const { container } = renderProductShell(<ProductShellObserver />);
     await act(async () => vi.runAllTimers());

@@ -169,14 +169,17 @@ afterEach(async () => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
-const render = async (initialOpen = false) => {
+const render = async (initialOpen = false, deferClose = false) => {
   const target = document.createElement("div");
   document.body.append(target);
   const root = createRoot(target);
   roots.push(root);
   const opened = vi.fn(),
     closed = vi.fn();
-  const control: { open?: (opener?: HTMLElement) => void } = {};
+  const control: {
+    open?: (opener?: HTMLElement) => void;
+    commitClose?: () => void;
+  } = {};
   const Harness = () => {
     const [open, setOpen] = useState(initialOpen);
     const [initialOpener, setInitialOpener] = useState<HTMLElement | null>(
@@ -190,7 +193,8 @@ const render = async (initialOpen = false) => {
     control.open = onOpen;
     const onClose = useCallback(() => {
       closed();
-      setOpen(false);
+      if (deferClose) control.commitClose = () => setOpen(false);
+      else setOpen(false);
     }, []);
     return (
       <>
@@ -219,6 +223,9 @@ const render = async (initialOpen = false) => {
     gear,
     opened,
     closed,
+    commitClose: async () => {
+      await act(async () => control.commitClose?.());
+    },
     draw,
     open: async (focus = true) => {
       if (focus) gear.focus();
@@ -433,6 +440,28 @@ describe("complete product settings host", () => {
     expect(document.activeElement).toBe(view.gear);
     expect(focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
   });
+  it("waits for the close commit before restoring focus outside native modality", async () => {
+    const view = await render(false, true);
+    await view.open();
+    const nativeFocus = HTMLElement.prototype.focus;
+    const focus = vi.spyOn(view.gear, "focus").mockImplementation((options) => {
+      // A native modal ignores focus attempts outside it until removal.
+      if (!view.target.querySelector("[data-settings-host-stub]"))
+        nativeFocus.call(view.gear, options);
+    });
+    await act(async () => view.props().onClose());
+    await view.flush();
+    expect(view.closed).toHaveBeenCalledOnce();
+    expect(
+      view.target.querySelector("[data-settings-host-stub]"),
+    ).not.toBeNull();
+    expect(focus).not.toHaveBeenCalled();
+    await view.commitClose();
+    await view.flush();
+    expect(focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+    expect(document.activeElement).toBe(view.gear);
+  });
+
   it("refreshes the current actor after a settings save and never edits a guest", async () => {
     const view = await render();
     await view.open();

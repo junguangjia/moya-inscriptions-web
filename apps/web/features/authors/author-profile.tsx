@@ -932,7 +932,7 @@ const ScopedAuthorProfile = ({
               className="yoyi-icon-button"
               onClick={(event) =>
                 onOpenSettings
-                  ? onOpenSettings(event.currentTarget)
+                  ? shell.requestSettings(event.currentTarget, onOpenSettings)
                   : setModal("settings")
               }
             >

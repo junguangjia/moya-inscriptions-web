@@ -48,7 +48,8 @@ export const desktopLayout = {
   feed: {
     rowHeight: 240,
     rowMin: 200,
-    rowMax: 300,
+    rowMax: 320,
+    rowHardMax: 360,
     featureMax: 720,
     gap: 12,
     rowGap: 12,

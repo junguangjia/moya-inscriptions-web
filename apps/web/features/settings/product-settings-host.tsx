@@ -45,6 +45,7 @@ export const ProductSettingsHost = ({
   const requestedOpener = useRef<HTMLElement | null>(null);
   const wasOpen = useRef(false);
   const focusFrame = useRef<number | null>(null);
+  const returnFocusPending = useRef(false);
   const [read, setRead] = useState<{
     actor: string | null;
     profile: AuthorProfile | null;
@@ -74,6 +75,11 @@ export const ProductSettingsHost = ({
     [shell.registerSettingsIntent, shell.settingsOpen, requestOpen],
   );
   useLayoutEffect(() => {
+    if (open) {
+      returnFocusPending.current = false;
+      if (focusFrame.current !== null) cancelAnimationFrame(focusFrame.current);
+      focusFrame.current = null;
+    }
     if (open && !wasOpen.current) {
       const active = document.activeElement;
       opener.current =
@@ -155,7 +161,14 @@ export const ProductSettingsHost = ({
     setRetry((value) => value + 1);
   };
   const finishClose = () => {
+    returnFocusPending.current = true;
     onClose();
+  };
+  useEffect(() => {
+    if (open || !returnFocusPending.current) return;
+    returnFocusPending.current = false;
+    // Native modality must be removed by the committed close before focus
+    // outside the dialog can succeed. Scheduling from onClose can run early.
     focusFrame.current = requestAnimationFrame(() => {
       focusFrame.current = null;
       const target =
@@ -174,7 +187,11 @@ export const ProductSettingsHost = ({
             );
       target?.focus({ preventScroll: true });
     });
-  };
+    return () => {
+      if (focusFrame.current !== null) cancelAnimationFrame(focusFrame.current);
+      focusFrame.current = null;
+    };
+  }, [open]);
   if (!open) return null;
   if (editing && profile)
     return (

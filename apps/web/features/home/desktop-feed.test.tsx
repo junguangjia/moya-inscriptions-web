@@ -115,32 +115,6 @@ describe("desktop feed isolation and native openers", () => {
     expect(markup).toContain("第二帖");
     expect(markup.indexOf("第一帖")).toBeLessThan(markup.indexOf("第二帖"));
   });
-  it("does not reserve image width for a caption before client measurement", () => {
-    const container = document.createElement("div");
-    container.innerHTML = renderToStaticMarkup(
-      <DesktopFeed
-        items={[cards[1]!]}
-        getKey={(item) => item.id}
-        renderItem={(_item, _index, slot) => (
-          <span data-unmeasured-media-width={slot.mediaWidth} />
-        )}
-      />,
-    );
-    expect(
-      container
-        .querySelector("[data-desktop-feed]")
-        ?.getAttribute("data-layout-ready"),
-    ).toBe("false");
-    const card = container.querySelector<HTMLElement>(
-      "[data-desktop-feed-item]",
-    )!;
-    const media = container.querySelector<HTMLElement>(
-      "[data-unmeasured-media-width]",
-    )!;
-    expect(Number.parseFloat(card.style.width)).toBe(
-      Number(media.dataset.unmeasuredMediaWidth),
-    );
-  });
   it("preserves source DOM order, shows real text and opens the selected content", () => {
     const { target, open } = render();
     expect(
@@ -349,28 +323,32 @@ const anchorFixture = ({
   };
 };
 describe("desktop feed viewport anchoring", () => {
-  it("appends pages without moving existing cards, their viewport offsets or native DOM identity", () => {
+  it("rebalances appended pages while keeping the visible content offset and every native DOM identity", () => {
     const view = anchorFixture();
     view.owner.scrollTop = Number.parseFloat(view.node("16").style.top) + 50;
     view.scroll();
-    const offset = view.node("16").getBoundingClientRect().top;
-    expect(offset).toBeLessThan(view.owner.clientHeight);
-    expect(view.node("16").getBoundingClientRect().bottom).toBeGreaterThan(0);
-    const oldY = Number.parseFloat(view.node("16").style.top);
-    const oldNode = view.node("16");
-    const oldStyles = [
+    const oldNodes = [
       ...view.target.querySelectorAll<HTMLElement>("[data-desktop-feed-item]"),
-    ].map((n) => n.style.cssText);
+    ];
+    const anchor = oldNodes.find((node) => {
+      const rect = node.getBoundingClientRect();
+      return rect.bottom > 0 && rect.top < view.owner.clientHeight;
+    })!;
+    const key = anchor.dataset.desktopFeedKey!;
+    const offset = anchor.getBoundingClientRect().top;
+    expect(offset).toBeLessThan(view.owner.clientHeight);
+    expect(anchor.getBoundingClientRect().bottom).toBeGreaterThan(0);
+    const oldY = Number.parseFloat(anchor.style.top);
     const focus = vi.spyOn(HTMLElement.prototype, "focus");
     view.draw(view.all);
-    expect(Number.parseFloat(view.node("16").style.top)).toBe(oldY);
-    expect(view.node("16")).toBe(oldNode);
-    expect(
-      [...view.target.querySelectorAll<HTMLElement>("[data-desktop-feed-item]")]
-        .slice(0, 49)
-        .map((n) => n.style.cssText),
-    ).toEqual(oldStyles);
-    expect(view.node("16").getBoundingClientRect().top).toBeCloseTo(offset);
+    // This fixture genuinely rebalances; preserving its old pixel positions
+    // would retain the sparse page boundary rather than the reading position.
+    expect(Number.parseFloat(view.node(key).style.top)).not.toBe(oldY);
+    const nextNodes = [
+      ...view.target.querySelectorAll<HTMLElement>("[data-desktop-feed-item]"),
+    ];
+    oldNodes.forEach((node, index) => expect(nextNodes[index]).toBe(node));
+    expect(view.node(key).getBoundingClientRect().top).toBeCloseTo(offset);
     expect(focus).not.toHaveBeenCalled();
     expect(
       [...view.target.querySelectorAll("button")].map((n) => n.textContent),
@@ -402,7 +380,12 @@ describe("desktop feed viewport anchoring", () => {
     expect(view.owner.scrollTop).toBe(310);
   });
   it("keeps a deeply clipped focused card visible when rebalancing makes its row shorter", () => {
-    const view = anchorFixture({ initialWidth: 896 });
+    const view = anchorFixture({
+      initialCount: 28,
+      count: 40,
+      initialWidth: 1440,
+      ratios: [0.4],
+    });
     const initial = view.node("17").getBoundingClientRect();
     view.owner.scrollTop = initial.top + initial.height - 50;
     expect(view.owner.scrollTop).toBe(initial.top + initial.height - 50);
@@ -411,9 +394,9 @@ describe("desktop feed viewport anchoring", () => {
     view.scroll();
     expect(view.node("17").getBoundingClientRect().bottom).toBeGreaterThan(0);
     const focus = vi.spyOn(HTMLElement.prototype, "focus");
-    view.resize(1440);
+    view.draw(view.all);
     expect(view.node("17").getBoundingClientRect().height).toBeLessThan(
-      initial.height,
+      initial.height - 50,
     );
     expect(document.activeElement).toBe(button);
     expect(view.node("17").getBoundingClientRect().bottom).toBeGreaterThan(0);
@@ -740,10 +723,16 @@ describe("desktop feed cold first layout bootstrap", () => {
     });
     const host = view.target.querySelector<HTMLElement>("[data-desktop-feed]")!;
     expect(host.dataset.layoutReady).toBe("true");
-    expect(Number.parseFloat(view.node("0").style.width)).toBe(230);
-    const styles = [
+    // The first four consecutive ratios share the measured 1440px row.
+    const firstHeight = (1440 - 4 * 72 - 3 * 12) / (0.4 + 2.8 + 0.5 + 1);
+    expect(Number.parseFloat(view.node("0").style.width)).toBeCloseTo(
+      72 + 0.4 * firstHeight,
+      8,
+    );
+    const oldNodes = [
       ...view.target.querySelectorAll<HTMLElement>("[data-desktop-feed-item]"),
-    ].map((n) => n.style.cssText);
+    ];
+    const styles = oldNodes.map((node) => node.style.cssText);
     view.scrollWrites.length = 0;
     view.draw(view.all, "pending:");
     expect(cardsShown(view.target)).toEqual(
@@ -768,11 +757,10 @@ describe("desktop feed cold first layout bootstrap", () => {
     expect(cardsShown(view.target)).toEqual(
       view.all.map((item) => "pending:" + item.id),
     );
-    expect(
-      [...view.target.querySelectorAll<HTMLElement>("[data-desktop-feed-item]")]
-        .slice(0, 24)
-        .map((n) => n.style.cssText),
-    ).toEqual(styles);
+    const nextNodes = [
+      ...view.target.querySelectorAll<HTMLElement>("[data-desktop-feed-item]"),
+    ];
+    oldNodes.forEach((node, index) => expect(nextNodes[index]).toBe(node));
     expect(view.scrollWrites).toEqual([]);
   });
   it("bootstraps the first positive measured width before an initially zero-width inert gallery is revealed", async () => {
@@ -787,7 +775,8 @@ describe("desktop feed cold first layout bootstrap", () => {
     view.resize(1440);
     expect(host.dataset.layoutReady).toBe("true");
     const geometry = view.node("0").style.cssText;
-    expect(Number.parseFloat(view.node("0").style.width)).toBe(230);
+    // Twelve 0.5-ratio images balance into two measured six-card rows.
+    expect(Number.parseFloat(view.node("0").style.width)).toBeCloseTo(230, 8);
     expect(view.owner.hasAttribute("inert")).toBe(true);
     view.owner.removeAttribute("inert");
     view.owner.removeAttribute("aria-hidden");

@@ -4,7 +4,7 @@ import { readPagingWebPort } from "./support/e2e-ports";
 test.beforeEach(async ({ page }, info) => {
   test.skip(
     !info.project.name.startsWith("desktop"),
-    "Desktop natural-aspect masonry only",
+    "Desktop balanced natural-aspect rows only",
   );
   test.setTimeout(45_000);
   await page.addInitScript(() =>
@@ -13,7 +13,7 @@ test.beforeEach(async ({ page }, info) => {
 });
 
 for (const width of [3440, 5120]) {
-  test(`real paging retains its prefix and packs continuous RTL columns at ${width}px`, async ({
+  test(`real paging retains its source identity and balances RTL rows at ${width}px`, async ({
     page,
   }, info) => {
     await page.setViewportSize({ width, height: 1440 });
@@ -26,19 +26,17 @@ for (const width of [3440, 5120]) {
     const cards = feed.locator("[data-desktop-feed-item]");
     await expect.poll(() => cards.count()).toBeGreaterThanOrEqual(12);
     const prefix = await cards.evaluateAll((nodes) =>
-      nodes.map((node) => {
-        const n = node as HTMLElement;
-        return { key: n.dataset.desktopFeedKey, geometry: n.style.cssText };
-      }),
+      nodes.map((node) => (node as HTMLElement).dataset.desktopFeedKey),
     );
+    const prefixNodes = (await cards.elementHandles()).slice(0, prefix.length);
     for (
       let pageNumber = 0;
       pageNumber < 4 && (await cards.count()) < 36;
       pageNumber++
     ) {
       const before = await cards.count();
-      // In masonry the last DOM card need not end at the tallest column.
-      // Bring the real feed/footer boundary into the observer's margin.
+      // Pagination intentionally scrolls to the real footer. Key/DOM identity
+      // stays stable, while ordered rows may rebalance their pixel positions.
       await feed.evaluate((root) =>
         root.scrollIntoView({ block: "end", inline: "nearest" }),
       );
@@ -48,13 +46,22 @@ for (const width of [3440, 5120]) {
     expect(
       await cards.evaluateAll(
         (nodes, count) =>
-          nodes.slice(0, count).map((node) => {
-            const n = node as HTMLElement;
-            return { key: n.dataset.desktopFeedKey, geometry: n.style.cssText };
-          }),
+          nodes
+            .slice(0, count)
+            .map((node) => (node as HTMLElement).dataset.desktopFeedKey),
         prefix.length,
       ),
     ).toEqual(prefix);
+    for (const node of prefixNodes) {
+      expect(
+        await node.evaluate(
+          (element) =>
+            element.isConnected &&
+            element.closest("[data-desktop-feed]") !== null,
+        ),
+      ).toBe(true);
+      await node.dispose();
+    }
     const geometry = await feed.evaluate((root) => {
       const box = root.getBoundingClientRect();
       return {
@@ -91,7 +98,8 @@ for (const width of [3440, 5120]) {
             mediaFrameError: Math.max(
               Math.abs(image.x - frame.x),
               Math.abs(image.y - frame.y),
-              Math.abs(image.width - frame.width),
+              Math.abs(image.right - caption.left),
+              Math.abs(image.width - (frame.width - caption.width)),
               Math.abs(image.height - frame.height),
             ),
             borderWidth: surface.borderWidth,
@@ -101,6 +109,7 @@ for (const width of [3440, 5120]) {
             captionPointerEvents: getComputedStyle(captionNode).pointerEvents,
             captionRightError: Math.abs(caption.right - frame.right),
             captionWidth: caption.width,
+            mediaWidth: image.width,
             titleWriting: title ? getComputedStyle(title).writingMode : null,
             excerptWriting: excerpt
               ? getComputedStyle(excerpt).writingMode
@@ -109,16 +118,16 @@ for (const width of [3440, 5120]) {
         }),
       };
     });
-    const columns = new Map<number, typeof geometry.items>();
+    const rows = new Map<number, typeof geometry.items>();
     for (const item of geometry.items) {
-      const x = Math.round(item.x);
-      columns.set(x, [...(columns.get(x) ?? []), item]);
+      const y = Math.round(item.y * 100);
+      rows.set(y, [...(rows.get(y) ?? []), item]);
       expect(item.frameError).toBeLessThan(1);
       expect(item.mediaFrameError).toBeLessThan(1);
       expect(item.borderWidth).toBe("0px");
       expect(item.outlineWidth).toBe("0px");
       expect(item.shadow).not.toBe("none");
-      expect(item.captionPosition).toBe("absolute");
+      expect(item.captionPosition).toBe("static");
       expect(item.captionPointerEvents).toBe("none");
       expect(item.captionRightError).toBeLessThan(1);
       expect(item.captionWidth).toBeCloseTo(72, 0);
@@ -127,24 +136,42 @@ for (const width of [3440, 5120]) {
       expect(item.x).toBeGreaterThanOrEqual(-0.1);
       expect(item.x + item.w).toBeLessThanOrEqual(geometry.width + 0.1);
       expect(item.h).toBeGreaterThan(0);
-      expect(item.h).toBeLessThanOrEqual(721);
+      expect(item.h).toBeLessThanOrEqual(361);
     }
-    expect(columns.size).toBeGreaterThan(8);
-    const ordered = [...columns].sort(([a], [b]) => a - b);
-    for (let index = 0; index < ordered.length; index++) {
-      const [, column] = ordered[index]!;
-      expect(column[0]!.y).toBeLessThan(1);
-      for (let card = 1; card < column.length; card++)
-        expect(
-          Math.abs(
-            column[card]!.y - column[card - 1]!.y - column[card - 1]!.h - 12,
-          ),
-        ).toBeLessThan(1);
-      if (index > 0) {
-        const previous = ordered[index - 1]![1][0]!;
-        expect(
-          Math.abs(column[0]!.x - previous.x - previous.w - 12),
-        ).toBeLessThan(1);
+    const ordered = [...rows].sort(([a], [b]) => a - b).map(([, row]) => row);
+    for (let rowIndex = 0; rowIndex < ordered.length; rowIndex++) {
+      const row = ordered[rowIndex]!;
+      expect(Math.abs(row[0]!.x + row[0]!.w - geometry.width)).toBeLessThan(1);
+      for (let index = 0; index < row.length; index++) {
+        expect(Math.abs(row[index]!.h - row[0]!.h)).toBeLessThan(1);
+        if (index > 0)
+          expect(
+            Math.abs(row[index - 1]!.x - row[index]!.x - row[index]!.w - 12),
+          ).toBeLessThan(1);
+      }
+      const ratioSum = row.reduce(
+        (sum, item) => sum + item.mediaWidth / item.h,
+        0,
+      );
+      const captionWidth = row.reduce(
+        (sum, item) => sum + item.captionWidth,
+        0,
+      );
+      const fullHeight =
+        (geometry.width - captionWidth - 12 * (row.length - 1)) / ratioSum;
+      if (fullHeight < 359.5) expect(Math.abs(row.at(-1)!.x)).toBeLessThan(1);
+      if (Math.abs(row.at(-1)!.x) >= 1) {
+        // Only a truly infeasible/sparse group may retain bounded natural
+        // widths; a terminal row does not receive an unconditional exemption.
+        expect(fullHeight).toBeGreaterThan(359.5);
+        expect(row[0]!.h).toBeCloseTo(240, 0);
+        expect(row.at(-1)!.x).toBeGreaterThan(0);
+      }
+      if (rowIndex > 0) {
+        const previous = ordered[rowIndex - 1]![0]!;
+        expect(Math.abs(row[0]!.y - previous.y - previous.h - 12)).toBeLessThan(
+          1,
+        );
       }
     }
     for (let index = 1; index < geometry.items.length; index++)
@@ -161,7 +188,7 @@ for (const width of [3440, 5120]) {
     );
     await cards.first().scrollIntoViewIfNeeded();
     await page.screenshot({
-      path: info.outputPath(`masonry-gallery-${width}.png`),
+      path: info.outputPath(`balanced-gallery-${width}.png`),
       animations: "disabled",
     });
   });

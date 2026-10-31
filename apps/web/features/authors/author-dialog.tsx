@@ -3,6 +3,7 @@ import { useEffect, useImperativeHandle, useRef } from "react";
 import { Icon } from "@moya/ui";
 import type { ReactNode, RefObject } from "react";
 import { requestIdentity } from "../shell/request-identity";
+import { acquireDesktopViewportScrollLock } from "../shell/desktop-viewport-scroll-lock";
 
 export interface AuthorDialogNavigationHandle {
   back: () => void;
@@ -117,6 +118,8 @@ export const AuthorDialog = ({
   useEffect(() => {
     const dialog = ref.current;
     dialog?.showModal();
+    const releaseViewport =
+      dialog?.open === true ? acquireDesktopViewportScrollLock() : () => {};
     const marker = id.current;
     const run = ++generation.current;
     consumed.current = false;
@@ -183,6 +186,7 @@ export const AuthorDialog = ({
       window.removeEventListener("popstate", pop, true);
       window.removeEventListener("beforeunload", unload);
       dialog?.close();
+      releaseViewport();
       // StrictMode replays setup synchronously. Actual unmount consumes only
       // this modal's entries and shields the underlying page from that pop.
       queueMicrotask(() => {

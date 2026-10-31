@@ -61,16 +61,32 @@ test("desktop gallery adapts CSS viewports without changing source order or imag
     });
     expect(geometry.overflow).toBe(false);
     expect(geometry.bounds.length).toBeGreaterThan(1);
+    const rows = new Map<number, typeof geometry.bounds>();
     for (let i = 0; i < geometry.bounds.length; i++) {
       const b = geometry.bounds[i]!;
       expect(b.x).toBeGreaterThanOrEqual(-1);
       expect(b.x + b.w).toBeLessThanOrEqual(width! + 1);
-      expect(b.h).toBeLessThanOrEqual(721);
-      const above = geometry.bounds
-        .slice(0, i)
-        .filter((a) => Math.abs(a.x - b.x) < 1)
-        .at(-1);
-      if (above) expect(Math.abs(b.y - above.y - above.h - 12)).toBeLessThan(1);
+      expect(b.h).toBeLessThanOrEqual(361);
+      const y = Math.round(b.y);
+      rows.set(y, [...(rows.get(y) ?? []), b]);
+    }
+    const orderedRows = [...rows.values()].sort((a, b) => a[0]!.y - b[0]!.y);
+    for (const [index, row] of orderedRows.entries()) {
+      const first = row[0]!;
+      for (const [column, card] of row.entries()) {
+        expect(Math.abs(card.y - first.y)).toBeLessThan(1);
+        expect(Math.abs(card.h - first.h)).toBeLessThan(1);
+        if (column > 0)
+          expect(
+            Math.abs(card.x + card.w + 12 - row[column - 1]!.x),
+          ).toBeLessThan(1);
+      }
+      if (index > 0) {
+        const previous = orderedRows[index - 1]![0]!;
+        expect(Math.abs(first.y - previous.y - previous.h - 12)).toBeLessThan(
+          1,
+        );
+      }
     }
     counts.push(geometry.visible);
     await expect(feed.locator('[role="listitem"]').first()).toHaveCSS(
