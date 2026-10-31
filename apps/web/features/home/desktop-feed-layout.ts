@@ -1,9 +1,16 @@
 import { desktopLayout } from "@moya/design-tokens";
+import {
+  FEED_STAGE_MAX_RATIO,
+  slideFit,
+} from "../authors/feed-post-strip-geometry";
 
 export interface DesktopFeedMedia {
+  /** Original source width / height, never the grouped preview-frame ratio. */
   readonly ratio: number | null;
   readonly cropped: boolean;
   readonly preserveContain?: boolean;
+  readonly authorCover?: boolean;
+  readonly missing?: boolean;
 }
 export interface DesktopFeedPosition extends DesktopFeedMedia {
   readonly x: number;
@@ -11,128 +18,193 @@ export interface DesktopFeedPosition extends DesktopFeedMedia {
   readonly width: number;
   readonly height: number;
   readonly mediaWidth: number;
+  readonly paired?: boolean;
 }
 
-/** Presentation geometry only; never invents content or changes list order. */
+type CardSize = Pick<
+  DesktopFeedPosition,
+  "width" | "height" | "mediaWidth" | "cropped"
+>;
+interface Photo {
+  readonly index: number;
+  readonly media: DesktopFeedMedia;
+  readonly raw: number;
+  readonly ratio: number;
+  readonly landscape: boolean;
+  readonly auxiliary: boolean;
+  readonly authorCover: boolean;
+}
+interface Group {
+  readonly top: number;
+  readonly bottom: number | null;
+  readonly coefficient: number;
+  readonly intercept: number;
+  width: number;
+}
+interface Band {
+  readonly groups: readonly Group[];
+  readonly consumed: number;
+  readonly height: number;
+  readonly score: number;
+  readonly fallback?: boolean;
+}
+interface Plan {
+  readonly score: number;
+  readonly band: Band | null;
+}
+const clamp = (value: number, minimum: number, maximum: number) =>
+  Math.max(minimum, Math.min(maximum, value));
+const safeMedia = (value: unknown): DesktopFeedMedia => {
+  if (value !== null && typeof value === "object" && "ratio" in value)
+    return value as DesktopFeedMedia;
+  return { ratio: 1, cropped: false, preserveContain: true, missing: true };
+};
+const sourceRatio = (value: number | null) =>
+  value !== null &&
+  Number.isFinite(value) &&
+  value > 0 &&
+  Number.isFinite(1 / value)
+    ? value
+    : 1;
+const legacyCover = (ratio: number) =>
+  slideFit({ width: 1, height: 1 / ratio }, FEED_STAGE_MAX_RATIO) === "cover";
+
+/** Only an explicit, still-eligible authored region may crop. Otherwise show the complete source. */
 export const desktopFeedMedia = (item: unknown): DesktopFeedMedia => {
-  const record = item as Record<string, unknown> | null;
-  const media = (record?.media ?? record?.representativeMedia) as
-    { width?: number; height?: number; feed?: { fit?: string } } | undefined;
+  const record =
+    item !== null && typeof item === "object"
+      ? (item as Record<string, unknown>)
+      : undefined;
+  const candidate = record?.media ?? record?.representativeMedia;
+  const media =
+    candidate !== null && typeof candidate === "object"
+      ? (candidate as {
+          width?: number;
+          height?: number;
+          feed?: { fit?: string };
+        })
+      : undefined;
   const target = record?.target as { type?: string } | undefined;
-  // A missing-image placeholder is never an actionable cropped preview.
-  const preserveContain = !media || media.feed?.fit === "contain";
   if (target?.type === "work" && !media) return { ratio: null, cropped: false };
-  const raw = Number(media?.width) / Number(media?.height);
+  if (!media)
+    return { ratio: 1, cropped: false, preserveContain: true, missing: true };
+  const width = Number(media.width),
+    height = Number(media.height);
+  const raw = width / height;
   if (
     !Number.isFinite(raw) ||
-    Number(media?.width) <= 0 ||
-    Number(media?.height) <= 0 ||
-    raw <= 0
+    width <= 0 ||
+    height <= 0 ||
+    !Number.isFinite(1 / raw)
   )
-    return {
-      ratio: 1,
-      cropped: false,
-      ...(preserveContain ? { preserveContain: true } : {}),
-    };
-  const ratio = Math.max(
-    desktopLayout.feed.minimumRatio,
-    Math.min(desktopLayout.feed.maximumRatio, raw),
-  );
+    return { ratio: 1, cropped: false, preserveContain: true };
+  const preserveContain = media.feed?.fit === "contain";
+  const authorCover =
+    !preserveContain &&
+    media.feed?.fit === "cover" &&
+    slideFit({ width, height }, FEED_STAGE_MAX_RATIO) === "cover";
   return {
-    ratio,
-    cropped: ratio !== raw && !preserveContain,
+    ratio: raw,
+    cropped: false,
     ...(preserveContain ? { preserveContain: true } : {}),
+    ...(authorCover ? { authorCover: true } : {}),
   };
 };
 
-/** Whole-card size includes the independent right-hand vertical caption. */
-export const desktopFeedTargetArea = (
-  width: number = desktopLayout.feed.cardAreaReferenceWidth,
-): number => {
+const photo = (media: DesktopFeedMedia, index: number): Photo => {
   const s = desktopLayout.feed;
-  const available =
-    Number.isFinite(width) && width > 0 ? width : s.cardAreaReferenceWidth;
-  return Math.max(
-    s.compactCardArea,
-    Math.min(
-      s.cardArea,
-      s.cardArea * (available / s.cardAreaReferenceWidth) ** 2,
-    ),
-  );
-};
-
-type CardSize = Pick<DesktopFeedPosition, "width" | "height" | "mediaWidth">;
-
-const cardBounds = (item: DesktopFeedMedia, width: number) => {
-  const s = desktopLayout.feed;
-  const host =
-    Number.isFinite(width) && width > 0 ? width : s.cardAreaReferenceWidth;
-  const label = Math.min(desktopLayout.feed.labelWidth, host / 2);
-  const ratio =
-    item.ratio === null
-      ? null
-      : Number.isFinite(item.ratio) && item.ratio > 0
-        ? item.ratio
-        : 1;
-  const area = desktopFeedTargetArea(host);
-  const maximum =
-    ratio === null
-      ? Math.min(host, s.cardMaxWidth, s.cardMaxHeight)
-      : Math.min(host, s.cardMaxWidth, label + ratio * s.cardMaxHeight);
-  const minimumHeight =
-    host < s.cardCompactWidth ? s.cardCompactMinHeight : s.cardMinHeight;
-  const minimum = Math.min(
-    maximum,
-    ratio === null ? minimumHeight : label + ratio * minimumHeight,
-  );
-  const clampWidth = (value: number) =>
-    Math.max(minimum, Math.min(maximum, value));
-  const areaWidth = (value: number) => {
-    if (ratio === null) return Math.sqrt(value);
-    const height =
-      (2 * value) / (Math.sqrt(label * label + 4 * ratio * value) + label);
-    return label + ratio * height;
+  const raw = sourceRatio(media.ratio);
+  const auxiliary = media.ratio === null;
+  const authorCover =
+    !auxiliary &&
+    !media.missing &&
+    !media.preserveContain &&
+    media.authorCover === true &&
+    legacyCover(raw);
+  return {
+    index,
+    media,
+    raw,
+    auxiliary,
+    authorCover,
+    ratio: authorCover
+      ? Math.max(raw, 1 / FEED_STAGE_MAX_RATIO)
+      : clamp(raw, s.minimumRatio, s.maximumRatio),
+    landscape:
+      !auxiliary &&
+      !media.missing &&
+      raw >= s.mosaicLandscapeMin &&
+      raw <= s.mosaicLandscapeMax,
   };
-  const size = (value: number): CardSize => {
-    const cardWidth = clampWidth(value);
-    const mediaWidth = ratio === null ? 0 : cardWidth - label;
+};
+const railFor = (width: number) =>
+  Math.min(desktopLayout.feed.labelWidth, width / 3);
+const hasAuthorCrop = (entry: Photo, height: number, mediaWidth: number) =>
+  entry.authorCover &&
+  mediaWidth > 0 &&
+  slideFit({ width: 1, height: 1 / entry.raw }, height / mediaWidth) ===
+    "cover";
+
+/** Shared with the unmeasured card: the same bounded dimensions AND native fit policy. */
+export const desktopFeedIdealSize = (
+  media: DesktopFeedMedia,
+  availableWidth: number = desktopLayout.feed.fallbackWidth,
+): CardSize => {
+  const s = desktopLayout.feed;
+  const width =
+    Number.isFinite(availableWidth) && availableWidth > 0
+      ? availableWidth
+      : s.fallbackWidth;
+  const rail = railFor(width),
+    entry = photo(safeMedia(media), 0);
+  if (entry.auxiliary) {
+    const cardWidth = Math.min(width, s.textWidth);
     return {
       width: cardWidth,
-      height: ratio === null ? cardWidth : mediaWidth / ratio,
-      mediaWidth,
+      height: s.rowHeight,
+      mediaWidth:
+        entry.media.ratio === null ? 0 : Math.max(0, cardWidth - rail),
+      cropped: false,
     };
-  };
+  }
+  const areaHeight =
+    (2 * s.mosaicTargetArea) /
+    (Math.sqrt(rail * rail + 4 * entry.ratio * s.mosaicTargetArea) + rail);
+  const maximum = Math.min(
+    s.mosaicMaxBandHeight,
+    (Math.min(width, s.mosaicSparseMaxWidth) - rail) / entry.ratio,
+  );
+  const height = clamp(areaHeight, Math.min(s.rowMin, maximum), maximum);
+  const mediaWidth = entry.ratio * height;
   return {
-    area,
-    low: clampWidth(areaWidth(area * (1 - s.cardAreaTolerance))),
-    high: clampWidth(areaWidth(area * (1 + s.cardAreaTolerance))),
-    ideal: clampWidth(areaWidth(area)),
-    size,
+    width: rail + mediaWidth,
+    height,
+    mediaWidth,
+    cropped: hasAuthorCrop(entry, height, mediaWidth),
   };
 };
+export const desktopFeedTargetArea = (): number =>
+  desktopLayout.feed.mosaicTargetArea;
 
-/** Also used before the host is measured, keeping the first card shape consistent. */
-export const desktopFeedIdealSize = (
-  item: DesktopFeedMedia,
-  width: number = desktopLayout.feed.cardAreaReferenceWidth,
-): CardSize => {
-  const bounds = cardBounds(item, width);
-  return bounds.size(bounds.ideal);
+const subsets = (
+  indices: readonly number[],
+  maximum: number,
+  emit: (indices: readonly number[]) => void,
+  start = 0,
+  chosen: number[] = [],
+): void => {
+  emit([...chosen]);
+  if (chosen.length >= maximum) return;
+  for (let position = start; position < indices.length; position += 1) {
+    const index = indices[position];
+    if (index === undefined) continue;
+    chosen.push(index);
+    subsets(indices, maximum, emit, position + 1, chosen);
+    chosen.pop();
+  }
 };
 
-interface SkylineInterval {
-  start: number;
-  end: number;
-  top: number;
-}
-
-/**
- * Sequential continuous-width masonry. Actual rectangles keep their media ratio
- * and comparable whole-card area; neither rows nor fixed image columns are imposed.
- * The virtual rectangle includes the following 12px gutter. Monotone top and
- * same-level RTL are hard constraints: density never reorders or backfills records.
- * Only geometric sliver feasibility is considered, so appends retain the prefix.
- */
+/** Accepted top-layer / bottom-layer mosaic; append rebalancing is restored by DesktopFeed's existing content anchor. */
 export const layoutDesktopFeed = (
   items: readonly DesktopFeedMedia[],
   width: number,
@@ -140,182 +212,258 @@ export const layoutDesktopFeed = (
   readonly height: number;
   readonly positions: readonly DesktopFeedPosition[];
 } => {
-  if (!Number.isFinite(width) || width <= 0 || !items.length)
+  if (!Number.isFinite(width) || width <= 0 || items.length === 0)
     return { height: 0, positions: [] };
-  const gap = desktopLayout.feed.gap;
-  const extent = width + gap;
-  const epsilon = 0.000001;
-  const futureMinimum =
-    cardBounds(
-      { ratio: desktopLayout.feed.minimumRatio, cropped: false },
+  const s = desktopLayout.feed,
+    rail = railFor(width),
+    gap = s.gap;
+  const photos = Array.from(items, (media, index) =>
+    photo(safeMedia(media), index),
+  );
+  const maximumTop = Math.min(
+    s.mosaicMaxTop,
+    Math.max(1, Math.ceil(width / s.mosaicGroupWidth)),
+  );
+  const plans: (Plan | null)[] = Array.from(
+    { length: photos.length + 1 },
+    () => null,
+  );
+  plans[photos.length] = { score: 0, band: null };
+  const fallback = (offset: number): Band => {
+    const entry = photos[offset];
+    const size = desktopFeedIdealSize(
+      entry?.media ?? { ratio: 1, cropped: false, preserveContain: true },
       width,
-    ).low + gap;
-  let skyline: SkylineInterval[] = [{ start: 0, end: extent, top: 0 }];
-  let lastTop = 0,
-    lastEnd = 0;
-  const positions: DesktopFeedPosition[] = [];
-
-  for (const item of items) {
-    const bounds = cardBounds(item, width);
-    const oldMaximum = Math.max(...skyline.map((part) => part.top));
-    const nextLevel = Math.min(
-      ...skyline
-        .filter((part) => part.top > lastTop + 0.5)
-        .map((part) => part.top),
     );
-    const selection: {
-      value?: { start: number; top: number; size: CardSize; score: number };
-    } = {};
-    const seen = new Set<string>();
-    const consider = (rawStart: number, rawWidth: number) => {
-      if (rawWidth < bounds.low - epsilon || rawWidth > bounds.high + epsilon)
-        return;
-      const size = bounds.size(rawWidth);
-      const outerWidth = size.width + gap;
-      if (rawStart < -epsilon || rawStart + outerWidth > extent + epsilon)
-        return;
-      const start = Math.max(0, Math.min(extent - outerWidth, rawStart));
-      const end = start + outerWidth;
-      const key = `${start.toFixed(6)}:${size.width.toFixed(6)}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      let top = lastTop;
-      for (const part of skyline)
-        if (part.end > start + epsilon && part.start < end - epsilon)
-          top = Math.max(top, part.top);
-      // A fresh level can begin at an existing skyline edge, never by a tiny
-      // artificial y shift that would visually reverse the same reading level.
-      if (top <= lastTop + 0.5 && start < lastEnd - epsilon)
-        top = Math.max(top, nextLevel);
-      if (!Number.isFinite(top)) return;
-      let sealed = 0,
-        underneath = 0,
-        runStart = 0,
-        runEnd = extent;
-      for (const part of skyline) {
-        sealed += Math.max(0, top - part.top) * (part.end - part.start);
-        const overlap = Math.max(
-          0,
-          Math.min(end, part.end) - Math.max(start, part.start),
-        );
-        underneath += Math.max(0, top - part.top) * overlap;
-        if (part.end <= start + epsilon && part.top > top + epsilon)
-          runStart = part.end;
-        if (
-          runEnd === extent &&
-          part.start >= end - epsilon &&
-          part.top > top + epsilon
-        )
-          runEnd = part.start;
-      }
-      const sliver = (length: number) =>
-        length > epsilon && length < futureMinimum - epsilon
-          ? length * Math.min(size.height, 240)
-          : 0;
-      const slivers = sliver(start - runStart) + sliver(runEnd - end);
-      const error = (size.width * size.height - bounds.area) / bounds.area;
-      const growth = Math.max(0, top + size.height + gap - oldMaximum);
-      const score =
-        (3 * (sealed + 0.25 * underneath + 0.5 * slivers)) / bounds.area +
-        2 * error * error +
-        (0.2 * growth) / desktopLayout.feed.cardMaxHeight +
-        (0.02 * (top - lastTop)) / desktopLayout.feed.cardMaxHeight;
-      const best = selection.value;
-      if (
-        best === undefined ||
-        score < best.score - epsilon ||
-        (Math.abs(score - best.score) <= epsilon &&
-          (top < best.top - epsilon ||
-            (Math.abs(top - best.top) <= epsilon && start < best.start)))
-      )
-        selection.value = { start, top, size, score };
+    return {
+      consumed: 1,
+      height: size.height,
+      score: 8,
+      fallback: true,
+      groups: [
+        {
+          top: offset,
+          bottom: null,
+          coefficient: 0,
+          intercept: size.width,
+          width: size.width,
+        },
+      ],
     };
-    const widths = [
-      bounds.ideal,
-      bounds.low,
-      bounds.high,
-      (bounds.ideal + bounds.low) / 2,
-      (bounds.ideal + bounds.high) / 2,
-    ];
-    for (const cardWidth of widths) {
-      const outerWidth = cardWidth + gap;
-      consider(0, cardWidth);
-      consider(extent - outerWidth, cardWidth);
-      consider(lastEnd, cardWidth);
-      for (const part of skyline) {
-        consider(part.start, cardWidth);
-        consider(part.end - outerWidth, cardWidth);
-      }
-    }
-    // Fit exact available runs at the lowest few levels, avoiding quantization
-    // or an unbounded rectangle-packing search. No future record is inspected.
-    const levels = [...new Set([lastTop, ...skyline.map((part) => part.top)])]
-      .sort((a, b) => a - b)
-      .slice(0, 3);
-    for (const level of levels) {
-      let runStart: number | null = null,
-        runEnd = 0;
-      const flush = () => {
-        if (runStart !== null) consider(runStart, runEnd - runStart - gap);
-        runStart = null;
-      };
-      for (const part of skyline) {
-        if (part.top <= level + epsilon) {
-          if (runStart === null) runStart = part.start;
-          runEnd = part.end;
-        } else flush();
-      }
-      flush();
-    }
-    // The ideal box at the right edge is always finite, including narrow hosts.
-    const chosen = selection.value ?? {
-      start: 0,
-      top: oldMaximum,
-      size: bounds.size(bounds.ideal),
-      score: Infinity,
-    };
-    const end = chosen.start + chosen.size.width + gap;
-    const bottom = chosen.top + chosen.size.height + gap;
-    const next: SkylineInterval[] = [];
-    let inserted = false;
-    for (const part of skyline) {
-      const floored = Math.max(part.top, chosen.top);
-      if (part.end <= chosen.start + epsilon || part.start >= end - epsilon)
-        next.push({ ...part, top: floored });
-      else {
-        if (part.start < chosen.start - epsilon)
-          next.push({ start: part.start, end: chosen.start, top: floored });
-        if (!inserted) {
-          next.push({ start: chosen.start, end, top: bottom });
-          inserted = true;
-        }
-        if (part.end > end + epsilon)
-          next.push({ start: end, end: part.end, top: floored });
-      }
-    }
-    skyline = [];
-    for (const part of next) {
-      const previous = skyline.at(-1);
-      if (
-        previous &&
-        Math.abs(previous.end - part.start) <= epsilon &&
-        Math.abs(previous.top - part.top) <= epsilon
-      )
-        previous.end = part.end;
-      else skyline.push(part);
-    }
-    positions.push({
-      ...item,
-      ...chosen.size,
-      x: Math.max(0, width - chosen.start - chosen.size.width),
-      y: chosen.top,
-      cropped: item.preserveContain ? false : item.cropped,
-    });
-    lastTop = chosen.top;
-    lastEnd = end;
-  }
-  return {
-    positions,
-    height: Math.max(0, ...positions.map((item) => item.y + item.height)),
   };
+  const candidates = (offset: number): Band[] => {
+    const found: Band[] = [],
+      first = photos[offset];
+    if (!first) return found;
+    if (first.auxiliary) {
+      const cardWidth = Math.min(width, s.textWidth);
+      let count = 0;
+      const maximum = Math.max(
+        1,
+        Math.floor((width + gap) / (cardWidth + gap)),
+      );
+      while (count < maximum && photos[offset + count]?.auxiliary) count += 1;
+      found.push({
+        consumed: count,
+        height: s.rowHeight,
+        score: 0.1 * count,
+        groups: Array.from({ length: count }, (_, index) => ({
+          top: offset + index,
+          bottom: null,
+          coefficient: 0,
+          intercept: cardWidth,
+          width: cardWidth,
+        })),
+      });
+      return found;
+    }
+    let remaining = 0;
+    while (photos[offset + remaining] && !photos[offset + remaining]!.auxiliary)
+      remaining += 1;
+    if (remaining === 1) return [fallback(offset)];
+    for (
+      let topCount = 1;
+      topCount <= Math.min(maximumTop, remaining);
+      topCount += 1
+    ) {
+      const eligible: number[] = [];
+      for (let index = 0; index < topCount; index += 1)
+        if (
+          photos[offset + index]?.landscape &&
+          eligible.length < s.mosaicPairCandidates
+        )
+          eligible.push(index);
+      subsets(
+        eligible,
+        Math.min(s.mosaicMaxPairs, remaining - topCount),
+        (pairedIndices) => {
+          const consumed = topCount + pairedIndices.length,
+            groups: Group[] = [];
+          let pairRank = 0;
+          let cropCost = 0;
+          for (let top = 0; top < topCount; top += 1) {
+            const entry = photos[offset + top];
+            if (!entry) return;
+            if (!pairedIndices.includes(top)) {
+              groups.push({
+                top: entry.index,
+                bottom: null,
+                coefficient: entry.ratio,
+                intercept: rail,
+                width: 0,
+              });
+              continue;
+            }
+            const second = photos[offset + topCount + pairRank];
+            pairRank += 1;
+            if (!second?.landscape) return;
+            const ratio = clamp(
+              Math.sqrt(entry.raw * second.raw),
+              s.minimumRatio,
+              s.maximumRatio,
+            );
+            const firstLoss =
+              entry.media.preserveContain || entry.ratio !== entry.raw
+                ? 0
+                : 1 - Math.min(entry.raw / ratio, ratio / entry.raw);
+            const secondLoss =
+              second.media.preserveContain || second.ratio !== second.raw
+                ? 0
+                : 1 - Math.min(second.raw / ratio, ratio / second.raw);
+            if (Math.max(firstLoss, secondLoss) > s.mosaicMaxPairCrop) return;
+            cropCost += 1.25 * (firstLoss ** 2 + secondLoss ** 2);
+            groups.push({
+              top: entry.index,
+              bottom: second.index,
+              coefficient: ratio / 2,
+              intercept: rail - (ratio * gap) / 2,
+              width: 0,
+            });
+          }
+          const coefficient = groups.reduce(
+            (sum, group) => sum + group.coefficient,
+            0,
+          );
+          const intercept = groups.reduce(
+            (sum, group) => sum + group.intercept,
+            0,
+          );
+          const justified =
+            (width - gap * (topCount - 1) - intercept) / coefficient;
+          if (!Number.isFinite(justified) || justified < s.mosaicMinBandHeight)
+            return;
+          const height = Math.min(s.mosaicMaxBandHeight, justified),
+            half = (height - gap) / 2;
+          if (half <= 0) return;
+          const areas: number[] = [];
+          let usedWidth = gap * (topCount - 1);
+          for (const group of groups) {
+            group.width = group.coefficient * height + group.intercept;
+            if (group.width <= rail || group.width > width) return;
+            usedWidth += group.width;
+            areas.push(group.width * (group.bottom === null ? height : half));
+            if (group.bottom !== null) areas.push(group.width * half);
+          }
+          const spread = Math.max(...areas) / Math.min(...areas);
+          const sizeCost = areas.reduce(
+            (sum, area) =>
+              sum +
+              Math.log(area / s.mosaicTargetArea) ** 2 *
+                (area > s.mosaicTargetArea * 1.4 ? 6 : 1),
+            0,
+          );
+          const spreadCost =
+            2 * Math.max(0, Math.log(spread / 1.8)) ** 2 * consumed;
+          const heightCost =
+            0.35 *
+            ((height - s.mosaicTargetHeight) / s.mosaicTargetHeight) ** 2 *
+            consumed;
+          const marginCost =
+            1.2 * (Math.max(0, width - usedWidth) / width) ** 2 * consumed;
+          found.push({
+            groups,
+            consumed,
+            height,
+            score:
+              sizeCost + spreadCost + heightCost + marginCost + cropCost + 0.3,
+          });
+        },
+      );
+    }
+    return found;
+  };
+  for (let offset = photos.length - 1; offset >= 0; offset -= 1) {
+    const choices = candidates(offset);
+    if (choices.length === 0) choices.push(fallback(offset));
+    for (const band of choices) {
+      const tail = plans[offset + band.consumed];
+      if (!tail) continue;
+      const score = band.score + tail.score,
+        best = plans[offset];
+      if (
+        !best ||
+        score < best.score ||
+        (Math.abs(score - best.score) < 0.000001 &&
+          band.consumed > (best.band?.consumed ?? 0))
+      )
+        plans[offset] = { score, band };
+    }
+  }
+  const positions: DesktopFeedPosition[] = [];
+  let offset = 0,
+    y = 0;
+  while (offset < photos.length) {
+    const band = plans[offset]?.band ?? fallback(offset);
+    let right = width;
+    const groups = band.groups.map((group) => {
+      const x = Math.max(0, right - group.width);
+      right = x - gap;
+      return { ...group, x };
+    });
+    const half = (band.height - gap) / 2;
+    for (let local = 0; local < band.consumed; local += 1) {
+      const index = offset + local,
+        entry = photos[index];
+      const group = groups.find(
+        (candidate) => candidate.top === index || candidate.bottom === index,
+      );
+      if (!entry || !group) return fallbackLayout(items, width);
+      const paired = group.bottom !== null,
+        height = paired ? half : band.height;
+      const mediaWidth =
+        entry.media.ratio === null ? 0 : Math.max(0, group.width - rail);
+      positions.push({
+        ...entry.media,
+        x: group.x,
+        y: y + (group.bottom === index ? half + gap : 0),
+        width: group.width,
+        height,
+        mediaWidth,
+        paired,
+        cropped: !paired && hasAuthorCrop(entry, height, mediaWidth),
+      });
+    }
+    y += band.height + gap;
+    offset += band.consumed;
+  }
+  return { positions, height: Math.max(0, y - gap) };
+};
+
+/** Defensive source-order fallback never drops records or manufactures a photo. */
+const fallbackLayout = (items: readonly DesktopFeedMedia[], width: number) => {
+  let y = 0;
+  const positions = Array.from(items, (input) => {
+    const media = safeMedia(input);
+    const size = desktopFeedIdealSize(media, width);
+    const position = {
+      ...media,
+      ...size,
+      x: Math.max(0, width - size.width),
+      y,
+      paired: false,
+    };
+    y += size.height + desktopLayout.feed.gap;
+    return position;
+  });
+  return { positions, height: Math.max(0, y - desktopLayout.feed.gap) };
 };

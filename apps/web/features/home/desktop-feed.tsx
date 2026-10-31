@@ -1,13 +1,14 @@
 "use client";
 
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { desktopLayout } from "@moya/design-tokens";
 import {
   desktopFeedIdealSize,
   desktopFeedMedia,
   layoutDesktopFeed,
 } from "./desktop-feed-layout";
 import styles from "./desktop-feed.module.css";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import type { DesktopFeedPosition } from "./desktop-feed-layout";
 
 interface ViewportAnchor {
@@ -315,7 +316,14 @@ export const DesktopFeed = <T,>({
       className={styles.feed}
       data-desktop-feed=""
       data-layout-ready={width > 0 ? "true" : "false"}
-      style={width > 0 ? { height } : undefined}
+      style={
+        width > 0
+          ? ({
+              height,
+              "--desktop-feed-rail-width": `${Math.min(desktopLayout.feed.labelWidth, width / 3)}px`,
+            } as CSSProperties)
+          : undefined
+      }
     >
       {visible.items.map((item, index) => {
         const media = desktopFeedMedia(item);

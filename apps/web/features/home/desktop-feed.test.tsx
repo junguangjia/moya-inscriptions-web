@@ -115,17 +115,27 @@ describe("desktop feed isolation and native openers", () => {
     expect(markup).toContain("第二帖");
     expect(markup.indexOf("第一帖")).toBeLessThan(markup.indexOf("第二帖"));
   });
-  it("uses the same whole-card area and natural media ratio before client measurement", () => {
+  it("prepares bounded complete-media defaults and explicit author intent before measurement", () => {
     const container = document.createElement("div");
+    const images = [
+      { ...cards[1]!, id: "preview" },
+      {
+        ...cards[1]!,
+        id: "contained",
+        title: "保留原图",
+        media: { width: 1600, height: 1000, feed: { fit: "contain" } },
+      },
+    ];
     container.innerHTML = renderToStaticMarkup(
       <DesktopFeed
-        items={[cards[1]!]}
+        items={images}
         getKey={(item) => item.id}
         renderItem={(item, _index, slot) => (
           <span
             data-card-width={slot.width}
             data-card-height={slot.height}
             data-image-width={slot.mediaWidth}
+            data-card-cropped={slot.cropped}
           >
             {item.title}
           </span>
@@ -137,15 +147,31 @@ describe("desktop feed isolation and native openers", () => {
         .querySelector("[data-desktop-feed]")
         ?.getAttribute("data-layout-ready"),
     ).toBe("false");
-    const size =
-      container.querySelector<HTMLElement>("[data-card-width]")!.dataset;
-    const width = Number(size.cardWidth);
-    const height = Number(size.cardHeight);
-    const mediaWidth = Number(size.imageWidth);
-    expect(width * height).toBeCloseTo(100000, 6);
-    expect(mediaWidth / height).toBeCloseTo(1.6, 8);
-    expect(width - mediaWidth).toBeCloseTo(72, 8);
-    expect(container.textContent).toBe("第二帖");
+    const sizes = [
+      ...container.querySelectorAll<HTMLElement>("[data-card-width]"),
+    ];
+    expect(sizes).toHaveLength(2);
+    for (const node of sizes) {
+      const width = Number(node.dataset.cardWidth);
+      const height = Number(node.dataset.cardHeight);
+      const mediaWidth = Number(node.dataset.imageWidth);
+      expect(width).toBeGreaterThan(96);
+      expect(width).toBeLessThanOrEqual(1000);
+      expect(height).toBeGreaterThan(0);
+      expect(height).toBeLessThanOrEqual(640);
+      expect(width - mediaWidth).toBeCloseTo(96, 8);
+      expect(mediaWidth / height).toBeCloseTo(1.6, 8);
+    }
+    // Both unframed and author-contained sources use the complete-image default.
+    // Explicit eligible authored cover is exercised by the native card suite.
+    expect(sizes.map((node) => node.dataset.cardCropped)).toEqual([
+      "false",
+      "false",
+    ]);
+    expect(sizes.map((node) => node.textContent)).toEqual([
+      "第二帖",
+      "保留原图",
+    ]);
   });
   it("preserves source DOM order, shows real text and opens the selected content", () => {
     const { target, open } = render();
@@ -355,7 +381,7 @@ const anchorFixture = ({
   };
 };
 describe("desktop feed viewport anchoring", () => {
-  it("appends pages while keeping prefix geometry, the visible content offset and every native DOM identity", () => {
+  it("regroups appended pages while keeping the visible content offset and every native DOM identity", () => {
     const view = anchorFixture();
     view.owner.scrollTop = Number.parseFloat(view.node("16").style.top) + 50;
     view.scroll();
@@ -370,21 +396,22 @@ describe("desktop feed viewport anchoring", () => {
     const offset = anchor.getBoundingClientRect().top;
     expect(offset).toBeLessThan(view.owner.clientHeight);
     expect(anchor.getBoundingClientRect().bottom).toBeGreaterThan(0);
-    const oldY = Number.parseFloat(anchor.style.top);
-    const oldStyles = oldNodes.map((node) => node.style.cssText);
+    const oldHeight = anchor.getBoundingClientRect().height;
     const focus = vi.spyOn(HTMLElement.prototype, "focus");
     view.draw(view.all);
-    // Sequential placement never inspects a later record to reposition an
-    // already displayed card, while the real reading position stays stable.
-    expect(Number.parseFloat(view.node(key).style.top)).toBe(oldY);
+    // The accepted mosaic can regroup coordinates; the actual reading anchor
+    // and native nodes remain owned by this same presentation boundary.
     const nextNodes = [
       ...view.target.querySelectorAll<HTMLElement>("[data-desktop-feed-item]"),
     ];
     oldNodes.forEach((node, index) => expect(nextNodes[index]).toBe(node));
-    expect(
-      nextNodes.slice(0, oldNodes.length).map((node) => node.style.cssText),
-    ).toEqual(oldStyles);
-    expect(view.node(key).getBoundingClientRect().top).toBeCloseTo(offset);
+    const after = view.node(key).getBoundingClientRect();
+    const readingOffset =
+      offset < 0 && after.height + offset <= 0
+        ? (offset * after.height) / oldHeight
+        : offset;
+    expect(after.top).toBeCloseTo(readingOffset);
+    expect(after.bottom).toBeGreaterThan(0);
     expect(focus).not.toHaveBeenCalled();
     expect(
       [...view.target.querySelectorAll("button")].map((n) => n.textContent),
@@ -419,7 +446,7 @@ describe("desktop feed viewport anchoring", () => {
     const view = anchorFixture({
       initialCount: 28,
       count: 40,
-      initialWidth: 1440,
+      initialWidth: 704,
       ratios: [0.4],
     });
     const initial = view.node("17").getBoundingClientRect();
@@ -430,7 +457,7 @@ describe("desktop feed viewport anchoring", () => {
     view.scroll();
     expect(view.node("17").getBoundingClientRect().bottom).toBeGreaterThan(0);
     const focus = vi.spyOn(HTMLElement.prototype, "focus");
-    view.resize(650);
+    view.resize(1143);
     expect(view.node("17").getBoundingClientRect().height).toBeLessThan(
       initial.height - 50,
     );
@@ -760,11 +787,8 @@ describe("desktop feed cold first layout bootstrap", () => {
     const host = view.target.querySelector<HTMLElement>("[data-desktop-feed]")!;
     expect(host.dataset.layoutReady).toBe("true");
     const measuredWidth = Number.parseFloat(view.node("0").style.width);
-    // Whole-card area A satisfies W * (W - 72) = A * imageRatio.
-    expect(measuredWidth).toBeCloseTo(
-      (72 + Math.sqrt(72 ** 2 + 4 * 0.4 * 100000)) / 2,
-      8,
-    );
+    expect(measuredWidth).toBeGreaterThan(96);
+    expect(measuredWidth).toBeLessThan(1440);
     // The ideal fallback can have this same shape. Its measured RTL position
     // must be prepared before visibility, rather than remaining at fallback x=0.
     expect(Number.parseFloat(view.node("0").style.left)).toBeCloseTo(
@@ -819,10 +843,8 @@ describe("desktop feed cold first layout bootstrap", () => {
     expect(host.dataset.layoutReady).toBe("true");
     const geometry = view.node("0").style.cssText;
     const measuredWidth = Number.parseFloat(view.node("0").style.width);
-    expect(measuredWidth).toBeCloseTo(
-      (72 + Math.sqrt(72 ** 2 + 4 * 0.5 * 100000)) / 2,
-      8,
-    );
+    expect(measuredWidth).toBeGreaterThan(96);
+    expect(measuredWidth).toBeLessThan(1440);
     expect(Number.parseFloat(view.node("0").style.left)).toBeCloseTo(
       1440 - measuredWidth,
       8,
