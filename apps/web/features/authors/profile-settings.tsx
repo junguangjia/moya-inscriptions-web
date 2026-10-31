@@ -22,8 +22,6 @@ import { useArticleAvailability } from "../editorial-content/article-authoring/a
 import { AccountSecurity } from "../auth/account-security";
 import type { AccountSecurityHandle } from "../auth/account-security";
 import { AccountSwitcher } from "./account-switcher";
-import { communityAccountsClient } from "./account-data";
-import type { CommunityAccountsView } from "./account-data";
 import {
   AccountDeletion,
   AccountDeletionEntry,
@@ -53,6 +51,7 @@ type Page =
   | "accounts"
   | "reports"
   | "feedback"
+  | "edit"
   | "deletion";
 const titles: Record<Page, string> = {
   root: "设置",
@@ -64,6 +63,7 @@ const titles: Record<Page, string> = {
   accounts: "切换账号",
   reports: "我的举报与申诉",
   feedback: "反馈与建议",
+  edit: "编辑信息",
   deletion: "注销账号",
 };
 const themeLabels = {
@@ -291,12 +291,20 @@ export const ProfileSettings = ({
   onSaved,
   onEdit,
   onDeparture,
+  accountRead,
 }: {
   profile: AuthorProfile | null;
   onClose: () => void;
   onSaved: () => void;
   onEdit?: (() => void) | undefined;
   onDeparture?: (() => void) | undefined;
+  accountRead?:
+    | {
+        readonly loading: boolean;
+        readonly error: string;
+        readonly onRetry: () => void;
+      }
+    | undefined;
 }) => {
   const articleAuthoring = useArticleAvailability();
   const author = useAuthors(),
@@ -355,15 +363,8 @@ export const ProfileSettings = ({
     securityBusyRef = useRef(false);
   const [accountsBusy, setAccountsBusy] = useState(false),
     accountsBusyRef = useRef(false);
-  // account-switching-v1: a signed-out browser still lists the accounts it
-  // holds; whether there are any decides if 切换账号 is offered.
+  // AccountSwitcher remains the single owner of its list, loading and retry.
   const viewerId = author.viewer?.id ?? null;
-  const guestConfirmed =
-    viewerId === null && !author.checking && !author.sessionError;
-  const [guestAccounts, setGuestAccounts] =
-    useState<CommunityAccountsView | null>(null);
-  const [guestProbed, setGuestProbed] = useState(false);
-  const guestProbe = useRef(false);
   const [factorTitle, setFactorTitle] = useState("");
   const [signedOut, setSignedOut] = useState(false);
   const [editRequested, setEditRequested] = useState(false),
@@ -484,32 +485,6 @@ export const ProfileSettings = ({
       blocksRun.current++;
     };
   }, []);
-  useEffect(() => {
-    if (viewerId !== null) {
-      guestProbe.current = false;
-      setGuestAccounts(null);
-      setGuestProbed(false);
-      return;
-    }
-    // Read once per signed-out view; a focus recheck does not read again.
-    if (!guestConfirmed || guestProbe.current) return;
-    guestProbe.current = true;
-    const controller = new AbortController();
-    let finished = false;
-    void communityAccountsClient
-      .list(controller.signal)
-      .then((result) => {
-        finished = true;
-        setGuestAccounts(result.state === "ready" ? result.view : null);
-        setGuestProbed(true);
-      })
-      .catch(() => undefined);
-    return () => {
-      if (finished) return;
-      guestProbe.current = false;
-      controller.abort();
-    };
-  }, [guestConfirmed, viewerId]);
   useEffect(() => {
     blocksRun.current++;
     mutationRun.current++;
@@ -788,6 +763,14 @@ export const ProfileSettings = ({
       if (valid()) setMutationBusy(false);
     }
   };
+  const requestEdit = () => {
+    if (!ownProfile || !onEdit) {
+      show("edit");
+      return;
+    }
+    if (dirty && !window.confirm("更改尚未保存，放弃这些更改？")) return;
+    setEditRequested(true);
+  };
   const row = (
     label: string,
     destination: keyof typeof pageIcons,
@@ -797,7 +780,7 @@ export const ProfileSettings = ({
       type="button"
       data-settings-focus-key={destination}
       className={styles.row}
-      disabled={blocked}
+      disabled={blocked || (destination !== "display" && accountPending)}
       onClick={() => show(destination)}
     >
       <span className={styles.rowIcon}>
@@ -819,7 +802,36 @@ export const ProfileSettings = ({
       <SettingsIcon className={styles.chevron} name="chevron-right" />
     </a>
   );
-  const guest = <div className={styles.rows}>{guestSignIn}</div>;
+  const accountPending = Boolean(accountRead?.loading || author.checking);
+  const accountError =
+    accountRead?.error ||
+    (author.sessionError ? "账户状态暂时无法确认，请重试。" : "");
+  const guest = (
+    <div className={styles.rows}>
+      {accountPending ? (
+        <p className={styles.status} role="status">
+          正在读取账户设置…
+        </p>
+      ) : accountError ? (
+        <div className={styles.rowText}>
+          <p className={styles.error} role="alert">
+            {accountError}
+          </p>
+          <button
+            type="button"
+            className={styles.action}
+            onClick={() =>
+              accountRead ? accountRead.onRetry() : void author.refresh()
+            }
+          >
+            重试
+          </button>
+        </div>
+      ) : (
+        guestSignIn
+      )}
+    </div>
+  );
   return (
     <AuthorDialog
       title={page === "factor" ? factorTitle : titles[page]}
@@ -858,6 +870,22 @@ export const ProfileSettings = ({
       >
         <div ref={scroller} className={styles.page}>
           <div ref={content} className={styles.content}>
+            {ownProfile && accountError && (
+              <div className={styles.group}>
+                <p className={styles.error} role="alert">
+                  {accountError}
+                </p>
+                <button
+                  type="button"
+                  className={styles.action}
+                  onClick={() =>
+                    accountRead ? accountRead.onRetry() : void author.refresh()
+                  }
+                >
+                  重试
+                </button>
+              </div>
+            )}
             {page === "root" && (
               <>
                 <section className={styles.group}>
@@ -870,63 +898,42 @@ export const ProfileSettings = ({
                     )}
                   </div>
                 </section>
-                {ownProfile ? (
-                  <>
-                    <section className={styles.group}>
-                      <h3>隐私</h3>
-                      <div className={styles.rows}>
-                        {row(
-                          "列表隐私",
-                          "privacy",
-                          privacyDirty ? "有未保存的更改" : undefined,
-                        )}
-                        {row("已屏蔽账户", "blocks")}
-                      </div>
-                    </section>
-                    <section className={styles.group}>
-                      <h3>账户</h3>
-                      <div className={styles.rows}>
-                        {row("账号与安全", "security", "手机号、邮箱换绑")}
-                        {row("切换账号", "accounts", "添加、切换或退出账户")}
-                        {row("我的举报与申诉", "reports")}
-                        {onEdit && (
-                          <button
-                            type="button"
-                            className={styles.row}
-                            disabled={blocked || editRequested}
-                            onClick={() => {
-                              if (
-                                dirty &&
-                                !window.confirm("更改尚未保存，放弃这些更改？")
-                              )
-                                return;
-                              setEditRequested(true);
-                            }}
-                          >
-                            <span className={styles.rowIcon}>
-                              <SettingsIcon name="user-round-pen" />
-                            </span>
-                            <span className={styles.rowText}>编辑信息</span>
-                            <SettingsIcon
-                              className={styles.chevron}
-                              name="chevron-right"
-                            />
-                          </button>
-                        )}
-                      </div>
-                    </section>
-                  </>
-                ) : (
-                  <section className={styles.group}>
-                    <h3>账户</h3>
-                    <div className={styles.rows}>
-                      {guestSignIn}
-                      {guestAccounts !== null &&
-                        guestAccounts.others.length > 0 &&
-                        row("切换账号", "accounts", "这台设备上已添加的账户")}
-                    </div>
-                  </section>
-                )}
+                <section className={styles.group}>
+                  <h3>隐私</h3>
+                  <div className={styles.rows}>
+                    {row(
+                      "列表隐私",
+                      "privacy",
+                      privacyDirty ? "有未保存的更改" : undefined,
+                    )}
+                    {row("已屏蔽账户", "blocks")}
+                  </div>
+                </section>
+                <section className={styles.group}>
+                  <h3>账户</h3>
+                  <div className={styles.rows}>
+                    {row("账号与安全", "security", "手机号、邮箱换绑")}
+                    {row("切换账号", "accounts", "添加、切换或退出账户")}
+                    {row("我的举报与申诉", "reports")}
+                    <button
+                      type="button"
+                      data-settings-focus-key="edit"
+                      className={styles.row}
+                      disabled={blocked || editRequested || accountPending}
+                      onClick={requestEdit}
+                    >
+                      <span className={styles.rowIcon}>
+                        <SettingsIcon name="user-round-pen" />
+                      </span>
+                      <span className={styles.rowText}>编辑信息</span>
+                      <SettingsIcon
+                        className={styles.chevron}
+                        name="chevron-right"
+                      />
+                    </button>
+                  </div>
+                </section>
+                {!ownProfile && guest}
                 <section className={styles.group}>
                   <h3>帮助与规则</h3>
                   <div className={styles.rows}>
@@ -993,29 +1000,39 @@ export const ProfileSettings = ({
                 <p className={styles.help}>立即生效，保存在当前浏览器。</p>
               </>
             )}
-            {page === "reports" && <MyReportingCases />}
-            {page === "accounts" &&
-              (viewerId === null && !guestProbed ? (
+            {page === "edit" &&
+              (ownProfile && onEdit ? (
+                <button
+                  type="button"
+                  className={`${styles.action} ${styles.primary}`}
+                  onClick={requestEdit}
+                >
+                  继续编辑资料
+                </button>
+              ) : ownProfile ? (
                 <p className={styles.status} role="status">
-                  正在读取账户…
+                  资料编辑暂时无法打开，请返回重试。
                 </p>
               ) : (
-                <AccountSwitcher
-                  viewerId={viewerId}
-                  initialView={viewerId === null ? guestAccounts : undefined}
-                  unsavedSettings={
-                    privacyDirty
-                      ? "列表隐私有未保存的更改"
-                      : feedback.dirty
-                        ? "反馈还没有提交"
-                        : null
-                  }
-                  onBusyChange={handleAccountsBusy}
-                  // Like a sign-out: close, then reload as the account that
-                  // is current now (or signed out).
-                  onSessionChange={() => setSignedOut(true)}
-                />
+                guest
               ))}
+            {page === "reports" && (ownProfile ? <MyReportingCases /> : guest)}
+            {page === "accounts" && (
+              <AccountSwitcher
+                viewerId={viewerId}
+                unsavedSettings={
+                  privacyDirty
+                    ? "列表隐私有未保存的更改"
+                    : feedback.dirty
+                      ? "反馈还没有提交"
+                      : null
+                }
+                onBusyChange={handleAccountsBusy}
+                // Like a sign-out: close, then reload as the account that
+                // is current now (or signed out).
+                onSessionChange={() => setSignedOut(true)}
+              />
+            )}
             {page === "privacy" &&
               (ownProfile ? (
                 <>
@@ -1157,16 +1174,16 @@ export const ProfileSettings = ({
                   {articleAuthoring && page === "security" ? (
                     <ArticleAgentConnections />
                   ) : null}
-                  {page === "security" && (
-                    <AccountDeletionEntry
-                      disabled={blocked}
-                      onOpen={() => show("deletion")}
-                    />
-                  )}
                 </>
               ) : (
                 guest
               ))}
+            {page === "security" && (
+              <AccountDeletionEntry
+                disabled={blocked || accountPending}
+                onOpen={() => show("deletion")}
+              />
+            )}
             {page === "deletion" &&
               (ownProfile ? (
                 <DeletionPage

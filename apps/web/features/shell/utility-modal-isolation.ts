@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useLayoutEffect, useRef } from "react";
+import { acquireDesktopViewportScrollLock } from "./desktop-viewport-scroll-lock";
 
 import type { RefObject } from "react";
 
@@ -31,6 +32,7 @@ let bodySnapshot: {
   readonly overflow: string;
   readonly scrollX: number;
   readonly scrollY: number;
+  readonly releaseViewport: () => void;
 } | null = null;
 let releaseFrame: number | null = null;
 let upperOverlayObserver: MutationObserver | null = null;
@@ -46,6 +48,7 @@ const restoreBody = () => {
   ) {
     window.scrollTo(snapshot.scrollX, snapshot.scrollY);
   }
+  snapshot.releaseViewport();
 };
 
 const scheduleBodyRelease = (shell: HTMLElement | null) => {
@@ -146,6 +149,7 @@ export const useUtilityModalIsolation = ({
         overflow: document.body.style.overflow,
         scrollX: window.scrollX,
         scrollY: window.scrollY,
+        releaseViewport: acquireDesktopViewportScrollLock(),
       };
     }
     activeModals.add(overlay);

@@ -44,27 +44,51 @@ export const FeedLayoutPreview = ({
             opacity=".5"
           />
           <g clipPath={`url(#${clipId})`}>
-            {platform === "pc" ? (
+            {platform === "pc" && value === "single" ? (
               <>
-                {/* Both desktop modes browse multiple records. Calligraphy
-                    keeps upright labels at each image's right edge. */}
+                {(
+                  [
+                    [156, 35, 44, 52],
+                    [90, 35, 44, 112],
+                    [24, 35, 44, 112],
+                    [156, 95, 44, 52],
+                  ] as const
+                ).map(([x, y, width, height]) => (
+                  <g key={`${x}:${y}`}>
+                    <rect
+                      x={x}
+                      y={y}
+                      width={width}
+                      height={height}
+                      rx="3"
+                      fill="currentColor"
+                      opacity=".2"
+                    />
+                    <path
+                      d={`M${x + width + 4} ${y + 1}v${height - 8}M${x + width + 8} ${y + 1}v${height - 18}`}
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      opacity=".4"
+                    />
+                  </g>
+                ))}
+              </>
+            ) : platform === "pc" ? (
+              <>
+                {/* Normal mode keeps its flexible columns and horizontal labels. */}
                 {[24, 90, 156].map((x, index) => (
                   <g key={x}>
                     <rect
                       x={x}
                       y="35"
-                      width={value === "single" ? 40 : 58}
+                      width="58"
                       height={index === 1 ? 60 : 44}
                       rx="3"
                       fill="currentColor"
                       opacity=".2"
                     />
                     <path
-                      d={
-                        value === "single"
-                          ? `M${x + 48} 36v35M${x + 54} 36v24`
-                          : `M${x} ${index === 1 ? 101 : 85}h36`
-                      }
+                      d={`M${x} ${index === 1 ? 101 : 85}h36`}
                       stroke="currentColor"
                       strokeWidth="2"
                       opacity=".4"
@@ -72,7 +96,7 @@ export const FeedLayoutPreview = ({
                     <rect
                       x={x}
                       y={index === 1 ? 112 : 100}
-                      width={value === "single" ? 40 : 58}
+                      width="58"
                       height="48"
                       rx="3"
                       fill="currentColor"

@@ -10,6 +10,7 @@ const {
   people,
   command,
   mutate,
+  refresh,
   setThemePreference,
   setFeedLayoutPreference,
   session,
@@ -32,11 +33,12 @@ const {
   people: vi.fn(),
   command: vi.fn(),
   mutate: vi.fn(),
+  refresh: vi.fn(),
   setThemePreference: vi.fn(),
   setFeedLayoutPreference: vi.fn(),
   session: { id: "user-00000000000000000000000000000001" },
   presentation: { platform: "phone" },
-  identity: { guest: false },
+  identity: { guest: false, checking: false, sessionError: false },
   accountsList: vi.fn(),
   switcherProps: [] as Record<string, unknown>[],
 }));
@@ -56,6 +58,9 @@ vi.mock("./author-context", () => ({
   useAuthors: () => ({
     signInHref: "/login",
     viewer: identity.guest ? null : session,
+    checking: identity.checking,
+    sessionError: identity.sessionError,
+    refresh,
     mutate,
   }),
 }));
@@ -127,6 +132,9 @@ beforeEach(() => {
   session.id = profile.id;
   presentation.platform = "phone";
   identity.guest = false;
+  identity.checking = false;
+  identity.sessionError = false;
+  refresh.mockReset().mockResolvedValue(undefined);
   switcherProps.length = 0;
   accountsList.mockResolvedValue({ state: "unavailable" });
   people.mockResolvedValue({ items: [], page: 1, pageSize: 20, total: 0 });
@@ -158,7 +166,10 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
-const render = async (owner: AuthorProfile | null = profile) => {
+const render = async (
+  owner: AuthorProfile | null = profile,
+  accountRead?: { loading: boolean; error: string; onRetry: () => void },
+) => {
   const node = document.createElement("div");
   document.body.append(node);
   root = createRoot(node);
@@ -172,6 +183,7 @@ const render = async (owner: AuthorProfile | null = profile) => {
         onClose={onClose}
         onSaved={onSaved}
         onEdit={onEdit}
+        accountRead={accountRead}
       />,
     ),
   );
@@ -217,6 +229,78 @@ const person = {
 };
 
 describe("grouped My settings", () => {
+  it("shows every ordinary setting category to a guest without reading private data", async () => {
+    identity.guest = true;
+    const { node } = await render(null);
+    for (const label of [
+      "外观",
+      "列表隐私",
+      "已屏蔽账户",
+      "账号与安全",
+      "切换账号",
+      "我的举报与申诉",
+      "编辑信息",
+      "反馈与建议",
+    ])
+      expect(button(node, label)).toBeDefined();
+    expect(node.querySelector('a[href="/policies"]')).not.toBeNull();
+    expect(node.querySelector('a[href="/policies/reporting"]')).not.toBeNull();
+    expect(people).not.toHaveBeenCalled();
+    expect(command).not.toHaveBeenCalled();
+    expect(authRequest).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "列表隐私",
+    "已屏蔽账户",
+    "账号与安全",
+    "我的举报与申诉",
+    "编辑信息",
+  ])(
+    "keeps guest %s accessible through the real sign-in entry without private commands",
+    async (label) => {
+      identity.guest = true;
+      const { node } = await render(null);
+      await click(node, label);
+      expect(node.querySelector('a[href="/login"]')).not.toBeNull();
+      expect(people).not.toHaveBeenCalled();
+      expect(command).not.toHaveBeenCalled();
+      expect(authRequest).not.toHaveBeenCalled();
+    },
+  );
+
+  it("shows a pending/error account read honestly and retries through its existing owner", async () => {
+    const retry = vi.fn();
+    const { node } = await render(null, {
+      loading: true,
+      error: "",
+      onRetry: retry,
+    });
+    expect(node.textContent).toContain("正在读取账户设置");
+    expect(button(node, "账号与安全").disabled).toBe(true);
+    expect(button(node, "外观").disabled).toBe(false);
+    await act(async () =>
+      root!.render(
+        <ProfileSettings
+          profile={null}
+          onClose={vi.fn()}
+          onSaved={vi.fn()}
+          accountRead={{
+            loading: false,
+            error: "合成读取失败",
+            onRetry: retry,
+          }}
+        />,
+      ),
+    );
+    expect(node.querySelector('[role="alert"]')?.textContent).toBe(
+      "合成读取失败",
+    );
+    expect(node.querySelector('a[href="/login"]')).toBeNull();
+    await click(node, "重试");
+    expect(retry).toHaveBeenCalledOnce();
+  });
+
   it("lets a guest choose display preferences without requesting private data", async () => {
     const { node } = await render(null);
     expect(node.querySelector("dialog")?.open).toBe(true);
@@ -848,6 +932,31 @@ describe("settings authentication return", () => {
     },
   );
 
+  it("continues the public guest edit intent with fresh owned data after authentication", async () => {
+    vi.spyOn(window.history, "back").mockImplementation(() => {});
+    vi.spyOn(window.history, "go").mockImplementation(() => {});
+    const view = await journey();
+    identity.guest = true;
+    await view.mount(null);
+    await click(view.node, "编辑信息");
+    expect(view.page()).toBe("edit");
+    expect(view.node.querySelector('a[href="/login"]')).not.toBeNull();
+    const entry = await view.leave();
+    await view.returnChecking(entry);
+    identity.guest = false;
+    await view.confirm();
+    expect(view.page()).toBe("edit");
+    expect(view.node.textContent).not.toContain("资料编辑暂时无法打开");
+    const sourceEntry: Record<string, unknown> = { ...window.history.state };
+    delete sourceEntry.phase4Dialog;
+    delete sourceEntry.phase4DialogDepth;
+    await click(view.node, "继续编辑资料");
+    await pop(sourceEntry);
+    expect(view.onEdit).toHaveBeenCalledOnce();
+    expect(view.onClose).not.toHaveBeenCalled();
+    expectReadOnlyReturn();
+  });
+
   it("retires the settings snapshot when an explicit edit exits the restored modal", async () => {
     vi.spyOn(window.history, "back").mockImplementation(() => {});
     const view = await journey();
@@ -1274,12 +1383,6 @@ describe("feedback in settings navigation", () => {
 });
 
 describe("切换账号 in settings (account-switching-v1)", () => {
-  const held = {
-    id: "user-00000000000000000000000000000002",
-    handle: "synthetic-held",
-    displayName: "已添加账户",
-    state: "ready",
-  };
   it("offers 切换账号 in the 账户 group and passes the shown account", async () => {
     const { node } = await render();
     expect(
@@ -1293,7 +1396,6 @@ describe("切换账号 in settings (account-switching-v1)", () => {
     expect(node.querySelector("[data-account-switcher-stub]")).not.toBeNull();
     expect(switcherProps.at(-1)).toMatchObject({
       viewerId: profile.id,
-      initialView: undefined,
       unsavedSettings: null,
     });
     // A signed-in owner's switcher reads the accounts itself, when opened.
@@ -1338,33 +1440,62 @@ describe("切换账号 in settings (account-switching-v1)", () => {
     expect(confirm).not.toHaveBeenCalled();
     expect(go).toHaveBeenCalledWith(-2);
   });
-  it("offers 切换账号 to a signed-out browser that still holds accounts", async () => {
+  it("always offers account switching to guests and lets the switcher own its read", async () => {
     identity.guest = true;
-    const view = { current: null, others: [held], limit: 3 };
-    accountsList.mockResolvedValue({ state: "ready", view });
     const { node } = await render(null);
-    expect(accountsList).toHaveBeenCalledOnce();
+    expect(accountsList).not.toHaveBeenCalled();
     expect(node.textContent).toContain("登录后管理账户设置");
     await click(node, "切换账号");
     expect(switcherProps.at(-1)).toMatchObject({
       viewerId: null,
-      initialView: view,
     });
-    // The read is reused, so its one-time 需重新登录 reports are not lost.
-    expect(accountsList).toHaveBeenCalledOnce();
+    expect(switcherProps.at(-1)?.initialView).toBeUndefined();
+    expect(accountsList).not.toHaveBeenCalled();
   });
   it.each([
     { state: "ready", view: { current: null, others: [], limit: 3 } },
     { state: "unavailable" },
   ])(
-    "leaves 切换账号 out for a signed-out browser without held accounts ($state)",
+    "keeps account switching discoverable before a guest account read ($state)",
     async (result) => {
       identity.guest = true;
       accountsList.mockResolvedValue(result);
       const { node } = await render(null);
-      expect(accountsList).toHaveBeenCalledOnce();
+      expect(accountsList).not.toHaveBeenCalled();
       expect(node.textContent).toContain("登录后管理账户设置");
-      expect(node.textContent).not.toContain("切换账号");
+      expect(node.textContent).toContain("切换账号");
     },
   );
+});
+
+describe("legacy local settings account retry", () => {
+  it("delegates an owned local session-error retry to the existing async refresh without claiming success", async () => {
+    identity.sessionError = true;
+    const pending = deferred<void>();
+    refresh.mockReturnValue(pending.promise);
+    const view = await render(profile);
+    expect(view.node.textContent).toContain("账户状态暂时无法确认，请重试。");
+    await click(view.node, "重试");
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(view.node.textContent).toContain("账户状态暂时无法确认，请重试。");
+    expect(command).not.toHaveBeenCalled();
+    expect(view.onSaved).not.toHaveBeenCalled();
+    // The provider owns errors/identity. A completed retry whose provider
+    // still reports failure must not manufacture a successful account read.
+    await act(async () => pending.resolve(undefined));
+    expect(view.node.textContent).toContain("账户状态暂时无法确认，请重试。");
+    expect(command).not.toHaveBeenCalled();
+  });
+  it("keeps the unified host retry authoritative when accountRead is provided", async () => {
+    const retry = vi.fn();
+    const view = await render(profile, {
+      loading: false,
+      error: "合成账户读取失败",
+      onRetry: retry,
+    });
+    await click(view.node, "重试");
+    expect(retry).toHaveBeenCalledOnce();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(command).not.toHaveBeenCalled();
+  });
 });

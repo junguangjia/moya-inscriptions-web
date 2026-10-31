@@ -602,6 +602,60 @@ const withHistoryMarkers = (state: unknown) => ({
 });
 
 describe("ProductShell", () => {
+  it.each(["detail", "topic", "profile", "editor"])(
+    "isolates background utilities when %s opens, with only the settings host outside",
+    async (overlay) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+      mountedRoots.push(root);
+      act(() =>
+        root.render(
+          <ProductShell
+            initialPlatform="pc"
+            home={<ProductShellObserver />}
+            discussion={<p>discussion</p>}
+            user={<p>user</p>}
+            articleEditorEnabled
+            renderEditorOverlay={() => <section role="dialog">editor</section>}
+            renderDetailOverlay={() => <section role="dialog">detail</section>}
+            renderTopicOverlay={() => <section role="dialog">topic</section>}
+            renderProfileOverlay={() => (
+              <section role="dialog">profile</section>
+            )}
+            primaryUtility={<button data-background-utility="">utility</button>}
+            settingsHost={<span data-unified-settings-host="" />}
+          />,
+        ),
+      );
+      await act(async () => vi.runAllTimers());
+      const utility = container.querySelector<HTMLButtonElement>(
+        "[data-background-utility]",
+      )!;
+      expect(utility.closest("[inert]")).toBeNull();
+      if (overlay === "topic") {
+        act(() => observedProductShell!.navigatePrimary("discussion"));
+        await act(async () => vi.runAllTimers());
+        expect(observedProductShell!.activeDestination).toBe("discussion");
+      }
+      act(() => {
+        const shell = observedProductShell!;
+        if (overlay === "detail") shell.openCatalog("catalog-one", utility);
+        else if (overlay === "topic") shell.openTopic("topic-one", utility, 0);
+        else if (overlay === "profile") shell.openProfile(null, utility);
+        else expect(shell.openEditor({ type: "new" }, utility)).toBe(true);
+      });
+      await act(async () => vi.runAllTimers());
+      expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+      expect(utility.closest("[inert]")).not.toBeNull();
+      const host = container.querySelector("[data-unified-settings-host]");
+      expect(host).not.toBeNull();
+      expect(
+        host!.closest('[inert], [hidden], [aria-hidden="true"]'),
+      ).toBeNull();
+    },
+  );
+
   it("hydrates a Macintosh iPad from the server seed before selecting its real tablet preferences", async () => {
     const element = (
       <ProductShell
@@ -3322,9 +3376,13 @@ describe("ProductShell", () => {
       },
     );
 
-    it.each([390, 800, 895, 896, 2560])(
-      "defaults a desktop to normal at width %s independently of the phone mode",
-      async (width) => {
+    it.each(
+      [390, 800, 895, 896, 2560].flatMap((width) =>
+        [null, "invalid"].map((stored) => ({ width, stored })),
+      ),
+    )(
+      "defaults a desktop with $stored at width $width to calligraphy independently of the phone mode",
+      async ({ width, stored }) => {
         vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
           "Desktop Browser",
         );
@@ -3334,19 +3392,29 @@ describe("ProductShell", () => {
         });
         window.localStorage.setItem(
           FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
-          "single",
+          "double",
         );
+        if (stored !== null)
+          window.localStorage.setItem(
+            DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
+            stored,
+          );
+        const before = { ...window.localStorage };
+        window.eval(PRODUCT_BOOT_SCRIPT);
+        expect(document.documentElement.dataset.homeLayout).toBe("single");
         renderProductShell(<ProductShellObserver />);
         await act(async () => vi.runAllTimers());
-        expect(observedProductShell?.feedLayout).toBe("double");
+        expect(observedProductShell?.feedLayout).toBe("single");
+        expect(observedProductShell?.desktop).toBe(width >= 896);
         expect(
           window.localStorage.getItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY),
-        ).toBe("single");
+        ).toBe("double");
         expect(
           window.localStorage.getItem(
             DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY,
           ),
-        ).toBeNull();
+        ).toBe(stored);
+        expect({ ...window.localStorage }).toEqual(before);
       },
     );
 
@@ -3381,14 +3449,76 @@ describe("ProductShell", () => {
       });
       renderProductShell(<ProductShellObserver />);
       await act(async () => vi.runAllTimers());
-      expect(observedProductShell?.feedLayout).toBe("double");
+      expect(observedProductShell?.feedLayout).toBe("single");
       act(() => {
-        observedProductShell!.setFeedLayoutPreference("single");
+        observedProductShell!.setFeedLayoutPreference("double");
         observedProductShell!.setThemePreference("dark");
       });
-      expect(observedProductShell?.feedLayout).toBe("single");
+      expect(observedProductShell?.feedLayout).toBe("double");
       expect(observedProductShell?.theme).toBe("dark");
     });
+  });
+
+  it("consumes the old display entry before the complete host owns its modal history", async () => {
+    const { container } = renderProductShell(<ProductShellObserver />);
+    await act(async () => vi.runAllTimers());
+    const opener = buttonByLabel(container, "从用户页打开设置");
+    click(opener);
+    await act(async () => vi.runAllTimers());
+    expect(observedProductShell?.settingsOpen).toBe(true);
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
+    const complete = vi.fn();
+    act(() => observedProductShell!.registerSettingsIntent(complete));
+    expect(back).toHaveBeenCalledOnce();
+    expect(complete).not.toHaveBeenCalled();
+    act(() => {
+      const state = primaryHistoryState("home");
+      window.history.replaceState(state, "", "/dev/t02p");
+      window.dispatchEvent(new PopStateEvent("popstate", { state }));
+    });
+    await act(async () => vi.runAllTimers());
+    expect(complete).toHaveBeenCalledExactlyOnceWith(opener);
+    expect(observedProductShell?.settingsOpen).toBe(false);
+    expect(dialog(container)).toBeNull();
+    expect(parseProductHistoryState(window.history.state)?.kind).toBe(
+      "primary",
+    );
+    expect(window.location.hash).toBe("");
+    expect(back).toHaveBeenCalledOnce();
+  });
+
+  it("records the desktop predecessor before a delegated settings modal owns history", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1440,
+    });
+    const { container } = renderProductShell(<ProductShellObserver />);
+    await act(async () => vi.runAllTimers());
+    expect(observedProductShell!.platform).toBe("pc");
+    const opener = buttonByLabel(container, "从用户页打开设置");
+    document.documentElement.scrollTop = 300;
+    const native = vi.fn(() => {
+      expect(parseProductHistoryState(window.history.state)).toMatchObject({
+        kind: "primary",
+        scrollTop: 300,
+      });
+      window.history.pushState(
+        { ...window.history.state, phase4Dialog: "synthetic-settings" },
+        "",
+        window.location.href,
+      );
+    });
+    act(() => observedProductShell!.registerSettingsIntent(native));
+    const entries = window.history.length;
+    try {
+      act(() => observedProductShell!.requestSettings(opener));
+      expect(native).toHaveBeenCalledExactlyOnceWith(opener);
+      expect(window.history.length).toBe(entries + 1);
+      expect(window.history.state.phase4Dialog).toBe("synthetic-settings");
+      expect(observedProductShell!.settingsOpen).toBe(false);
+    } finally {
+      document.documentElement.scrollTop = 0;
+    }
   });
 
   it("delegates settings to the current page and ignores disposal of an older intent", async () => {

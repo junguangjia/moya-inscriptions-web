@@ -20,6 +20,7 @@ import { Button, LoadingScreen } from "@moya/ui";
 
 import styles from "./product-shell.module.css";
 import { requestIdentity } from "../shell/request-identity";
+import { acquireDesktopViewportScrollLock } from "../shell/desktop-viewport-scroll-lock";
 
 import { PRODUCT_LOADING_MINIMUM_MS } from "./product-boot";
 import {
@@ -283,7 +284,10 @@ export interface ProductShellContextValue {
     topicId: string,
     opener: HTMLButtonElement,
   ) => void;
-  readonly requestSettings: (opener?: HTMLElement) => void;
+  readonly requestSettings: (
+    opener?: HTMLElement,
+    onOpen?: (opener: HTMLElement) => void,
+  ) => void;
   /** Register the active page's settings surface; disposing a stale intent is safe. */
   readonly registerSettingsIntent: (
     handler: (opener: HTMLElement) => void,
@@ -316,6 +320,8 @@ export interface ProductShellProps {
   readonly initialPlatform: PresentationPlatform;
   readonly discussion: ReactNode;
   readonly primaryUtility?: ReactNode;
+  /** The unified modal host must also work over an inert profile/detail. */
+  readonly settingsHost?: ReactNode;
   readonly navigationAction?: ReactNode;
   readonly renderProfileOverlay?: (
     properties: ProductShellProfileOverlayRenderProps,
@@ -421,6 +427,7 @@ export const ProductShell = ({
   initialPlatform,
   discussion,
   primaryUtility,
+  settingsHost,
   navigationAction,
   renderDetailOverlay,
   renderEditorOverlay,
@@ -437,6 +444,10 @@ export const ProductShell = ({
   const settingsIntentRef = useRef<((opener: HTMLElement) => void) | null>(
     null,
   );
+  const pendingSettingsIntentRef = useRef<{
+    handler: (opener: HTMLElement) => void;
+    opener: HTMLElement;
+  } | null>(null);
   const detailBackRef = useRef<HTMLButtonElement>(null);
   const topicBackRef = useRef<HTMLButtonElement>(null);
   const detailOpenerRef = useRef<HTMLElement | null>(null);
@@ -984,6 +995,18 @@ export const ProductShell = ({
   const setSettingsVisibility = useCallback((open: boolean) => {
     settingsOpenRef.current = open;
     setSettingsOpen(open);
+    if (!open && pendingSettingsIntentRef.current) {
+      const pending = pendingSettingsIntentRef.current;
+      pendingSettingsIntentRef.current = null;
+      queueMicrotask(() => {
+        if (
+          settingsIntentRef.current === pending.handler &&
+          rootRef.current?.isConnected &&
+          parseProductHistoryState(window.history.state)?.kind === "primary"
+        )
+          pending.handler(pending.opener);
+      });
+    }
   }, []);
 
   const setDetailVisibility = useCallback((target: ContentIdentity | null) => {
@@ -1023,6 +1046,37 @@ export const ProductShell = ({
     [],
   );
 
+  const saveCurrentEntry = useCallback(() => {
+    if (detailHistoryTimerRef.current !== null) {
+      window.clearTimeout(detailHistoryTimerRef.current);
+      detailHistoryTimerRef.current = null;
+    }
+    const current = parseProductHistoryState(window.history.state);
+    if (current?.kind === "detail" || current?.kind === "viewer")
+      window.history.replaceState(
+        currentProductHistoryState({
+          ...current,
+          detailScrollTop: detailScrollTopRef.current,
+        }),
+        "",
+      );
+    else if (current?.kind === "profile" && profileRef.current)
+      window.history.replaceState(
+        currentProductHistoryState(profileRef.current),
+        "",
+      );
+    else {
+      const destination = activeDestinationRef.current;
+      saveScroll(destination, platformRef.current);
+      window.history.replaceState(
+        currentProductHistoryState(
+          primaryHistoryState(destination, readActiveScrollTop()),
+        ),
+        "",
+        primaryLocation(window.location),
+      );
+    }
+  }, [readActiveScrollTop, saveScroll]);
   const openSettings = useCallback(
     (opener: HTMLElement) => {
       if (
@@ -1087,7 +1141,7 @@ export const ProductShell = ({
   }, [closeSettings, settingsOpen]);
 
   const requestSettings = useCallback(
-    (requestedOpener?: HTMLElement) => {
+    (requestedOpener?: HTMLElement, onOpen?: (opener: HTMLElement) => void) => {
       const opener =
         requestedOpener ??
         (document.activeElement instanceof HTMLElement
@@ -1098,26 +1152,44 @@ export const ProductShell = ({
         settingsOpenRef.current ||
         feedViewerRef.current !== null ||
         contentRef.current !== null ||
-        profileRef.current !== null ||
+        (profileRef.current !== null && onOpen === undefined) ||
         editorRef.current !== null ||
         topicIdRef.current !== null
       )
         return;
-      if (settingsIntentRef.current !== null) settingsIntentRef.current(opener);
-      else openSettings(opener);
+      const intent = onOpen ?? settingsIntentRef.current;
+      if (intent !== null) {
+        // The native modal owns its entry, so record its predecessor first.
+        saveCurrentEntry();
+        intent(opener);
+      } else openSettings(opener);
     },
-    [openSettings],
+    [openSettings, saveCurrentEntry],
   );
 
   const registerSettingsIntent = useCallback(
     (handler: (opener: HTMLElement) => void) => {
       settingsIntentRef.current = handler;
+      // Consume the legacy root entry before AuthorDialog creates its own.
+      // Replacing it with another primary entry would duplicate the source
+      // page and lose its recorded scroll position on the following Back.
+      if (settingsOpenRef.current && rootRef.current) {
+        const alreadyPending = pendingSettingsIntentRef.current !== null;
+        pendingSettingsIntentRef.current = {
+          handler,
+          opener:
+            pendingSettingsIntentRef.current?.opener ??
+            settingsOpenerRef.current ??
+            rootRef.current,
+        };
+        if (!alreadyPending) closeSettings();
+      }
       return () => {
         if (settingsIntentRef.current === handler)
           settingsIntentRef.current = null;
       };
     },
-    [],
+    [closeSettings],
   );
 
   const openTopic = useCallback(
@@ -1226,37 +1298,6 @@ export const ProductShell = ({
     },
     [],
   );
-  const saveCurrentEntry = useCallback(() => {
-    if (detailHistoryTimerRef.current !== null) {
-      window.clearTimeout(detailHistoryTimerRef.current);
-      detailHistoryTimerRef.current = null;
-    }
-    const current = parseProductHistoryState(window.history.state);
-    if (current?.kind === "detail" || current?.kind === "viewer")
-      window.history.replaceState(
-        currentProductHistoryState({
-          ...current,
-          detailScrollTop: detailScrollTopRef.current,
-        }),
-        "",
-      );
-    else if (current?.kind === "profile" && profileRef.current)
-      window.history.replaceState(
-        currentProductHistoryState(profileRef.current),
-        "",
-      );
-    else {
-      const destination = activeDestinationRef.current;
-      saveScroll(destination, platformRef.current);
-      window.history.replaceState(
-        currentProductHistoryState(
-          primaryHistoryState(destination, readActiveScrollTop()),
-        ),
-        "",
-        primaryLocation(window.location),
-      );
-    }
-  }, [readActiveScrollTop, saveScroll]);
   const authReturnView = useAuthReturnView("shell", () => {
     const stored = parseProductHistoryState(window.history.state);
     const history =
@@ -2860,9 +2901,11 @@ export const ProductShell = ({
     else if (editorOpen) editorBackRef.current?.focus();
     else topicBackRef.current?.focus();
     const previousOverflow = document.body.style.overflow;
+    const releaseViewport = acquireDesktopViewportScrollLock();
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = previousOverflow;
+      releaseViewport();
     };
   }, [
     activeContent,
@@ -3044,6 +3087,7 @@ export const ProductShell = ({
             />
             {primaryUtility}
           </div>
+          {settingsHost}
 
           {authReturnNotice !== null ? (
             <div

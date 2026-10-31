@@ -113,6 +113,7 @@ export interface T02pProductPreviewProps {
   readonly onHomeFeedChange?: (feed: HomeFeed) => void;
   readonly initialTopicId?: string | null;
   readonly productUtility?: ReactNode;
+  readonly settingsHost?: ReactNode;
   readonly navigationAction?: ReactNode;
   readonly quickActions?: ContentQuickActionEnvironment;
   readonly renderCommentSection?: (catalogId: string) => ReactNode;
@@ -145,6 +146,7 @@ export const T02pProductPreview = ({
   onHomeFeedChange,
   initialTopicId = null,
   productUtility,
+  settingsHost,
   navigationAction,
   quickActions,
   renderCommentSection,
@@ -200,6 +202,7 @@ export const T02pProductPreview = ({
         initialPlatform={initialPlatform}
         {...(browseOnlyPolicy ? { browseOnlyPolicy } : {})}
         primaryUtility={productUtility}
+        settingsHost={settingsHost}
         navigationAction={navigationAction}
         {...(renderProfileOverlay ? { renderProfileOverlay } : {})}
         articleEditorEnabled={articleEditorEnabled}

@@ -150,7 +150,7 @@ describe("Product Shell pre-hydration boot", () => {
     expect(() => window.eval(PRODUCT_BOOT_SCRIPT)).not.toThrow();
     expect(document.documentElement.dataset.themePreference).toBe("light");
     expect(document.documentElement.dataset.theme).toBe("light");
-    expect(document.documentElement.dataset.homeLayout).toBe("double");
+    expect(document.documentElement.dataset.homeLayout).toBe("single");
   });
 
   it("retains an explicit theme when the layout read fails", () => {
@@ -164,7 +164,7 @@ describe("Product Shell pre-hydration boot", () => {
 
     expect(document.documentElement.dataset.themePreference).toBe("dark");
     expect(document.documentElement.dataset.theme).toBe("dark");
-    expect(document.documentElement.dataset.homeLayout).toBe("double");
+    expect(document.documentElement.dataset.homeLayout).toBe("single");
   });
 
   it("falls back safely for invalid stored values", () => {
@@ -176,16 +176,17 @@ describe("Product Shell pre-hydration boot", () => {
 
     expect(document.documentElement.dataset.themePreference).toBe("light");
     expect(document.documentElement.dataset.theme).toBe("light");
-    expect(document.documentElement.dataset.homeLayout).toBe("double");
+    expect(document.documentElement.dataset.homeLayout).toBe("single");
   });
 
   it.each([
     ["no choice on a phone", null, "phone", "single"],
-    ["no choice on a desktop", null, "desktop", "double"],
+    ["no choice on a desktop", null, "desktop", "single"],
     ["no choice on a tablet", null, "tablet", "single"],
     ["an explicit double on a tablet", "double", "tablet", "double"],
     ["an explicit double on a phone", "double", "phone", "double"],
     ["an explicit single on a desktop", "single", "desktop", "single"],
+    ["an explicit double on a desktop", "double", "desktop", "double"],
   ] as const)(
     "lays out the home feed for %s",
     (_label, stored, device, expected) => {
@@ -242,21 +243,21 @@ describe("Product Shell pre-hydration boot", () => {
     },
   );
 
-  it("does not import an existing phone preference into the normal desktop default", () => {
+  it("does not import an existing phone preference into the calligraphy desktop default", () => {
     vi.useFakeTimers();
-    window.localStorage.setItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY, "single");
+    window.localStorage.setItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY, "double");
     window.eval(PRODUCT_BOOT_SCRIPT);
-    expect(document.documentElement.dataset.homeLayout).toBe("double");
+    expect(document.documentElement.dataset.homeLayout).toBe("single");
     expect(
       window.localStorage.getItem(DESKTOP_FEED_LAYOUT_PREFERENCE_STORAGE_KEY),
     ).toBeNull();
     expect(
       window.localStorage.getItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY),
-    ).toBe("single");
+    ).toBe("double");
   });
 
   it.each([390, 800, 895, 896, 2560])(
-    "keeps the missing and invalid desktop defaults normal at width %s before paint",
+    "keeps missing and invalid desktop defaults calligraphic at width %s before paint",
     (width) => {
       vi.useFakeTimers();
       vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
@@ -266,7 +267,7 @@ describe("Product Shell pre-hydration boot", () => {
         configurable: true,
         value: width,
       });
-      window.localStorage.setItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY, "single");
+      window.localStorage.setItem(FEED_LAYOUT_PREFERENCE_STORAGE_KEY, "double");
       for (const stored of [null, "invalid"]) {
         if (stored === null)
           window.localStorage.removeItem(
@@ -279,19 +280,19 @@ describe("Product Shell pre-hydration boot", () => {
           );
         const before = { ...window.localStorage };
         window.eval(PRODUCT_BOOT_SCRIPT);
-        expect(document.documentElement.dataset.homeLayout).toBe("double");
+        expect(document.documentElement.dataset.homeLayout).toBe("single");
         expect({ ...window.localStorage }).toEqual(before);
       }
     },
   );
 
-  it("keeps a desktop normal when browser storage is blocked", () => {
+  it("keeps desktop calligraphy when browser storage is blocked", () => {
     vi.useFakeTimers();
     vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Desktop Browser");
     vi.spyOn(window, "localStorage", "get").mockImplementation(() => {
       throw new DOMException("blocked", "SecurityError");
     });
     window.eval(PRODUCT_BOOT_SCRIPT);
-    expect(document.documentElement.dataset.homeLayout).toBe("double");
+    expect(document.documentElement.dataset.homeLayout).toBe("single");
   });
 });

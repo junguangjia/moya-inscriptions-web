@@ -12,7 +12,7 @@ test.beforeEach(async ({}, info) => {
   );
 });
 
-test("desktop gallery adapts CSS viewports without changing source order or image geometry", async ({
+test("desktop full-image mosaic adapts CSS viewports while preserving source order and original access", async ({
   page,
 }, info) => {
   await page.addInitScript(() =>
@@ -48,10 +48,18 @@ test("desktop gallery adapts CSS viewports without changing source order or imag
       );
       const view = { w: innerWidth, h: innerHeight };
       return {
+        availableWidth: node.getBoundingClientRect().width,
+        feedX: node.getBoundingClientRect().x,
         overflow: document.documentElement.scrollWidth > view.w + 1,
         bounds: cards.map((c) => {
           const r = c.getBoundingClientRect();
-          return { x: r.x, y: r.y, w: r.width, h: r.height };
+          return {
+            x: r.x,
+            y: r.y,
+            w: r.width,
+            h: r.height,
+            logicalY: Number.parseFloat(c.style.top),
+          };
         }),
         visible: cards.filter((c) => {
           const r = c.getBoundingClientRect();
@@ -65,15 +73,30 @@ test("desktop gallery adapts CSS viewports without changing source order or imag
       const b = geometry.bounds[i]!;
       expect(b.x).toBeGreaterThanOrEqual(-1);
       expect(b.x + b.w).toBeLessThanOrEqual(width! + 1);
-      expect(b.h).toBeLessThanOrEqual(721);
-      const a = geometry.bounds[i - 1];
-      if (a && Math.abs(a.y - b.y) < 1)
-        expect(Math.abs(a.x - b.x - b.w - 12)).toBeLessThan(1);
+      expect(b.w).toBeGreaterThan(0);
+      expect(b.h).toBeGreaterThan(0);
+      expect(b.h).toBeLessThanOrEqual(641);
+      if (i > 0) {
+        const previous = geometry.bounds[i - 1]!;
+        expect(b.y).toBeGreaterThanOrEqual(previous.y - 0.1);
+        if (b.logicalY === previous.logicalY)
+          expect(b.x + b.w + 15).toBeLessThanOrEqual(previous.x);
+      }
+      for (const other of geometry.bounds.slice(0, i))
+        expect(
+          b.x + b.w + 15 <= other.x ||
+            other.x + other.w + 15 <= b.x ||
+            b.y + b.h + 15 <= other.y ||
+            other.y + other.h + 15 <= b.y,
+        ).toBe(true);
     }
+    await expect(
+      feed.getByRole("img", { name: "局部预览 · 打开查看全图", exact: true }),
+    ).toHaveCount(0);
     counts.push(geometry.visible);
     await expect(feed.locator('[role="listitem"]').first()).toHaveCSS(
       "border-radius",
-      "12px",
+      "18px",
     );
     await page.screenshot({
       path: info.outputPath(`desktop-${width}.png`),
@@ -89,11 +112,11 @@ test("desktop settings persist independently across compact reflow", async ({
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.addInitScript(() =>
-    localStorage.setItem("yoyi.home-feed-layout.v2", "double"),
+    localStorage.setItem("yoyi.home-feed-layout.v2", "single"),
   );
   await page.goto("/dev/t02p");
   const shell = page.locator("[data-product-shell]");
-  await expect(shell).toHaveAttribute("data-feed-layout", "double");
+  await expect(shell).toHaveAttribute("data-feed-layout", "single");
   expect(
     await page.evaluate(() =>
       localStorage.getItem("yoyi.desktop-feed-layout.v1"),
@@ -104,29 +127,29 @@ test("desktop settings persist independently across compact reflow", async ({
   await page.locator("[data-feed-layout-toggle]").click();
   await expect(page.locator("[data-feed-layout-toggle]")).toHaveAttribute(
     "data-feed-layout-mode",
-    "single",
+    "double",
   );
   expect(
     await page.evaluate(() => [
       localStorage.getItem("yoyi.desktop-feed-layout.v1"),
       localStorage.getItem("yoyi.home-feed-layout.v2"),
     ]),
-  ).toEqual(["single", "double"]);
+  ).toEqual(["double", "single"]);
   await page.keyboard.press("Escape");
   await page.setViewportSize({ width: 800, height: 720 });
   await expect(shell).toHaveAttribute("data-desktop", "false");
-  await expect(shell).toHaveAttribute("data-feed-layout", "single");
+  await expect(shell).toHaveAttribute("data-feed-layout", "double");
   await page.setViewportSize({ width: 2560, height: 1440 });
   await page.reload();
   await expect(shell).toHaveAttribute("data-desktop", "true");
-  await expect(shell).toHaveAttribute("data-feed-layout", "single");
+  await expect(shell).toHaveAttribute("data-feed-layout", "double");
   expect(
     await page.evaluate(() => [
       localStorage.getItem("yoyi.desktop-feed-layout.v1"),
       localStorage.getItem("yoyi.home-feed-layout.v2"),
     ]),
-  ).toEqual(["single", "double"]);
-  await expect(page.locator("[data-desktop-feed]").first()).toBeVisible();
+  ).toEqual(["double", "single"]);
+  await expect(page.locator("[data-desktop-feed]")).toHaveCount(0);
 });
 
 test("catalog detail separates the upper and lower reader and restores the gallery opener", async ({
@@ -266,14 +289,16 @@ test("formal anonymous desktop keeps navigation, publishing and settings availab
   await expect(shell).toHaveAttribute("data-browse-only", "false");
   await expect(page.locator("[data-desktop-navigation]")).toBeVisible();
   await expect(page.locator("[data-create-work-action]")).toBeVisible();
-  await expect(shell).toHaveAttribute("data-feed-layout", "double");
+  await expect(shell).toHaveAttribute("data-feed-layout", "single");
   const gear = page.locator("[data-desktop-settings]");
   await gear.click();
-  await page.locator("[data-feed-layout-toggle]").click();
-  await expect(page.locator("[data-feed-layout-toggle]")).toHaveAttribute(
-    "data-feed-layout-mode",
-    "single",
-  );
+  await page
+    .getByRole("dialog", { name: "设置", exact: true })
+    .getByRole("button", { name: /^外观/ })
+    .click();
+  await page.getByRole("radio", { name: "正常模式", exact: true }).click();
+  await expect(shell).toHaveAttribute("data-feed-layout", "double");
+  await page.keyboard.press("Escape");
   await page.keyboard.press("Escape");
   await expect(gear).toBeFocused();
   await expect(shell).toHaveAttribute("data-browse-only", "false");

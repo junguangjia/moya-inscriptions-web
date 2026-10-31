@@ -83,6 +83,39 @@ test("secondary rail respects reduced motion and vertical keyboard selection", a
   await expect(next.locator("[data-tab-label-slot]")).toHaveCSS("opacity", "1");
 });
 
+test("detail isolates background utility triggers and restores them on return", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(
+    `${qa}&feed=inscriptions&catalogId=qa-visual-inscription-01#detail`,
+  );
+  const detail = page.getByRole("dialog", { name: "资料详情", exact: true });
+  await expect(detail).toBeVisible();
+  const utilities = page.locator("[data-user-trigger], [data-filter-trigger]");
+  await expect(utilities).toHaveCount(2);
+  for (const trigger of await utilities.all()) {
+    expect(
+      await trigger.evaluate((node) => node.closest("[inert]") !== null),
+    ).toBe(true);
+    await trigger.focus();
+    await expect(trigger).not.toBeFocused();
+  }
+  for (let index = 0; index < 8; index += 1) {
+    await page.keyboard.press("Tab");
+    expect(
+      await utilities.evaluateAll((nodes) =>
+        nodes.some((node) => node === document.activeElement),
+      ),
+    ).toBe(false);
+  }
+  await detail.getByRole("button", { name: "返回", exact: true }).click();
+  await expect(detail).toHaveCount(0);
+  const filter = page.locator("[data-filter-trigger]");
+  await filter.focus();
+  await expect(filter).toBeFocused();
+});
+
 test("long and short menu destinations keep one desktop frame and stable gallery geometry", async ({
   page,
 }, info) => {
@@ -196,6 +229,12 @@ test("desktop document gutter preserves settings and search background scroll lo
       .locator('[data-home-feed-panel="discover"] [data-desktop-feed]')
       .first(),
   ).toHaveAttribute("data-layout-ready", "true");
+  // This programmatic fixture scroll must follow the initial history restore.
+  // Native user scroll input already cancels that bounded restore.
+  await expect(page.locator("[data-product-shell]")).not.toHaveAttribute(
+    "data-scroll-restoring",
+    "",
+  );
   await page.evaluate(() => window.scrollTo(0, 150));
   await expect
     .poll(() => page.evaluate(() => window.scrollY))

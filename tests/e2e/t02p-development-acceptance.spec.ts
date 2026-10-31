@@ -2438,11 +2438,17 @@ test("Catalog scenario selector maps every state without changing destination", 
 test("Feed layout remains bounded to phone/tablet while PC stays responsive", async ({
   page,
 }, testInfo) => {
+  const platform = expectedInitialAutoPlatform(testInfo.project.name);
+  // This legacy matrix preserves normal PC columns; fresh desktop defaults
+  // are covered separately by desktop-normal-default.spec.ts.
+  if (platform === "pc")
+    await page.addInitScript(() =>
+      localStorage.setItem("yoyi.desktop-feed-layout.v1", "double"),
+    );
   const { surface } = await openDevelopmentSurface(page);
   const masonry = activeHomeMasonry(surface);
-  const platform = expectedInitialAutoPlatform(testInfo.project.name);
   await expect(masonry).toHaveAttribute("data-layout-ready", "true");
-  // Phone and tablet open in calligraphy mode; PC keeps automatic columns.
+  // Phone/tablet use their default; the explicit normal PC keeps automatic columns.
   await expect(productShell(surface)).toHaveAttribute(
     "data-feed-layout",
     platform === "pc" ? "double" : "single",

@@ -2,7 +2,7 @@
 
 import { FeedColophon } from "../authors/feed-colophon";
 
-import { useMemo } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import { LiveCommentSection } from "../comments/live-comment-section";
 import { AuthorProvider, useAuthors } from "../authors/author-context";
@@ -34,6 +34,8 @@ import { DirectMessageEntryProvider } from "../messages";
 import { useProductShell } from "../product-shell/product-shell";
 import { CatalogSearchHeaderAction } from "../search/catalog-search";
 import { resolveBrowseOnlySession } from "../shell/browse-only";
+import { useAuthReturn, useAuthReturnView } from "../auth/auth-return";
+import { ProductSettingsHost } from "../settings/product-settings-host";
 
 import type { CommunityCommentSurface } from "./community-comment-surface";
 import type { ContentIdentity } from "@moya/contracts";
@@ -153,6 +155,30 @@ const AuthorProduct = ({
   wideScreenBrowseOnly: WideScreenBrowseOnlyHint | undefined;
 }) => {
   const author = useAuthors();
+  const authReturn = useAuthReturn();
+  const settingsCapture = useRef({ open: false });
+  const restoredSettings = useAuthReturnView<{ open: boolean }>(
+    "product-settings-open",
+    () => settingsCapture.current,
+  );
+  const [settingsOpen, setSettingsOpen] = useState(
+    restoredSettings?.open === true,
+  );
+  settingsCapture.current = { open: settingsOpen };
+  const [settingsOpener, setSettingsOpener] = useState<HTMLElement | null>(
+    null,
+  );
+  const openSettings = useCallback((opener?: HTMLElement) => {
+    setSettingsOpener(opener ?? null);
+    setSettingsOpen(true);
+  }, []);
+  const departSettings = useCallback(() => {
+    authReturn?.consumeView("product-settings-open", restoredSettings);
+  }, [authReturn, restoredSettings]);
+  const closeSettings = useCallback(() => {
+    departSettings();
+    setSettingsOpen(false);
+  }, [departSettings]);
   const session =
     wideScreenBrowseOnly === undefined
       ? undefined
@@ -205,7 +231,10 @@ const AuthorProduct = ({
                   )
                 }
                 renderProfileOverlay={(properties) => (
-                  <AuthorProfileOverlay {...properties} />
+                  <AuthorProfileOverlay
+                    {...properties}
+                    onOpenSettings={openSettings}
+                  />
                 )}
                 workDetailLoader={loadWorkDetail}
                 workDetailPeek={peekWorkDetail}
@@ -233,7 +262,16 @@ const AuthorProduct = ({
                 renderInscriptions={(active) => (
                   <FilteredInscriptions active={active} />
                 )}
-                userPage={<UserPage />}
+                settingsHost={
+                  <ProductSettingsHost
+                    open={settingsOpen}
+                    onOpen={openSettings}
+                    onClose={closeSettings}
+                    initialOpener={settingsOpener}
+                    onDeparture={departSettings}
+                  />
+                }
+                userPage={<UserPage onOpenSettings={openSettings} />}
                 headerStart={<CatalogSearchHeaderAction />}
                 headerEnd={
                   <MessageTrigger
@@ -251,12 +289,17 @@ const AuthorProduct = ({
   );
 };
 
-const UserPage = () => {
+const UserPage = ({
+  onOpenSettings,
+}: {
+  onOpenSettings: (opener?: HTMLElement) => void;
+}) => {
   const shell = useProductShell();
   return (
     <AuthorProfilePage
       onBack={() => shell.navigatePrimary("home")}
       headerStart={<CatalogSearchHeaderAction />}
+      onOpenSettings={onOpenSettings}
     />
   );
 };
