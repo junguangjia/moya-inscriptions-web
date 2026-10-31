@@ -57,7 +57,7 @@ for (const width of [3440, 5120]) {
         await node.evaluate(
           (element) =>
             element.isConnected &&
-            element.closest("[data-desktop-feed]") !== null,
+            (element as Element).closest("[data-desktop-feed]") !== null,
         ),
       ).toBe(true);
       await node.dispose();
