@@ -101,6 +101,15 @@ export const catalogBlockCell = (
   };
 };
 
+/**
+ * SQL: the cells of the frame of the master row alias, as `catalogBlockGrid`
+ * counts them. A master with fewer ready blocks on committed blobs has a set
+ * not yet cut; the storage bounds count the projected bytes of every active
+ * master whose set is not cut (catalog-deep-zoom-self-master-v1).
+ */
+export const catalogBlockSetCellsSql = (master: string): string =>
+  `ceil(${master}.frame_width / ${CATALOG_ZOOM_BLOCK_EDGE}.0) * ceil(${master}.frame_height / ${CATALOG_ZOOM_BLOCK_EDGE}.0)`;
+
 /** `block-NN` of a cell index (00..99). */
 export const catalogBlockRole = (cell: number): string => {
   if (

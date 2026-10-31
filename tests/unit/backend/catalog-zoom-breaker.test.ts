@@ -1,5 +1,6 @@
 import {
   CATALOG_ZOOM_USAGE_CACHE_MS,
+  CATALOG_ZOOM_USAGE_LIMITS,
   catalogZoomBreakerTripped,
   catalogZoomUsageAt,
   createCatalogZoomGate,
@@ -16,7 +17,8 @@ import type { CatalogZoomDayUsage } from "@moya/backend-production/internal/medi
  * catalog-deep-zoom-v1 (Issue #295), criteria 13 and 21: the Backend's
  * deep-zoom gate. With edge delivery the breaker fails closed (no row for
  * today, or an observation older than an hour, hides blocks) and trips at
- * 150,000 requests or 5 GB; without edge delivery (Development's relay) only
+ * 150,000 requests or 0.4 GB (catalog-deep-zoom-self-master-v1; it was 5 GB,
+ * and the warning 0.25 GB, was 3 GB); without edge delivery (Development's relay) only
  * a row for today that reaches a trip threshold trips it. The usage row is
  * read at most once a minute; the switch accepts only on or off.
  */
@@ -60,10 +62,12 @@ describe("the deep-zoom breaker", () => {
       ),
     ).toBe(false);
     for (const [requests, bytes, tripped] of [
-      [149_999, 4_999_999_999, false],
+      [149_999, 399_999_999, false],
       [150_000, 0, true],
-      [0, 5_000_000_000, true],
-      [100_000, 3_000_000_000, false],
+      [0, 400_000_000, true],
+      [100_000, 250_000_000, false],
+      // The old 5 GB trip point is far past the new one.
+      [0, 4_999_999_999, true],
     ] as const)
       expect(
         catalogZoomBreakerTripped(row({ requests, bytes }), NOW, true),
@@ -107,16 +111,30 @@ describe("the deep-zoom breaker", () => {
     ).toBe(false);
   });
 
-  it("warns at 100,000 requests or 3 GB", () => {
+  it("warns at 100,000 requests or 0.25 GB", () => {
     expect(
-      catalogZoomUsageAt({ requests: 99_999, bytes: 2_999_999_999 }, "warning"),
+      catalogZoomUsageAt({ requests: 99_999, bytes: 249_999_999 }, "warning"),
     ).toBe(false);
     expect(catalogZoomUsageAt({ requests: 100_000, bytes: 0 }, "warning")).toBe(
       true,
     );
     expect(
-      catalogZoomUsageAt({ requests: 0, bytes: 3_000_000_000 }, "warning"),
+      catalogZoomUsageAt({ requests: 0, bytes: 250_000_000 }, "warning"),
     ).toBe(true);
+    // Between the two lines: a warning, no trip.
+    expect(
+      catalogZoomUsageAt({ requests: 0, bytes: 399_999_999 }, "trip"),
+    ).toBe(false);
+  });
+
+  it("records the thresholds: requests unchanged, bytes 0.25 GB and 0.4 GB (pending the Owner's confirmation)", () => {
+    expect(CATALOG_ZOOM_USAGE_LIMITS).toEqual({
+      warningRequests: 100_000,
+      warningBytes: 250_000_000,
+      tripRequests: 150_000,
+      tripBytes: 400_000_000,
+      staleMs: 60 * 60 * 1_000,
+    });
   });
 });
 

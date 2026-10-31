@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   realpath,
   rm,
   writeFile,
@@ -20,6 +21,7 @@ import {
   parseCatalogMasterArguments,
   runCatalogMasterCommand,
 } from "@moya/backend-production/internal/catalog-master";
+import { LocalCatalogSourceReader } from "@moya/backend-production/internal/catalog-source";
 import {
   createCatalogBlockRenderer,
   catalogSyncIdentities,
@@ -46,6 +48,8 @@ import {
 } from "@moya/catalog-postgres";
 import {
   CATALOG_BLOCK_GUARD_SQL,
+  CATALOG_MASTER_SLICE_CAP,
+  CATALOG_MASTER_TASK_CAP,
   PostgresCatalogDisplayMasterAdapter,
   PostgresMediaPublicationAdapter,
   PostgresPublishingOperatorAdapter,
@@ -68,6 +72,7 @@ import {
 } from "./synthetic-test-database.js";
 
 import type { CatalogMasterAttach, PublishingJobLease } from "@moya/api";
+import type { CatalogSourceReader } from "@moya/backend-production/internal/catalog-source";
 
 /*
  * catalog-deep-zoom-v1 (Issue #295) on a dedicated synthetic database with
@@ -78,7 +83,8 @@ import type { CatalogMasterAttach, PublishingJobLease } from "@moya/api";
  * rollback guard (9), the Development relay lookup (14) and the live storage
  * bounds (25); and (catalog-scale-v1 1B) that every change of an asset's
  * block set marks the asset, so a scoped reconcile pass whose sweep share is
- * empty still publishes a recorded set and withdraws a detached one.
+ * empty still publishes a recorded set and withdraws a detached one, a
+ * self-master's (catalog-deep-zoom-self-master-v1) included.
  * Content is synthetic; no store or cloud I/O. The opt-in
  * Development smoke (CATALOG_BLOCKS_SANDBOX_SMOKE=1) adds a private
  * temporary filesystem store and the local media sandbox image.
@@ -217,16 +223,34 @@ const catalogImage = async (
     readonly width?: number;
     readonly height?: number;
     readonly catalogId?: string;
-    readonly published?: boolean;
+    /** A fresh media id by default; an existing one makes a replaced image. */
     readonly mediaId?: string;
+    readonly published?: boolean;
+    /** The viewer's long edge; the approved image's by default. */
+    readonly viewerLong?: number;
+    /** `display`: a pilot `display/v1/` key instead of an `editorial/` one. */
+    readonly keyForm?: "editorial" | "display";
+    /** The approved bytes' SHA-256; synthetic by default. */
+    readonly approvedSha256?: string;
+    /** The asset's recorded `source_sha256`; the approved one by default. */
+    readonly sourceSha256?: string | null;
+    /** What the base render recorded; the approved image's facts by default. */
+    readonly master?: {
+      readonly sha256?: string;
+      readonly width?: number;
+      readonly height?: number;
+    };
   } = {},
 ): Promise<CatalogImage> => {
   const width = options.width ?? 4096;
   const height = options.height ?? 2731;
   const mediaId = options.mediaId ?? `media-${hex(8)}`;
   const catalogId = options.catalogId ?? `catalog-${hex(8)}`;
-  const approvedSha256 = sha(mediaId);
-  const objectKey = `editorial/${sha(catalogId)}/${sha(`${mediaId}:orig`)}-${approvedSha256}.jpg`;
+  const approvedSha256 = options.approvedSha256 ?? sha(mediaId);
+  const objectKey =
+    options.keyForm === "display"
+      ? `display/v1/media_${md5(mediaId)}/${approvedSha256}.webp`
+      : `editorial/${sha(catalogId)}/${sha(`${mediaId}:orig`)}-${approvedSha256}.jpg`;
   const assetId = `catalog-asset-${md5(`${mediaId}:${objectKey}`)}`;
   if (options.published !== false)
     await setup.query(
@@ -235,8 +259,22 @@ const catalogImage = async (
     );
   await setup.query(
     `INSERT INTO community.catalog_media_assets(id,media_id,source_object_key,source_sha256,source_width,source_height,source_content_type,master_sha256,master_width,master_height,state,created_at,updated_at)
-     VALUES($1,$2,$3,$4,$5,$6,'image/jpeg',$4,$5,$6,'ready',$7,$7)`,
-    [assetId, mediaId, objectKey, approvedSha256, width, height, t0],
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'ready',$11,$11)`,
+    [
+      assetId,
+      mediaId,
+      objectKey,
+      options.sourceSha256 === undefined
+        ? approvedSha256
+        : options.sourceSha256,
+      width,
+      height,
+      options.keyForm === "display" ? "image/webp" : "image/jpeg",
+      options.master?.sha256 ?? approvedSha256,
+      options.master?.width ?? width,
+      options.master?.height ?? height,
+      t0,
+    ],
   );
   const scaled = (long: number) =>
     width >= height
@@ -246,7 +284,7 @@ const catalogImage = async (
     ["thumb", 480],
     ["cover", 720],
     ["display", 2048],
-    ["viewer", Math.max(width, height)],
+    ["viewer", options.viewerLong ?? Math.max(width, height)],
   ] as const) {
     const blob = `media-blob-${hex()}`;
     await setup.query(
@@ -270,12 +308,23 @@ const catalogImage = async (
   };
 };
 
-const masters = new PostgresCatalogDisplayMasterAdapter(
-  // Bound lazily: the App pool exists only after beforeAll.
+/**
+ * The pool `pool()` names, bound lazily: the pools exist only after
+ * beforeAll. Its methods run bound to that pool, not to the proxy: pg-pool's
+ * own methods reassign its client list (an idle client's removal does), and
+ * with the proxy as `this` the new list would land on the proxy's empty
+ * target, so the pool's `end()` in afterAll would wait for a removed client.
+ */
+const lazyPool = (pool: () => Pool): Pool =>
   new Proxy({} as Pool, {
-    get: (_target, property) => Reflect.get(app, property, app),
-  }),
-);
+    get: (_target, property) => {
+      const target = pool();
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+
+const masters = new PostgresCatalogDisplayMasterAdapter(lazyPool(() => app));
 
 const attachInput = (
   image: CatalogImage,
@@ -587,6 +636,9 @@ describe("catalog-master store as the App role (criteria 1, 2, 3a, 25)", () => {
         ),
       ),
     ).toBe("approved_mismatch");
+    // An `editorial/` image above 4096 px with a master that is not its own
+    // bytes (masterSha256 differs from the approved SHA-256): not a
+    // self-master, so RP-11 still refuses it.
     const large = await catalogImage({ width: 6000, height: 4000 });
     expect(codeOf(await masters.attach(attachInput(large), t0))).toBe(
       "approved_too_large",
@@ -720,11 +772,12 @@ describe("catalog-master store as the App role (criteria 1, 2, 3a, 25)", () => {
       [filler, t0],
     );
     // The slice cap counts masters and blocks only.
+    expect(CATALOG_MASTER_SLICE_CAP).toBe(20 * 1024 ** 3);
     expect(
       codeOf(
         await masters.attach(
           attachInput(second, {
-            source: { kind: "dry_run", byteSize: 11 * 1024 ** 3 },
+            source: { kind: "dry_run", byteSize: CATALOG_MASTER_SLICE_CAP },
           }),
           t0,
         ),
@@ -1207,9 +1260,7 @@ describe("Catalog block publication and withdrawal (criteria 6–8, 14)", () => 
     return { id, leaseOwner: owner };
   };
   const publication = new PostgresMediaPublicationAdapter(
-    new Proxy({} as Pool, {
-      get: (_target, property) => Reflect.get(app, property, app),
-    }),
+    lazyPool(() => app),
     { isPublic: () => true, allowPublish: () => true },
   );
 
@@ -1480,9 +1531,7 @@ describe("Catalog block publication and withdrawal (criteria 6–8, 14)", () => 
 
 describe("Expand-release rollback floor and database cost (criteria 9, 10)", () => {
   const publication = new PostgresMediaPublicationAdapter(
-    new Proxy({} as Pool, {
-      get: (_target, property) => Reflect.get(app, property, app),
-    }),
+    lazyPool(() => app),
     { isPublic: () => true, allowPublish: () => true },
   );
 
@@ -1710,9 +1759,7 @@ describe("Expand-release rollback floor and database cost (criteria 9, 10)", () 
 
 describe("Catalog block jobs in the store (PR B; criteria 3a, 5)", () => {
   const works = new PostgresWorkPublishingAdapter(
-    new Proxy({} as Pool, {
-      get: (_target, property) => Reflect.get(app, property, app),
-    }),
+    lazyPool(() => app),
     { publication: { allowPublish: () => true, isPublic: () => true } },
   );
   const quiet = () =>
@@ -2313,10 +2360,7 @@ describe.skipIf(process.env.CATALOG_BLOCKS_SANDBOX_SMOKE !== "1")(
 );
 
 describe("Catalog Detail deep-zoom reads (PR C; criteria 12, 13, 20)", () => {
-  const as = (pool: () => Pool) =>
-    new Proxy({} as Pool, {
-      get: (_target, property) => Reflect.get(pool(), property, pool()),
-    });
+  const as = lazyPool;
   const publication = new PostgresMediaPublicationAdapter(
     as(() => app),
     { isPublic: () => true, allowPublish: () => true },
@@ -2599,15 +2643,891 @@ describe("PR A review fixes (B1, B2, S2, S3, S5)", () => {
   });
 });
 
+/*
+ * catalog-deep-zoom-self-master-v1 (Issue #321): a published `editorial/`
+ * original is its own master when all four conditions hold (criteria 1, 2);
+ * the read-only source lookup and `attach --from-source` through a real
+ * source reader, store and the App role (criterion 3); and the storage
+ * bounds counting blocks that are not yet cut (criterion 4).
+ */
+describe("Self-masters (catalog-deep-zoom-self-master-v1, Issue #321)", () => {
+  const works = new PostgresWorkPublishingAdapter(
+    lazyPool(() => app),
+    { publication: { allowPublish: () => true, isPublic: () => true } },
+  );
+  const quiet = async () => {
+    await setup.query(
+      "UPDATE community.publishing_jobs SET state='abandoned', finished_at=$1, last_error_code='test_reset', lease_owner=NULL, lease_expires_at=NULL WHERE state IN ('queued','running')",
+      [t0],
+    );
+    await setup.query(
+      "UPDATE community.catalog_display_masters SET ended_at=$1, end_reason='detached' WHERE ended_at IS NULL",
+      [t0],
+    );
+  };
+  /** A 60 MP-class `editorial/` original published as is, viewer 4096. */
+  const original = (
+    options: Parameters<typeof catalogImage>[0] = {},
+  ): Promise<CatalogImage> =>
+    catalogImage({ width: 9504, height: 6336, viewerLong: 4096, ...options });
+  /** The approved bytes themselves as the master, `submitted`. */
+  const self = (
+    image: CatalogImage,
+    overrides: Partial<CatalogMasterAttach> = {},
+  ): Partial<CatalogMasterAttach> => ({
+    masterSha256: image.approvedSha256,
+    header: {
+      contentType: "image/jpeg",
+      width: image.width,
+      height: image.height,
+    },
+    ...overrides,
+  });
+  const dry = { kind: "dry_run", byteSize: 40_000_000 } as const;
+  const check = async (
+    image: CatalogImage,
+    overrides: Partial<CatalogMasterAttach> = {},
+  ) =>
+    codeOf(
+      await masters.attach(
+        attachInput(image, self(image, { source: dry, ...overrides })),
+        t0,
+      ),
+    );
+
+  it("attaches a self-master that meets all four conditions: an 8192 x 5461 frame of 48 cells", async () => {
+    const image = await original();
+    expect(
+      await masters.attach(
+        attachInput(image, self(image, { source: dry })),
+        t0,
+      ),
+    ).toMatchObject({
+      status: "done",
+      masterId: null,
+      frameWidth: 8192,
+      frameHeight: 5461,
+      cells: 48,
+    });
+    const result = await attached(image, self(image));
+    expect(result).toMatchObject({
+      frameWidth: 8192,
+      frameHeight: 5461,
+      cells: 48,
+    });
+    expect(
+      (
+        await setup.query(
+          "SELECT m.master_sha256, m.master_width, m.master_height, m.derivation, b.sha256 FROM community.catalog_display_masters m JOIN community.media_blobs b ON b.id=m.blob_id WHERE m.id=$1",
+          [result.masterId],
+        )
+      ).rows[0],
+    ).toEqual({
+      master_sha256: image.approvedSha256,
+      master_width: 9504,
+      master_height: 6336,
+      derivation: "submitted",
+      sha256: image.approvedSha256,
+    });
+  });
+
+  it("refuses with approved_too_large when any single self-master condition breaks", async () => {
+    // 1. The approved key is not `editorial/` (a pilot `display/v1/` key).
+    expect(await check(await original({ keyForm: "display" }))).toBe(
+      "approved_too_large",
+    );
+    // 2. The master's bytes are not the approved image's.
+    const image = await original();
+    expect(await check(image, { masterSha256: sha("another file") })).toBe(
+      "approved_too_large",
+    );
+    // 3. The base render recorded another source.
+    expect(
+      await check(await original({ master: { sha256: sha("rendered") } })),
+    ).toBe("approved_too_large");
+    // 4. The master's oriented size is not the size the base render decoded
+    //    (a rotated original recorded unoriented fails closed).
+    expect(
+      await check(await original({ master: { width: 6336, height: 9504 } })),
+    ).toBe("approved_too_large");
+    // 5. It is not the submitted file.
+    expect(await check(image, { derivation: "edited-export" })).toBe(
+      "approved_too_large",
+    );
+    // All four hold: the same image passes.
+    expect(await check(image)).toBe("done");
+  });
+
+  it("keeps every other check for a self-master: aspect, framing, gain, base and the long scroll", async () => {
+    // The published size and the decoded original disagree in aspect.
+    const skewed = await catalogImage({
+      width: 9504,
+      height: 6000,
+      viewerLong: 4096,
+      master: { width: 9504, height: 6336 },
+    });
+    expect(
+      await check(skewed, {
+        header: { contentType: "image/jpeg", width: 9504, height: 6336 },
+      }),
+    ).toBe("aspect_mismatch");
+    // 1.25 x the 4096 viewer is 5120: a 5000 px original gains too little.
+    const small = await catalogImage({
+      width: 5000,
+      height: 3334,
+      viewerLong: 4096,
+    });
+    expect(await check(small)).toBe("gain_too_small");
+    // A 3000 px viewer is below 0.45 x the 8192 frame.
+    expect(await check(await original({ viewerLong: 3000 }))).toBe(
+      "base_too_small",
+    );
+    // An already full-size long scroll (986 x 4031, viewer 4031) gains nothing.
+    const scroll = await catalogImage({ width: 986, height: 4031 });
+    expect(await check(scroll)).toBe("gain_too_small");
+  });
+
+  it("limits and re-attaches a self-master under the same rule", async () => {
+    const image = await original();
+    const first = await attached(image, self(image));
+    expect(await masters.setLimit(image.mediaId, 6144, "owner", t0)).toEqual(
+      expect.objectContaining({
+        status: "done",
+        frameWidth: 6144,
+        frameHeight: 4096,
+        cells: 24,
+      }),
+    );
+    expect(
+      codeOf(await masters.setLimit(image.mediaId, 5000, "owner", t0)),
+    ).toBe("gain_too_small");
+    expect((await masters.detach({ mediaId: image.mediaId }, t0)).status).toBe(
+      "done",
+    );
+    expect(
+      await masters.attach(
+        attachInput(
+          image,
+          self(image, {
+            source: { kind: "existing", masterId: first.masterId! },
+          }),
+        ),
+        t0,
+      ),
+    ).toMatchObject({ status: "done", frameWidth: 8192, frameHeight: 5461 });
+  });
+
+  it("names the published original only for a ready, published `editorial/` image without an active master", async () => {
+    const image = await original();
+    expect(await masters.sourceOf(image.mediaId)).toEqual({
+      status: "done",
+      objectKey: image.objectKey,
+      approvedSha256: image.approvedSha256,
+    });
+    expect(
+      codeOf(
+        await masters.sourceOf(
+          (await original({ keyForm: "display" })).mediaId,
+        ),
+      ),
+    ).toBe("not_editorial");
+    expect(
+      codeOf(
+        await masters.sourceOf((await original({ published: false })).mediaId),
+      ),
+    ).toBe("not_published");
+    const pending = await original();
+    await setup.query(
+      "UPDATE community.catalog_media_assets SET state='pending' WHERE id=$1",
+      [pending.assetId],
+    );
+    expect(codeOf(await masters.sourceOf(pending.mediaId))).toBe(
+      "asset_not_ready",
+    );
+    await attached(image, self(image));
+    expect(codeOf(await masters.sourceOf(image.mediaId))).toBe(
+      "already_attached",
+    );
+    await expect(masters.sourceOf("bad id")).rejects.toThrow(TypeError);
+  });
+
+  it("takes the approved SHA-256 from the key, which the asset's recorded one always equals (review R6)", async () => {
+    // The schema refuses an asset whose recorded SHA-256 is not its key's, so
+    // a self-master's key check and approved-image check never disagree.
+    await expect(
+      original({ published: false, sourceSha256: sha("other bytes") }),
+    ).rejects.toThrow(/catalog_media_assets_source_sha256_bound/u);
+    // An asset that recorded none qualifies through its key's SHA-256.
+    const unrecorded = await original({ sourceSha256: null });
+    expect(await masters.sourceOf(unrecorded.mediaId)).toEqual({
+      status: "done",
+      objectKey: unrecorded.objectKey,
+      approvedSha256: unrecorded.approvedSha256,
+    });
+    expect(await check(unrecorded)).toBe("done");
+    expect(await check(unrecorded, { masterSha256: sha("another file") })).toBe(
+      "approved_too_large",
+    );
+  });
+
+  it("cuts, lists and selects a self-master's 48 blocks like any master's", async () => {
+    await quiet();
+    const image = await original();
+    const master = await attached(image, self(image));
+    const frame = { width: master.frameWidth, height: master.frameHeight };
+    expect(await works.enqueueCatalogBlockSets(t0, 100)).toEqual({
+      enqueued: 3,
+    });
+    const ranges = (
+      await setup.query<{ cells: [number, number] }>(
+        "SELECT payload->'cells' AS cells FROM community.publishing_jobs WHERE kind='catalog_render' AND payload->>'masterId'=$1 AND state='queued' ORDER BY (payload->'cells'->>0)::int",
+        [master.masterId],
+      )
+    ).rows.map((row) => row.cells);
+    expect(ranges).toEqual([
+      [0, 15],
+      [16, 31],
+      [32, 47],
+    ]);
+    for (const [from, to] of ranges)
+      expect(
+        await works.recordCatalogBlocks(
+          image.assetId,
+          {
+            masterId: master.masterId!,
+            blocks: Array.from({ length: to - from + 1 }, (_, index) => {
+              const cell = from + index;
+              const rect = catalogBlockCell(frame.width, frame.height, cell);
+              const key = blobKey();
+              return {
+                storageKey: key,
+                byteSize: 250_000,
+                sha256: sha(key),
+                cell,
+                recipeVersion: 1,
+                recipeDigest: "3333333333333333",
+                contentType: "image/jpeg" as const,
+                width: rect.width,
+                height: rect.height,
+              };
+            }),
+          },
+          t0,
+        ),
+      ).toEqual({ status: "recorded" });
+    const blockIds = (
+      await setup.query<{ id: string }>(
+        "SELECT id FROM community.media_renditions WHERE catalog_master_id=$1 AND state='ready' ORDER BY role",
+        [master.masterId],
+      )
+    ).rows.map((row) => row.id);
+    expect(blockIds).toHaveLength(48);
+    const reader = new PostgresCatalogQueryAdapter(
+      lazyPool(() => publicRead),
+      { renditions: true, zoom: { isOpen: async () => true } },
+    );
+    expect([...(await reader.getZoomFrames(image.catalogId as never))]).toEqual(
+      [[image.mediaId, frame]],
+    );
+    expect(
+      await reader.getZoomBlocks(
+        image.catalogId as never,
+        image.mediaId as never,
+      ),
+    ).toEqual({ ...frame, keys: blockIds });
+    // The whole Catalog's copy set, the tests' oracle since catalog-scale-v1
+    // W7 (a scoped pass publishing a self-master's set is tested with the
+    // block-set marks below).
+    const authority = catalogAuthorityWithCopySet(setup, null, app);
+    expect(
+      (await authority.copyRenditionIds()).filter((id) =>
+        blockIds.includes(id),
+      ),
+    ).toHaveLength(48);
+    expect((await masters.status(image.catalogId)).masters[0]).toMatchObject({
+      blocksReady: 48,
+      complete: true,
+    });
+  });
+
+  it("counts the projected blocks of masters not yet cut, so a fast batch cannot pass the slice cap", async () => {
+    await quiet();
+    const images = await Promise.all([1, 2, 3].map(() => catalogImage()));
+    // Each default master: 6000 x 4000 frame, projected at 1 byte per pixel.
+    const projected = 6000 * 4000;
+    const before = (await masters.status(null)).storage.sliceBytes;
+    // Sized so the third attach fits only if the first two attaches' blocks
+    // were forgotten: before + 3m + projected <= cap < before + 3m + 3 x projected.
+    const masterBytes = Math.floor(
+      (CATALOG_MASTER_SLICE_CAP - before - 2 * projected) / 3,
+    );
+    const upload = () =>
+      ({
+        kind: "upload",
+        storageKey: blobKey(),
+        byteSize: masterBytes,
+      }) as const;
+    const first = await attached(images[0]!, { source: upload() });
+    expect(first.storage.sliceBytes).toBe(before);
+    const second = await attached(images[1]!, { source: upload() });
+    // The first master's bytes and its projected blocks, nothing cut yet.
+    expect(second.storage.sliceBytes).toBe(before + masterBytes + projected);
+    const third = await masters.attach(
+      attachInput(images[2]!, { source: upload() }),
+      t0,
+    );
+    expect(third).toMatchObject({
+      status: "refused",
+      code: "storage_slice_cap",
+      storage: {
+        sliceBytes: before + 2 * masterBytes + 2 * projected,
+        attachBytes: masterBytes + projected,
+        sliceCap: CATALOG_MASTER_SLICE_CAP,
+      },
+    });
+    // Once a set is cut, its real block bytes replace its projection, and
+    // the published copy its blocks do not have yet stays counted.
+    const frame = { width: first.frameWidth, height: first.frameHeight };
+    const cut = await insertBlocks(
+      images[0]!,
+      first.masterId!,
+      frame,
+      allCells(frame),
+    );
+    const settled = before + 2 * masterBytes + projected + 2 * 24 * 250_000;
+    expect((await masters.status(null)).storage.sliceBytes).toBe(settled);
+    // A dry run sees the same bound, also one sized into the room that
+    // forgetting the unpublished copy would leave.
+    for (const byteSize of [masterBytes, masterBytes - 24 * 250_000])
+      expect(
+        codeOf(
+          await masters.attach(
+            attachInput(images[2]!, {
+              source: { kind: "dry_run", byteSize },
+            }),
+            t0,
+          ),
+        ),
+      ).toBe("storage_slice_cap");
+    // When the publication rows land, the reservation becomes their bytes:
+    // the slice total does not move.
+    const publicAsset = hex();
+    await setup.query(
+      "INSERT INTO community.media_public_assets(id,catalog_asset_id,desired_at,created_at,updated_at) VALUES($1,$2,$3,$3,$3)",
+      [publicAsset, images[0]!.assetId, t0],
+    );
+    for (const [cell, rendition] of cut.entries()) {
+      const blob = (
+        await setup.query<{ storage_key: string; sha256: string }>(
+          "SELECT b.storage_key, b.sha256 FROM community.media_renditions r JOIN community.media_blobs b ON b.id=r.blob_id WHERE r.id=$1",
+          [rendition],
+        )
+      ).rows[0]!;
+      const token = hex();
+      const role = `block-${String(cell).padStart(2, "0")}`;
+      await setup.query(
+        `INSERT INTO community.media_publications(id,public_asset_id,rendition_id,generation_token,object_key,storage_key,content_type,purpose,byte_size,sha256,role,edit_key,created_at)
+         VALUES($1,$2,$3,$4,$5,$6,'image/jpeg','catalog_derivative',250000,$7,$8,'base',$9)`,
+        [
+          `media-publication-${hex()}`,
+          publicAsset,
+          rendition,
+          token,
+          `v1/${publicAsset}/${token}/base/${role}.r1.jpg`,
+          blob.storage_key,
+          blob.sha256,
+          role,
+          t0,
+        ],
+      );
+      if (cell === 11)
+        expect((await masters.status(null)).storage.sliceBytes).toBe(settled);
+    }
+    expect((await masters.status(null)).storage.sliceBytes).toBe(settled);
+    // Leave the slice for later suites: end both, release their blobs and
+    // withdraw the block publications.
+    await masters.detach({ all: true }, t0);
+    await setup.query(
+      `UPDATE community.media_blobs SET state='tombstoned', tombstoned_at=$2, retention_hold=NULL
+       WHERE id IN (SELECT blob_id FROM community.catalog_display_masters WHERE id=ANY($1::text[]))`,
+      [[first.masterId, second.masterId], t0],
+    );
+    for (const step of [
+      "state='withdrawing', withdraw_requested_at=$2",
+      "state='withdrawn', origin_deleted_at=$2, verified_at=$2",
+    ])
+      await setup.query(
+        `UPDATE community.media_publications SET ${step} WHERE public_asset_id=$1`,
+        [publicAsset, t0],
+      );
+  });
+
+  it("takes the storage lock before the bounded check, so another process waits for it and sees its bytes", async () => {
+    await quiet();
+    const image = await catalogImage();
+    const before = (await masters.status(null)).storage.sliceBytes;
+    const filler = `media-blob-${hex()}`;
+    const holder = await setup.connect();
+    let open = false;
+    let attach: Promise<unknown> | undefined;
+    try {
+      // Another catalog-master transaction holds the storage lock and fills
+      // the slice to its cap; it commits only once the attach waits.
+      await holder.query("BEGIN");
+      open = true;
+      await holder.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('catalog-master-storage',0))",
+      );
+      await holder.query(
+        `INSERT INTO community.media_blobs(id,owner_id,purpose,storage_key,byte_size,sha256,content_type,retention_hold,created_at)
+         VALUES($1,NULL,'catalog_master',$2,$3,$4,'image/jpeg','catalog_master',$5)`,
+        [filler, blobKey(), CATALOG_MASTER_SLICE_CAP - before, sha(filler), t0],
+      );
+      let settled = false;
+      attach = masters
+        .attach(
+          attachInput(image, {
+            source: { kind: "dry_run", byteSize: 1_000_000 },
+          }),
+          t0,
+        )
+        .finally(() => {
+          settled = true;
+        });
+      // The attach waits on this very key (not on a slow preamble): another
+      // backend's request for the storage lock is queued, not granted.
+      let waiting = false;
+      for (let poll = 0; poll < 100 && !waiting && !settled; poll += 1) {
+        waiting =
+          (
+            await setup.query(
+              `SELECT 1 FROM pg_locks l,
+                 (SELECT hashtextextended('catalog-master-storage',0) AS k) key
+               WHERE l.locktype='advisory' AND NOT l.granted AND l.objsubid=1
+                 AND l.database=(SELECT oid FROM pg_database WHERE datname=current_database())
+                 AND l.classid=((key.k >> 32) & 4294967295)::oid
+                 AND l.objid=(key.k & 4294967295)::oid`,
+            )
+          ).rowCount === 1;
+        if (!waiting) await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(settled).toBe(false);
+      expect(waiting).toBe(true);
+      await holder.query("COMMIT");
+      open = false;
+      // The bounds are read after the wait: the committed filler refuses
+      // it. A bounds read before the lock would still have answered done.
+      expect(
+        codeOf(
+          (await attach) as { readonly status: string; readonly code?: string },
+        ),
+      ).toBe("storage_slice_cap");
+    } finally {
+      if (open) await holder.query("ROLLBACK");
+      // On a failed assertion the attach finishes once the lock is free.
+      await attach?.catch(() => undefined);
+      holder.release();
+      await setup.query(
+        "UPDATE community.media_blobs SET state='tombstoned', tombstoned_at=$2, retention_hold=NULL WHERE id=$1",
+        [filler, t0],
+      );
+    }
+  });
+
+  it("serializes concurrent attaches, so two processes cannot both pass the slice cap", async () => {
+    await quiet();
+    const images = await Promise.all([1, 2].map(() => catalogImage()));
+    const projected = 6000 * 4000;
+    const before = (await masters.status(null)).storage.sliceBytes;
+    // Either attach fits alone; the second one cannot fit beside the first.
+    const masterBytes =
+      Math.floor((CATALOG_MASTER_SLICE_CAP - before) / 2) - projected + 1;
+    const results = await Promise.all(
+      images.map((image) =>
+        masters.attach(
+          attachInput(image, {
+            source: {
+              kind: "upload",
+              storageKey: blobKey(),
+              byteSize: masterBytes,
+            },
+          }),
+          t0,
+        ),
+      ),
+    );
+    expect(results.map(codeOf).sort()).toEqual(["done", "storage_slice_cap"]);
+    const ids = results.flatMap((result) =>
+      result.status === "done" && result.masterId ? [result.masterId] : [],
+    );
+    await masters.detach({ all: true }, t0);
+    await setup.query(
+      `UPDATE community.media_blobs SET state='tombstoned', tombstoned_at=$2, retention_hold=NULL
+       WHERE id IN (SELECT blob_id FROM community.catalog_display_masters WHERE id=ANY($1::text[]))`,
+      [ids, t0],
+    );
+  });
+
+  it("counts the projected blocks of masters not yet cut in the task bound too (review R1)", async () => {
+    await quiet();
+    const images = await Promise.all([1, 2].map(() => catalogImage()));
+    // Each default master: a 20,000,000-byte upload and a 6000 x 4000 frame.
+    const masterBytes = 20_000_000;
+    const projected = 6000 * 4000;
+    const taskBefore = (await masters.status(null)).storage.taskBytes;
+    // Other #206 bytes (a member's original) fill the task bound so that the
+    // second attach fits only if the first attach's blocks were forgotten:
+    // with them it is 12,000,000 bytes over.
+    const user = `user-${hex()}`;
+    await setup.query(
+      "INSERT INTO community.public_users(id,handle,display_name) VALUES($1,$2,'合成')",
+      [user, `cz-${hex(8)}`],
+    );
+    const filler = `media-blob-${hex()}`;
+    const fillerBytes =
+      CATALOG_MASTER_TASK_CAP -
+      taskBefore -
+      2 * (masterBytes + projected) +
+      12_000_000;
+    await setup.query(
+      "INSERT INTO community.media_blobs(id,owner_id,purpose,storage_key,byte_size,sha256,content_type,created_at) VALUES($1,$2,'original',$3,$4,$5,'image/jpeg',$6)",
+      [filler, user, blobKey(), fillerBytes, sha(filler), t0],
+    );
+    try {
+      const sliceBefore = (await masters.status(null)).storage.sliceBytes;
+      const first = await attached(images[0]!);
+      expect(first.storage.taskBytes).toBe(taskBefore + fillerBytes);
+      expect(await masters.attach(attachInput(images[1]!), t0)).toMatchObject({
+        status: "refused",
+        code: "storage_task_cap",
+        storage: {
+          taskBytes: taskBefore + fillerBytes + masterBytes + projected,
+          sliceBytes: sliceBefore + masterBytes + projected,
+          attachBytes: masterBytes + projected,
+          taskCap: CATALOG_MASTER_TASK_CAP,
+        },
+      });
+    } finally {
+      await setup.query(
+        "UPDATE community.media_blobs SET state='tombstoned', tombstoned_at=$2 WHERE id=$1",
+        [filler, t0],
+      );
+    }
+  });
+
+  it("counts a block with a live and a withdrawing publication once, so a partly cut set stays projected", async () => {
+    await quiet();
+    const images = await Promise.all([1, 2].map(() => catalogImage()));
+    // A default master: a 20,000,000-byte upload and a 6000 x 4000 frame.
+    const masterBytes = 20_000_000;
+    const projected = 6000 * 4000;
+    const before = (await masters.status(null)).storage.sliceBytes;
+    const first = await attached(images[0]!);
+    const frame = { width: first.frameWidth, height: first.frameHeight };
+    // Every cell but the last is cut: the set is not complete, so its whole
+    // frame stays projected beside the cut blocks' bytes.
+    const cut = await insertBlocks(
+      images[0]!,
+      first.masterId!,
+      frame,
+      allCells(frame).slice(0, -1),
+    );
+    const partly = before + masterBytes + cut.length * 250_000 + projected;
+    expect((await masters.status(null)).storage.sliceBytes).toBe(partly);
+    // The first cut block is published under a new generation while its old
+    // one is still withdrawing: two publication rows that are not withdrawn
+    // for one rendition (the live-rendition index covers only publishing and
+    // published). Both rows' bytes count, but the block counts once: the set
+    // stays not cut and projected, rather than looking cut with only its
+    // other blocks' unpublished copies left.
+    const publicAsset = hex();
+    await setup.query(
+      "INSERT INTO community.media_public_assets(id,catalog_asset_id,desired_at,created_at,updated_at) VALUES($1,$2,$3,$3,$3)",
+      [publicAsset, images[0]!.assetId, t0],
+    );
+    const blob = (
+      await setup.query<{ storage_key: string; sha256: string }>(
+        "SELECT b.storage_key, b.sha256 FROM community.media_renditions r JOIN community.media_blobs b ON b.id=r.blob_id WHERE r.id=$1",
+        [cut[0]],
+      )
+    ).rows[0]!;
+    for (const state of ["withdrawing", "published"] as const) {
+      const token = hex();
+      await setup.query(
+        `INSERT INTO community.media_publications(id,public_asset_id,rendition_id,generation_token,object_key,storage_key,content_type,purpose,byte_size,sha256,role,edit_key,state,published_at,withdraw_requested_at,created_at)
+         VALUES($1,$2,$3,$4,$5,$6,'image/jpeg','catalog_derivative',250000,$7,'block-00','base',$8,$9,$10,$9)`,
+        [
+          `media-publication-${hex()}`,
+          publicAsset,
+          cut[0],
+          token,
+          `v1/${publicAsset}/${token}/base/block-00.r1.jpg`,
+          blob.storage_key,
+          blob.sha256,
+          state,
+          t0,
+          state === "withdrawing" ? t0 : null,
+        ],
+      );
+    }
+    const settled = partly + 2 * 250_000;
+    expect((await masters.status(null)).storage.sliceBytes).toBe(settled);
+    // So an attach sized into the room that counting the block twice would
+    // leave is refused.
+    const room = CATALOG_MASTER_SLICE_CAP - settled - projected;
+    expect(
+      await masters.attach(
+        attachInput(images[1]!, {
+          source: { kind: "dry_run", byteSize: room + 1 },
+        }),
+        t0,
+      ),
+    ).toMatchObject({
+      status: "refused",
+      code: "storage_slice_cap",
+      storage: { sliceBytes: settled, attachBytes: room + 1 + projected },
+    });
+    // Leave the slice for later suites: end the master, release its blob and
+    // withdraw the block publications.
+    await masters.detach({ all: true }, t0);
+    await setup.query(
+      `UPDATE community.media_blobs SET state='tombstoned', tombstoned_at=$2, retention_hold=NULL
+       WHERE id IN (SELECT blob_id FROM community.catalog_display_masters WHERE id=$1)`,
+      [first.masterId, t0],
+    );
+    for (const step of [
+      "state='withdrawing', withdraw_requested_at=$2",
+      "state='withdrawn', origin_deleted_at=$2, verified_at=$2",
+    ])
+      await setup.query(
+        `UPDATE community.media_publications SET ${step} WHERE public_asset_id=$1`,
+        [publicAsset, t0],
+      );
+  });
+
+  it("leaves out the projection of the master a limit change or a re-attach ends (review R2)", async () => {
+    await quiet();
+    const image = await catalogImage();
+    // A 6000 x 4000 frame, 5500 x 3667 once limited; 1 byte per frame pixel.
+    const projected = 6000 * 4000;
+    const limitedProjection = 5500 * 3667;
+    const before = (await masters.status(null)).storage.sliceBytes;
+    // Sized so that the limit change and the re-attach each fit only while the
+    // master they end is left out: 12,000,000 bytes below the slice cap after
+    // the first attach, and over it if that master's blocks counted twice.
+    const masterBytes =
+      CATALOG_MASTER_SLICE_CAP - before - projected - 12_000_000;
+    const first = await attached(image, {
+      source: { kind: "upload", storageKey: blobKey(), byteSize: masterBytes },
+    });
+    expect(first.storage.sliceBytes).toBe(before);
+    const limited = await masters.setLimit(image.mediaId, 5500, "owner", t0);
+    expect(limited).toMatchObject({
+      status: "done",
+      frameWidth: 5500,
+      frameHeight: 3667,
+      storage: {
+        sliceBytes: before + masterBytes,
+        attachBytes: limitedProjection,
+      },
+    });
+    // The image is replaced in Admin while the limited master is still
+    // active: re-attaching that master to the new asset ends it.
+    const replacement = await catalogImage({
+      mediaId: image.mediaId,
+      catalogId: image.catalogId,
+      approvedSha256: sha(`${image.mediaId}:replacement`),
+    });
+    await setup.query(
+      "DELETE FROM public.catalog_media WHERE media_id=$1 AND object_key=$2",
+      [image.mediaId, image.objectKey],
+    );
+    await setup.query(
+      "UPDATE community.catalog_media_assets SET unreferenced_since=$2 WHERE id=$1",
+      [image.assetId, t0],
+    );
+    const limitedId = limited.status === "done" ? limited.masterId! : "";
+    const again = await masters.attach(
+      attachInput(replacement, {
+        source: { kind: "existing", masterId: limitedId },
+      }),
+      t0,
+    );
+    expect(again).toMatchObject({
+      status: "done",
+      frameWidth: 6000,
+      frameHeight: 4000,
+      storage: { sliceBytes: before + masterBytes, attachBytes: projected },
+    });
+    expect(
+      (
+        await setup.query(
+          "SELECT end_reason FROM community.catalog_display_masters WHERE id=$1",
+          [limitedId],
+        )
+      ).rows[0],
+    ).toEqual({ end_reason: "reattached" });
+    // Leave the slice for later suites: end it and release its blob.
+    await masters.detach({ all: true }, t0);
+    await setup.query(
+      `UPDATE community.media_blobs SET state='tombstoned', tombstoned_at=$2, retention_hold=NULL
+       WHERE id IN (SELECT blob_id FROM community.catalog_display_masters WHERE id=$1)`,
+      [first.masterId, t0],
+    );
+  });
+
+  it("attaches through --from-source: the source reader, an empty inbox, the store and the App role", async () => {
+    await quiet();
+    const base = await realpath(
+      await mkdtemp(path.join(tmpdir(), "catalog-self-master-")),
+    );
+    try {
+      const directories = ["store", "inbox", "media"].map((name) =>
+        path.join(base, name),
+      );
+      for (const directory of directories) {
+        await mkdir(directory, { mode: 0o700 });
+        await chmod(directory, 0o700);
+      }
+      const [storeDirectory, inbox, media] = directories as [
+        string,
+        string,
+        string,
+      ];
+      const store = await FilesystemPublishingMediaStore.open(storeDirectory, {
+        temporaryRoots: [],
+      });
+      // A synthetic 5200 x 3467 original published as is: frame 5200 x 3467
+      // over a 4096 viewer (1.27 x), 6 x 4 cells.
+      const bytes = await sharp({
+        create: {
+          width: 5200,
+          height: 3467,
+          channels: 3,
+          background: { r: 120, g: 90, b: 60 },
+        },
+      })
+        .jpeg({ quality: 80 })
+        .toBuffer();
+      const approvedSha256 = createHash("sha256").update(bytes).digest("hex");
+      const image = await catalogImage({
+        width: 5200,
+        height: 3467,
+        viewerLong: 4096,
+        approvedSha256,
+      });
+      await writeFile(
+        path.join(media, image.objectKey.split("/").at(-1)!),
+        bytes,
+      );
+      const pilot = await original({ keyForm: "display" });
+      const approval = path.join(base, "approval.json");
+      await writeFile(
+        approval,
+        JSON.stringify({
+          version: 1,
+          kind: APPROVAL_KIND,
+          catalogId: image.catalogId,
+          entries: [
+            {
+              mediaId: pilot.mediaId,
+              approvedSha256: pilot.approvedSha256,
+              masterFile: "pilot.jpg",
+              masterSha256: pilot.approvedSha256,
+              derivation: "submitted",
+            },
+            {
+              mediaId: image.mediaId,
+              approvedSha256,
+              masterFile: "original.jpg",
+              masterSha256: approvedSha256,
+              derivation: "submitted",
+            },
+          ],
+        }),
+      );
+      const local = new LocalCatalogSourceReader(media);
+      const inboxCounts: number[] = [];
+      const reader: CatalogSourceReader = {
+        async read(objectKey, target, options) {
+          const read = await local.read(objectKey, target, options);
+          inboxCounts.push((await readdir(inbox)).length);
+          return read;
+        },
+      };
+      const lines: Record<string, unknown>[] = [];
+      const ok = await runCatalogMasterCommand(
+        parseCatalogMasterArguments([
+          "attach-batch",
+          "--approval",
+          approval,
+          "--inbox",
+          inbox,
+          "--from-source",
+        ]),
+        {
+          port: masters,
+          store: async () => store,
+          source: async () => reader,
+          out: (line) => lines.push(line),
+          now: () => t0,
+        },
+      );
+      expect(ok).toBe(false);
+      expect(lines).toEqual([
+        {
+          command: "attach",
+          mediaId: pilot.mediaId,
+          status: "refused",
+          code: "not_editorial",
+        },
+        expect.objectContaining({
+          command: "attach",
+          mediaId: image.mediaId,
+          status: "attached",
+          frameWidth: 5200,
+          frameHeight: 3467,
+          cells: 24,
+        }),
+      ]);
+      expect(JSON.stringify(lines)).not.toMatch(
+        /editorial\/|display\/v1|original\.jpg|blobs\/|catalog-self-master/u,
+      );
+      expect(inboxCounts).toEqual([1]);
+      expect(await readdir(inbox)).toEqual([]);
+      const row = (
+        await setup.query<{
+          sha256: string;
+          byte_size: string;
+          storage_key: string;
+        }>(
+          `SELECT b.sha256, b.byte_size, b.storage_key FROM community.catalog_display_masters m
+           JOIN community.media_blobs b ON b.id=m.blob_id
+           WHERE m.catalog_asset_id=$1 AND m.ended_at IS NULL`,
+          [image.assetId],
+        )
+      ).rows[0]!;
+      expect(row).toMatchObject({
+        sha256: approvedSha256,
+        byte_size: String(bytes.byteLength),
+      });
+      // The private store holds the original's exact bytes.
+      expect(
+        createHash("sha256")
+          .update(await readFile(path.join(storeDirectory, row.storage_key)))
+          .digest("hex"),
+      ).toBe(approvedSha256);
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("catalog-scale-v1: a block set's change marks its asset for the scoped reconcile", () => {
   const authority = createCatalogPublicationAuthority(
-    new Proxy({} as Pool, {
-      get: (_target, property) => Reflect.get(setup, property, setup),
-    }),
+    lazyPool(() => setup),
     null,
-    new Proxy({} as Pool, {
-      get: (_target, property) => Reflect.get(app, property, app),
-    }),
+    lazyPool(() => app),
   );
   /** The real authority, planning only the assets with a pending mark: a
    * scoped pass with an empty sweep share, so only a mark brings an asset
@@ -2627,9 +3547,7 @@ describe("catalog-scale-v1: a block set's change marks its asset for the scoped 
     },
   };
   const publication = new PostgresMediaPublicationAdapter(
-    new Proxy({} as Pool, {
-      get: (_target, property) => Reflect.get(app, property, app),
-    }),
+    lazyPool(() => app),
     {
       isPublic: () => true,
       allowPublish: () => true,
@@ -2637,10 +3555,10 @@ describe("catalog-scale-v1: a block set's change marks its asset for the scoped 
     },
   );
   const works = new PostgresWorkPublishingAdapter(
-    new Proxy({} as Pool, {
-      get: (_target, property) => Reflect.get(app, property, app),
-    }),
-    { publication: { allowPublish: () => true, isPublic: () => true } },
+    lazyPool(() => app),
+    {
+      publication: { allowPublish: () => true, isPublic: () => true },
+    },
   );
   /** Every earlier mark cleared: only what the test does marks. */
   const clearMarks = () =>
@@ -2717,10 +3635,14 @@ describe("catalog-scale-v1: a block set's change marks its asset for the scoped 
         [assetId],
       )
     ).rows[0]!.n;
-  /** A published image with an active master and its base set copied. */
-  const servedWithMaster = async () => {
-    const image = await catalogImage();
-    const master = await attached(image);
+  /** A published image (a default one, or `served`) with an active master
+   * (attached with `overrides`) and its base set copied. */
+  const servedWithMaster = async (
+    served?: CatalogImage,
+    overrides: Partial<CatalogMasterAttach> = {},
+  ) => {
+    const image = served ?? (await catalogImage());
+    const master = await attached(image, overrides);
     await clearMarks();
     await setup.query(
       `INSERT INTO community.catalog_publication_dirty (asset_id, mark_seq, reason, marked_at)
@@ -2843,5 +3765,175 @@ describe("catalog-scale-v1: a block set's change marks its asset for the scoped 
       reason: "rendition",
       urgent: false,
     });
+  });
+
+  /*
+   * Self-masters (catalog-deep-zoom-self-master-v1) change a block set only
+   * through the same writes: a recorded set, a new limit, a detach and a
+   * re-attach. Each brings the asset into a pass that plans no sweep asset.
+   */
+  /** A published 9504 x 6336 `editorial/` original (viewer 4096) and the
+   * attach of its own approved bytes as its master: a self-master. */
+  const selfOriginal = async (
+    options: Parameters<typeof catalogImage>[0] = {},
+  ) => {
+    const image = await catalogImage({
+      width: 9504,
+      height: 6336,
+      viewerLong: 4096,
+      ...options,
+    });
+    const self: Partial<CatalogMasterAttach> = {
+      masterSha256: image.approvedSha256,
+      header: { contentType: "image/jpeg", width: 9504, height: 6336 },
+    };
+    return { image, self };
+  };
+  /** Records the cells of a master's set as one block job would. */
+  const recordCells = (
+    image: CatalogImage,
+    master: { readonly masterId: string | null },
+    frame: { readonly width: number; readonly height: number },
+    cells: readonly number[],
+  ) =>
+    works.recordCatalogBlocks(
+      image.assetId,
+      {
+        masterId: master.masterId!,
+        blocks: cells.map((cell) => {
+          const rect = catalogBlockCell(frame.width, frame.height, cell);
+          const key = blobKey();
+          return {
+            storageKey: key,
+            byteSize: 250_000,
+            sha256: sha(key),
+            cell,
+            recipeVersion: 1,
+            recipeDigest: "3333333333333333",
+            contentType: "image/jpeg" as const,
+            width: rect.width,
+            height: rect.height,
+          };
+        }),
+      },
+      t0,
+    );
+  /** Cells `from` to `to`, inclusive. */
+  const cellRange = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, index) => from + index);
+
+  it("publishes a self-master's recorded set and withdraws it after a new limit and after a detach, each in a pass that plans no sweep asset", async () => {
+    const { image, self } = await selfOriginal();
+    const { master } = await servedWithMaster(image, self);
+    const frame = { width: master.frameWidth, height: master.frameHeight };
+    expect(frame).toEqual({ width: 8192, height: 5461 });
+    // The last two rows of the 8 x 6 grid, its edge cells included.
+    expect(await recordCells(image, master, frame, cellRange(32, 47))).toEqual({
+      status: "recorded",
+    });
+    let marked = await pendingMark(image.assetId);
+    await publication.reconcile(t0, true, 500);
+    expect(await queued(image.assetId)).toContain("publish_media");
+    expect(marked).toEqual({ reason: "rendition", urgent: false });
+    await runJobs(image.assetId);
+    expect(await liveBlocks(image.assetId)).toBe(16);
+
+    // A new limit ends the self-master: its blocks leave the plan.
+    await clearMarks();
+    const limited = await masters.setLimit(image.mediaId, 6144, "owner", t0);
+    expect(limited).toMatchObject({
+      status: "done",
+      frameWidth: 6144,
+      frameHeight: 4096,
+      cells: 24,
+    });
+    marked = await pendingMark(image.assetId);
+    await publication.reconcile(t0, true, 500);
+    expect(await queued(image.assetId)).toEqual(["withdraw_media"]);
+    expect(marked).toEqual({ reason: "rendition", urgent: false });
+    await runJobs(image.assetId);
+    expect(await liveBlocks(image.assetId)).toBe(0);
+
+    // The limited set is recorded and published, then detached.
+    const limitedFrame = { width: 6144, height: 4096 };
+    await clearMarks();
+    expect(
+      await recordCells(
+        image,
+        limited as { readonly masterId: string },
+        limitedFrame,
+        cellRange(0, 15),
+      ),
+    ).toEqual({ status: "recorded" });
+    await publication.reconcile(t0, true, 500);
+    await runJobs(image.assetId);
+    expect(await liveBlocks(image.assetId)).toBe(16);
+    await clearMarks();
+    expect(await masters.detach({ mediaId: image.mediaId }, t0)).toEqual({
+      status: "done",
+      ended: 1,
+    });
+    marked = await pendingMark(image.assetId);
+    await publication.reconcile(t0, true, 500);
+    expect(await queued(image.assetId)).toEqual(["withdraw_media"]);
+    expect(marked).toEqual({ reason: "rendition", urgent: false });
+    await runJobs(image.assetId);
+    expect(await liveBlocks(image.assetId)).toBe(0);
+  });
+
+  it("withdraws the published blocks of a self-master re-attached to its image's replacement in the next pass", async () => {
+    const { image, self } = await selfOriginal();
+    const { master } = await servedWithMaster(image, self);
+    const frame = { width: master.frameWidth, height: master.frameHeight };
+    expect(await recordCells(image, master, frame, cellRange(0, 15))).toEqual({
+      status: "recorded",
+    });
+    await publication.reconcile(t0, true, 500);
+    await runJobs(image.assetId);
+    expect(await liveBlocks(image.assetId)).toBe(16);
+    // The same original moves to another record in Admin: the projection
+    // names a new pair of the media id, and the old asset is unreferenced
+    // (set here without the sync's own mark).
+    const replacement = await catalogImage({
+      mediaId: image.mediaId,
+      approvedSha256: image.approvedSha256,
+      width: 9504,
+      height: 6336,
+      viewerLong: 4096,
+    });
+    await setup.query(
+      "DELETE FROM public.catalog_media WHERE media_id=$1 AND object_key=$2",
+      [image.mediaId, image.objectKey],
+    );
+    await setup.query(
+      "UPDATE community.catalog_media_assets SET unreferenced_since=$2 WHERE id=$1",
+      [image.assetId, t0],
+    );
+    await clearMarks();
+    // Still its own master on the replacement: the re-attach ends the
+    // master still active on the old asset and marks that asset.
+    expect(
+      await masters.attach(
+        attachInput(replacement, {
+          ...self,
+          source: { kind: "existing", masterId: master.masterId! },
+        }),
+        t0,
+      ),
+    ).toMatchObject({ status: "done", frameWidth: 8192, frameHeight: 5461 });
+    expect(
+      (
+        await setup.query(
+          "SELECT end_reason FROM community.catalog_display_masters WHERE id=$1",
+          [master.masterId],
+        )
+      ).rows[0],
+    ).toEqual({ end_reason: "reattached" });
+    const marked = await pendingMark(image.assetId);
+    await publication.reconcile(t0, true, 500);
+    expect(await queued(image.assetId)).toEqual(["withdraw_media"]);
+    expect(marked).toEqual({ reason: "rendition", urgent: false });
+    await runJobs(image.assetId);
+    expect(await liveBlocks(image.assetId)).toBe(0);
   });
 });

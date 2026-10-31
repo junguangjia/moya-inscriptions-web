@@ -114,8 +114,11 @@ describe("media sandbox import boundary", () => {
         );
       if (imported.includes(parser)) importers.push(name);
     }
-    // The catalog-master and access-check commands are separate operator
-    // entries. The access check opens the App role for read-only final admission.
+    // The catalog-master (catalog-deep-zoom-v1) and access-check commands are
+    // separate operator entries. catalog-master opens the App role and the
+    // private store only, and with --from-source the worker's read-only
+    // Catalog source reader; the access check opens the App role for
+    // read-only final admission.
     expect(importers.sort()).toEqual([
       "access/check.ts",
       "catalog-master-cli.ts",
