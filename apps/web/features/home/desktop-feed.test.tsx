@@ -115,6 +115,38 @@ describe("desktop feed isolation and native openers", () => {
     expect(markup).toContain("第二帖");
     expect(markup.indexOf("第一帖")).toBeLessThan(markup.indexOf("第二帖"));
   });
+  it("uses the same whole-card area and natural media ratio before client measurement", () => {
+    const container = document.createElement("div");
+    container.innerHTML = renderToStaticMarkup(
+      <DesktopFeed
+        items={[cards[1]!]}
+        getKey={(item) => item.id}
+        renderItem={(item, _index, slot) => (
+          <span
+            data-card-width={slot.width}
+            data-card-height={slot.height}
+            data-image-width={slot.mediaWidth}
+          >
+            {item.title}
+          </span>
+        )}
+      />,
+    );
+    expect(
+      container
+        .querySelector("[data-desktop-feed]")
+        ?.getAttribute("data-layout-ready"),
+    ).toBe("false");
+    const size =
+      container.querySelector<HTMLElement>("[data-card-width]")!.dataset;
+    const width = Number(size.cardWidth);
+    const height = Number(size.cardHeight);
+    const mediaWidth = Number(size.imageWidth);
+    expect(width * height).toBeCloseTo(100000, 6);
+    expect(mediaWidth / height).toBeCloseTo(1.6, 8);
+    expect(width - mediaWidth).toBeCloseTo(72, 8);
+    expect(container.textContent).toBe("第二帖");
+  });
   it("preserves source DOM order, shows real text and opens the selected content", () => {
     const { target, open } = render();
     expect(
@@ -323,7 +355,7 @@ const anchorFixture = ({
   };
 };
 describe("desktop feed viewport anchoring", () => {
-  it("rebalances appended pages while keeping the visible content offset and every native DOM identity", () => {
+  it("appends pages while keeping prefix geometry, the visible content offset and every native DOM identity", () => {
     const view = anchorFixture();
     view.owner.scrollTop = Number.parseFloat(view.node("16").style.top) + 50;
     view.scroll();
@@ -339,15 +371,19 @@ describe("desktop feed viewport anchoring", () => {
     expect(offset).toBeLessThan(view.owner.clientHeight);
     expect(anchor.getBoundingClientRect().bottom).toBeGreaterThan(0);
     const oldY = Number.parseFloat(anchor.style.top);
+    const oldStyles = oldNodes.map((node) => node.style.cssText);
     const focus = vi.spyOn(HTMLElement.prototype, "focus");
     view.draw(view.all);
-    // This fixture genuinely rebalances; preserving its old pixel positions
-    // would retain the sparse page boundary rather than the reading position.
-    expect(Number.parseFloat(view.node(key).style.top)).not.toBe(oldY);
+    // Sequential placement never inspects a later record to reposition an
+    // already displayed card, while the real reading position stays stable.
+    expect(Number.parseFloat(view.node(key).style.top)).toBe(oldY);
     const nextNodes = [
       ...view.target.querySelectorAll<HTMLElement>("[data-desktop-feed-item]"),
     ];
     oldNodes.forEach((node, index) => expect(nextNodes[index]).toBe(node));
+    expect(
+      nextNodes.slice(0, oldNodes.length).map((node) => node.style.cssText),
+    ).toEqual(oldStyles);
     expect(view.node(key).getBoundingClientRect().top).toBeCloseTo(offset);
     expect(focus).not.toHaveBeenCalled();
     expect(
@@ -379,7 +415,7 @@ describe("desktop feed viewport anchoring", () => {
     view.draw(view.all);
     expect(view.owner.scrollTop).toBe(310);
   });
-  it("keeps a deeply clipped focused card visible when rebalancing makes its row shorter", () => {
+  it("keeps a deeply clipped focused card visible when responsive sizing makes it shorter", () => {
     const view = anchorFixture({
       initialCount: 28,
       count: 40,
@@ -394,7 +430,7 @@ describe("desktop feed viewport anchoring", () => {
     view.scroll();
     expect(view.node("17").getBoundingClientRect().bottom).toBeGreaterThan(0);
     const focus = vi.spyOn(HTMLElement.prototype, "focus");
-    view.draw(view.all);
+    view.resize(650);
     expect(view.node("17").getBoundingClientRect().height).toBeLessThan(
       initial.height - 50,
     );
@@ -723,12 +759,19 @@ describe("desktop feed cold first layout bootstrap", () => {
     });
     const host = view.target.querySelector<HTMLElement>("[data-desktop-feed]")!;
     expect(host.dataset.layoutReady).toBe("true");
-    // The first four consecutive ratios share the measured 1440px row.
-    const firstHeight = (1440 - 4 * 72 - 3 * 12) / (0.4 + 2.8 + 0.5 + 1);
-    expect(Number.parseFloat(view.node("0").style.width)).toBeCloseTo(
-      72 + 0.4 * firstHeight,
+    const measuredWidth = Number.parseFloat(view.node("0").style.width);
+    // Whole-card area A satisfies W * (W - 72) = A * imageRatio.
+    expect(measuredWidth).toBeCloseTo(
+      (72 + Math.sqrt(72 ** 2 + 4 * 0.4 * 100000)) / 2,
       8,
     );
+    // The ideal fallback can have this same shape. Its measured RTL position
+    // must be prepared before visibility, rather than remaining at fallback x=0.
+    expect(Number.parseFloat(view.node("0").style.left)).toBeCloseTo(
+      1440 - measuredWidth,
+      8,
+    );
+    expect(Number.parseFloat(view.node("0").style.left)).toBeGreaterThan(0);
     const oldNodes = [
       ...view.target.querySelectorAll<HTMLElement>("[data-desktop-feed-item]"),
     ];
@@ -775,8 +818,16 @@ describe("desktop feed cold first layout bootstrap", () => {
     view.resize(1440);
     expect(host.dataset.layoutReady).toBe("true");
     const geometry = view.node("0").style.cssText;
-    // Twelve 0.5-ratio images balance into two measured six-card rows.
-    expect(Number.parseFloat(view.node("0").style.width)).toBeCloseTo(230, 8);
+    const measuredWidth = Number.parseFloat(view.node("0").style.width);
+    expect(measuredWidth).toBeCloseTo(
+      (72 + Math.sqrt(72 ** 2 + 4 * 0.5 * 100000)) / 2,
+      8,
+    );
+    expect(Number.parseFloat(view.node("0").style.left)).toBeCloseTo(
+      1440 - measuredWidth,
+      8,
+    );
+    expect(Number.parseFloat(view.node("0").style.left)).toBeGreaterThan(0);
     expect(view.owner.hasAttribute("inert")).toBe(true);
     view.owner.removeAttribute("inert");
     view.owner.removeAttribute("aria-hidden");

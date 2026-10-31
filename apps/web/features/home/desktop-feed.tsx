@@ -1,8 +1,11 @@
 "use client";
 
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import { desktopFeedMedia, layoutDesktopFeed } from "./desktop-feed-layout";
-import { desktopLayout } from "@moya/design-tokens";
+import {
+  desktopFeedIdealSize,
+  desktopFeedMedia,
+  layoutDesktopFeed,
+} from "./desktop-feed-layout";
 import styles from "./desktop-feed.module.css";
 import type { ReactNode } from "react";
 import type { DesktopFeedPosition } from "./desktop-feed-layout";
@@ -316,17 +319,11 @@ export const DesktopFeed = <T,>({
     >
       {visible.items.map((item, index) => {
         const media = desktopFeedMedia(item);
-        const mediaWidth = (media.ratio ?? 0) * desktopLayout.feed.rowHeight;
         const position = layout.positions[index] ?? {
           ...media,
+          ...desktopFeedIdealSize(media, width || undefined),
           x: 0,
           y: 0,
-          width:
-            media.ratio === null
-              ? desktopLayout.feed.textWidth
-              : mediaWidth + desktopLayout.feed.labelWidth,
-          height: desktopLayout.feed.rowHeight,
-          mediaWidth,
         };
         const key = visible.getKey(item);
         return (

@@ -4,7 +4,7 @@ import { readPagingWebPort } from "./support/e2e-ports";
 test.beforeEach(async ({ page }, info) => {
   test.skip(
     !info.project.name.startsWith("desktop"),
-    "Desktop balanced natural-aspect rows only",
+    "Desktop comparable whole-card masonry only",
   );
   test.setTimeout(45_000);
   await page.addInitScript(() =>
@@ -13,7 +13,7 @@ test.beforeEach(async ({ page }, info) => {
 });
 
 for (const width of [3440, 5120]) {
-  test(`real paging retains its source identity and balances RTL rows at ${width}px`, async ({
+  test(`real paging keeps its prefix and comparable whole-card areas at ${width}px`, async ({
     page,
   }, info) => {
     await page.setViewportSize({ width, height: 1440 });
@@ -26,7 +26,10 @@ for (const width of [3440, 5120]) {
     const cards = feed.locator("[data-desktop-feed-item]");
     await expect.poll(() => cards.count()).toBeGreaterThanOrEqual(12);
     const prefix = await cards.evaluateAll((nodes) =>
-      nodes.map((node) => (node as HTMLElement).dataset.desktopFeedKey),
+      nodes.map((node) => ({
+        key: (node as HTMLElement).dataset.desktopFeedKey,
+        geometry: (node as HTMLElement).style.cssText,
+      })),
     );
     const prefixNodes = (await cards.elementHandles()).slice(0, prefix.length);
     for (
@@ -35,8 +38,8 @@ for (const width of [3440, 5120]) {
       pageNumber++
     ) {
       const before = await cards.count();
-      // Pagination intentionally scrolls to the real footer. Key/DOM identity
-      // stays stable, while ordered rows may rebalance their pixel positions.
+      // Pagination intentionally scrolls to the real footer. Sequential packing
+      // preserves the prefix geometry as well as its keys and native nodes.
       await feed.evaluate((root) =>
         root.scrollIntoView({ block: "end", inline: "nearest" }),
       );
@@ -46,9 +49,10 @@ for (const width of [3440, 5120]) {
     expect(
       await cards.evaluateAll(
         (nodes, count) =>
-          nodes
-            .slice(0, count)
-            .map((node) => (node as HTMLElement).dataset.desktopFeedKey),
+          nodes.slice(0, count).map((node) => ({
+            key: (node as HTMLElement).dataset.desktopFeedKey,
+            geometry: (node as HTMLElement).style.cssText,
+          })),
         prefix.length,
       ),
     ).toEqual(prefix);
@@ -118,10 +122,11 @@ for (const width of [3440, 5120]) {
         }),
       };
     });
-    const rows = new Map<number, typeof geometry.items>();
+    const targetArea = Math.max(
+      52000,
+      Math.min(100000, 100000 * (geometry.width / 1000) ** 2),
+    );
     for (const item of geometry.items) {
-      const y = Math.round(item.y * 100);
-      rows.set(y, [...(rows.get(y) ?? []), item]);
       expect(item.frameError).toBeLessThan(1);
       expect(item.mediaFrameError).toBeLessThan(1);
       expect(item.borderWidth).toBe("0px");
@@ -136,48 +141,31 @@ for (const width of [3440, 5120]) {
       expect(item.x).toBeGreaterThanOrEqual(-0.1);
       expect(item.x + item.w).toBeLessThanOrEqual(geometry.width + 0.1);
       expect(item.h).toBeGreaterThan(0);
-      expect(item.h).toBeLessThanOrEqual(361);
+      expect(item.h).toBeLessThanOrEqual(421);
+      expect(item.w).toBeLessThanOrEqual(Math.min(580, geometry.width) + 1);
+      expect(item.w * item.h).toBeGreaterThanOrEqual(targetArea * 0.8 - 50);
+      expect(item.w * item.h).toBeLessThanOrEqual(targetArea * 1.2 + 50);
     }
-    const ordered = [...rows].sort(([a], [b]) => a - b).map(([, row]) => row);
-    for (let rowIndex = 0; rowIndex < ordered.length; rowIndex++) {
-      const row = ordered[rowIndex]!;
-      expect(Math.abs(row[0]!.x + row[0]!.w - geometry.width)).toBeLessThan(1);
-      for (let index = 0; index < row.length; index++) {
-        expect(Math.abs(row[index]!.h - row[0]!.h)).toBeLessThan(1);
-        if (index > 0)
-          expect(
-            Math.abs(row[index - 1]!.x - row[index]!.x - row[index]!.w - 12),
-          ).toBeLessThan(1);
+    expect(
+      Math.abs(geometry.items[0]!.x + geometry.items[0]!.w - geometry.width),
+    ).toBeLessThan(1);
+    for (let index = 0; index < geometry.items.length; index++) {
+      const item = geometry.items[index]!;
+      if (index > 0) {
+        const previous = geometry.items[index - 1]!;
+        expect(item.y).toBeGreaterThanOrEqual(previous.y - 0.1);
+        if (item.y <= previous.y + 0.5)
+          expect(item.x + item.w + 12).toBeLessThanOrEqual(previous.x + 0.1);
       }
-      const ratioSum = row.reduce(
-        (sum, item) => sum + item.mediaWidth / item.h,
-        0,
-      );
-      const captionWidth = row.reduce(
-        (sum, item) => sum + item.captionWidth,
-        0,
-      );
-      const fullHeight =
-        (geometry.width - captionWidth - 12 * (row.length - 1)) / ratioSum;
-      if (fullHeight < 359.5) expect(Math.abs(row.at(-1)!.x)).toBeLessThan(1);
-      if (Math.abs(row.at(-1)!.x) >= 1) {
-        // Only a truly infeasible/sparse group may retain bounded natural
-        // widths; a terminal row does not receive an unconditional exemption.
-        expect(fullHeight).toBeGreaterThan(359.5);
-        expect(row[0]!.h).toBeCloseTo(240, 0);
-        expect(row.at(-1)!.x).toBeGreaterThan(0);
-      }
-      if (rowIndex > 0) {
-        const previous = ordered[rowIndex - 1]![0]!;
-        expect(Math.abs(row[0]!.y - previous.y - previous.h - 12)).toBeLessThan(
-          1,
-        );
+      for (const earlier of geometry.items.slice(0, index)) {
+        const separated =
+          item.x + item.w + 12 <= earlier.x + 0.1 ||
+          earlier.x + earlier.w + 12 <= item.x + 0.1 ||
+          item.y + item.h + 12 <= earlier.y + 0.1 ||
+          earlier.y + earlier.h + 12 <= item.y + 0.1;
+        expect(separated).toBe(true);
       }
     }
-    for (let index = 1; index < geometry.items.length; index++)
-      expect(geometry.items[index]!.y).toBeGreaterThanOrEqual(
-        geometry.items[index - 1]!.y - 0.1,
-      );
     expect(
       Math.abs(
         geometry.height - Math.max(...geometry.items.map((n) => n.y + n.h)),
@@ -188,7 +176,7 @@ for (const width of [3440, 5120]) {
     );
     await cards.first().scrollIntoViewIfNeeded();
     await page.screenshot({
-      path: info.outputPath(`balanced-gallery-${width}.png`),
+      path: info.outputPath(`equal-area-gallery-${width}.png`),
       animations: "disabled",
     });
   });

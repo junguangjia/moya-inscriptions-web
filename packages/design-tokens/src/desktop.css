@@ -8,6 +8,14 @@
   --yoyi-desktop-prose-max: 760px;
   --yoyi-desktop-message-max: 1280px;
   --yoyi-desktop-card-label-width: 72px;
+  --yoyi-desktop-card-target-area: 100000;
+  --yoyi-desktop-card-compact-area: 52000;
+  --yoyi-desktop-card-area-reference-width: 1000px;
+  --yoyi-desktop-card-min-height: 140px;
+  --yoyi-desktop-card-compact-min-height: 120px;
+  --yoyi-desktop-card-compact-width: 896px;
+  --yoyi-desktop-card-max-height: 420px;
+  --yoyi-desktop-card-max-width: 580px;
   --yoyi-desktop-feed-row-height: 240px;
   --yoyi-desktop-feed-row-min: 200px;
   --yoyi-desktop-feed-row-max: 320px;

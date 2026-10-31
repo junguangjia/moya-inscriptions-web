@@ -48,6 +48,7 @@ test("desktop gallery adapts CSS viewports without changing source order or imag
       );
       const view = { w: innerWidth, h: innerHeight };
       return {
+        availableWidth: node.getBoundingClientRect().width,
         overflow: document.documentElement.scrollWidth > view.w + 1,
         bounds: cards.map((c) => {
           const r = c.getBoundingClientRect();
@@ -61,32 +62,33 @@ test("desktop gallery adapts CSS viewports without changing source order or imag
     });
     expect(geometry.overflow).toBe(false);
     expect(geometry.bounds.length).toBeGreaterThan(1);
-    const rows = new Map<number, typeof geometry.bounds>();
+    const targetArea = Math.max(
+      52000,
+      Math.min(100000, 100000 * (geometry.availableWidth / 1000) ** 2),
+    );
     for (let i = 0; i < geometry.bounds.length; i++) {
       const b = geometry.bounds[i]!;
       expect(b.x).toBeGreaterThanOrEqual(-1);
       expect(b.x + b.w).toBeLessThanOrEqual(width! + 1);
-      expect(b.h).toBeLessThanOrEqual(361);
-      const y = Math.round(b.y);
-      rows.set(y, [...(rows.get(y) ?? []), b]);
-    }
-    const orderedRows = [...rows.values()].sort((a, b) => a[0]!.y - b[0]!.y);
-    for (const [index, row] of orderedRows.entries()) {
-      const first = row[0]!;
-      for (const [column, card] of row.entries()) {
-        expect(Math.abs(card.y - first.y)).toBeLessThan(1);
-        expect(Math.abs(card.h - first.h)).toBeLessThan(1);
-        if (column > 0)
-          expect(
-            Math.abs(card.x + card.w + 12 - row[column - 1]!.x),
-          ).toBeLessThan(1);
+      expect(b.h).toBeLessThanOrEqual(421);
+      expect(b.w).toBeLessThanOrEqual(581);
+      // DOMRect dimensions are quantized independently by CSS layout units.
+      const areaEpsilon = (b.w + b.h) / 32 + 1;
+      expect(b.w * b.h).toBeGreaterThanOrEqual(targetArea * 0.8 - areaEpsilon);
+      expect(b.w * b.h).toBeLessThanOrEqual(targetArea * 1.2 + areaEpsilon);
+      if (i > 0) {
+        const previous = geometry.bounds[i - 1]!;
+        expect(b.y).toBeGreaterThanOrEqual(previous.y - 0.1);
+        if (Math.abs(b.y - previous.y) < 0.5)
+          expect(b.x + b.w + 11).toBeLessThanOrEqual(previous.x);
       }
-      if (index > 0) {
-        const previous = orderedRows[index - 1]![0]!;
-        expect(Math.abs(first.y - previous.y - previous.h - 12)).toBeLessThan(
-          1,
-        );
-      }
+      for (const other of geometry.bounds.slice(0, i))
+        expect(
+          b.x + b.w + 11 <= other.x ||
+            other.x + other.w + 11 <= b.x ||
+            b.y + b.h + 11 <= other.y ||
+            other.y + other.h + 11 <= b.y,
+        ).toBe(true);
     }
     counts.push(geometry.visible);
     await expect(feed.locator('[role="listitem"]').first()).toHaveCSS(
