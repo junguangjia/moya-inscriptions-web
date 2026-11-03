@@ -102,9 +102,18 @@ export const withEditorialTransaction = async <T>(
   }
 };
 
+// numeric_value_out_of_range and invalid_text_representation: an id the integer
+// column cannot hold, such as 3000000000 or "12.5", so no such record can exist.
+const IMPOSSIBLE_ID_SQLSTATES: ReadonlySet<unknown> = new Set([
+  "22003",
+  "22P02",
+]);
+
 /** A read that truly found nothing. Any other failure stays what it is. */
 export const isMissingRecord = (error: unknown): boolean =>
-  error instanceof NotFound || error instanceof Forbidden;
+  error instanceof NotFound ||
+  error instanceof Forbidden ||
+  IMPOSSIBLE_ID_SQLSTATES.has(sqlState(error));
 
 /** Answered from a stored rejected receipt, not from a new attempt. */
 export class ReplayedEditorialError extends EditorialError {
@@ -116,11 +125,13 @@ export class ReplayedEditorialError extends EditorialError {
 }
 
 // Refusals the same command can get past once something else changes: the key,
-// the Owner's open document, the images, the record or what it references. Payload
-// refusals, which are not EditorialError, write no receipt either.
+// the Owner's open document, the account's scope, the images, the record or what
+// it references. Payload refusals, which are not EditorialError, write no receipt
+// either.
 const RETRYABLE_REFUSALS: ReadonlySet<string> = new Set([
   "ALREADY_PUBLISHED",
   "CATALOG_DELIVERY_PREPARATION_REQUIRED",
+  "CATALOG_OUT_OF_SCOPE",
   "CONCURRENT_OPERATION_BUSY",
   "DOCUMENT_LOCKED",
   "RECORD_UNAVAILABLE",

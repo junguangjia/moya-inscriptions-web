@@ -53,6 +53,8 @@ const SCOPE_NAMES = [
   "commit-wire",
   "commit-rest",
   "commit-approve",
+  "no-key-approve",
+  "no-key-restore",
   "status-lost",
   "busy",
   "lock-failure",
@@ -69,6 +71,10 @@ const SCOPE_NAMES = [
   "superseded",
   "superseded-media",
   "no-approval",
+  "existing",
+  "existing-source",
+  "existing-source-other",
+  "field-refusal",
   "duplicate",
   "fields",
 ];
@@ -179,7 +185,7 @@ const withCommitFailure = async <T>(
 
 /** One failure of one Local API method on one collection; the key door reads keys. */
 const failingOnce = (
-  method: "find" | "update",
+  method: "create" | "find" | "findByID" | "update",
   collection: string,
   failure: () => Error,
 ) => {
@@ -191,6 +197,18 @@ const failingOnce = (
     spent = true;
     return Promise.reject(failure());
   }) as never);
+};
+
+/** The commit lands and the read that would confirm it fails, once. */
+const withStatusReadLost = async <T>(work: () => Promise<T>): Promise<T> => {
+  const statusRead = vi
+    .spyOn(adapter().drizzle, "execute")
+    .mockRejectedValueOnce(new Error("synthetic lost connection"));
+  try {
+    return await work();
+  } finally {
+    statusRead.mockRestore();
+  }
 };
 
 /** Holds one editorial lock on a connection of its own, as a concurrent write would. */
@@ -437,6 +455,84 @@ describe.sequential("commit truth in withEditorialTransaction", () => {
     expect(await restoreDraft(await reqFor(owner), restore)).toMatchObject({
       id: saved.id,
       revision: edited.revision + 1,
+    });
+  });
+
+  // The accepted limit in section 17: these routes have no key to retry under.
+  it("leaves a second active approval after a repeated unknown approve, and it survives revoking the one reported", async () => {
+    const saved = await saveDraft(await reqFor(automation), {
+      idempotencyKey: `${run}:no-key-approve:create`,
+      content: draftFor("no-key-approve"),
+    });
+    const approve = async () =>
+      approveBatch(await reqFor(owner), {
+        automationUserId: automation.id,
+        items: [{ id: saved.id, revision: saved.revision }],
+      });
+    await withStatusReadLost(async () => {
+      await expect(approve()).rejects.toMatchObject({
+        code: "OUTCOME_UNKNOWN",
+      });
+    });
+    const { approvalId: reported } = await approve();
+    const approvals = await rowsOf(
+      sql`SELECT approval.id, approval.status FROM editorial_approvals approval
+          JOIN editorial_approvals_items item ON item._parent_id = approval.id
+          WHERE item.catalog_id = ${saved.id} ORDER BY approval.id`,
+    );
+    expect(approvals.map(({ status }) => status)).toEqual(["active", "active"]);
+    expect(Number(approvals[1]!.id)).toBe(reported);
+    const revoked = await fetch(
+      new URL(`/api/editorial-approvals/${reported}`, server.origin),
+      {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          ...jwtHeader(ownerToken),
+        },
+        body: JSON.stringify({ status: "revoked" }),
+      },
+    );
+    expect(revoked.status).toBe(200);
+    expect(
+      await publishApproved(await reqFor(automation), {
+        approvalId: Number(approvals[0]!.id),
+        id: saved.id,
+        idempotencyKey: `${run}:no-key-approve:publish`,
+      }),
+    ).toMatchObject({ id: saved.id, replayed: false });
+  });
+
+  it("answers REVISION_CONFLICT to a repeated restore whose unknown first attempt had committed", async () => {
+    const saved = await saveDraft(await reqFor(automation), {
+      idempotencyKey: `${run}:no-key-restore:create`,
+      content: draftFor("no-key-restore"),
+    });
+    const edited = await saveDraft(await reqFor(automation), {
+      id: saved.id,
+      expectedRevision: saved.revision,
+      idempotencyKey: `${run}:no-key-restore:edit`,
+      content: { ...draftFor("no-key-restore"), title: "Second revision" },
+    });
+    const { docs } = await payload.findVersions({
+      collection: "catalogs",
+      where: { parent: { equals: saved.id } },
+      sort: "createdAt",
+      limit: 1,
+      overrideAccess: true,
+    });
+    const restore = async () =>
+      restoreDraft(await reqFor(owner), {
+        versionId: docs[0]!.id,
+        expectedRevision: edited.revision,
+      });
+    await withStatusReadLost(async () => {
+      await expect(restore()).rejects.toMatchObject({
+        code: "OUTCOME_UNKNOWN",
+      });
+    });
+    await expect(restore()).rejects.toMatchObject({
+      code: "REVISION_CONFLICT",
     });
   });
 
@@ -739,6 +835,35 @@ describe.sequential("failures a retry can get past write no receipt", () => {
   });
 });
 
+describe.sequential("a refusal the Owner can lift", () => {
+  it("writes no receipt for CATALOG_OUT_OF_SCOPE, and the same key succeeds once the scope is widened", async () => {
+    // Deliberately not in SCOPE_NAMES, and the last change to this account's scope.
+    const name = "scope-widened";
+    const args = {
+      idempotencyKey: `${run}:scope-widened`,
+      content: draftFor(name),
+    };
+    const before = await receiptCount();
+    await withClient(async (call) => {
+      expect(await call("editorial_save_draft", args)).toEqual({
+        ok: false,
+        code: "CATALOG_OUT_OF_SCOPE",
+      });
+      expect(await receiptCount()).toBe(before);
+      await payload.update({
+        collection: "users",
+        id: automation.id,
+        overrideAccess: true,
+        data: { scopeCatalogIds: [...SCOPE_NAMES, name].map(catalogId) },
+      });
+      expect(await call("editorial_save_draft", args)).toMatchObject({
+        revision: 1,
+        replayed: false,
+      });
+    });
+  });
+});
+
 describe.sequential("a rejection that stands", () => {
   it("keeps its receipt, and a replay of it is marked on Local, REST and JSON-RPC", async () => {
     const created = await saveDraft(await reqFor(automation), {
@@ -798,6 +923,97 @@ describe.sequential("a rejection that stands", () => {
       { status: "rejected", error_code: "REVISION_CONFLICT" },
       { status: "rejected", error_code: "REVISION_CONFLICT" },
     ]);
+  });
+
+  it("answers IDENTITY_ALREADY_BOUND to a new-key create of a record that exists, and keeps that receipt", async () => {
+    const content = draftFor("existing");
+    const saved = await saveDraft(await reqFor(automation), {
+      idempotencyKey: `${run}:existing:create`,
+      content,
+    });
+    const before = await receiptCount();
+    await withClient(async (call) => {
+      const retry = { idempotencyKey: `${run}:existing:wire`, content };
+      expect(await call("editorial_save_draft", retry)).toEqual({
+        ok: false,
+        code: "IDENTITY_ALREADY_BOUND",
+      });
+      // The record cannot be hard-deleted, so this refusal stands for its key.
+      expect(await call("editorial_save_draft", retry)).toEqual({
+        ok: false,
+        code: "IDENTITY_ALREADY_BOUND",
+        replayed: true,
+      });
+    });
+    const rest = await restPost(
+      "editorial/save-draft",
+      { idempotencyKey: `${run}:existing:rest`, content },
+      jwtHeader(automationToken),
+    );
+    expect(rest.status).toBe(409);
+    expect(await rest.json()).toEqual({
+      ok: false,
+      error: {
+        code: "IDENTITY_ALREADY_BOUND",
+        fields: ["catalogId", "sourceId"],
+      },
+    });
+    expect(await receiptCount()).toBe(before + 2);
+    expect(await catalogRows("existing")).toEqual([{ id: saved.id }]);
+  });
+
+  it("answers the same when only the source id belongs to a record, whichever index refuses first", async () => {
+    const source = `source-existing-source-${run}`;
+    await saveDraft(await reqFor(automation), {
+      idempotencyKey: `${run}:existing-source:create`,
+      content: draftFor("existing-source"),
+    });
+    // With its binding gone the claim passes, so only the unique index can refuse.
+    await rowsOf(
+      sql`DELETE FROM editorial_identities WHERE identity_value = ${source}`,
+    );
+    await withClient(async (call) => {
+      expect(
+        await call("editorial_save_draft", {
+          idempotencyKey: `${run}:existing-source:other`,
+          content: syntheticCatalogDraft(
+            catalogId("existing-source-other"),
+            source,
+          ),
+        }),
+      ).toEqual({ ok: false, code: "IDENTITY_ALREADY_BOUND" });
+    });
+    expect(await catalogRows("existing-source-other")).toEqual([]);
+  });
+
+  it("leaves a Payload refusal of any other field as CONTENT_INVALID, with no receipt", async () => {
+    const args = {
+      idempotencyKey: `${run}:field-refusal`,
+      content: draftFor("field-refusal"),
+    };
+    const before = await receiptCount();
+    await withClient(async (call) => {
+      const create = failingOnce(
+        "create",
+        "catalogs",
+        () =>
+          new ValidationError({
+            errors: [{ path: "title", message: "invalid" }],
+          }),
+      );
+      try {
+        expect(await call("editorial_save_draft", args)).toEqual({
+          ok: false,
+          code: "CONTENT_INVALID",
+        });
+      } finally {
+        create.mockRestore();
+      }
+      expect(await receiptCount()).toBe(before);
+      expect(await call("editorial_save_draft", args)).toMatchObject({
+        replayed: false,
+      });
+    });
   });
 
   it("still answers the rejection when its own receipt could not be written", async () => {
@@ -970,6 +1186,70 @@ describe.sequential("truthful codes on the plugin path", () => {
         find.mockRestore();
       }
     });
+  });
+
+  it.each([
+    ["above the integer column", 3_000_000_000],
+    ["a digit string above it", "99999999999"],
+    ["a fraction", "12.5"],
+  ])(
+    "answers RECORD_UNAVAILABLE, and 404 on REST, for an id that cannot exist: %s",
+    async (_label, id) => {
+      const before = await receiptCount();
+      const rest = await restPost(
+        "editorial/read-draft",
+        { id },
+        jwtHeader(automationToken),
+      );
+      expect(rest.status).toBe(404);
+      expect(await rest.json()).toEqual({
+        ok: false,
+        error: { code: "RECORD_UNAVAILABLE", fields: [] },
+      });
+      await withClient(async (call) => {
+        expect(await call("editorial_read", { id })).toEqual({
+          ok: false,
+          code: "RECORD_UNAVAILABLE",
+        });
+        expect(
+          await call("editorial_publish_approved", {
+            approvalId: id,
+            id: 1,
+            idempotencyKey: `${run}:impossible:${String(id)}`,
+          }),
+        ).toEqual({ ok: false, code: "RECORD_UNAVAILABLE" });
+      });
+      expect(await receiptCount()).toBe(before);
+    },
+  );
+
+  it("does not read another database failure as a miss", async () => {
+    const failure = () =>
+      Object.assign(new Error("synthetic failure"), {
+        cause: { code: "57P01" },
+      });
+    await withClient(async (call) => {
+      const read = failingOnce("findByID", "catalogs", failure);
+      try {
+        expect(await call("editorial_read", { id: 1 })).toEqual({
+          ok: false,
+          code: "OUTCOME_UNKNOWN",
+        });
+      } finally {
+        read.mockRestore();
+      }
+    });
+    const read = failingOnce("findByID", "catalogs", failure);
+    try {
+      const rest = await restPost(
+        "editorial/read-draft",
+        { id: 1 },
+        jwtHeader(automationToken),
+      );
+      expect(rest.status).toBe(500);
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it("answers RECORD_UNAVAILABLE for an approval that does not exist", async () => {

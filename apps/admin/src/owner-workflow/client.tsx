@@ -54,6 +54,8 @@ const errorMessage = (code: string) =>
     AUTHORIZATION_REQUIRED: "登录已过期，请重新登录。",
     RESTORE_OWNER_ONLY: "只有 Owner 可以恢复历史版本。",
     CONCURRENT_OPERATION_BUSY: "记录正在保存，请稍后刷新重试。",
+    OUTCOME_UNKNOWN:
+      "操作结果未确认，可能已经生效。请先刷新，并在“资料批准”中核对批准列表，确认后再决定是否重复操作。",
   })[code] ?? "操作未完成。请刷新后重试；内容不会被自动覆盖。";
 
 class WorkflowFailure extends Error {}

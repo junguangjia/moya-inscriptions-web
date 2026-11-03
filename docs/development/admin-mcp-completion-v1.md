@@ -1178,8 +1178,20 @@ tests/cms/admin-mcp-browser-checks.mjs:
   (editorial/transaction.ts) and any status of 500 or above. RECORD_UNAVAILABLE,
   REFERENCE_NOT_FOUND and REFERENCE_NOT_PUBLISHED join the list because they
   depend on state that can change; a read that failed for another reason no
-  longer reads as RECORD_UNAVAILABLE at all. `lockEditorialKey` answers BUSY
-  only for a lock timeout, a deadlock or a cancelled statement.
+  longer reads as RECORD_UNAVAILABLE at all. CATALOG_OUT_OF_SCOPE joins because
+  the Owner can widen an account's scope. `lockEditorialKey` answers BUSY only
+  for a lock timeout, a deadlock or a cancelled statement.
+- An id the integer column cannot hold (SQLSTATE 22003 or 22P02, such as
+  3000000000 or "12.5") is a miss in `isMissingRecord`, because no such record
+  can exist. `failureCode` asks the same function, so an impossible approvalId
+  on `editorial_publish_approved` reads as RECORD_UNAVAILABLE. On REST that
+  approvalId stays 500 `OPERATION_FAILED`, as a missing one always was.
+- A create with a new key that reaches a record that exists answers
+  IDENTITY_ALREADY_BOUND from `saveDraft`, on `editorial_save_draft` and on
+  REST, not CONTENT_INVALID, which would invite a model to edit valid content.
+  The unique index decides, so a race loser answers the same. It keeps a
+  rejected receipt, because a Catalog cannot be hard-deleted and the same
+  command meets it again. Native Admin keeps Payload's own field error.
 - A failure writing a rejected receipt leaves the original rejection as the
   answer, because the rejection is known and the retry meets it again.
 - `editorial_*` name Payload's own refusals (RECORD_UNAVAILABLE, FORBIDDEN,
@@ -1782,6 +1794,14 @@ Accepted limits, recorded and not fixed:
 - A rejected receipt written before S2 keeps answering its key with its old
   code, transient ones included, because a key's receipt cannot be replaced. A
   new key gets past it. Whether Production holds any such row was not checked.
+- A retry after OUTCOME_UNKNOWN on approve-batch can leave a second active
+  approval of the same revisions, because the route has no key, and
+  approve-article-batch has the same shape. The page reports only the later id,
+  so revoking that one leaves the first active, and automation can still publish
+  with it. What goes live is still a revision the Owner approved; what falls
+  short is the revocation. The Owner page says the result is unconfirmed and
+  asks for a look at the approval list before repeating. An approve op for AI
+  keys needs a requestId, or it meets the Matrix row "Lost answer or timeout".
 - A replayed draft save does not report `supersededIntents`: the migration list
   has no column for them, so a client that lost the answer reads the intent
   instead.

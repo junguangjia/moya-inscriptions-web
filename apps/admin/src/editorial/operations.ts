@@ -6,7 +6,11 @@ import {
   editorialSaveDraftSchema,
   EDITORIAL_FIELD_NAMES,
 } from "@moya/contracts/internal/editorial";
-import { restoreVersionOperation, type PayloadRequest } from "payload";
+import {
+  restoreVersionOperation,
+  ValidationError,
+  type PayloadRequest,
+} from "payload";
 import type { EditorialReceipt } from "../payload-types";
 
 import { isAutomation, actsAsOwner, requireActor } from "./access";
@@ -62,6 +66,18 @@ const editableDocument = async (req: PayloadRequest, id: number | string) => {
     throw error;
   }
 };
+
+/**
+ * A create that reaches an existing record. The record's own identity bindings let
+ * it through claimEditorialIdentities, then a unique index refuses it, and Payload
+ * words that as a field refusal although the content is fine. A Catalog cannot be
+ * hard-deleted, so the same command meets this again: it keeps a rejected receipt.
+ */
+const isIdentityTaken = (error: unknown): boolean =>
+  error instanceof ValidationError &&
+  error.data.errors.some(
+    ({ path }) => path === "catalogId" || path === "sourceId",
+  );
 
 const numericID = (value: unknown): number => {
   const id =
@@ -219,20 +235,29 @@ export const saveDraft = async (req: PayloadRequest, input: unknown) => {
         ) {
           throw new EditorialError("REVISION_CONFLICT", 409);
         }
-        const document = await req.payload.create({
-          collection: "catalogs",
-          data: {
-            ...payloadContentData(parsed.content),
-            _status: "draft",
-            revision: 0,
-          },
-          draft: true,
-          depth: 0,
-          req,
-          user: req.user,
-          overrideAccess: false,
-        });
-        return documentResult(document);
+        try {
+          const document = await req.payload.create({
+            collection: "catalogs",
+            data: {
+              ...payloadContentData(parsed.content),
+              _status: "draft",
+              revision: 0,
+            },
+            draft: true,
+            depth: 0,
+            req,
+            user: req.user,
+            overrideAccess: false,
+          });
+          return documentResult(document);
+        } catch (error) {
+          if (isIdentityTaken(error))
+            throw new EditorialError("IDENTITY_ALREADY_BOUND", 409, [
+              "catalogId",
+              "sourceId",
+            ]);
+          throw error;
+        }
       }
       const { id, expectedRevision } = parsed;
       if (expectedRevision === undefined)

@@ -5,7 +5,7 @@ import {
 import type { AdminMcpToolProfile } from "@moya/contracts/internal/admin-mcp";
 import { mcpPlugin } from "@payloadcms/plugin-mcp";
 import type { MCPPluginConfig } from "@payloadcms/plugin-mcp";
-import { Forbidden, NotFound, ValidationError } from "payload";
+import { Forbidden, ValidationError } from "payload";
 import type {
   CollectionConfig,
   Field,
@@ -26,7 +26,10 @@ import {
   publishApproved,
   isHumanOwner,
 } from "./editorial";
-import { ReplayedEditorialError } from "./editorial/transaction";
+import {
+  isMissingRecord,
+  ReplayedEditorialError,
+} from "./editorial/transaction";
 
 const id = z.union([z.string().min(1).max(128), z.number().int().positive()]);
 const safeReply = (result: unknown) => ({
@@ -38,8 +41,8 @@ const safeReply = (result: unknown) => ({
  * reads as one.
  */
 const failureCode = (error: unknown): string => {
-  if (error instanceof NotFound) return "RECORD_UNAVAILABLE";
   if (error instanceof Forbidden) return "FORBIDDEN";
+  if (isMissingRecord(error)) return "RECORD_UNAVAILABLE";
   if (error instanceof ValidationError) return "CONTENT_INVALID";
   return error instanceof Error && /^[A-Z_]{3,64}$/.test(error.message)
     ? error.message

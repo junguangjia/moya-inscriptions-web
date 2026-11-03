@@ -556,6 +556,38 @@ export const verifyAdminMcpSurfaces = async ({
       }),
       { ok: false, code: "RECORD_UNAVAILABLE" },
     );
+    // Above the integer column: the database refuses it, and that is still a miss.
+    const impossible = 3_000_000_000;
+    assert.deepEqual(
+      await editorial("read-draft", { id: impossible }),
+      refusedWith(404, "RECORD_UNAVAILABLE"),
+    );
+    assert.deepEqual(await tool("editorial_read", { id: impossible }), {
+      ok: false,
+      code: "RECORD_UNAVAILABLE",
+    });
+    assert.deepEqual(
+      await tool("editorial_publish_approved", {
+        approvalId: impossible,
+        id: documentId,
+        idempotencyKey: `${run}:impossible-approval`,
+      }),
+      { ok: false, code: "RECORD_UNAVAILABLE" },
+    );
+    // A new key creating what exists is not a field refusal, and it stands.
+    const existing = {
+      idempotencyKey: `${run}:existing`,
+      content,
+    };
+    assert.deepEqual(await tool("editorial_save_draft", existing), {
+      ok: false,
+      code: "IDENTITY_ALREADY_BOUND",
+    });
+    assert.deepEqual(await tool("editorial_save_draft", existing), {
+      ok: false,
+      code: "IDENTITY_ALREADY_BOUND",
+      replayed: true,
+    });
   } finally {
     await editor.close();
   }
