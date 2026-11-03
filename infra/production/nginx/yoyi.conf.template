@@ -2,6 +2,9 @@
 # Render/validate this template only during separately authorized deployment.
 # Fixed classifications omit raw paths/query strings, cookies, tokens and UA text.
 limit_req_zone $binary_remote_addr zone=yoyi_analytics:1m rate=30r/m;
+# Whole-path total for /api/mcp: peers may be edge nodes, so never per address.
+# Starting values; confirm them in the isolated environment.
+limit_req_zone $server_name zone=yoyi_mcp:1m rate=10r/s;
 # Analytics alone may use EdgeOne's overwritten connection address. This private
 # include contains only the verified current origin ACL for this site's host.
 # An empty file trusts no peers; a missing file rejects configuration validation.
@@ -34,6 +37,7 @@ map $uri $yoyi_route_class {
     ~^/api/community(?:/|$) community;
     ~^/api/catalog(?:/|$) catalog;
     ~^/api/catalog-search$ search;
+    ~^/api/mcp(?:/|$) machine-api;
     ~^/api/ admin-api;
     ~^/(?:_next|admin-assets)(?:/|$) assets;
     ~^/mcp(?:/|$) machine-api;
@@ -106,7 +110,8 @@ server {
     client_max_body_size 1m;
 
     # Only the configured Article audience reaches Backend; internal/operator
-    # and generic Admin agent paths remain unexposed.
+    # paths remain unexposed. The Admin's key-only MCP path is /api/mcp below; its
+    # Development-only agent tools answer NOT_FOUND here.
     location = /mcp/article-authoring {
         proxy_buffering off;
         proxy_cache off;
@@ -155,6 +160,14 @@ server {
     # Payload owns its native management/preview/media APIs and authorizes access.
     location /api/ {
         client_max_body_size 50m;
+        proxy_pass http://yoyi_admin;
+    }
+    # MCP keys only, at the Admin's door. No session or anonymous access reaches a
+    # tool, and the limit is this path's total, so nothing else consumes it.
+    location = /api/mcp {
+        limit_req zone=yoyi_mcp burst=40;
+        limit_req_status 429;
+        client_max_body_size 4m;
         proxy_pass http://yoyi_admin;
     }
     # The approved Web retains all existing Public API forwarding routes.

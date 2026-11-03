@@ -16,7 +16,7 @@ import type {
   PayloadRequest,
 } from "payload";
 
-import { isAutomation, isOwner, requireActor } from "../editorial/access";
+import { isAutomation, actsAsOwner, requireActor } from "../editorial/access";
 import { EditorialError } from "../editorial/errors";
 import {
   clearMutationState,
@@ -81,7 +81,8 @@ export const createEditorialContentHooks = (
     input.overrideAccess = false;
     input.overrideLock = false;
     if (operation === "restoreVersion") {
-      if (!isOwner(req)) throw new EditorialError("RESTORE_OWNER_ONLY", 403);
+      if (!actsAsOwner(req))
+        throw new EditorialError("RESTORE_OWNER_ONLY", 403);
       if (input.draft !== true)
         throw new EditorialError("RESTORE_REQUIRES_DRAFT", 400);
       Object.defineProperties(req, {
@@ -136,7 +137,7 @@ export const createEditorialContentHooks = (
         throw new EditorialError("IDENTITY_SERVER_ONLY", 400, [
           workflow.identityField,
         ]);
-      if (data._status === "published" && !isOwner(req))
+      if (data._status === "published" && !actsAsOwner(req))
         throw new EditorialError("PUBLISH_NOT_APPROVED", 403);
       if (data._status !== "published") {
         input.draft = true;
@@ -154,7 +155,7 @@ export const createEditorialContentHooks = (
     await lockEditorialKey(req, `document:${String(input.id)}`);
     const expectedRevision = revisionNumber(data.revision);
     const publishing = data._status === "published";
-    if (publishing && !isOwner(req) && !isApprovedPublishRequest(req))
+    if (publishing && !actsAsOwner(req) && !isApprovedPublishRequest(req))
       throw new EditorialError("PUBLISH_NOT_APPROVED", 403);
     if (isAutomation(req) && !isApprovedPublishRequest(req)) {
       if (input.draft !== true)
@@ -168,7 +169,7 @@ export const createEditorialContentHooks = (
     )
       throw new EditorialError("PUBLICATION_STATE_REQUIRED", 400, ["_status"]);
     const mode = publishing ? "publish" : input.draft ? "draft" : "withdraw";
-    if (mode === "withdraw" && !isOwner(req))
+    if (mode === "withdraw" && !actsAsOwner(req))
       throw new EditorialError("WITHDRAW_OWNER_ONLY", 403);
     setMutationState(req, { mode, expectedRevision });
     return args;
@@ -223,7 +224,7 @@ export const createEditorialContentHooks = (
         const state = mutationState(req);
         if (!state) throw new EditorialError("WORKFLOW_REQUIRED", 403);
         if (state.mode === "publish") {
-          if (!isOwner(req) && !isApprovedPublishRequest(req))
+          if (!actsAsOwner(req) && !isApprovedPublishRequest(req))
             throw new EditorialError("PUBLISH_NOT_APPROVED", 403);
           data._status = "published";
           const previous = (originalDoc ?? {}) as Record<string, unknown>;
@@ -254,13 +255,14 @@ export const createEditorialContentHooks = (
 /** Owner: everything except delete. Automation: read and draft writes only. */
 export const editorialContentAccess = {
   create: ({ req }: { req: PayloadRequest }) =>
-    isOwner(req) || isAutomation(req),
+    actsAsOwner(req) || isAutomation(req),
   delete: () => false,
-  read: ({ req }: { req: PayloadRequest }) => isOwner(req) || isAutomation(req),
+  read: ({ req }: { req: PayloadRequest }) =>
+    actsAsOwner(req) || isAutomation(req),
   readVersions: ({ req }: { req: PayloadRequest }) =>
-    isOwner(req) || isAutomation(req),
+    actsAsOwner(req) || isAutomation(req),
   update: ({ req }: { req: PayloadRequest }) =>
-    isOwner(req) || isAutomation(req),
+    actsAsOwner(req) || isAutomation(req),
 };
 
 /** A referenced Catalog record must be published for the reference to publish. */

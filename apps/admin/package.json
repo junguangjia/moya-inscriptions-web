@@ -18,6 +18,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "3.1127.0",
     "@aws-sdk/s3-request-presigner": "3.1127.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@moya/api": "workspace:*",
     "@moya/catalog-postgres": "workspace:*",
     "@moya/community-postgres": "workspace:*",
@@ -70,6 +71,9 @@
     "./community-endpoints": "./src/community/endpoints.ts",
     "./community-bulk-actions": "./src/community/bulk-actions.tsx",
     "./community-comment-image-body": "./src/community/comment-image-body.tsx",
+    "./admin-mcp": "./src/admin-mcp/index.ts",
+    "./admin-mcp-control-view": "./src/admin-mcp/control/View.tsx",
+    "./admin-mcp-control-client": "./src/admin-mcp/control/client.tsx",
     "./agent-admin-mcp": "./src/agent-admin/mcp-tools.ts",
     "./agent-connections": "./src/agent-connections/index.ts",
     "./agent-connections-admission": "./src/agent-connections/admission.ts",

@@ -77,6 +77,7 @@ export interface Config {
     articles: Article;
     "article-collections": ArticleCollection;
     "editorial-article-approvals": EditorialArticleApproval;
+    "mcp-audit-events": McpAuditEvent;
     "payload-mcp-api-keys": PayloadMcpApiKey;
     "payload-kv": PayloadKv;
     "payload-locked-documents": PayloadLockedDocument;
@@ -100,6 +101,8 @@ export interface Config {
     "editorial-article-approvals":
       | EditorialArticleApprovalsSelect<false>
       | EditorialArticleApprovalsSelect<true>;
+    "mcp-audit-events":
+      McpAuditEventsSelect<false> | McpAuditEventsSelect<true>;
     "payload-mcp-api-keys":
       PayloadMcpApiKeysSelect<false> | PayloadMcpApiKeysSelect<true>;
     "payload-kv": PayloadKvSelect<false> | PayloadKvSelect<true>;
@@ -114,8 +117,12 @@ export interface Config {
     defaultIDType: number;
   };
   fallbackLocale: null;
-  globals: {};
-  globalsSelect: {};
+  globals: {
+    "mcp-control": McpControl;
+  };
+  globalsSelect: {
+    "mcp-control": McpControlSelect<false> | McpControlSelect<true>;
+  };
   locale: null;
   widgets: {
     collections: CollectionsWidget;
@@ -168,7 +175,7 @@ export interface PayloadMcpApiKeyAuthOperations {
  */
 export interface User {
   id: number;
-  role: "owner" | "automation";
+  role: "owner" | "automation" | "ai_operator";
   agentPrincipal?: string | null;
   scopeCatalogIds?:
     | {
@@ -622,6 +629,57 @@ export interface EditorialArticleApproval {
   createdAt: string;
 }
 /**
+ * 查看 AI 与自动化密钥的每次调用。写入有开始和结束两条记录，只有开始的记录表示结果未知。
+ *
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mcp-audit-events".
+ */
+export interface McpAuditEvent {
+  id: number;
+  at: string;
+  phase: "start" | "finish";
+  class: "read" | "reversible" | "irreversible" | "write" | "reserved";
+  tool?: string | null;
+  op?: string | null;
+  ok?: boolean | null;
+  code?: string | null;
+  keyLabel?: string | null;
+  targetType?: string | null;
+  targetId?: string | null;
+  count?: number | null;
+  changedFields?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  callId: string;
+  keyId?: number | null;
+  userId?: string | null;
+  runId?: string | null;
+  requestId?: string | null;
+  durationMs?: number | null;
+  responseBytes?: number | null;
+  dbMs?: number | null;
+  upstreamMs?: number | null;
+  queryCount?: number | null;
+  cacheHit?: boolean | null;
+  branchLatency?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  beforeHash?: string | null;
+  afterHash?: string | null;
+}
+/**
  * API keys control which collections, resources, tools, and prompts MCP clients can access
  *
  * This interface was referenced by `Config`'s JSON-Schema
@@ -703,6 +761,15 @@ export interface PayloadMcpApiKey {
      */
     artvennOperationsPrepareUndo?: boolean | null;
   };
+  /**
+   * 仅对 AI 操作账号生效；自动化账号沿用已勾选的工具。
+   */
+  toolProfile?: ("read" | "operate" | "full") | null;
+  /**
+   * 到期后密钥立即失效；每次续期最长 30 天。
+   */
+  expiresAt?: string | null;
+  lastUsedAt?: string | null;
   updatedAt: string;
   createdAt: string;
   enableAPIKey?: boolean | null;
@@ -769,6 +836,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: "editorial-article-approvals";
         value: number | EditorialArticleApproval;
+      } | null)
+    | ({
+        relationTo: "mcp-audit-events";
+        value: number | McpAuditEvent;
       } | null)
     | ({
         relationTo: "payload-mcp-api-keys";
@@ -1189,6 +1260,38 @@ export interface EditorialArticleApprovalsSelect<T extends boolean = true> {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mcp-audit-events_select".
+ */
+export interface McpAuditEventsSelect<T extends boolean = true> {
+  at?: T;
+  phase?: T;
+  class?: T;
+  tool?: T;
+  op?: T;
+  ok?: T;
+  code?: T;
+  keyLabel?: T;
+  targetType?: T;
+  targetId?: T;
+  count?: T;
+  changedFields?: T;
+  callId?: T;
+  keyId?: T;
+  userId?: T;
+  runId?: T;
+  requestId?: T;
+  durationMs?: T;
+  responseBytes?: T;
+  dbMs?: T;
+  upstreamMs?: T;
+  queryCount?: T;
+  cacheHit?: T;
+  branchLatency?: T;
+  beforeHash?: T;
+  afterHash?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-mcp-api-keys_select".
  */
 export interface PayloadMcpApiKeysSelect<T extends boolean = true> {
@@ -1214,6 +1317,9 @@ export interface PayloadMcpApiKeysSelect<T extends boolean = true> {
         artvennOperationsCancel?: T;
         artvennOperationsPrepareUndo?: T;
       };
+  toolProfile?: T;
+  expiresAt?: T;
+  lastUsedAt?: T;
   updatedAt?: T;
   createdAt?: T;
   enableAPIKey?: T;
@@ -1269,6 +1375,54 @@ export interface CollectionsWidget {
     [k: string]: unknown;
   };
   width: "full";
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mcp-control".
+ */
+export interface McpControl {
+  id: number;
+  pause?: boolean | null;
+  threshold: number;
+  dm?: boolean | null;
+  dmOpenedAt?: string | null;
+  dmOpenedBy?: (number | null) | User;
+  evidence?: boolean | null;
+  evidenceOpenedAt?: string | null;
+  evidenceOpenedBy?: (number | null) | User;
+  rawIp?: boolean | null;
+  rawIpOpenedAt?: string | null;
+  rawIpOpenedBy?: (number | null) | User;
+  selfOnly?: boolean | null;
+  selfOnlyOpenedAt?: string | null;
+  selfOnlyOpenedBy?: (number | null) | User;
+  complianceConfirmation?: string | null;
+  updatedAt?: string | null;
+  createdAt?: string | null;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mcp-control_select".
+ */
+export interface McpControlSelect<T extends boolean = true> {
+  pause?: T;
+  threshold?: T;
+  dm?: T;
+  dmOpenedAt?: T;
+  dmOpenedBy?: T;
+  evidence?: T;
+  evidenceOpenedAt?: T;
+  evidenceOpenedBy?: T;
+  rawIp?: T;
+  rawIpOpenedAt?: T;
+  rawIpOpenedBy?: T;
+  selfOnly?: T;
+  selfOnlyOpenedAt?: T;
+  selfOnlyOpenedBy?: T;
+  complianceConfirmation?: T;
+  updatedAt?: T;
+  createdAt?: T;
+  globalType?: T;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema

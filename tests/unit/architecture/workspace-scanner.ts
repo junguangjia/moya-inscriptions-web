@@ -1283,6 +1283,16 @@ export const isAuthorizedCmsServerFile = (
     ) ||
     // Agent Administration V1: the MCP tool adapter is a server module.
     relative === "src/agent-admin/mcp-tools.ts" ||
+    // admin-mcp-completion-v1: the server-side MCP path, named one by one like
+    // the connection boundary below.
+    /^src\/admin-mcp\/(?:audit|dispatch|door|envelope|guard|index|native)\.ts$/.test(
+      relative,
+    ) ||
+    /^src\/admin-mcp\/tools\/(?:index|whoami)\.ts$/.test(relative) ||
+    /^src\/admin-mcp\/control\/(?:endpoints|global|page-data|state)\.ts$/.test(
+      relative,
+    ) ||
+    relative === "src/admin-mcp/control/View.tsx" ||
     // Agent Connections V1: the connection authentication boundary. These are
     // server modules by construction — they read request headers, resolve a
     // restricted principal and answer the Payload MCP plugin — and they are
@@ -1336,6 +1346,9 @@ const isOwnerWorkflowTypes = (
       ].includes(relative) &&
         reference.specifier ===
           "@moya/contracts/internal/community-operator") ||
+      // The AI control page renders what its server view read, as types only.
+      (relative === "src/admin-mcp/control/client.tsx" &&
+        reference.specifier === "@moya/contracts/internal/admin-mcp") ||
       ([
         "src/media/MediaSnapshotPicker.tsx",
         "src/media/CatalogOwnershipField.tsx",

@@ -129,7 +129,7 @@ beforeAll(async () => {
   const outsideEmail = `cos-outside-${suffix}@example.invalid`;
   await payload.create({
     collection: "users",
-    overrideAccess: false,
+    overrideAccess: true,
     req: ownerReq,
     data: {
       email: outsideEmail,

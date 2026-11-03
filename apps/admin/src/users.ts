@@ -1,8 +1,42 @@
-import type { Access, CollectionConfig, FieldAccess } from "payload";
-const owner: Access = ({ req }) =>
-  req.user?.collection === "users" && req.user.role === "owner";
-const ownerField: FieldAccess = ({ req }) =>
-  req.user?.collection === "users" && req.user.role === "owner";
+import {
+  AuthenticationError,
+  type Access,
+  type CollectionBeforeChangeHook,
+  type CollectionBeforeLoginHook,
+  type CollectionConfig,
+  type FieldAccess,
+} from "payload";
+
+import {
+  auditReservedCollection,
+  noticePasswordChange,
+} from "./admin-mcp/audit";
+import { isHumanOwner, isOwner } from "./editorial/access";
+import { EditorialError } from "./editorial/errors";
+
+// Accounts are reserved to the Owner's browser session (amendment 2026-11-03,
+// section 4). Any other Owner credential keeps reading its own row, because
+// /api/users/me runs with overrideAccess:false.
+const humanOwner: Access = ({ req }) => isHumanOwner(req);
+const humanOwnerField: FieldAccess = ({ req }) => isHumanOwner(req);
+const humanOwnerOrOwnRow: Access = ({ req }) => {
+  if (isHumanOwner(req)) return true;
+  return isOwner(req) ? { id: { equals: req.user?.id } } : false;
+};
+// An ai_operator row acts only through an MCP key, never a password or REST key.
+const refuseAiOperatorLogin: CollectionBeforeLoginHook = ({ req, user }) => {
+  if (user.role === "ai_operator") throw new AuthenticationError(req.t);
+  return user;
+};
+const refuseAiOperatorRestKey: CollectionBeforeChangeHook = ({
+  data,
+  originalDoc,
+}) => {
+  const merged = { ...originalDoc, ...data };
+  if (merged.role === "ai_operator" && merged.enableAPIKey)
+    throw new EditorialError("AI_OPERATOR_REST_KEY_REFUSED", 400);
+  return data;
+};
 export const initialUserEndpoints = (
   environment = process.env.CMS_ENVIRONMENT,
 ): NonNullable<CollectionConfig["endpoints"]> =>
@@ -38,13 +72,19 @@ export const Users: CollectionConfig = {
       sameSite: "Strict",
     },
   },
+  disableBulkEdit: true,
   access: {
-    admin: ({ req }) => owner({ req }) === true,
-    create: owner,
-    read: owner,
-    update: owner,
+    admin: ({ req }) => isOwner(req),
+    create: humanOwner,
+    read: humanOwnerOrOwnRow,
+    update: humanOwner,
     delete: () => false,
-    unlock: owner,
+    unlock: humanOwner,
+  },
+  hooks: {
+    beforeChange: [refuseAiOperatorRestKey, noticePasswordChange],
+    afterChange: [auditReservedCollection],
+    beforeLogin: [refuseAiOperatorLogin],
   },
   endpoints: initialUserEndpoints(),
   fields: [
@@ -57,8 +97,9 @@ export const Users: CollectionConfig = {
       options: [
         { label: "管理员", value: "owner" },
         { label: "自动化账号", value: "automation" },
+        { label: "AI 操作账号", value: "ai_operator" },
       ],
-      access: { create: ownerField, update: ownerField },
+      access: { create: humanOwnerField, update: humanOwnerField },
     },
     {
       type: "collapsible",
@@ -74,7 +115,7 @@ export const Users: CollectionConfig = {
           type: "text",
           label: "AI 身份标识",
           required: false,
-          access: { create: ownerField, update: ownerField },
+          access: { create: humanOwnerField, update: humanOwnerField },
           validate: (value: unknown) =>
             value === undefined ||
             value === null ||
@@ -88,7 +129,7 @@ export const Users: CollectionConfig = {
           type: "json",
           label: "允许编辑的资料编号",
           defaultValue: [],
-          access: { create: ownerField, update: ownerField },
+          access: { create: humanOwnerField, update: humanOwnerField },
           validate: (value: unknown) =>
             (Array.isArray(value) &&
               value.length <= 10000 &&

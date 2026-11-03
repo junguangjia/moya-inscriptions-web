@@ -12,7 +12,7 @@ import {
 } from "@moya/contracts/internal/editorial";
 import type { PayloadRequest } from "payload";
 
-import { isAutomation, isOwner, requireActor } from "../editorial/access";
+import { isAutomation, actsAsOwner, requireActor } from "../editorial/access";
 import { relationshipID } from "../editorial/collections";
 import { requestFingerprint } from "../editorial/content";
 import { EditorialError, validationError } from "../editorial/errors";
@@ -221,7 +221,7 @@ export const approveArticleBatch = async (
   req: PayloadRequest,
   input: unknown,
 ) => {
-  if (!isOwner(req)) throw new EditorialError("APPROVAL_OWNER_ONLY", 403);
+  if (!actsAsOwner(req)) throw new EditorialError("APPROVAL_OWNER_ONLY", 403);
   const parsed = parse(editorialArticleApproveBatchSchema, input);
   const approval = await req.payload.create({
     collection: "editorial-article-approvals",

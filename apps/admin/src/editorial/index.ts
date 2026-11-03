@@ -1,8 +1,11 @@
 export {
+  actsAsOwner,
   catalogAccess,
   catalogScopeAccess,
   canEditCatalog,
+  isAiOperator,
   isAutomation,
+  isHumanOwner,
   isOwner,
 } from "./access";
 export { EditorialApprovals, EditorialReceipts } from "./collections";

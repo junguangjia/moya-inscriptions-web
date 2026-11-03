@@ -39,7 +39,7 @@ const read = (relative: string) =>
   readFileSync(path.join(root, relative), "utf8");
 
 describe("F1: what the repository configuration actually says", () => {
-  it("routes /api/ to the Admin upstream with named carve-outs, and no carve-out for /mcp", () => {
+  it("routes /api/ to the Admin upstream with named carve-outs, /api/mcp staying on Admin behind its path limit", () => {
     const template = read("infra/production/nginx/yoyi.conf.template");
     // The general rule.
     expect(template).toMatch(
@@ -49,8 +49,11 @@ describe("F1: what the repository configuration actually says", () => {
     // rather than an oversight nobody ever makes.
     expect(template).toContain("location = /api/catalog");
     expect(template).toContain("location ^~ /api/community/");
-    // The finding itself, stated as configuration and nothing more.
-    expect(template).not.toContain("/api/mcp");
+    // The earlier finding was no carve-out at all. The 2026-11-03 amendment
+    // authorizes a key-only path with a limit, still on the Admin upstream.
+    expect(template).toMatch(
+      /location = \/api\/mcp \{[^}]*limit_req zone=yoyi_mcp[^}]*proxy_pass http:\/\/yoyi_admin;/u,
+    );
   });
 
   it("is a CONDITIONAL finding: this assertion is about the template, not about any deployed host", () => {
@@ -86,8 +89,8 @@ describe("F1: the NEW connection surface fails closed", () => {
     // argument is the gated factory, and that factory answers `null` — the
     // closed door — whenever the surface is not composed.
     const mcp = read("apps/admin/src/mcp.ts");
-    expect(mcp).toContain(
-      "overrideAuth: connectionOverrideAuth(connectionAuthDependencies())",
+    expect(mcp).toMatch(
+      /overrideAuth: withKeyDoor\(\s*connectionOverrideAuth\(connectionAuthDependencies\(\)\),?\s*\)/u,
     );
     for (const environment of [
       {},

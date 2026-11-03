@@ -661,7 +661,7 @@ beforeAll(async () => {
     const email = `ingest-${label}-${suffix}@example.invalid`;
     await payload.create({
       collection: "users",
-      overrideAccess: false,
+      overrideAccess: true,
       req: ownerReq,
       data: { email, password, role: "automation", scopeCatalogIds: scope },
     });
@@ -2303,7 +2303,7 @@ describe("Catalog ingest through real Payload and a synthetic COS", () => {
     const password = randomUUID();
     await payload.create({
       collection: "users",
-      overrideAccess: false,
+      overrideAccess: true,
       req: ownerReq,
       data: {
         email,
