@@ -246,6 +246,22 @@ const webT02StaticFilesFile = path.join(webRoot, "lib", "t02-static-files.ts");
 // Community V1 (Mission 2A): each file may import exactly these names from the
 // Web Public API server module; nothing else under app/ reaches it.
 const webCommunityServerImports: ReadonlyMap<string, string> = new Map([
+  // #358: one association-authorized image byte relay, never the JSON relay.
+  [
+    path.join(
+      webRoot,
+      "app",
+      "api",
+      "community",
+      "discussion",
+      "images",
+      "[commentId]",
+      "[itemId]",
+      "[variant]",
+      "route.ts",
+    ),
+    "{relayServerDiscussionImage}",
+  ],
   // closed-beta-access-v1: the one place a page or a content-serving route
   // asks the Backend whether the visitor may see the product.
   [
@@ -700,6 +716,18 @@ const articleClientImports: ReadonlyMap<
 > = new Map(
   (
     Object.entries({
+      "features/comments/comment-image-upload-session.ts": {
+        "comment-images-client": ["COMMENT_IMAGE_LIMITS"],
+      },
+      "features/comments/comment-image-composer-state.ts": {
+        "comment-images-client": [
+          "COMMENT_IMAGE_LIMITS",
+          "validCommentImageOffsets",
+        ],
+      },
+      "features/comments/comment-image-draft.test.ts": {
+        "comment-images-client": ["validCommentImageOffsets"],
+      },
       "features/settings/feedback-upload-session.ts": {
         "feedback-client": ["feedbackImageLimits"],
         "work-publishing-client": ["publishingClient"],
@@ -1009,6 +1037,9 @@ const isForbiddenServerReference = (specifier: string): boolean => {
 };
 
 const allowedClientContractTypes = new Set([
+  // #358 canonical static image references, not provider/storage details.
+  "CommentImage",
+  "CommentImageInput",
   // Issue #326 public reporting and restricted appeal DTOs (types only).
   "AuthCapabilities",
   "AuthChallengeAccepted",
@@ -1293,6 +1324,7 @@ const isOwnerWorkflowTypes = (
       ([
         "src/community/api.ts",
         "src/community/queue-client.tsx",
+        "src/community/comment-image-body.tsx",
         "src/community/content-client.tsx",
         "src/community/users-client.tsx",
         "src/community/settings-client.tsx",

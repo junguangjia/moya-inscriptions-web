@@ -12,7 +12,10 @@ import {
   qaCommentScenarioNames,
 } from "../comments/comment-scenarios";
 import { useQaCommentStore } from "../comments/use-qa-comment-store";
-import { QaDetailColophon } from "./qa-detail-colophon";
+import {
+  QaDetailColophon,
+  createQaCommentReportRenderer,
+} from "./qa-detail-colophon";
 import { homeScenarioNames } from "./home-scenario-contract";
 import { loadCatalogDetailPresentation } from "../detail/load-catalog-detail";
 import {
@@ -31,7 +34,7 @@ import { qaSearchScenarioNames, qaSearchScenarios } from "./search-scenarios";
 import { quickActionContentKey } from "../quick-actions/quick-action-types";
 import type { ContentQuickActionEnvironment } from "../quick-actions/quick-action-types";
 import type { HomeFeed } from "../home/home-feed";
-import type { CatalogDetail } from "@moya/contracts";
+import type { CatalogDetail, DiscussionTarget } from "@moya/contracts";
 import type {
   T02pDevelopmentCatalogScenario,
   T02pDevelopmentCatalogScenarios,
@@ -320,6 +323,23 @@ export const T02pQaHarness = ({
               resetKey={`${searchScenario}:${userScenario}`}
             >
               <T02pProductPreview
+                {...(commentScenario === "comment-inline-images"
+                  ? {
+                      renderFeedColophon: (
+                        target: DiscussionTarget,
+                        title: string,
+                      ) => (
+                        <QaDetailColophon
+                          key={`feed:${commentScenario}:${target.type}:${target.id}`}
+                          target={target}
+                          title={title}
+                          store={commentStore}
+                          scenario={commentScenario}
+                          presentation="feed"
+                        />
+                      ),
+                    }
+                  : {})}
                 quickActions={quickActions}
                 catalogDetailLoader={loadQaDetail}
                 key={homeScenario}
@@ -348,6 +368,9 @@ export const T02pQaHarness = ({
                     catalogId={catalogId}
                     currentUser={qaCurrentUser}
                     items={commentStore.getItems(catalogId)}
+                    renderReport={createQaCommentReportRenderer(
+                      commentStore.getItems(catalogId),
+                    )}
                     key={`${commentScenario}:${catalogId}`}
                     onSendComment={(text) =>
                       commentStore.sendComment(catalogId, text, qaCurrentUser)

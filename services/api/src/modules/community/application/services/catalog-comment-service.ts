@@ -174,6 +174,8 @@ export class CatalogCommentService {
         undefined,
         undefined,
         request.mentions,
+        request.images,
+        request.requestId,
       );
       return {
         item: {
@@ -185,6 +187,8 @@ export class CatalogCommentService {
         awaitingApproval: sent.awaitingApproval,
       };
     }
+    if (request.images?.length || request.text.length === 0)
+      throw new CommunityInputError("Comment images unavailable");
     const moderation = await this.entryModerationState();
     const created = await this.commentPort.insertComment({
       id: generateOpaqueId("comment", this.randomBytes) as CatalogCommentId,
@@ -215,6 +219,8 @@ export class CatalogCommentService {
         rootCommentId,
         request.replyTo,
         request.mentions,
+        request.images,
+        request.requestId,
       );
       return {
         item: legacyReply(sent.item),
@@ -233,6 +239,8 @@ export class CatalogCommentService {
           "replyTo must be a visible reply under the same root comment",
         );
     }
+    if (request.images?.length || request.text.length === 0)
+      throw new CommunityInputError("Comment images unavailable");
     const moderation = await this.entryModerationState();
     const created = await this.commentPort.insertReply({
       id: generateOpaqueId("comment", this.randomBytes) as CatalogCommentId,
@@ -281,6 +289,7 @@ const legacyReply = (r: DiscussionReply): CatalogCommentReply => ({
   id: r.id,
   author: r.author,
   text: r.text,
+  ...(r.images ? { images: r.images } : {}),
   createdAt: r.createdAt,
   ...(r.replyTo ? { replyTo: r.replyTo } : {}),
 });

@@ -1,10 +1,16 @@
 import {
+  COMMENT_IMAGE_CAPABILITY_HEADER,
+  COMMENT_IMAGE_CAPABILITY_VERSION,
+} from "@moya/contracts/comment-images-protocol";
+import {
   catalogCommentIdSchema,
   catalogCommentPageSchema,
   catalogCommentReplyPageSchema,
   catalogCommentReplySchema,
   catalogCommentSchema,
   catalogIdSchema,
+  createCatalogCommentRequestSchema,
+  createCatalogCommentReplyRequestSchema,
   publicUserProfileSchema,
 } from "@moya/contracts/schemas";
 
@@ -46,7 +52,10 @@ export interface CommentReplyPageClientQuery {
 
 const readInit = (signal?: AbortSignal): RequestInit => ({
   credentials: "same-origin",
-  headers: { Accept: "application/json" },
+  headers: {
+    Accept: "application/json",
+    [COMMENT_IMAGE_CAPABILITY_HEADER]: COMMENT_IMAGE_CAPABILITY_VERSION,
+  },
   method: "GET",
   ...(signal === undefined ? {} : { signal }),
 });
@@ -68,6 +77,7 @@ const writeInit = (
   headers: {
     Accept: "application/json",
     "Content-Type": "application/json",
+    [COMMENT_IMAGE_CAPABILITY_HEADER]: COMMENT_IMAGE_CAPABILITY_VERSION,
     ...(account === undefined ? {} : { "x-author-account": account }),
   },
   method: "POST",
@@ -215,15 +225,17 @@ export const fetchSameOriginCatalogCommentReplyPage = async (
 
 export const createSameOriginCatalogComment = async (
   catalogId: string,
-  body: { readonly text: string },
+  body: unknown,
   context: CatalogCommentClientContext = defaultContext(),
 ): Promise<CommentSubmissionTransportResult<CatalogComment>> => {
   const parsedId = catalogIdSchema.safeParse(catalogId);
   if (!parsedId.success) return { state: "not-found" };
+  const parsedBody = createCatalogCommentRequestSchema.safeParse(body);
+  if (!parsedBody.success) return { state: "invalid-input" };
   return submit(
     context,
     commentsUrl(context.baseUrl, parsedId.data, {}),
-    body,
+    parsedBody.data,
     parseWith(catalogCommentSchema),
   );
 };
@@ -231,17 +243,19 @@ export const createSameOriginCatalogComment = async (
 export const createSameOriginCatalogCommentReply = async (
   catalogId: string,
   commentId: string,
-  body: { readonly text: string; readonly replyTo?: string },
+  body: unknown,
   context: CatalogCommentClientContext = defaultContext(),
 ): Promise<CommentSubmissionTransportResult<CatalogCommentReply>> => {
   const parsedId = catalogIdSchema.safeParse(catalogId);
   const parsedCommentId = catalogCommentIdSchema.safeParse(commentId);
   if (!parsedId.success || !parsedCommentId.success)
     return { state: "not-found" };
+  const parsedBody = createCatalogCommentReplyRequestSchema.safeParse(body);
+  if (!parsedBody.success) return { state: "invalid-input" };
   return submit(
     context,
     repliesUrl(context.baseUrl, parsedId.data, parsedCommentId.data, {}),
-    body,
+    parsedBody.data,
     parseWith(catalogCommentReplySchema),
   );
 };

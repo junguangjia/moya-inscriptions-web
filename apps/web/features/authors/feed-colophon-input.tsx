@@ -9,10 +9,19 @@ import {
   useState,
 } from "react";
 import type { FormEvent, MouseEvent } from "react";
+import type { CommentImageInput } from "@moya/contracts";
 import { useAuthReturn } from "../auth/auth-return";
+import {
+  CommentImageComposerControls,
+  CommentImageError,
+  useCommentImageComposer,
+} from "../comments/comment-image-composer";
+import type { CommentImageSubmission } from "../comments/comment-image-composer";
+import { InlineCommentBody } from "../comments/inline-comment-body";
 import type { CommentViewerState } from "../comments/comment-section";
 import type { CommentReplyTarget } from "../comments/comment-types";
 import { normalizeMentionText } from "../notifications/mention-data";
+import { VerticalText } from "./vertical-text";
 import styles from "./feed-colophon-input.module.css";
 
 export const COLOPHON_INPUT_MAX_LENGTH = 1000;
@@ -240,6 +249,8 @@ export interface FeedColophonInputHandle {
 }
 
 export interface FeedColophonInputProps {
+  /** False for local QA threads, even when a real account is signed in. */
+  readonly imageUploadsEnabled?: boolean;
   /** The post's `contentKey(target)`; the draft is kept under `feed:` + it. */
   readonly contentKey: string;
   /** The signed-in reader's id; null for a guest. */
@@ -258,6 +269,8 @@ export interface FeedColophonInputProps {
   readonly onSubmit: (
     text: string,
     target: CommentReplyTarget | null,
+    images?: readonly CommentImageInput[],
+    requestId?: string,
   ) => Promise<boolean>;
   /** The status after an action (已发送, a failure), empty for none. */
   readonly notice: string;
@@ -295,6 +308,7 @@ export const FeedColophonInput = forwardRef<
   {
     contentKey,
     actorId,
+    imageUploadsEnabled = true,
     viewerState,
     closed,
     closedNote,
@@ -318,6 +332,11 @@ export const FeedColophonInput = forwardRef<
     null,
   );
   const [focused, setFocused] = useState(false);
+  const [attachmentPanelOpen, setAttachmentPanelOpen] = useState(false);
+  const [localSubmitting, setLocalSubmitting] = useState(false);
+  const [sendError, setSendError] = useState("");
+  const pendingSend = useRef(false);
+  const submitRun = useRef(0);
   const blurTimer = useRef<number | null>(null);
   const [fitHeight, setFitHeight] = useState<number | null>(null);
   // Bumped by every edit, so a send in flight never clears newer text.
@@ -329,12 +348,34 @@ export const FeedColophonInput = forwardRef<
     actor: actorId,
   });
   const viewer = viewerState.state;
+  const imageComposer = useCommentImageComposer({
+    accountId: !imageUploadsEnabled
+      ? null
+      : viewer === "signed-in"
+        ? actorId
+        : viewer === "checking" || viewer === "unavailable"
+          ? editorScope.current.actor
+          : null,
+    scopeKey: draftKey,
+    text: draft,
+    disabled:
+      !imageUploadsEnabled ||
+      closed ||
+      unavailable ||
+      submitting ||
+      localSubmitting ||
+      viewer === "signed-out",
+    revalidating: viewer === "checking" || viewer === "unavailable",
+  });
+  const writing = focused || attachmentPanelOpen;
+  const sending = submitting || localSubmitting || imageComposer.pending;
 
   useLayoutEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
       editorRevision.current += 1;
+      submitRun.current += 1;
       if (blurTimer.current !== null) window.clearTimeout(blurTimer.current);
     };
   }, []);
@@ -354,17 +395,41 @@ export const FeedColophonInput = forwardRef<
       (!recovered.current && confirmedActor !== null && viewer === "signed-in")
     ) {
       editorRevision.current += 1;
+      submitRun.current += 1;
+      pendingSend.current = false;
+      setLocalSubmitting(false);
+      setSendError("");
+      setAttachmentPanelOpen(false);
       if (confirmedActor !== null) recovered.current = true;
       const saved =
         confirmedActor === null
           ? undefined
           : (authReturn?.take(confirmedActor, draftKey) as
               Partial<SavedColophonDraft> | undefined);
-      setDraft(typeof saved?.draft === "string" ? saved.draft : "");
+      const next = typeof saved?.draft === "string" ? saved.draft : "";
+      imageComposer.textChanged(draft, next);
+      setDraft(next);
       setReplyTarget(saved?.replyTarget ?? null);
     }
     editorScope.current = { key: draftKey, actor: confirmedActor };
   }, [actorId, authReturn, draftKey, viewer]);
+
+  // A removed/sent last image hides the tray; it must not leave the dock hidden
+  // merely because a management button had focus before it disappeared.
+  useEffect(() => {
+    if (
+      !imageComposer.hasImages &&
+      !imageComposer.adding &&
+      !imageComposer.notice &&
+      !imageComposer.connectionPaused
+    )
+      setAttachmentPanelOpen(false);
+  }, [
+    imageComposer.hasImages,
+    imageComposer.adding,
+    imageComposer.notice,
+    imageComposer.connectionPaused,
+  ]);
 
   useEffect(() => {
     const owner = editorScope.current.actor;
@@ -395,7 +460,7 @@ export const FeedColophonInput = forwardRef<
     const style = getComputedStyle(box);
     // Not being written, the column keeps to its idle width and shows the
     // draft's start, so the colophons stay readable around it.
-    const width = focused
+    const width = writing
       ? colophonInputWidth(
           box.scrollWidth,
           idle,
@@ -417,7 +482,7 @@ export const FeedColophonInput = forwardRef<
       frame.paddingRight,
     ].reduce((sum, value) => sum + (Number.parseFloat(value) || 0), 0);
     form.style.width = `${width + lead + chrome}px`;
-    if (focused) {
+    if (writing) {
       revealCaret(box);
       markHiddenText(box, true);
     } else {
@@ -433,7 +498,7 @@ export const FeedColophonInput = forwardRef<
     closed,
     draft,
     fitHeight,
-    focused,
+    writing,
     replyTarget,
     shown,
     stageWidth,
@@ -442,13 +507,13 @@ export const FeedColophonInput = forwardRef<
   ]);
 
   useEffect(() => {
-    onWritingChange?.(focused && shown, replyTarget);
-  }, [focused, onWritingChange, replyTarget, shown]);
+    onWritingChange?.(writing && shown, replyTarget);
+  }, [writing, onWritingChange, replyTarget, shown]);
 
   // While the input has focus the column ends where the visible area does,
   // so the keyboard never covers 发送 or the line being written.
   useEffect(() => {
-    if (!focused) {
+    if (!writing || !shown) {
       setFitHeight(null);
       return undefined;
     }
@@ -492,7 +557,7 @@ export const FeedColophonInput = forwardRef<
       document.removeEventListener("scroll", schedule, { capture: true });
       if (frameId !== null) window.cancelAnimationFrame(frameId);
     };
-  }, [focused, strip]);
+  }, [writing, shown, strip]);
 
   // Back on the images, the hidden column lets go of focus (and the
   // keyboard); the draft stays.
@@ -515,6 +580,8 @@ export const FeedColophonInput = forwardRef<
     ref,
     () => ({
       reply: (target) => {
+        editorRevision.current += 1;
+        setSendError("");
         setReplyTarget(target);
         focusAtEnd();
       },
@@ -531,28 +598,83 @@ export const FeedColophonInput = forwardRef<
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const text = normalizeMentionText(draft);
-    if (text.length === 0 || submitting) return;
+    if (
+      (text.length === 0 && !imageComposer.hasImages) ||
+      sending ||
+      pendingSend.current ||
+      closed ||
+      unavailable ||
+      viewer !== "signed-in"
+    )
+      return;
+    let ticket: CommentImageSubmission | null;
+    try {
+      ticket = imageComposer.prepareSubmission(
+        JSON.stringify([
+          contentKey,
+          replyTarget?.rootCommentId ?? null,
+          replyTarget?.replyId ?? null,
+          replyTarget?.user.id ?? null,
+        ]),
+      );
+    } catch (error) {
+      setSendError(
+        error instanceof CommentImageError
+          ? error.message
+          : "附图暂时无法发送，请重试。正文和图片已保留。",
+      );
+      return;
+    }
     const submittedRevision = editorRevision.current;
+    const generation = ++submitRun.current;
+    pendingSend.current = true;
+    setLocalSubmitting(true);
+    setSendError("");
     // A failed send keeps the text; nothing is shown as sent.
-    void onSubmit(text, replyTarget).then(
-      (accepted) => {
-        if (
-          !accepted ||
-          !mounted.current ||
-          editorRevision.current !== submittedRevision
-        )
+    void (async () => {
+      try {
+        const accepted = await (ticket === null
+          ? onSubmit(text, replyTarget)
+          : onSubmit(
+              ticket.text,
+              replyTarget,
+              ticket.images,
+              ticket.requestId,
+            ));
+        await ticket?.finish(accepted);
+        if (!mounted.current || submitRun.current !== generation) return;
+        if (!accepted) {
+          setSendError("题跋暂时未能确认发送，正文和图片已保留，请重试。");
           return;
+        }
+        if (editorRevision.current !== submittedRevision) return;
         editorRevision.current += 1;
+        imageComposer.textChanged(draft, "");
         setDraft("");
         setReplyTarget(null);
+        setAttachmentPanelOpen(false);
         // The keyboard goes down, so the colophon brought in shows.
         const active = document.activeElement;
         if (active instanceof HTMLElement && formRef.current?.contains(active))
           active.blur();
-      },
-      () => undefined,
-    );
+      } catch {
+        await ticket?.finish(false);
+        if (mounted.current && submitRun.current === generation)
+          setSendError("题跋暂时未能确认发送，正文和图片已保留，请重试。");
+      } finally {
+        if (mounted.current && submitRun.current === generation) {
+          pendingSend.current = false;
+          setLocalSubmitting(false);
+        }
+      }
+    })();
   };
+
+  const canSend =
+    !sending &&
+    !imageComposer.mutating &&
+    (draft.trim().length > 0 || imageComposer.hasImages) &&
+    (!imageComposer.hasImages || imageComposer.ready);
 
   const status = (
     <p
@@ -561,7 +683,7 @@ export const FeedColophonInput = forwardRef<
       key="status"
       role="status"
     >
-      {notice}
+      {sendError || notice}
     </p>
   );
 
@@ -584,7 +706,7 @@ export const FeedColophonInput = forwardRef<
       ref={formRef}
       className={styles.column}
       data-colophon-input={state}
-      data-colophon-input-focused={focused ? "" : undefined}
+      data-colophon-input-focused={writing && shown ? "" : undefined}
       data-colophon-input-shown={shown ? "" : undefined}
       inert={!shown || undefined}
       noValidate
@@ -613,6 +735,8 @@ export const FeedColophonInput = forwardRef<
                   data-colophon-input-unreply=""
                   onMouseDown={keepFocus}
                   onClick={() => {
+                    editorRevision.current += 1;
+                    setSendError("");
                     setReplyTarget(null);
                     focusAtEnd();
                   }}
@@ -644,8 +768,19 @@ export const FeedColophonInput = forwardRef<
               }}
               onChange={(event) => {
                 editorRevision.current += 1;
+                setSendError("");
+                imageComposer.textChanged(draft, event.currentTarget.value);
                 setDraft(event.currentTarget.value);
               }}
+              onSelect={(event) =>
+                imageComposer.captureSelection(event.currentTarget)
+              }
+              onPointerUp={(event) =>
+                imageComposer.captureSelection(event.currentTarget)
+              }
+              onKeyUp={(event) =>
+                imageComposer.captureSelection(event.currentTarget)
+              }
               onFocus={() => {
                 if (blurTimer.current !== null) {
                   window.clearTimeout(blurTimer.current);
@@ -669,8 +804,10 @@ export const FeedColophonInput = forwardRef<
                 )
                   return;
                 event.preventDefault();
-                if (replyTarget !== null) setReplyTarget(null);
-                else event.currentTarget.blur();
+                if (replyTarget !== null) {
+                  editorRevision.current += 1;
+                  setReplyTarget(null);
+                } else event.currentTarget.blur();
               }}
               placeholder="写题跋…"
               rows={1}
@@ -683,10 +820,10 @@ export const FeedColophonInput = forwardRef<
             className={styles.send}
             data-colophon-input-send=""
             onMouseDown={keepFocus}
-            disabled={draft.trim().length === 0 || submitting}
+            disabled={!canSend}
             type="submit"
           >
-            {submitting ? "发送中" : "发送"}
+            {sending ? "发送中" : "发送"}
           </button>
         </>
       ) : (
@@ -710,6 +847,31 @@ export const FeedColophonInput = forwardRef<
           ) : null}
           {status}
         </>
+      )}
+      {imageUploadsEnabled && (
+        <div
+          className={styles.attachments}
+          hidden={state !== "write"}
+          inert={state !== "write" || undefined}
+        >
+          <CommentImageComposerControls
+            composer={imageComposer}
+            editorRef={boxRef}
+            orientation="vertical"
+            onOpenChange={setAttachmentPanelOpen}
+            renderPreview={({ text, images }) => (
+              <div className={styles.imagePreview}>
+                <InlineCommentBody
+                  text={text}
+                  images={images}
+                  vertical
+                  disabled
+                  renderText={(value) => <VerticalText text={value} />}
+                />
+              </div>
+            )}
+          />
+        </div>
       )}
     </form>
   );

@@ -92,6 +92,7 @@ describe("same-origin reply bridge", () => {
       },
       undefined,
       undefined,
+      null,
     );
   });
 
@@ -126,6 +127,7 @@ describe("same-origin reply bridge", () => {
       opaqueSession,
       { text: "回复正文", replyTo: reply.id },
       undefined,
+      null,
     );
   });
 
@@ -152,6 +154,7 @@ describe("same-origin reply bridge", () => {
       opaqueSession,
       { text: "回复正文" },
       account,
+      null,
     );
     createReplyMock.mockClear();
     for (const headers of [

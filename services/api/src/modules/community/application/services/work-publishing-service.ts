@@ -899,6 +899,13 @@ export class WorkPublishingService {
   }
 
   /** Streams an authorized derivative; sources are never addressable. */
+  openAuthorizedMedia(
+    target: import("../ports/work-publishing-port.js").PublishingMediaReadTarget,
+    range?: PublishingMediaByteRange,
+  ): Promise<PublishingMediaDelivery> {
+    return openPublishingMedia(this.store, async () => target, range);
+  }
+
   openMedia(
     viewerId: string | null,
     itemId: string,

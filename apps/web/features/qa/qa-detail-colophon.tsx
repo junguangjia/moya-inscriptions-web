@@ -7,8 +7,40 @@ import type { DiscussionThread } from "../authors/use-discussion-thread";
 import type { QaCommentScenarioName } from "../comments/comment-scenarios";
 import type { useQaCommentStore } from "../comments/use-qa-comment-store";
 import { qaCurrentUser } from "./user-scenarios";
+import { useAuthors } from "../authors/author-context";
+import { CommentReportButton } from "../reporting/comment-report-button";
+import type { CommentItem } from "../comments/comment-types";
 
 const idle = () => undefined;
+
+const QaCommentReport = () => {
+  const [sent, setSent] = useState(false);
+  const { notify } = useAuthors();
+  return (
+    <CommentReportButton
+      sent={sent}
+      disabled={sent}
+      onClick={() => {
+        setSent(true);
+        notify("QA 演示：已标记，未提交真实举报");
+      }}
+    />
+  );
+};
+
+/** Both QA readers share the live symbol, with no reporting transport. */
+export const createQaCommentReportRenderer = (
+  items: readonly CommentItem[],
+) => {
+  const reportable = new Set(
+    items
+      .flatMap((item) => [item, ...item.replies])
+      .filter((item) => !item.deleted && item.user.id !== qaCurrentUser.id)
+      .map((item) => item.id),
+  );
+  return (id: string) =>
+    reportable.has(id) ? <QaCommentReport key={id} /> : null;
+};
 
 /** The same local QA store as normal Detail, with no runtime discussion reads. */
 export const QaDetailColophon = ({
@@ -16,11 +48,13 @@ export const QaDetailColophon = ({
   title,
   store,
   scenario,
+  presentation = "detail",
 }: {
   readonly target: DiscussionTarget;
   readonly title: string;
   readonly store: ReturnType<typeof useQaCommentStore>;
   readonly scenario: QaCommentScenarioName;
+  readonly presentation?: "detail" | "feed";
 }) => {
   const [highlightId, setHighlight] = useState<string | undefined>(undefined);
   const items = store.getItems(target.id);
@@ -69,10 +103,12 @@ export const QaDetailColophon = ({
   };
   return (
     <FeedColophonPresentation
+      imageUploadsEnabled={false}
+      renderReport={createQaCommentReportRenderer(items)}
       target={target}
       title={title}
       thread={thread}
-      presentation="detail"
+      presentation={presentation}
     />
   );
 };

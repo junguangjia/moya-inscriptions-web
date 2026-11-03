@@ -69,6 +69,7 @@
     "./local-media-read": "./src/media/local-read.ts",
     "./community-endpoints": "./src/community/endpoints.ts",
     "./community-bulk-actions": "./src/community/bulk-actions.tsx",
+    "./community-comment-image-body": "./src/community/comment-image-body.tsx",
     "./agent-admin-mcp": "./src/agent-admin/mcp-tools.ts",
     "./agent-connections": "./src/agent-connections/index.ts",
     "./agent-connections-admission": "./src/agent-connections/admission.ts",

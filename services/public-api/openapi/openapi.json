@@ -13414,6 +13414,55 @@
             "pattern": "^\\S+$",
             "type": "string"
           },
+          "images": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "fullSrc": {
+                  "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/full$",
+                  "type": "string"
+                },
+                "height": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "id": {
+                  "pattern": "^media-item-[0-9a-f]{32}$",
+                  "type": "string"
+                },
+                "offset": {
+                  "maximum": 1000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "src": {
+                  "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/display$",
+                  "type": "string"
+                },
+                "thumbSrc": {
+                  "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/thumb$",
+                  "type": "string"
+                },
+                "width": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "offset",
+                "width",
+                "height",
+                "thumbSrc",
+                "src"
+              ],
+              "type": "object"
+            },
+            "maxItems": 6,
+            "type": "array"
+          },
           "replies": {
             "items": {
               "additionalProperties": false,
@@ -13454,6 +13503,55 @@
                   "pattern": "^\\S+$",
                   "type": "string"
                 },
+                "images": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "fullSrc": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/full$",
+                        "type": "string"
+                      },
+                      "height": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "id": {
+                        "pattern": "^media-item-[0-9a-f]{32}$",
+                        "type": "string"
+                      },
+                      "offset": {
+                        "maximum": 1000,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "src": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/display$",
+                        "type": "string"
+                      },
+                      "thumbSrc": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/thumb$",
+                        "type": "string"
+                      },
+                      "width": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "offset",
+                      "width",
+                      "height",
+                      "thumbSrc",
+                      "src"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 6,
+                  "type": "array"
+                },
                 "replyTo": {
                   "additionalProperties": false,
                   "properties": {
@@ -13481,7 +13579,6 @@
                 },
                 "text": {
                   "maxLength": 1000,
-                  "minLength": 1,
                   "type": "string"
                 }
               },
@@ -13497,7 +13594,6 @@
           },
           "text": {
             "maxLength": 1000,
-            "minLength": 1,
             "type": "string"
           }
         },
@@ -13569,6 +13665,55 @@
                   "pattern": "^\\S+$",
                   "type": "string"
                 },
+                "images": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "fullSrc": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/full$",
+                        "type": "string"
+                      },
+                      "height": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "id": {
+                        "pattern": "^media-item-[0-9a-f]{32}$",
+                        "type": "string"
+                      },
+                      "offset": {
+                        "maximum": 1000,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "src": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/display$",
+                        "type": "string"
+                      },
+                      "thumbSrc": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/thumb$",
+                        "type": "string"
+                      },
+                      "width": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "offset",
+                      "width",
+                      "height",
+                      "thumbSrc",
+                      "src"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 6,
+                  "type": "array"
+                },
                 "replies": {
                   "items": {
                     "additionalProperties": false,
@@ -13609,6 +13754,55 @@
                         "pattern": "^\\S+$",
                         "type": "string"
                       },
+                      "images": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fullSrc": {
+                              "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/full$",
+                              "type": "string"
+                            },
+                            "height": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991,
+                              "type": "integer"
+                            },
+                            "id": {
+                              "pattern": "^media-item-[0-9a-f]{32}$",
+                              "type": "string"
+                            },
+                            "offset": {
+                              "maximum": 1000,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "src": {
+                              "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/display$",
+                              "type": "string"
+                            },
+                            "thumbSrc": {
+                              "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/thumb$",
+                              "type": "string"
+                            },
+                            "width": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "offset",
+                            "width",
+                            "height",
+                            "thumbSrc",
+                            "src"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 6,
+                        "type": "array"
+                      },
                       "replyTo": {
                         "additionalProperties": false,
                         "properties": {
@@ -13636,7 +13830,6 @@
                       },
                       "text": {
                         "maxLength": 1000,
-                        "minLength": 1,
                         "type": "string"
                       }
                     },
@@ -13652,7 +13845,6 @@
                 },
                 "text": {
                   "maxLength": 1000,
-                  "minLength": 1,
                   "type": "string"
                 }
               },
@@ -13716,6 +13908,55 @@
                   "pattern": "^\\S+$",
                   "type": "string"
                 },
+                "images": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "fullSrc": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/full$",
+                        "type": "string"
+                      },
+                      "height": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "id": {
+                        "pattern": "^media-item-[0-9a-f]{32}$",
+                        "type": "string"
+                      },
+                      "offset": {
+                        "maximum": 1000,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "src": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/display$",
+                        "type": "string"
+                      },
+                      "thumbSrc": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/thumb$",
+                        "type": "string"
+                      },
+                      "width": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "offset",
+                      "width",
+                      "height",
+                      "thumbSrc",
+                      "src"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 6,
+                  "type": "array"
+                },
                 "replies": {
                   "items": {
                     "additionalProperties": false,
@@ -13756,6 +13997,55 @@
                         "pattern": "^\\S+$",
                         "type": "string"
                       },
+                      "images": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fullSrc": {
+                              "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/full$",
+                              "type": "string"
+                            },
+                            "height": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991,
+                              "type": "integer"
+                            },
+                            "id": {
+                              "pattern": "^media-item-[0-9a-f]{32}$",
+                              "type": "string"
+                            },
+                            "offset": {
+                              "maximum": 1000,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "src": {
+                              "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/display$",
+                              "type": "string"
+                            },
+                            "thumbSrc": {
+                              "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/thumb$",
+                              "type": "string"
+                            },
+                            "width": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "offset",
+                            "width",
+                            "height",
+                            "thumbSrc",
+                            "src"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 6,
+                        "type": "array"
+                      },
                       "replyTo": {
                         "additionalProperties": false,
                         "properties": {
@@ -13783,7 +14073,6 @@
                       },
                       "text": {
                         "maxLength": 1000,
-                        "minLength": 1,
                         "type": "string"
                       }
                     },
@@ -13799,7 +14088,6 @@
                 },
                 "text": {
                   "maxLength": 1000,
-                  "minLength": 1,
                   "type": "string"
                 }
               },
@@ -13880,6 +14168,55 @@
             "pattern": "^\\S+$",
             "type": "string"
           },
+          "images": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "fullSrc": {
+                  "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/full$",
+                  "type": "string"
+                },
+                "height": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "id": {
+                  "pattern": "^media-item-[0-9a-f]{32}$",
+                  "type": "string"
+                },
+                "offset": {
+                  "maximum": 1000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "src": {
+                  "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/display$",
+                  "type": "string"
+                },
+                "thumbSrc": {
+                  "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/thumb$",
+                  "type": "string"
+                },
+                "width": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "offset",
+                "width",
+                "height",
+                "thumbSrc",
+                "src"
+              ],
+              "type": "object"
+            },
+            "maxItems": 6,
+            "type": "array"
+          },
           "replyTo": {
             "additionalProperties": false,
             "properties": {
@@ -13907,7 +14244,6 @@
           },
           "text": {
             "maxLength": 1000,
-            "minLength": 1,
             "type": "string"
           }
         },
@@ -13958,6 +14294,55 @@
                   "pattern": "^\\S+$",
                   "type": "string"
                 },
+                "images": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "fullSrc": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/full$",
+                        "type": "string"
+                      },
+                      "height": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "id": {
+                        "pattern": "^media-item-[0-9a-f]{32}$",
+                        "type": "string"
+                      },
+                      "offset": {
+                        "maximum": 1000,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "src": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/display$",
+                        "type": "string"
+                      },
+                      "thumbSrc": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/thumb$",
+                        "type": "string"
+                      },
+                      "width": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "offset",
+                      "width",
+                      "height",
+                      "thumbSrc",
+                      "src"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 6,
+                  "type": "array"
+                },
                 "replyTo": {
                   "additionalProperties": false,
                   "properties": {
@@ -13985,7 +14370,6 @@
                 },
                 "text": {
                   "maxLength": 1000,
-                  "minLength": 1,
                   "type": "string"
                 }
               },
@@ -15103,6 +15487,62 @@
           }
         },
         "required": ["id", "displayName"],
+        "type": "object"
+      },
+      "CommentImage": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "fullSrc": {
+            "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/full$",
+            "type": "string"
+          },
+          "height": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "id": {
+            "pattern": "^media-item-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "offset": {
+            "maximum": 1000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "src": {
+            "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/display$",
+            "type": "string"
+          },
+          "thumbSrc": {
+            "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/thumb$",
+            "type": "string"
+          },
+          "width": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          }
+        },
+        "required": ["id", "offset", "width", "height", "thumbSrc", "src"],
+        "type": "object"
+      },
+      "CommentImageInput": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "itemId": {
+            "pattern": "^media-item-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "offset": {
+            "maximum": 1000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": ["itemId", "offset"],
         "type": "object"
       },
       "CommentLikeUpdate": {
@@ -18489,6 +18929,26 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "images": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "itemId": {
+                  "pattern": "^media-item-[0-9a-f]{32}$",
+                  "type": "string"
+                },
+                "offset": {
+                  "maximum": 1000,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": ["itemId", "offset"],
+              "type": "object"
+            },
+            "maxItems": 6,
+            "type": "array"
+          },
           "mentions": {
             "items": {
               "additionalProperties": false,
@@ -18524,9 +18984,13 @@
             "pattern": "^\\S+$",
             "type": "string"
           },
+          "requestId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
           "text": {
             "maxLength": 1000,
-            "minLength": 1,
             "type": "string"
           }
         },
@@ -18537,6 +19001,26 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "images": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "itemId": {
+                  "pattern": "^media-item-[0-9a-f]{32}$",
+                  "type": "string"
+                },
+                "offset": {
+                  "maximum": 1000,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": ["itemId", "offset"],
+              "type": "object"
+            },
+            "maxItems": 6,
+            "type": "array"
+          },
           "mentions": {
             "items": {
               "additionalProperties": false,
@@ -18566,9 +19050,13 @@
             "maxItems": 20,
             "type": "array"
           },
+          "requestId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
           "text": {
             "maxLength": 1000,
-            "minLength": 1,
             "type": "string"
           }
         },
@@ -20303,6 +20791,55 @@
             "pattern": "^\\S+$",
             "type": "string"
           },
+          "images": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "fullSrc": {
+                  "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/full$",
+                  "type": "string"
+                },
+                "height": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "id": {
+                  "pattern": "^media-item-[0-9a-f]{32}$",
+                  "type": "string"
+                },
+                "offset": {
+                  "maximum": 1000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "src": {
+                  "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/display$",
+                  "type": "string"
+                },
+                "thumbSrc": {
+                  "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/thumb$",
+                  "type": "string"
+                },
+                "width": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "offset",
+                "width",
+                "height",
+                "thumbSrc",
+                "src"
+              ],
+              "type": "object"
+            },
+            "maxItems": 6,
+            "type": "array"
+          },
           "likeCount": {
             "maximum": 9007199254740991,
             "minimum": 0,
@@ -20353,6 +20890,55 @@
                   "minLength": 1,
                   "pattern": "^\\S+$",
                   "type": "string"
+                },
+                "images": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "fullSrc": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/full$",
+                        "type": "string"
+                      },
+                      "height": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "id": {
+                        "pattern": "^media-item-[0-9a-f]{32}$",
+                        "type": "string"
+                      },
+                      "offset": {
+                        "maximum": 1000,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "src": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/display$",
+                        "type": "string"
+                      },
+                      "thumbSrc": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/thumb$",
+                        "type": "string"
+                      },
+                      "width": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "offset",
+                      "width",
+                      "height",
+                      "thumbSrc",
+                      "src"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 6,
+                  "type": "array"
                 },
                 "likeCount": {
                   "maximum": 9007199254740991,
@@ -20583,6 +21169,55 @@
                   "pattern": "^\\S+$",
                   "type": "string"
                 },
+                "images": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "fullSrc": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/full$",
+                        "type": "string"
+                      },
+                      "height": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "id": {
+                        "pattern": "^media-item-[0-9a-f]{32}$",
+                        "type": "string"
+                      },
+                      "offset": {
+                        "maximum": 1000,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "src": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/display$",
+                        "type": "string"
+                      },
+                      "thumbSrc": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/thumb$",
+                        "type": "string"
+                      },
+                      "width": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "offset",
+                      "width",
+                      "height",
+                      "thumbSrc",
+                      "src"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 6,
+                  "type": "array"
+                },
                 "likeCount": {
                   "maximum": 9007199254740991,
                   "minimum": 0,
@@ -20633,6 +21268,55 @@
                         "minLength": 1,
                         "pattern": "^\\S+$",
                         "type": "string"
+                      },
+                      "images": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fullSrc": {
+                              "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/full$",
+                              "type": "string"
+                            },
+                            "height": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991,
+                              "type": "integer"
+                            },
+                            "id": {
+                              "pattern": "^media-item-[0-9a-f]{32}$",
+                              "type": "string"
+                            },
+                            "offset": {
+                              "maximum": 1000,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "src": {
+                              "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/display$",
+                              "type": "string"
+                            },
+                            "thumbSrc": {
+                              "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/thumb$",
+                              "type": "string"
+                            },
+                            "width": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "offset",
+                            "width",
+                            "height",
+                            "thumbSrc",
+                            "src"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 6,
+                        "type": "array"
                       },
                       "likeCount": {
                         "maximum": 9007199254740991,
@@ -20838,6 +21522,55 @@
                   "pattern": "^\\S+$",
                   "type": "string"
                 },
+                "images": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "fullSrc": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/full$",
+                        "type": "string"
+                      },
+                      "height": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "id": {
+                        "pattern": "^media-item-[0-9a-f]{32}$",
+                        "type": "string"
+                      },
+                      "offset": {
+                        "maximum": 1000,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "src": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/display$",
+                        "type": "string"
+                      },
+                      "thumbSrc": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/thumb$",
+                        "type": "string"
+                      },
+                      "width": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "offset",
+                      "width",
+                      "height",
+                      "thumbSrc",
+                      "src"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 6,
+                  "type": "array"
+                },
                 "likeCount": {
                   "maximum": 9007199254740991,
                   "minimum": 0,
@@ -20888,6 +21621,55 @@
                         "minLength": 1,
                         "pattern": "^\\S+$",
                         "type": "string"
+                      },
+                      "images": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fullSrc": {
+                              "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/full$",
+                              "type": "string"
+                            },
+                            "height": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991,
+                              "type": "integer"
+                            },
+                            "id": {
+                              "pattern": "^media-item-[0-9a-f]{32}$",
+                              "type": "string"
+                            },
+                            "offset": {
+                              "maximum": 1000,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "src": {
+                              "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/display$",
+                              "type": "string"
+                            },
+                            "thumbSrc": {
+                              "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/thumb$",
+                              "type": "string"
+                            },
+                            "width": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "offset",
+                            "width",
+                            "height",
+                            "thumbSrc",
+                            "src"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 6,
+                        "type": "array"
                       },
                       "likeCount": {
                         "maximum": 9007199254740991,
@@ -21130,6 +21912,55 @@
             "pattern": "^\\S+$",
             "type": "string"
           },
+          "images": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "fullSrc": {
+                  "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/full$",
+                  "type": "string"
+                },
+                "height": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "id": {
+                  "pattern": "^media-item-[0-9a-f]{32}$",
+                  "type": "string"
+                },
+                "offset": {
+                  "maximum": 1000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "src": {
+                  "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/display$",
+                  "type": "string"
+                },
+                "thumbSrc": {
+                  "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/thumb$",
+                  "type": "string"
+                },
+                "width": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "offset",
+                "width",
+                "height",
+                "thumbSrc",
+                "src"
+              ],
+              "type": "object"
+            },
+            "maxItems": 6,
+            "type": "array"
+          },
           "likeCount": {
             "maximum": 9007199254740991,
             "minimum": 0,
@@ -21225,6 +22056,55 @@
                   "minLength": 1,
                   "pattern": "^\\S+$",
                   "type": "string"
+                },
+                "images": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "fullSrc": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/full$",
+                        "type": "string"
+                      },
+                      "height": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "id": {
+                        "pattern": "^media-item-[0-9a-f]{32}$",
+                        "type": "string"
+                      },
+                      "offset": {
+                        "maximum": 1000,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "src": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/display$",
+                        "type": "string"
+                      },
+                      "thumbSrc": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/thumb$",
+                        "type": "string"
+                      },
+                      "width": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "offset",
+                      "width",
+                      "height",
+                      "thumbSrc",
+                      "src"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 6,
+                  "type": "array"
                 },
                 "likeCount": {
                   "maximum": 9007199254740991,
@@ -21368,6 +22248,55 @@
                 "minLength": 1,
                 "pattern": "^\\S+$",
                 "type": "string"
+              },
+              "images": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "fullSrc": {
+                      "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/full$",
+                      "type": "string"
+                    },
+                    "height": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "id": {
+                      "pattern": "^media-item-[0-9a-f]{32}$",
+                      "type": "string"
+                    },
+                    "offset": {
+                      "maximum": 1000,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "src": {
+                      "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/display$",
+                      "type": "string"
+                    },
+                    "thumbSrc": {
+                      "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/thumb$",
+                      "type": "string"
+                    },
+                    "width": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "offset",
+                    "width",
+                    "height",
+                    "thumbSrc",
+                    "src"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 6,
+                "type": "array"
               },
               "likeCount": {
                 "maximum": 9007199254740991,
@@ -22772,6 +23701,55 @@
             "pattern": "^\\S+$",
             "type": "string"
           },
+          "images": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "fullSrc": {
+                  "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/full$",
+                  "type": "string"
+                },
+                "height": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "id": {
+                  "pattern": "^media-item-[0-9a-f]{32}$",
+                  "type": "string"
+                },
+                "offset": {
+                  "maximum": 1000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "src": {
+                  "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/display$",
+                  "type": "string"
+                },
+                "thumbSrc": {
+                  "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/thumb$",
+                  "type": "string"
+                },
+                "width": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "offset",
+                "width",
+                "height",
+                "thumbSrc",
+                "src"
+              ],
+              "type": "object"
+            },
+            "maxItems": 6,
+            "type": "array"
+          },
           "rootId": {
             "maxLength": 128,
             "minLength": 1,
@@ -22864,6 +23842,55 @@
                   "minLength": 1,
                   "pattern": "^\\S+$",
                   "type": "string"
+                },
+                "images": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "fullSrc": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/full$",
+                        "type": "string"
+                      },
+                      "height": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "id": {
+                        "pattern": "^media-item-[0-9a-f]{32}$",
+                        "type": "string"
+                      },
+                      "offset": {
+                        "maximum": 1000,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "src": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/display$",
+                        "type": "string"
+                      },
+                      "thumbSrc": {
+                        "pattern": "^\\/api\\/community\\/discussion\\/images\\/comment-[0-9a-f]{32}\\/media-item-[0-9a-f]{32}\\/thumb$",
+                        "type": "string"
+                      },
+                      "width": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "offset",
+                      "width",
+                      "height",
+                      "thumbSrc",
+                      "src"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 6,
+                  "type": "array"
                 },
                 "rootId": {
                   "maxLength": 128,
@@ -30817,7 +31844,7 @@
             "type": "string"
           },
           "purpose": {
-            "enum": ["content", "feedback"],
+            "enum": ["content", "feedback", "comment"],
             "type": "string"
           },
           "qualityMode": {
@@ -39683,6 +40710,212 @@
           }
         },
         "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/community/discussion/images/{commentId}/{itemId}/{variant}": {
+      "get": {
+        "description": "Rechecks comment, root, target publication, blocks and moderation on every read. Own pending images are private; hidden or deleted bodies and removed threads are unavailable. Sources and arbitrary media IDs are never served. No query; private, no-store; GET/HEAD and one byte range supported.",
+        "operationId": "readDiscussionImage",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "commentId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/CatalogCommentId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "itemId",
+            "required": true,
+            "schema": {
+              "pattern": "^media-item-[0-9a-f]{32}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "variant",
+            "required": true,
+            "schema": {
+              "enum": ["thumb", "display", "full"],
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/webp": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Authorized processed still image; private, no-store."
+          },
+          "206": {
+            "description": "Authorized byte range"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid session"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Image or its comment/target unavailable"
+          },
+          "416": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unsatisfiable range"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Media unavailable"
+          }
+        },
+        "security": [
+          {},
+          {
+            "session": []
+          }
+        ]
+      },
+      "head": {
+        "description": "Rechecks comment, root, target publication, blocks and moderation on every read. Own pending images are private; hidden or deleted bodies and removed threads are unavailable. Sources and arbitrary media IDs are never served. No query; private, no-store; GET/HEAD and one byte range supported.",
+        "operationId": "headDiscussionImage",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "commentId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/CatalogCommentId"
+            }
+          },
+          {
+            "in": "path",
+            "name": "itemId",
+            "required": true,
+            "schema": {
+              "pattern": "^media-item-[0-9a-f]{32}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "variant",
+            "required": true,
+            "schema": {
+              "enum": ["thumb", "display", "full"],
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/webp": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Authorized processed still image; private, no-store."
+          },
+          "206": {
+            "description": "Authorized byte range"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid session"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Image or its comment/target unavailable"
+          },
+          "416": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unsatisfiable range"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Media unavailable"
+          }
+        },
+        "security": [
+          {},
           {
             "session": []
           }

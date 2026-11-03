@@ -15,7 +15,7 @@ import {
 
 import { sendApiError } from "../http/api-error-response.js";
 import { JsonBodyError, readJsonBody } from "../http/json-body.js";
-import { sendJson } from "../http/json-response.js";
+import { sendCommentJson } from "../http/comment-json-response.js";
 import { collectTransportQuery } from "../http/transport-query.js";
 import { readBearerToken } from "./session-credential.js";
 
@@ -165,12 +165,18 @@ const identify = async (
 };
 
 const sendSubmission = <Item>(
+  request: IncomingMessage,
   response: ServerResponse,
   submission: CommentSubmission<Item>,
 ): void => {
   // 202 tells the author the submission is awaiting Owner approval under
   // PRE_MODERATION; the body shape is the same Public DTO either way.
-  sendJson(response, submission.awaitingApproval ? 202 : 201, submission.item);
+  sendCommentJson(
+    request,
+    response,
+    submission.awaitingApproval ? 202 : 201,
+    submission.item,
+  );
 };
 
 const sendBodyFailure = (response: ServerResponse, error: unknown): void => {
@@ -192,7 +198,8 @@ export const handleReadComments = async (
   const listing = parseListing(request, response);
   if (listing === undefined) return;
   try {
-    sendJson(
+    sendCommentJson(
+      request,
       response,
       200,
       await commentService.readComments(
@@ -224,6 +231,7 @@ export const handleCreateComment = async (
   try {
     const body = parseCreateCommentRequest(await readJsonBody(request));
     sendSubmission(
+      request,
       response,
       await dependencies.commentService.createComment(
         catalogId,
@@ -250,7 +258,8 @@ export const handleReadReplies = async (
   const page = parsePage(request, response, COMMENT_REPLY_PAGE_SIZE_DEFAULT);
   if (page === undefined) return;
   try {
-    sendJson(
+    sendCommentJson(
+      request,
       response,
       200,
       await commentService.readReplies(
@@ -286,6 +295,7 @@ export const handleCreateReply = async (
   try {
     const body = parseCreateReplyRequest(await readJsonBody(request));
     sendSubmission(
+      request,
       response,
       await dependencies.commentService.createReply(
         catalogId,

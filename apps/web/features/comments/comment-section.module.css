@@ -53,6 +53,15 @@
   min-width: 0;
 }
 
+/* Keep an opened native file picker alive through same-account revalidation. */
+.composerScope {
+  display: contents;
+}
+
+.composerScope[hidden] {
+  display: none;
+}
+
 .composerInputRow {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

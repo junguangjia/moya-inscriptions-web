@@ -89,7 +89,7 @@ describe("same-origin comment bridge", () => {
     const response = await GET(readRequest("?page=2&pageSize=10"), context);
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
-    expect(response.headers.get("vary")).toBe("Cookie");
+    expect(response.headers.get("vary")).toBe("Cookie, x-yoyi-comment-images");
     expect(await response.json()).toEqual(page);
     expect(fetchPageMock).toHaveBeenCalledWith(
       catalogId,
@@ -99,6 +99,7 @@ describe("same-origin comment bridge", () => {
       },
       undefined,
       undefined,
+      null,
     );
   });
 
@@ -117,6 +118,7 @@ describe("same-origin comment bridge", () => {
       },
       undefined,
       undefined,
+      null,
     );
   });
 
@@ -162,6 +164,7 @@ describe("same-origin comment bridge", () => {
       opaqueSession,
       { text: "评论正文" },
       undefined,
+      null,
     );
   });
 
@@ -189,6 +192,7 @@ describe("same-origin comment bridge", () => {
       opaqueSession,
       { text: "评论正文" },
       account,
+      null,
     );
     createMock.mockClear();
     const malformed = await POST(

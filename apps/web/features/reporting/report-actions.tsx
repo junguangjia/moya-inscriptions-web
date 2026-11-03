@@ -16,6 +16,7 @@ import {
   ReportingRequestError,
 } from "./reporting-data";
 import styles from "./reporting.module.css";
+import { CommentReportButton } from "./comment-report-button";
 
 export const reportReasonLabels: Record<CommunityReportReason, string> = {
   illegal_harmful: "违法有害",
@@ -30,19 +31,6 @@ type FormTarget = Extract<
   CreateCommunityReportRequest,
   { kind: "standard" }
 >["target"];
-const Flag = () => (
-  <svg
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.7"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
-    <path d="M5 21V3m0 1c5-4 9 4 15 0v11c-6 4-10-4-15 0" />
-  </svg>
-);
 
 /** A comment report is intentionally only a quiet symbol and one command. */
 export const QuickCommentReport = ({ id }: { id: string }) => {
@@ -95,18 +83,12 @@ export const QuickCommentReport = ({ id }: { id: string }) => {
     }
   };
   return (
-    <button
-      type="button"
-      className={styles.flag}
-      aria-label={state === "sent" ? "已举报评论" : "举报评论"}
-      aria-pressed={state === "sent"}
-      aria-busy={state === "pending" || undefined}
+    <CommentReportButton
+      sent={state === "sent"}
+      pending={state === "pending"}
       disabled={author.checking || state !== "idle"}
       onClick={(event) => void run(event.currentTarget)}
-      data-comment-report=""
-    >
-      <Flag />
-    </button>
+    />
   );
 };
 

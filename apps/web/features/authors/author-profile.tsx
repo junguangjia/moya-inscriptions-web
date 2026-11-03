@@ -1,4 +1,5 @@
 "use client";
+import { InlineCommentBody } from "../comments/inline-comment-body";
 
 import { ReportDialog, ReportMenu } from "../reporting/report-actions";
 import { useAuthEntry } from "../auth/auth-return";
@@ -1449,7 +1450,12 @@ export const MyComments = ({
       <ul className="phase4-comment-list">
         {items.map((item) => (
           <li key={item.id}>
-            <p>{item.text}</p>
+            <p>
+              <InlineCommentBody
+                text={item.text}
+                images={item.deleted ? undefined : item.images}
+              />
+            </p>
             <small>{new Date(item.createdAt).toLocaleString()}</small>
             <div className="phase4-actions">
               {item.target ? (

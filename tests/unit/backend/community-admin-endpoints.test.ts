@@ -79,6 +79,99 @@ const invoke = async (
 };
 
 describe("Admin community moderation endpoint boundary", () => {
+  it("keeps unrelated Owner JSON outside comment representation negotiation", async () => {
+    const { call } = recorder();
+    const endpoint = createCommunityEndpoints(call).find(
+      (candidate) => candidate.path === "/community-moderation/read-summary",
+    )!;
+    const req = request({});
+    req.headers = new Headers({ "x-yoyi-comment-images": "1" });
+    const response = await endpoint.handler(req);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("vary")).toBeNull();
+    expect(await response.json()).toEqual({
+      ok: true,
+      result: { echoed: true },
+    });
+  });
+
+  it("requests canonical Backend JSON before adapting it for a legacy Owner page", async () => {
+    const operatorCredential = "EXPLICIT_SYNTHETIC_PLACEHOLDER";
+    vi.stubEnv(
+      "COMMUNITY_OPERATOR_BASE_URL",
+      "http://127.0.0.1:3411/operator/",
+    );
+    vi.stubEnv("COMMUNITY_OPERATOR_TOKEN", operatorCredential);
+    const item = {
+      id: commentId,
+      text: "",
+      images: [{ id: "synthetic-image" }],
+    };
+    const upstream = vi.fn<typeof fetch>(async () => Response.json({ item }));
+    vi.stubGlobal("fetch", upstream);
+    try {
+      const result = await invoke(
+        createCommunityEndpoints(),
+        "read-comment",
+        request({ id: commentId }),
+      );
+      expect(result).toEqual({
+        status: 200,
+        body: {
+          ok: true,
+          result: {
+            item: { id: commentId, text: "【此条含附图，请刷新页面查看】" },
+          },
+        },
+      });
+      const headers = new Headers(upstream.mock.calls[0]?.[1]?.headers);
+      expect(headers.get("x-yoyi-comment-images")).toBe("1");
+      expect(headers.get("authorization")).toBe(`Bearer ${operatorCredential}`);
+      expect(item.text).toBe("");
+    } finally {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each([undefined, "1", "2"])(
+    "adapts authorized comment JSON for the Owner browser marker %j",
+    async (version) => {
+      const item = {
+        id: commentId,
+        text: "",
+        images: [{ id: "synthetic-image" }],
+      };
+      const detail = { item, root: item, replyTo: null };
+      const call = vi.fn(async () => detail) as unknown as OperatorCall;
+      const endpoint = createCommunityEndpoints(call).find(
+        (candidate) => candidate.path === "/community-moderation/read-comment",
+      )!;
+      const req = request({ id: commentId });
+      req.headers = new Headers(
+        version === undefined ? {} : { "x-yoyi-comment-images": version },
+      );
+      const response = await endpoint.handler(req);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("vary")).toBe(
+        "Cookie, x-yoyi-comment-images",
+      );
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      const result = (await response.json()).result;
+      if (version === "1") expect(result).toEqual(detail);
+      else {
+        expect(result.item).toEqual({
+          id: commentId,
+          text: "【此条含附图，请刷新页面查看】",
+        });
+        expect(result.root).toEqual(result.item);
+      }
+      expect(item.text).toBe("");
+      expect(item.images).toHaveLength(1);
+      expect(call).toHaveBeenCalledWith("GET", `comments/${commentId}`);
+    },
+  );
+
   it("restricts the new user controls to Owner and rejects spoofed commands", async () => {
     vi.stubEnv("NODE_ENV", "development");
     const { call, calls } = recorder();

@@ -5,8 +5,14 @@ import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommentViewerState } from "../comments/comment-section";
 import type { CommentReplyTarget } from "../comments/comment-types";
+import type { UploadManagerSnapshot } from "../publishing/upload-manager";
 
 const h = vi.hoisted(() => ({
+  account: "reader",
+  epoch: 0,
+  serial: 0,
+  abandoned: 0,
+  committed: 0,
   authReturn: null as null | {
     remember: ReturnType<typeof vi.fn>;
     take: ReturnType<typeof vi.fn>;
@@ -14,6 +20,89 @@ const h = vi.hoisted(() => ({
 }));
 vi.mock("../auth/auth-return", () => ({
   useAuthReturn: () => h.authReturn,
+}));
+vi.mock("../authors/author-data", () => ({
+  authorClient: {
+    account: () => h.account,
+    accountEpoch: () => h.epoch,
+  },
+}));
+vi.mock("../publishing/ui/media/media-preview", () => ({
+  useBoundedPreview: () => ({ url: null, status: "idle", size: null }),
+}));
+vi.mock("../comments/comment-image-upload-session", () => ({
+  CommentImageError: class extends Error {},
+  createCommentUploadSession: (owner: string) => {
+    let state: UploadManagerSnapshot = {
+      accountId: owner,
+      status: "active",
+      pauseReason: null,
+      items: [],
+    };
+    const listeners = new Set<() => void>();
+    const emit = () => {
+      for (const listener of listeners) listener();
+    };
+    return {
+      owner,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      snapshot: () => state,
+      localStill: () => null,
+      add: async (files: readonly File[]) => {
+        const rows = files.map(() => {
+          const serial = ++h.serial;
+          const id = `media-item-${serial.toString(16).padStart(32, "0")}`;
+          return {
+            key: `selected-${serial}`,
+            itemId: id,
+            kind: "static" as const,
+            qualityMode: "standard" as const,
+            notCameraOriginal: false,
+            phase: "ready" as const,
+            components: [],
+            failure: null,
+            choice: null,
+            recoverable: false,
+            serverItem: {
+              id,
+              kind: "static" as const,
+              qualityMode: "standard" as const,
+              state: "ready" as const,
+              failureCode: null,
+              components: [],
+              presentation: { width: 100, height: 150 },
+              media: {
+                thumbSrc: "/api/community/synthetic/thumb",
+                displaySrc: "/api/community/synthetic/display",
+              },
+            },
+          };
+        });
+        state = { ...state, items: [...state.items, ...rows] };
+        emit();
+        return rows.map(({ key }) => key);
+      },
+      remove: async (key: string) => {
+        state = {
+          ...state,
+          items: state.items.filter((item) => item.key !== key),
+        };
+        emit();
+      },
+      retry: async () => {},
+      useOriginal: () => {},
+      resumeConnection: async () => {},
+      committed: async () => {
+        h.committed++;
+      },
+      abandon: async () => {
+        h.abandoned++;
+      },
+    };
+  },
 }));
 import {
   COLOPHON_INPUT_BLUR_MS,
@@ -83,7 +172,37 @@ const submit = () =>
     );
   });
 
+const selectImages = async (offset = box().value.length) => {
+  const trigger = $<HTMLButtonElement>('[aria-label="添加图片"]')!;
+  act(() => {
+    box().setSelectionRange(offset, offset);
+    trigger.dispatchEvent(
+      new MouseEvent("mousedown", {
+        button: 0,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    trigger.click();
+  });
+  await act(async () => {
+    const picker = $<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(picker, "files", {
+      configurable: true,
+      value: [
+        new File(["synthetic still"], "synthetic.png", { type: "image/png" }),
+      ],
+    });
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+};
+
 beforeEach(() => {
+  h.account = "reader";
+  h.epoch = 0;
+  h.serial = 0;
+  h.abandoned = 0;
+  h.committed = 0;
   h.authReturn = null;
   strip = document.createElement("div");
   document.body.append(strip);
@@ -161,6 +280,181 @@ describe("colophon input geometry", () => {
 });
 
 describe("FeedColophonInput", () => {
+  it("retains ready attachments during same-account checking and unavailable refresh states", async () => {
+    render();
+    type("甲😀乙");
+    await selectImages(3);
+    const input = $<HTMLInputElement>('input[type="file"]')!;
+    render({ viewerState: { state: "checking" } });
+    expect($('input[type="file"]')).toBe(input);
+    expect(input.isConnected).toBe(true);
+    expect(h.abandoned).toBe(0);
+    render({ viewerState: { state: "unavailable" } });
+    expect(h.abandoned).toBe(0);
+    render();
+    await submit();
+    expect(onSubmit.mock.calls[0]?.[2]).toEqual([
+      { itemId: "media-item-00000000000000000000000000000001", offset: 3 },
+    ]);
+    expect(h.committed).toBe(1);
+  });
+
+  it("keeps a pending OS picker input connected through checking and uploads only after reconfirmation", async () => {
+    render();
+    type("甲乙");
+    const trigger = $<HTMLButtonElement>('[aria-label="添加图片"]')!;
+    act(() => {
+      box().setSelectionRange(1, 1);
+      trigger.click();
+    });
+    const input = $<HTMLInputElement>('input[type="file"]')!;
+    render({ viewerState: { state: "checking" } });
+    expect($('input[type="file"]')).toBe(input);
+    expect(input.disabled).toBe(false);
+    expect(input.closest<HTMLElement>("[hidden]")).not.toBeNull();
+    await act(async () => {
+      Object.defineProperty(input, "files", {
+        configurable: true,
+        value: [
+          new File(["synthetic"], "synthetic.png", { type: "image/png" }),
+        ],
+      });
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(h.serial).toBe(0);
+    await act(async () => render());
+    expect(h.serial).toBe(1);
+    await submit();
+    expect(onSubmit.mock.calls[0]?.[2]?.[0]?.offset).toBe(1);
+  });
+
+  it("replaces the picker DOM on an account change and ignores a late old selection", async () => {
+    render();
+    act(() => $<HTMLButtonElement>('[aria-label="添加图片"]')!.click());
+    const old = $<HTMLInputElement>('input[type="file"]')!;
+    h.account = "new-reader";
+    h.epoch++;
+    render({ actorId: h.account });
+    expect($('input[type="file"]')).not.toBe(old);
+    expect(old.isConnected).toBe(false);
+    await act(async () => {
+      Object.defineProperty(old, "files", {
+        configurable: true,
+        value: [
+          new File(["synthetic"], "synthetic.png", { type: "image/png" }),
+        ],
+      });
+      old.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(h.serial).toBe(0);
+    expect($("[data-comment-image-panel]")).toBeNull();
+  });
+  it("sends image-only colophons without invented text through the same input and send", async () => {
+    render();
+    await selectImages(0);
+    expect(box().value).toBe("");
+    expect(strip.querySelectorAll("textarea")).toHaveLength(1);
+    expect(send().disabled).toBe(false);
+    await submit();
+    expect(onSubmit).toHaveBeenCalledWith(
+      "",
+      null,
+      [
+        {
+          itemId: "media-item-00000000000000000000000000000001",
+          offset: 0,
+        },
+      ],
+      expect.any(String),
+    );
+    expect(h.committed).toBe(1);
+    expect($("[data-comment-image-panel]")).toBeNull();
+    expect(send().disabled).toBe(true);
+  });
+
+  it("keeps ready images, their position and request identity after an unconfirmed send", async () => {
+    onSubmit.mockResolvedValueOnce(false);
+    render();
+    type("甲😀乙");
+    await selectImages(3);
+    await submit();
+    const first = onSubmit.mock.calls[0]!;
+    expect(first[0]).toBe("甲😀乙");
+    expect(first[2]?.[0]?.offset).toBe(3);
+    expect(box().value).toBe("甲😀乙");
+    expect($("[data-comment-image-panel]")).not.toBeNull();
+    expect($("[data-colophon-notice]")?.textContent).toContain(
+      "正文和图片已保留",
+    );
+    expect(h.committed).toBe(0);
+    await submit();
+    expect(onSubmit.mock.calls[1]?.[3]).toBe(first[3]);
+    expect(onSubmit.mock.calls[1]?.[2]).toEqual(first[2]);
+    expect(h.committed).toBe(1);
+  });
+
+  it("rebases an inline image through native text edits and preserves it while choosing a reply", async () => {
+    render();
+    type("甲😀乙");
+    await selectImages(3);
+    type("前甲😀乙");
+    act(() => handle.current?.reply(replyTo));
+    expect($("[data-comment-image-panel]")).not.toBeNull();
+    await submit();
+    expect(onSubmit).toHaveBeenCalledWith(
+      "前甲😀乙",
+      replyTo,
+      [
+        {
+          itemId: "media-item-00000000000000000000000000000001",
+          offset: 4,
+        },
+      ],
+      expect.any(String),
+    );
+  });
+
+  it("retires attachments on a content/account scope change instead of leaking their preview", async () => {
+    render();
+    type("这一篇的正文");
+    await selectImages(2);
+    render({ contentKey: "work:w2" });
+    expect(box().value).toBe("");
+    expect($("[data-comment-image-panel]")).toBeNull();
+    expect(h.abandoned).toBe(1);
+    await selectImages(0);
+    h.account = "other-reader";
+    h.epoch++;
+    render({ contentKey: "work:w2", actorId: h.account });
+    expect($("[data-comment-image-panel]")).toBeNull();
+    expect(h.abandoned).toBe(2);
+  });
+
+  it("keeps writing layout for an open image panel and does not blur the active textarea when closing it", async () => {
+    const onWritingChange = vi.fn();
+    render({ onWritingChange });
+    act(() => box().focus());
+    await selectImages(0);
+    expect(onWritingChange).toHaveBeenLastCalledWith(true, null);
+    act(() => $<HTMLButtonElement>('[aria-label="收起附图面板"]')!.click());
+    expect(document.activeElement).toBe(box());
+    expect(
+      $("[data-colophon-input]")?.hasAttribute("data-colophon-input-focused"),
+    ).toBe(true);
+    expect(onWritingChange).toHaveBeenLastCalledWith(true, null);
+  });
+
+  it("lets the dock return on the image stage even if the attachment panel was open", async () => {
+    const onWritingChange = vi.fn();
+    render({ onWritingChange });
+    await selectImages(0);
+    render({ onWritingChange, shown: false });
+    expect(
+      $("[data-colophon-input]")?.hasAttribute("data-colophon-input-focused"),
+    ).toBe(false);
+    expect(onWritingChange).toHaveBeenLastCalledWith(false, null);
+  });
+
   it("is a vertical text input with a vertical placeholder and a disabled 发送 while empty", () => {
     render();
     const column = $("[data-colophon-input]");

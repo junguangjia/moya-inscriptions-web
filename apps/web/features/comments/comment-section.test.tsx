@@ -79,6 +79,70 @@ afterEach(() => {
 });
 
 describe("CommentSection", () => {
+  it.each(["resolve", "reject"] as const)(
+    "isolates an old send's %s from a new content scope and pending send",
+    async (oldOutcome) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+      roots.push(root);
+      let finishA!: () => void;
+      let finishB!: () => void;
+      const pendingA = new Promise<boolean>((resolve, reject) => {
+        finishA = () =>
+          oldOutcome === "resolve"
+            ? resolve(true)
+            : reject(new Error("Old request failed"));
+      });
+      const pendingB = new Promise<boolean>((resolve) => {
+        finishB = () => resolve(true);
+      });
+      const sendA = vi.fn(() => pendingA);
+      const sendB = vi.fn(() => pendingB);
+      const draw = (catalogId: string, onSendComment: () => Promise<boolean>) =>
+        act(() =>
+          root.render(
+            <CommentSection
+              catalogId={catalogId}
+              currentUser={currentUser}
+              items={[]}
+              onSendComment={onSendComment}
+              onSendReply={() => undefined}
+            />,
+          ),
+        );
+      const send = () =>
+        click(
+          container.querySelector(
+            '[data-comment-composer] button[type="submit"]',
+          ),
+        );
+      draw("catalog-a", sendA);
+      fill(container.querySelector("textarea"), "Draft A");
+      send();
+      expect(sendA).toHaveBeenCalledOnce();
+      draw("catalog-b", sendB);
+      fill(container.querySelector("textarea"), "Draft B");
+      send();
+      expect(sendB).toHaveBeenCalledOnce();
+      await act(async () => {
+        finishA();
+        await Promise.resolve();
+      });
+      expect(container.querySelector("textarea")?.value).toBe("Draft B");
+      expect(
+        container.querySelector("[data-comment-image-send-error]"),
+      ).toBeNull();
+      send();
+      expect(sendB).toHaveBeenCalledOnce();
+      await act(async () => {
+        finishB();
+        await Promise.resolve();
+      });
+      expect(container.querySelector("textarea")?.value).toBe("");
+    },
+  );
+
   it.each(["root", "reply-12"])(
     "reveals %s's own content while retaining the full row highlight",
     (id) => {

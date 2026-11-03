@@ -16,7 +16,18 @@ import {
 import { MentionControl } from "../notifications/mention-control";
 import { remapMentions } from "../notifications/mention-edits";
 import { normalizeMentionText } from "../notifications/mention-data";
-import type { MentionReference } from "@moya/contracts";
+import type {
+  CommentImage,
+  CommentImageInput,
+  MentionReference,
+} from "@moya/contracts";
+import { InlineCommentBody } from "./inline-comment-body";
+import {
+  CommentImageComposerControls,
+  CommentImageError,
+  useCommentImageComposer,
+} from "./comment-image-composer";
+import type { CommentImageSubmission } from "./comment-image-composer";
 import { createPortal } from "react-dom";
 
 import {
@@ -77,11 +88,15 @@ export interface CommentSectionProps {
   readonly onSendComment: (
     text: string,
     mentions?: readonly MentionReference[],
+    images?: readonly CommentImageInput[],
+    requestId?: string,
   ) => CommentSendResult;
   readonly onSendReply: (
     target: CommentReplyTarget,
     text: string,
     mentions?: readonly MentionReference[],
+    images?: readonly CommentImageInput[],
+    requestId?: string,
   ) => CommentSendResult;
   /** The live Phase 4 composition supplies authorized like commands. */
   readonly onToggleLike?: (commentId: string, replyId?: string) => void;
@@ -206,6 +221,7 @@ const Avatar = ({ user }: { readonly user: CommentUserPresentation }) => {
 
 const CommentContent = ({
   media,
+  images,
   replyToUser,
   text,
   onReply,
@@ -214,21 +230,28 @@ const CommentContent = ({
   readonly onReply: () => void;
   readonly authorName: string;
   readonly media?: readonly CommentMediaPresentation[] | undefined;
+  readonly images?: readonly CommentImage[] | undefined;
   readonly replyToUser?: CommentUserPresentation | undefined;
   readonly text: string;
 }) => (
   <div
     aria-label={`回复 ${authorName}`}
+    aria-description={
+      images?.length ? "点击文字或按回车回复，点击图片放大查看" : undefined
+    }
     className={styles.replyEntry}
     data-comment-reply-action=""
-    role="button"
+    role={images?.length ? "group" : "button"}
     tabIndex={0}
     onClick={() => {
       // Selecting text must not switch the current reply target.
       if (window.getSelection()?.isCollapsed !== false) onReply();
     }}
     onKeyDown={(event) => {
-      if (event.key === "Enter" || event.key === " ") {
+      if (
+        event.target === event.currentTarget &&
+        (event.key === "Enter" || event.key === " ")
+      ) {
         event.preventDefault();
         onReply();
       }
@@ -244,7 +267,7 @@ const CommentContent = ({
           />
         </span>
       )}
-      {text}
+      <InlineCommentBody text={text} images={images} />
     </p>
     {media === undefined || media.length === 0 ? null : (
       <ul aria-label="评论图片" className={styles.commentMedia}>
@@ -340,6 +363,7 @@ const ReplyRow = ({
           })
         }
         media={reply.media}
+        images={reply.deleted ? undefined : reply.images}
         replyToUser={reply.replyToUser}
         text={reply.text}
       />
@@ -406,6 +430,7 @@ const CommentRow = ({
             onReply({ rootCommentId: comment.id, user: comment.user })
           }
           media={comment.media}
+          images={comment.deleted ? undefined : comment.images}
           text={comment.text}
         />
         <div className={styles.metaRow}>
@@ -570,6 +595,8 @@ export const CommentSection = ({
   );
   const recoveredComposer = useRef(false);
   const editorRevision = useRef(0);
+  const imageSendLock = useRef({ locked: false });
+  const [imageNotice, setImageNotice] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const editorMounted = useRef(true);
   const editorScope = useRef<{ catalogId: string; actor: string | null }>({
@@ -600,7 +627,12 @@ export const CommentSection = ({
         viewerState === "signed-in")
     ) {
       editorRevision.current += 1;
-      if (confirmedActor !== null) recoveredComposer.current = true;
+      imageSendLock.current = { locked: false };
+      setImageNotice("");
+      recoveredComposer.current =
+        confirmedActor !== null &&
+        viewerState !== "checking" &&
+        viewerState !== "unavailable";
       const saved =
         confirmedActor === null
           ? undefined
@@ -656,6 +688,18 @@ export const CommentSection = ({
   const composerPortalTarget = useCommentComposerPortalTarget();
   const postingAsId = useId();
   const live = presentation === "live";
+  const imageComposer = useCommentImageComposer({
+    accountId:
+      !live || viewerState === "signed-out"
+        ? null
+        : viewerState === "checking" || viewerState === "unavailable"
+          ? editorScope.current.actor
+          : currentUser.id,
+    scopeKey: catalogId,
+    text: draft,
+    disabled: submitting || status !== null || viewerState === "signed-out",
+    revalidating: viewerState === "checking" || viewerState === "unavailable",
+  });
 
   const hot = hotItems ?? [];
   const count =
@@ -685,14 +729,62 @@ export const CommentSection = ({
     setExpandedCommentIds((current) => new Set(current).add(commentId));
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const text = normalizeMentionText(draft);
-    if (text.length === 0 || submitting) return;
+    const sendLock = imageSendLock.current;
+    const normalized = normalizeMentionText(draft);
+    if (
+      (normalized.length === 0 && !imageComposer.hasImages) ||
+      submitting ||
+      sendLock.locked ||
+      imageComposer.mutating
+    )
+      return;
+    let ticket: CommentImageSubmission | null;
+    try {
+      ticket = imageComposer.prepareSubmission(
+        JSON.stringify([
+          catalogId,
+          currentUser.id,
+          replyTarget?.rootCommentId ?? null,
+          replyTarget?.replyId ?? null,
+          mentions,
+        ]),
+      );
+      setImageNotice("");
+    } catch (error) {
+      setImageNotice(
+        error instanceof CommentImageError
+          ? error.message
+          : "图片暂时无法发送，请检查后重试。",
+      );
+      return;
+    }
+    const text = ticket?.text ?? normalized;
     const submittedRevision = editorRevision.current;
     const target = replyTarget;
-    const outcome =
-      target === null
-        ? onSendComment(text, mentions)
-        : onSendReply(target, text, mentions);
+    sendLock.locked = true;
+    let outcome: CommentSendResult;
+    try {
+      outcome =
+        ticket === null
+          ? target === null
+            ? onSendComment(text, mentions)
+            : onSendReply(target, text, mentions)
+          : target === null
+            ? onSendComment(text, mentions, ticket.images, ticket.requestId)
+            : onSendReply(
+                target,
+                text,
+                mentions,
+                ticket.images,
+                ticket.requestId,
+              );
+    } catch {
+      sendLock.locked = false;
+      void ticket?.finish(false);
+      if (editorMounted.current && imageSendLock.current === sendLock)
+        setImageNotice("发送失败，正文和附图仍保留，请重试。");
+      return;
+    }
     const accepted = () => {
       if (
         !editorMounted.current ||
@@ -709,11 +801,22 @@ export const CommentSection = ({
     if (outcome instanceof Promise) {
       void outcome.then(
         (ok) => {
+          void ticket?.finish(ok);
           if (ok) accepted();
+          sendLock.locked = false;
         },
-        () => undefined,
+        () => {
+          void ticket?.finish(false);
+          sendLock.locked = false;
+          if (editorMounted.current && imageSendLock.current === sendLock)
+            setImageNotice("发送失败，正文和附图仍保留，请重试。");
+        },
       );
-    } else accepted();
+    } else {
+      void ticket?.finish(true);
+      accepted();
+      sendLock.locked = false;
+    }
   };
   // Owner acceptance (2026-09-25): every text composer is one box with the
   // send button on its right; the mention trigger sits inside the box.
@@ -750,9 +853,21 @@ export const CommentSection = ({
             onChange={(event) => {
               editorRevision.current += 1;
               const next = event.currentTarget.value;
+              imageComposer.textChanged(draft, next);
+              setImageNotice("");
               setMentions(remapMentions(draft, next, mentions));
               setDraft(next);
             }}
+            onSelect={(event) =>
+              imageComposer.captureSelection(event.currentTarget)
+            }
+            onPointerUp={(event) =>
+              imageComposer.captureSelection(event.currentTarget)
+            }
+            onKeyUp={(event) =>
+              imageComposer.captureSelection(event.currentTarget)
+            }
+            maxLength={1000}
             placeholder="写下你的评论…"
             rows={1}
             value={draft}
@@ -765,6 +880,7 @@ export const CommentSection = ({
               maxLength={1000}
               onChange={(text, refs) => {
                 editorRevision.current++;
+                imageComposer.normalizedTextChanged(draft, text);
                 setDraft(text);
                 setMentions(refs);
                 textareaRef.current?.focus();
@@ -774,30 +890,75 @@ export const CommentSection = ({
         </div>
         <button
           className={styles.composerSend}
-          disabled={draft.trim().length === 0 || submitting}
+          disabled={
+            (draft.trim().length === 0 && !imageComposer.hasImages) ||
+            submitting ||
+            imageComposer.pending ||
+            imageComposer.mutating ||
+            (imageComposer.hasImages && !imageComposer.ready)
+          }
           type="submit"
         >
           {submitting ? "发送中…" : "发送"}
         </button>
       </div>
+      {live && (
+        <CommentImageComposerControls
+          composer={imageComposer}
+          editorRef={textareaRef}
+          disabled={submitting}
+          renderPreview={({ text, images }) => (
+            <p className={styles.commentText}>
+              <InlineCommentBody text={text} images={images} />
+            </p>
+          )}
+        />
+      )}
+      {imageNotice && (
+        <p
+          className={styles.notice}
+          data-comment-image-send-error=""
+          role="alert"
+        >
+          {imageNotice}
+        </p>
+      )}
       <span id={postingAsId} className={styles.visuallyHidden}>
         以“{currentUser.name}”发布
       </span>
     </form>
   );
   // Signed out, the composer's place carries the truthful state instead.
-  const composerSlot: ReactNode =
-    viewer === undefined || viewer.state === "signed-in" ? (
-      composer
-    ) : viewer.state === "signed-out" ? (
+  const showComposer = viewer === undefined || viewer.state === "signed-in";
+  const preserveCheckingComposer =
+    (viewerState === "checking" || viewerState === "unavailable") &&
+    recoveredComposer.current &&
+    editorScope.current.catalogId === catalogId &&
+    editorScope.current.actor !== null;
+  const composerStatus: ReactNode =
+    viewer?.state === "signed-out" ? (
       <p className={styles.signedOut} data-comment-signed-out="">
         <a href={viewer.signInHref}>登录</a>后即可发表评论。
       </p>
-    ) : viewer.state === "unavailable" ? (
+    ) : viewer?.state === "unavailable" ? (
       <p className={styles.signedOut} data-comment-viewer-unavailable="">
         暂时无法确认登录状态，请稍后刷新再试。
       </p>
     ) : null;
+  const composerSlot: ReactNode = (
+    <>
+      {(showComposer || preserveCheckingComposer) && (
+        <div
+          className={styles.composerScope}
+          hidden={!showComposer}
+          inert={!showComposer || undefined}
+        >
+          {composer}
+        </div>
+      )}
+      {!showComposer && composerStatus}
+    </>
+  );
   const renderRow = (comment: CommentItem) => (
     <CommentRow
       comment={comment}

@@ -1371,3 +1371,46 @@ authorCommunityPaths["/v1/community/notifications/stream"] = {
     },
   },
 };
+
+// #358: derivatives remain private to the currently authorized comment audience.
+const commentImagePath =
+  "/v1/community/discussion/images/{commentId}/{itemId}/{variant}";
+const commentImageRead = {
+  ...operation("readDiscussionImage", commentImagePath, null, null, false),
+  description:
+    "Rechecks comment, root, target publication, blocks and moderation on every read. Own pending images are private; hidden or deleted bodies and removed threads are unavailable. Sources and arbitrary media IDs are never served. No query; private, no-store; GET/HEAD and one byte range supported.",
+  parameters: [
+    ...["commentId", "itemId", "variant"].map((name) => ({
+      name,
+      in: "path",
+      required: true,
+      schema:
+        name === "variant"
+          ? { type: "string", enum: ["thumb", "display", "full"] }
+          : pathSchema(name),
+    })),
+    {
+      name: "Range",
+      in: "header",
+      required: false,
+      schema: { type: "string" },
+    },
+  ],
+  responses: {
+    "200": {
+      description: "Authorized processed still image; private, no-store.",
+      content: {
+        "image/webp": { schema: { type: "string", format: "binary" } },
+      },
+    },
+    "206": { description: "Authorized byte range" },
+    "401": failure("Invalid session"),
+    "404": failure("Image or its comment/target unavailable"),
+    "416": failure("Unsatisfiable range"),
+    "503": failure("Media unavailable"),
+  },
+};
+authorCommunityPaths[commentImagePath] = {
+  get: commentImageRead,
+  head: { ...commentImageRead, operationId: "headDiscussionImage" },
+};

@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  commentImageSchema,
+  COMMENT_IMAGE_LIMITS,
+} from "../../comment-images.ts";
 import { operatorModerationReasonSchema } from "./moderation-reason.js";
 
 import {
@@ -168,6 +172,32 @@ export const operatorAuthorSchema = z.strictObject({
  * state, never credentials. `catalogTitle` comes from the published Catalog
  * read side through the Backend; null when the record is no longer published.
  */
+const operatorCommentImageUrl = (variant: string) =>
+  z
+    .string()
+    .regex(
+      new RegExp(
+        `^/api/community-moderation/comment-media/comment-[0-9a-f]{32}/media-item-[0-9a-f]{32}/${variant}$`,
+        "u",
+      ),
+    );
+export const operatorCommentImagesSchema = z
+  .array(
+    commentImageSchema.extend({
+      thumbSrc: operatorCommentImageUrl("thumb"),
+      src: operatorCommentImageUrl("display"),
+      fullSrc: operatorCommentImageUrl("full").optional(),
+    }),
+  )
+  .max(COMMENT_IMAGE_LIMITS.maxImages);
+export const operatorCommentMediaRequestSchema = z.strictObject({
+  commentId: catalogCommentIdSchema.refine((value) =>
+    /^comment-[0-9a-f]{32}$/u.test(value),
+  ),
+  itemId: z.string().regex(/^media-item-[0-9a-f]{32}$/u),
+  variant: z.enum(["thumb", "display", "full"]),
+});
+
 export const operatorCommentSchema = z.strictObject({
   id: catalogCommentIdSchema,
   kind: operatorCommentKindSchema,
@@ -182,7 +212,8 @@ export const operatorCommentSchema = z.strictObject({
   /** The sibling reply this reply answers, when there is one. */
   replyToId: catalogCommentIdSchema.optional(),
   author: operatorAuthorSchema,
-  text: z.string().min(1).max(COMMENT_TEXT_MAXIMUM),
+  text: z.string().max(COMMENT_TEXT_MAXIMUM),
+  images: operatorCommentImagesSchema.optional(),
   createdAt: z.iso.datetime({ offset: false }),
   moderation: commentModerationStateSchema,
 });

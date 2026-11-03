@@ -94,6 +94,7 @@
 /* The text and, right of it, the reply lead: both the column's full height
    less 发送, however long the name answered. */
 .field {
+  order: 0;
   display: flex;
   flex: 1 1 auto;
   flex-direction: row-reverse;
@@ -190,6 +191,39 @@
   opacity: 1;
 }
 
+/* The compact control stays in the 48px input. Its management panel is anchored
+   to this full-height column, so it remains usable above the software keyboard
+   even when the column has shrunk to its 160px visible minimum. */
+.column :global([data-comment-image-controls][data-orientation="vertical"]) {
+  position: static;
+}
+
+.column
+  :global([data-comment-image-controls][data-orientation="vertical"])
+  :global([data-comment-image-panel]) {
+  top: var(--yoyi-space-4);
+  bottom: auto;
+  left: 0;
+  max-height: calc(100% - var(--yoyi-space-4) - var(--yoyi-space-3));
+}
+
+.imagePreview {
+  height: min(240px, 35svh);
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  color: var(--yoyi-color-text-primary);
+  font-family: var(--yoyi-font-editorial);
+  font-size: var(--yoyi-type-body-size);
+  line-height: var(--yoyi-type-article-line-height-normal);
+  white-space: pre-wrap;
+  direction: ltr;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  line-break: strict;
+  overflow-wrap: anywhere;
+}
+
 /* 「回复 X：」 heads the text as its right-most column, from the text's own
    top line; × follows it. One column at most: a name too long for it is
    cut (it is already cut short in characters), never × or the text. */
@@ -254,6 +288,7 @@
 }
 
 .status {
+  order: 2;
   flex: none;
   align-self: center;
   max-height: 50%;
@@ -283,6 +318,7 @@
 
 /* 发送: a small seal at the foot, as tall as 发送中, so it never moves. */
 .send {
+  order: 3;
   position: relative;
   flex: none;
   align-self: center;
@@ -308,6 +344,16 @@
   color: var(--yoyi-color-text-disabled);
   background: var(--yoyi-color-background-muted);
   cursor: default;
+}
+
+.attachments {
+  order: 1;
+  flex: none;
+  min-width: var(--yoyi-space-10);
+}
+
+.attachments[hidden] {
+  display: none;
 }
 
 .signIn,

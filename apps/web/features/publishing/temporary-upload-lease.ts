@@ -144,8 +144,14 @@ export const createTemporaryUploadLease = (options: {
         receipt.itemId = item.id;
         return item;
       }),
-    retireCommitted: (used: ReadonlySet<string>, ready: () => boolean) =>
-      serialize(async () => {
+    retireCommitted: (
+      used: ReadonlySet<string>,
+      ready: () => boolean,
+      /** Only acknowledged item ids explicitly removed by this editor. */
+      removed?: ReadonlySet<string>,
+    ) => {
+      const settledRemoved = new Set(removed);
+      return serialize(async () => {
         await finishRetirement();
         if (current === null) return true;
         // A registration queued while a content save was in flight must also
@@ -157,14 +163,17 @@ export const createTemporaryUploadLease = (options: {
             (receipt) =>
               "sessionId" in receipt.command.holder &&
               receipt.command.holder.sessionId === id &&
-              (receipt.itemId === null || !used.has(receipt.itemId)),
+              (receipt.itemId === null ||
+                (!used.has(receipt.itemId) &&
+                  !settledRemoved.has(receipt.itemId))),
           )
         )
           return false;
         retirement = { id, requestId: options.requestId() };
         await finishRetirement();
         return true;
-      }),
+      });
+    },
     discard: () =>
       serialize(async () => {
         if (retirement === null && current !== null)

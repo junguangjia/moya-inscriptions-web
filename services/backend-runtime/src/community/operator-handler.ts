@@ -6,6 +6,7 @@ import type { readBoundedArticleThumbnail } from "./article-runtime-read.js";
 import {
   requireHumanModerationReason,
   CommunityInputError,
+  CommunityNotFoundError,
   CommunityContentOperatorService,
   isCommunityConflictError,
   isCommunityInputError,
@@ -32,8 +33,10 @@ import {
   type CatalogRenderBacklogReport,
 } from "@moya/contracts/internal/editorial";
 
+import { deliverPublishingMedia } from "./publishing-media-read.js";
 import { JsonBodyError, readJsonBody } from "../http/json-body.js";
 import { sendJson } from "../http/json-response.js";
+import { sendCommentJson } from "../http/comment-json-response.js";
 import { failureLabel } from "../http/request-boundary.js";
 import { collectTransportQuery } from "../http/transport-query.js";
 import { handleAgentRequest } from "./agent-handler.js";
@@ -236,6 +239,10 @@ export const handleOperatorRequest = async (
     articlePublicationOperatorService,
   }: OperatorRouteDependencies,
 ): Promise<void> => {
+  if (/^\/internal\/community\/comments\/[^/]+\/images\//u.test(pathname)) {
+    response.setHeader("cache-control", "private, no-store");
+    response.setHeader("vary", "Authorization");
+  }
   if (!isAuthorizedOperator(request, operatorCredential)) {
     sendOperatorError(response, 401, "OPERATOR_UNAUTHORIZED");
     return;
@@ -515,6 +522,48 @@ export const handleOperatorRequest = async (
       }
     }
     if (discussionPort) {
+      const imagePath =
+        /^\/internal\/community\/comments\/(comment-[0-9a-f]{32})\/images\/(media-item-[0-9a-f]{32})\/(thumb|display|full)$/u.exec(
+          pathname,
+        );
+      if (
+        imagePath &&
+        discussionPort.resolveDiscussionImage &&
+        publishingOperatorService
+      ) {
+        if (method !== "GET" && method !== "HEAD") {
+          response.writeHead(405, {
+            allow: "GET, HEAD",
+            "cache-control": "private, no-store",
+          });
+          response.end();
+          return;
+        }
+        if (new URL(request.url ?? "/", "http://request.invalid").search)
+          throw new CommunityInputError();
+        const id = imagePath[1]! as import("@moya/contracts").CatalogCommentId;
+        // This separately credentialed review follows retained moderation
+        // detail, rather than public target/thread admission. The byte lookup
+        // still rejects permanently deleted bodies and unrelated media items.
+        await moderationService.readCommentDetail(id);
+        await deliverPublishingMedia(
+          request,
+          response,
+          async (range) => {
+            const image = await discussionPort.resolveDiscussionImage!(
+              id,
+              imagePath[2]!,
+              imagePath[3] as "thumb" | "display" | "full",
+              null,
+              true,
+            );
+            if (!image) throw new CommunityNotFoundError();
+            return publishingOperatorService.openAuthorizedMedia(image, range);
+          },
+          { "cache-control": "private, no-store", vary: "Authorization" },
+        );
+        return;
+      }
       const deletion =
         /^\/internal\/community\/comments\/(comment-[0-9a-f]{32})\/(delete-body|remove-thread)$/u.exec(
           pathname,
@@ -571,7 +620,8 @@ export const handleOperatorRequest = async (
         return;
       }
       const query = queryOf(request);
-      sendJson(
+      sendCommentJson(
+        request,
         response,
         200,
         await moderationService.readComments({
@@ -665,7 +715,8 @@ export const handleOperatorRequest = async (
           methodNotAllowed();
           return;
         }
-        sendJson(
+        sendCommentJson(
+          request,
           response,
           200,
           await moderationService.readCommentDetail(id.data),

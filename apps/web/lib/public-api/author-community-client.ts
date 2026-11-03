@@ -1,4 +1,8 @@
 import {
+  COMMENT_IMAGE_CAPABILITY_HEADER,
+  COMMENT_IMAGE_CAPABILITY_VERSION,
+} from "@moya/contracts/comment-images-protocol";
+import {
   notificationPageSchema,
   mentionLookupPageSchema,
   authorProfileSchema,
@@ -44,6 +48,7 @@ import type {
   DiscoveryQuery,
   DiscussionTarget,
   MentionReference,
+  CommentImageInput,
 } from "@moya/contracts";
 import { linkAbortSignals } from "../platform/abort-signals";
 interface Parser<T> {
@@ -156,8 +161,18 @@ const request = async <T>(
             "x-request-id": options.requestId ?? "",
           }
         : options.body === undefined
-          ? { ...identityHeaders, accept: "application/json" }
-          : { ...identityHeaders, "content-type": "application/json" },
+          ? {
+              ...identityHeaders,
+              accept: "application/json",
+              [COMMENT_IMAGE_CAPABILITY_HEADER]:
+                COMMENT_IMAGE_CAPABILITY_VERSION,
+            }
+          : {
+              ...identityHeaders,
+              "content-type": "application/json",
+              [COMMENT_IMAGE_CAPABILITY_HEADER]:
+                COMMENT_IMAGE_CAPABILITY_VERSION,
+            },
       ...(options.upload
         ? { body: options.upload }
         : options.body === undefined
@@ -460,13 +475,21 @@ export const authorClient = {
     root?: string,
     replyTo?: string,
     mentions: readonly MentionReference[] = [],
+    images: readonly CommentImageInput[] = [],
+    requestId?: string,
   ) =>
     request(
       `discussion/${targetPath(target)}${root ? `/replies/${root}` : ""}`,
       discussionSubmitResultSchema,
       {
         method: "POST",
-        body: { text, mentions, ...(replyTo ? { replyTo } : {}) },
+        body: {
+          text,
+          mentions,
+          ...(replyTo ? { replyTo } : {}),
+          ...(images.length ? { images } : {}),
+          ...(requestId ? { requestId } : {}),
+        },
       },
     ),
   locate: (target: DiscussionTarget, id: string, pinned: readonly string[]) =>

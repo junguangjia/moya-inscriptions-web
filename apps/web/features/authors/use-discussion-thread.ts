@@ -5,6 +5,7 @@ import type {
   DiscussionReply,
   DiscussionTarget,
   MentionReference,
+  CommentImageInput,
 } from "@moya/contracts";
 import { useAuthEntry, useAuthReturnView } from "../auth/auth-return";
 import type { CommentViewerState } from "../comments/comment-section";
@@ -44,6 +45,7 @@ export const row = (r: DiscussionReply): CommentReply => ({
   liked: r.liked,
   deleted: r.deleted,
   ...(r.replyTo ? { replyToUser: presentAuthor(r.replyTo) } : {}),
+  ...(!r.deleted && r.images?.length ? { images: r.images } : {}),
 });
 
 export const rootRow = (r: DiscussionComment): CommentItem => ({
@@ -114,11 +116,15 @@ export interface DiscussionThread {
   readonly sendComment: (
     text: string,
     mentions?: readonly MentionReference[],
+    images?: readonly CommentImageInput[],
+    requestId?: string,
   ) => Promise<boolean>;
   readonly sendReply: (
     t: CommentReplyTarget,
     text: string,
     mentions?: readonly MentionReference[],
+    images?: readonly CommentImageInput[],
+    requestId?: string,
   ) => Promise<boolean>;
   /** A guest goes to sign-in, returning focus to `opener`. */
   readonly toggleLike: (
@@ -554,6 +560,8 @@ export function useDiscussionThread({
     root?: string,
     reply?: string,
     mentions: readonly MentionReference[] = [],
+    images: readonly CommentImageInput[] = [],
+    requestId?: string,
   ) => {
     if (sendLock.current || !author.viewer || author.checking || composerClosed)
       return false;
@@ -576,9 +584,20 @@ export function useDiscussionThread({
     setSubmitting(true);
     if (colophon) setActionError(null);
     try {
-      const result = mentions.length
-        ? await authorClient.send(target, text, root, reply, mentions)
-        : await authorClient.send(target, text, root, reply);
+      const result =
+        images.length || requestId
+          ? await authorClient.send(
+              target,
+              text,
+              root,
+              reply,
+              mentions,
+              images,
+              requestId,
+            )
+          : mentions.length
+            ? await authorClient.send(target, text, root, reply, mentions)
+            : await authorClient.send(target, text, root, reply);
       if (run === epoch.current) {
         const submitted = result?.id
           ? {
@@ -705,9 +724,10 @@ export function useDiscussionThread({
       if (root) void loadReplies(root.id, 1);
     },
     loadReplies: (rootId, through) => void loadReplies(rootId, through),
-    sendComment: (text, mentions) => send(text, undefined, undefined, mentions),
-    sendReply: (t, text, mentions) =>
-      send(text, t.rootCommentId, t.replyId, mentions),
+    sendComment: (text, mentions, images, requestId) =>
+      send(text, undefined, undefined, mentions, images, requestId),
+    sendReply: (t, text, mentions, images, requestId) =>
+      send(text, t.rootCommentId, t.replyId, mentions, images, requestId),
     toggleLike: (rootId, replyId, opener) => {
       if (!author.viewer) {
         if (opener) enterAuth(author.signInHref, opener);
@@ -747,9 +767,10 @@ export function useDiscussionThread({
       latest.current.browseHighlightFromFirstReply(),
     loadReplies: (rootId, through) =>
       latest.current.loadReplies(rootId, through),
-    sendComment: (text, mentions) => latest.current.sendComment(text, mentions),
-    sendReply: (t, text, mentions) =>
-      latest.current.sendReply(t, text, mentions),
+    sendComment: (text, mentions, images, requestId) =>
+      latest.current.sendComment(text, mentions, images, requestId),
+    sendReply: (t, text, mentions, images, requestId) =>
+      latest.current.sendReply(t, text, mentions, images, requestId),
     toggleLike: (rootId, replyId, opener) =>
       latest.current.toggleLike(rootId, replyId, opener),
     deleteBody: (id) => latest.current.deleteBody(id),

@@ -7,14 +7,34 @@ import {
   enqueueNotification,
   validateMentionUsers,
 } from "./notifications/source.js";
-import { normalizeMentionText } from "@moya/contracts/schemas";
-import type { ArticleId, MentionReference } from "@moya/contracts";
+import {
+  normalizeMentionText,
+  createCatalogCommentReplyRequestSchema,
+} from "@moya/contracts/schemas";
+import {
+  commentImagesSql,
+  pinCommentImages,
+  releaseCommentImages,
+} from "./comment-images.js";
+import { derivativeReadSql, mediaReadTarget } from "./publishing/media-read.js";
+import { withinPublicPolicySql } from "./publishing/rendition-read.js";
+import type {
+  ArticleId,
+  MentionReference,
+  CommentImageInput,
+  CommentImage,
+} from "@moya/contracts";
 import { asCommunityOperationError } from "./availability.js";
 import { createHash, randomUUID } from "node:crypto";
-import { CommunityConflictError, CommunityNotFoundError } from "@moya/api";
+import {
+  CommunityConflictError,
+  CommunityNotFoundError,
+  CommunityInputError,
+} from "@moya/api";
 import {
   discussionCommentSchema,
   discussionReplySchema,
+  discussionTargetSchema,
   ownCommentSchema,
 } from "@moya/contracts/schemas";
 import type { DiscussionPort, DiscussionQuery } from "@moya/api";
@@ -50,7 +70,7 @@ const likeCount = (
   alias: string,
 ) => `(SELECT count(*)::integer FROM community.comment_likes l JOIN community.public_users lu ON lu.id=l.user_id
  WHERE l.comment_id=${alias}.id AND lu.status='active' AND community.accounts_can_interact(l.user_id,${alias}.author_id))`;
-const rootProjection = `c.id,c.author_id,u.display_name,u.studio_name,u.status AS author_status,c.text,c.created_at,c.body_deleted_at,
+const rootProjection = `c.id,c.author_id,u.display_name,u.studio_name,u.status AS author_status,c.text,c.created_at,c.body_deleted_at,c.moderation,${commentImagesSql("c")} AS images,
  CASE WHEN ${rootPublic} AND c.body_deleted_at IS NULL THEN ${likeCount("c")} ELSE 0 END AS like_count,
  EXISTS(SELECT 1 FROM community.comment_likes WHERE comment_id=c.id AND user_id=$3) AS liked`;
 const replyFromFor = (roots: string) =>
@@ -61,7 +81,7 @@ const replyFrom = replyFromFor("r.root_comment_id=$4");
 /** The same audience rules over every root of a page (`$4` text[]). */
 const groupedReplyFrom = replyFromFor("r.root_comment_id=ANY($4::text[])");
 const replyVisible = `${rootPublic} AND r.moderation='visible' AND r.body_deleted_at IS NULL`;
-const replyProjection = `r.id,r.author_id,ru.display_name,ru.studio_name,ru.status AS author_status,r.text,r.created_at,r.body_deleted_at,
+const replyProjection = `r.id,r.author_id,ru.display_name,ru.studio_name,ru.status AS author_status,r.text,r.created_at,r.body_deleted_at,r.moderation,${commentImagesSql("r")} AS images,
  CASE WHEN ${rootPublic} AND r.moderation='visible' AND r.body_deleted_at IS NULL THEN ${likeCount("r")} ELSE 0 END AS like_count,
  EXISTS(SELECT 1 FROM community.comment_likes WHERE comment_id=r.id AND user_id=$3) AS liked,
  (SELECT json_strip_nulls(json_build_object('id',tu.id,'displayName',tu.display_name,'studioName',tu.studio_name,
@@ -75,8 +95,10 @@ interface ItemRow extends QueryResultRow {
   studio_name: string;
   author_status: string;
   text: string;
+  images?: CommentImage[];
   created_at: Date;
   body_deleted_at: Date | null;
+  moderation: string;
   like_count: number;
   liked: boolean;
   reply_to?: unknown;
@@ -96,6 +118,7 @@ const item = (r: ItemRow): DiscussionReply =>
       ...(r.author_status === "deleted" ? { deleted: true } : {}),
     },
     text: r.body_deleted_at ? deletedText : r.text,
+    images: r.body_deleted_at ? [] : (r.images ?? []),
     createdAt: r.created_at.toISOString(),
     deleted: r.body_deleted_at !== null,
     likeCount: r.like_count,
@@ -495,9 +518,80 @@ export class PostgresDiscussionStore implements DiscussionPort {
     rootId?: string,
     replyTo?: string,
     mentions: readonly MentionReference[] = [],
+    images: readonly CommentImageInput[] = [],
+    requestId?: string,
   ) {
     text = normalizeMentionText(text);
+    if (
+      !createCatalogCommentReplyRequestSchema.safeParse({
+        text,
+        mentions,
+        images: [...images],
+        ...(requestId ? { requestId } : {}),
+        ...(replyTo ? { replyTo } : {}),
+      }).success
+    )
+      throw new CommunityInputError("Invalid comment body");
     return this.run(true, async (db) => {
+      await this.active(db, actor);
+      const fingerprint = createHash("sha256")
+        .update(
+          JSON.stringify({
+            action: "comment_images_submit",
+            target,
+            text,
+            rootId: rootId ?? null,
+            replyTo: replyTo ?? null,
+            mentions,
+            images,
+          }),
+        )
+        .digest("hex");
+      if (requestId) {
+        await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
+          `${actor}:${requestId}`,
+        ]);
+        const old = (
+          await db.query<{
+            fingerprint: string;
+            result: {
+              id: string;
+              rootId: string;
+            };
+          }>(
+            "SELECT fingerprint,result FROM community.discussion_command_receipts WHERE actor_label=$1 AND request_id=$2",
+            [actor, requestId],
+          )
+        ).rows[0];
+        if (old) {
+          if (old.fingerprint !== fingerprint)
+            throw new CommunityConflictError(
+              "Submission identity already used",
+            );
+          await this.workAllowed(db, target, actor, true);
+          // A receipt establishes the command identity, never permission to replay
+          // an obsolete body, author label or attachment projection.
+          const current = await this.subject(db, old.result.id, false);
+          if (current.thread_removed_at) throw new CommunityNotFoundError();
+          const rows = rootId
+            ? await db.query<ItemRow>(
+                `SELECT ${replyProjection} ${replyFrom} AND r.id=$5 AND r.body_deleted_at IS NULL AND r.moderation<>'hidden' AND c.moderation<>'hidden'`,
+                [target.type, target.id, actor, rootId, old.result.id],
+              )
+            : await db.query<ItemRow>(
+                `SELECT ${rootProjection} ${rootFrom} AND c.id=$4 AND c.body_deleted_at IS NULL AND c.moderation<>'hidden'`,
+                [target.type, target.id, actor, old.result.id],
+              );
+          const canonical = rows.rows[0];
+          if (!canonical) throw new CommunityNotFoundError();
+          return {
+            id: old.result.id,
+            rootId: old.result.rootId,
+            item: item(canonical),
+            awaitingApproval: canonical.moderation === "pending",
+          };
+        }
+      }
       await validateMentionUsers(db, actor, text, mentions);
       await this.active(db, actor);
       await this.interactionLocks(db, target, actor, rootId, replyTo);
@@ -546,9 +640,10 @@ export class PostgresDiscussionStore implements DiscussionPort {
       const moderation =
           policy === "DIRECT_PUBLICATION" ? "visible" : "pending",
         id = opaque("comment");
+      await pinCommentImages(db, actor, id, images);
       if (rootId)
         await db.query(
-          "INSERT INTO community.catalog_comment_replies(id,root_comment_id,author_id,text,moderation,reply_to_reply_id,was_public,mentions) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)",
+          "INSERT INTO community.catalog_comment_replies(id,root_comment_id,author_id,text,moderation,reply_to_reply_id,was_public,mentions,image_refs) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb)",
           [
             id,
             rootId,
@@ -558,11 +653,12 @@ export class PostgresDiscussionStore implements DiscussionPort {
             replyTo ?? null,
             moderation === "visible",
             JSON.stringify(mentions),
+            JSON.stringify(images),
           ],
         );
       else
         await db.query(
-          "INSERT INTO community.catalog_comments(id,catalog_id,target_type,author_id,text,moderation,was_public,mentions) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)",
+          "INSERT INTO community.catalog_comments(id,catalog_id,target_type,author_id,text,moderation,was_public,mentions,image_refs) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb)",
           [
             id,
             target.id,
@@ -572,6 +668,7 @@ export class PostgresDiscussionStore implements DiscussionPort {
             moderation,
             moderation === "visible",
             JSON.stringify(mentions),
+            JSON.stringify(images),
           ],
         );
       await enqueueNotification(db, "comment", id, actor);
@@ -596,7 +693,14 @@ export class PostgresDiscussionStore implements DiscussionPort {
             )
           ).rows[0]
         : undefined;
-      return {
+      const resolvedImages =
+        (
+          await db.query<{ images: CommentImage[] }>(
+            `SELECT ${commentImagesSql("s")} AS images FROM community.${rootId ? "catalog_comment_replies" : "catalog_comments"} s WHERE id=$1`,
+            [id],
+          )
+        ).rows[0]?.images ?? [];
+      const result = {
         id,
         rootId: rootId ?? id,
         awaitingApproval: moderation === "pending",
@@ -608,6 +712,7 @@ export class PostgresDiscussionStore implements DiscussionPort {
             studioName: author?.studio_name,
           },
           text,
+          images: resolvedImages,
           createdAt: created?.created_at.toISOString(),
           likeCount: 0,
           liked: false,
@@ -624,6 +729,76 @@ export class PostgresDiscussionStore implements DiscussionPort {
             : {}),
         }),
       };
+      if (requestId)
+        await db.query(
+          "INSERT INTO community.discussion_command_receipts(actor_label,request_id,fingerprint,result) VALUES($1,$2,$3,$4::jsonb)",
+          [
+            actor,
+            requestId,
+            fingerprint,
+            JSON.stringify({ id: result.id, rootId: result.rootId }),
+          ],
+        );
+      return result;
+    });
+  }
+
+  async resolveDiscussionImage(
+    commentId: string,
+    itemId: string,
+    variant: "thumb" | "display" | "full",
+    viewer: string | null,
+    operator = false,
+  ) {
+    return this.run(false, async (db) => {
+      const subjects = (
+        await db.query<{
+          root_id: string;
+          target_type: "catalog" | "work" | "article";
+          catalog_id: string;
+          is_reply: boolean;
+          subject_author_id: string;
+        }>(
+          `SELECT c.id AS root_id,c.target_type,c.catalog_id,FALSE AS is_reply,c.author_id AS subject_author_id FROM community.catalog_comments c WHERE c.id=$1
+        UNION ALL SELECT c.id,c.target_type,c.catalog_id,TRUE,r.author_id FROM community.catalog_comment_replies r JOIN community.catalog_comments c ON c.id=r.root_comment_id WHERE r.id=$1`,
+          [commentId],
+        )
+      ).rows;
+      if (subjects.length !== 1) return null;
+      const subject = subjects[0]!;
+      // Public media access ends on withdrawal/privacy even for an old owner
+      // URL. The separate authenticated Owner review retains the same body
+      // access as the existing moderation detail, including reversible removal.
+      if (!operator) {
+        const target = discussionTargetSchema.parse({
+          type: subject.target_type,
+          id: subject.catalog_id,
+        });
+        await this.workAllowed(db, target, null);
+        if (viewer !== null) await this.workAllowed(db, target, viewer);
+      }
+      const audience = operator
+        ? "($3::text IS NULL OR $3::text IS NOT NULL)"
+        : `${rootEligible} AND c.moderation<>'hidden'${subject.is_reply ? ` AND ${replyAudience} AND r.moderation<>'hidden'` : ""}`;
+      const alias = subject.is_reply ? "r" : "c";
+      const allowed = (
+        await db.query(
+          `SELECT 1 FROM community.catalog_comments c JOIN community.public_users u ON u.id=c.author_id
+        ${subject.is_reply ? "JOIN community.catalog_comment_replies r ON r.root_comment_id=c.id JOIN community.public_users ru ON ru.id=r.author_id" : ""}
+        WHERE c.target_type=$1 AND c.catalog_id=$2 AND ${alias}.id=$4 AND ${operator ? "TRUE" : "c.thread_removed_at IS NULL"} AND ${alias}.body_deleted_at IS NULL
+        AND ${audience} AND EXISTS(SELECT 1 FROM jsonb_array_elements(${alias}.image_refs) v WHERE v->>'itemId'=$5)`,
+          [subject.target_type, subject.catalog_id, viewer, commentId, itemId],
+        )
+      ).rowCount;
+      if (!allowed) return null;
+      return mediaReadTarget(
+        (
+          await db.query(
+            `${derivativeReadSql} AND i.purpose='comment' AND i.owner_id=$4 AND i.kind='static' AND i.state='ready' AND i.cancelled_at IS NULL AND i.purged_at IS NULL AND d.content_type='image/webp' AND ${withinPublicPolicySql("d")}`,
+            [itemId, variant, "base", subject.subject_author_id],
+          )
+        ).rows[0],
+      );
     });
   }
   private async subject(db: PoolClient, id: string, lock = true) {
@@ -765,6 +940,7 @@ export class PostgresDiscussionStore implements DiscussionPort {
           `UPDATE community.${s.id === s.root_id ? "catalog_comments" : "catalog_comment_replies"} SET text=$2,body_deleted_at=COALESCE(body_deleted_at,CURRENT_TIMESTAMP) WHERE id=$1`,
           [id, deletedText],
         );
+        await releaseCommentImages(db, [id], new Date());
         await this.authorAudit(db, actor, "comment_body_deleted", id);
       });
     });
@@ -821,6 +997,7 @@ export class PostgresDiscussionStore implements DiscussionPort {
             `UPDATE community.${s.id === s.root_id ? "catalog_comments" : "catalog_comment_replies"} SET text=$2,body_deleted_at=COALESCE(body_deleted_at,CURRENT_TIMESTAMP) WHERE id=$1`,
             [id, deletedText],
           );
+          await releaseCommentImages(db, [id], new Date());
           await this.operatorAudit(
             db,
             operator,
@@ -883,6 +1060,8 @@ export class PostgresDiscussionStore implements DiscussionPort {
             "UPDATE community.catalog_comments SET thread_removed_at=CURRENT_TIMESTAMP WHERE id=$1",
             [rootId],
           );
+          // Staff review may overturn thread removal. Keep every body's media
+          // pins so restoration recovers the same ready images, even after grace.
           await this.operatorAudit(
             db,
             operator,
@@ -914,8 +1093,8 @@ export class PostgresDiscussionStore implements DiscussionPort {
   }
   async ownComments(actor: string, q: DiscussionQuery) {
     return this.run(false, async (db) => {
-      const own = `FROM (SELECT c.id,c.id AS root_id,c.author_id,c.text,c.created_at,c.body_deleted_at,c.target_type,c.catalog_id,c.thread_removed_at,c.author_id AS root_author,c.moderation AS root_moderation FROM community.catalog_comments c
-   UNION ALL SELECT r.id,c.id,r.author_id,r.text,r.created_at,r.body_deleted_at,c.target_type,c.catalog_id,c.thread_removed_at,c.author_id,c.moderation FROM community.catalog_comment_replies r JOIN community.catalog_comments c ON c.id=r.root_comment_id) x
+      const own = `FROM (SELECT c.id,c.id AS root_id,c.author_id,c.text,c.created_at,c.body_deleted_at,c.target_type,c.catalog_id,c.thread_removed_at,c.author_id AS root_author,c.moderation AS root_moderation,${commentImagesSql("c")} AS images FROM community.catalog_comments c
+   UNION ALL SELECT r.id,c.id,r.author_id,r.text,r.created_at,r.body_deleted_at,c.target_type,c.catalog_id,c.thread_removed_at,c.author_id,c.moderation,${commentImagesSql("r")} FROM community.catalog_comment_replies r JOIN community.catalog_comments c ON c.id=r.root_comment_id) x
    WHERE x.author_id=$1 AND x.thread_removed_at IS NULL`;
       const total = Number(
         (await db.query(`SELECT count(*) AS n ${own}`, [actor])).rows[0]?.n ??
@@ -955,6 +1134,7 @@ export class PostgresDiscussionStore implements DiscussionPort {
         return ownCommentSchema.parse({
           id: r.id,
           rootId: r.root_id,
+          images: target === null || r.body_deleted_at ? [] : r.images,
           text: r.body_deleted_at ? deletedText : r.text,
           createdAt: r.created_at.toISOString(),
           deleted: !!r.body_deleted_at,

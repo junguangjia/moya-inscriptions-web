@@ -1,3 +1,7 @@
+import {
+  COMMENT_IMAGE_CAPABILITY_HEADER,
+  COMMENT_IMAGE_CAPABILITY_VERSION,
+} from "@moya/contracts/comment-images-protocol";
 import type {
   AccountCapacityClass,
   CommentModerationAction,
@@ -124,7 +128,10 @@ export async function call<Result>(
       method: "POST",
       credentials: "same-origin",
       cache: "no-store",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        [COMMENT_IMAGE_CAPABILITY_HEADER]: COMMENT_IMAGE_CAPABILITY_VERSION,
+      },
       body: JSON.stringify(input),
       signal: requestSignal,
     });

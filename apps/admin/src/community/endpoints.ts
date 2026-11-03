@@ -15,6 +15,7 @@ import {
   operatorFeedbackQuerySchema,
   operatorFeedbackPageSchema,
   operatorFeedbackMediaRequestSchema,
+  operatorCommentMediaRequestSchema,
   recommendUserCommandSchema,
   adminModerateWorkRequestSchema,
   featuredMutationSchema,
@@ -63,6 +64,10 @@ import {
   operatorReportForwardRequestSchema,
 } from "@moya/contracts/internal/community-operator";
 import { z } from "zod";
+import {
+  COMMENT_IMAGE_CAPABILITY_HEADER,
+  commentImagePayloadFor,
+} from "@moya/contracts/comment-images-protocol";
 
 import { isOwner } from "../editorial/access";
 import {
@@ -699,9 +704,25 @@ const endpoint = (name: string, operation: CommunityOperation): Endpoint => ({
         throw new CommunityOperatorError("NOT_FOUND", 404);
       const input = await readJson(req);
       const result = await operation(req, input);
+      const commentJson = name === "read-comments" || name === "read-comment";
       return Response.json(
-        { ok: true, result },
-        { headers: { "Cache-Control": "no-store" } },
+        {
+          ok: true,
+          result: commentJson
+            ? commentImagePayloadFor(
+                req.headers?.get(COMMENT_IMAGE_CAPABILITY_HEADER),
+                result,
+              )
+            : result,
+        },
+        {
+          headers: {
+            "Cache-Control": "no-store",
+            ...(commentJson
+              ? { Vary: `Cookie, ${COMMENT_IMAGE_CAPABILITY_HEADER}` }
+              : {}),
+          },
+        },
       );
     } catch (error) {
       return failure(error, req);
@@ -892,6 +913,62 @@ const feedbackMediaEndpoint = (openMedia: OperatorMediaCall): Endpoint => ({
   },
 });
 
+/** Comment pictures retain their current discussion association, including review. */
+const commentMediaEndpoint = (openMedia: OperatorMediaCall): Endpoint => ({
+  path: "/community-moderation/comment-media/:commentId/:itemId/:variant",
+  method: "get",
+  handler: async (req) => {
+    try {
+      requireOwner(req);
+      const params = req.routeParams ?? {};
+      const { commentId, itemId, variant } = parse(
+        operatorCommentMediaRequestSchema,
+        {
+          commentId: params.commentId,
+          itemId: params.itemId,
+          variant: params.variant,
+        },
+      );
+      if (!/^comment-[0-9a-f]{32}$/u.test(commentId))
+        throw new CommunityOperatorError("COMMAND_INVALID", 400);
+      if (new URL(req.url ?? "http://request.invalid").search !== "")
+        throw new CommunityOperatorError("COMMAND_INVALID", 400);
+      const requestedRange = req.headers?.get("range");
+      const range = byteRange(requestedRange);
+      if (requestedRange != null && range === null)
+        throw new CommunityOperatorError("RANGE_NOT_SATISFIABLE", 416);
+      const media = await openMedia(
+        `comments/${segment(commentId)}/images/${segment(itemId)}/${variant}`,
+        range,
+        req.signal,
+      );
+      if (
+        !["image/webp", "image/jpeg", "image/png"].includes(media.contentType)
+      ) {
+        await media.body.cancel().catch(() => undefined);
+        throw new CommunityOperatorError("OPERATION_FAILED", 502);
+      }
+      const headers = new Headers({
+        "Content-Type": media.contentType,
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+        "Cross-Origin-Resource-Policy": "same-origin",
+        "Referrer-Policy": "no-referrer",
+        Vary: "Cookie, Range",
+      });
+      if (media.acceptsRanges) headers.set("Accept-Ranges", "bytes");
+      if (media.contentLength !== null)
+        headers.set("Content-Length", media.contentLength);
+      if (media.contentRange !== null)
+        headers.set("Content-Range", media.contentRange);
+      return new Response(media.body, { status: media.status, headers });
+    } catch (error) {
+      return failure(error, req);
+    }
+  },
+});
+
 /** The real endpoint set, with the transports injectable for boundary tests. */
 export const createCommunityEndpoints = (
   call: OperatorCall = callCommunityOperator,
@@ -906,6 +983,7 @@ export const createCommunityEndpoints = (
   articleSubmissionMediaEndpoint(openMedia),
   reportEvidenceEndpoint(openEvidence),
   feedbackMediaEndpoint(openMedia),
+  commentMediaEndpoint(openMedia),
 ];
 
 export const communityEndpoints: Endpoint[] = createCommunityEndpoints();

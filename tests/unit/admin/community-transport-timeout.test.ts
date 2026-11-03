@@ -6,6 +6,20 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("bounded community transport", () => {
+  it("requests canonical comment images through the Owner browser boundary", async () => {
+    const result = { item: { text: "", images: [{ id: "synthetic-image" }] } };
+    const fetcher = vi.fn(async () => Response.json({ ok: true, result }));
+    vi.stubGlobal("fetch", fetcher);
+    await expect(
+      call("read-comment", { id: "synthetic-comment" }),
+    ).resolves.toEqual(result);
+    const init = (
+      fetcher.mock.calls as unknown as [string, RequestInit][]
+    )[0]![1];
+    expect(new Headers(init.headers).get("x-yoyi-comment-images")).toBe("1");
+    expect(init.credentials).toBe("same-origin");
+  });
+
   it("makes an unconfirmed timed out write retryable with its original identity", async () => {
     const deadline = new AbortController();
     vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);

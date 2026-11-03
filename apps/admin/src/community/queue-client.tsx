@@ -28,6 +28,7 @@ import {
 } from "./api";
 import styles from "./community.module.css";
 import { ModerationReasonInput, readModerationReason } from "./bulk-actions";
+import { CommentImageBody } from "./comment-image-body";
 
 import type {
   BulkModerationResult,
@@ -1036,9 +1037,18 @@ export const CommunityQueueClient = ({
                             onClick={() => openItem(item.id)}
                             type="button"
                           >
-                            {excerpt(item.text)}
+                            {excerpt(item.text) ||
+                              (item.images?.length ? "（附图评论）" : "")}
                           </button>
                         </p>
+                        {item.images?.length ? (
+                          <span
+                            className={styles.chip}
+                            data-comment-image-count=""
+                          >
+                            附图 {item.images.length} 张
+                          </span>
+                        ) : null}
                         <span className={styles.secondary}>
                           <span className={styles.chip} data-state="kind">
                             {kindLabels[item.kind]}
@@ -1368,7 +1378,7 @@ const DetailBody = ({
       <div>
         <h3>正文</h3>
         <p className={styles.fullText} data-detail-text="">
-          {item.text}
+          <CommentImageBody text={item.text} images={item.images} />
         </p>
       </div>
       <div>
@@ -1414,7 +1424,8 @@ const DetailBody = ({
           <h3>所属根评论</h3>
           <div className={styles.contextBox}>
             <StateChip state={data.root.moderation} />{" "}
-            {data.root.author.displayName}：{excerpt(data.root.text, 160)}
+            {data.root.author.displayName}：
+            <CommentImageBody text={data.root.text} images={data.root.images} />
             <span className={styles.secondary}>
               <button
                 className={styles.rowLink}
@@ -1432,7 +1443,11 @@ const DetailBody = ({
           <h3>回复对象</h3>
           <div className={styles.contextBox}>
             <StateChip state={data.replyTo.moderation} />{" "}
-            {data.replyTo.author.displayName}：{excerpt(data.replyTo.text, 160)}
+            {data.replyTo.author.displayName}：
+            <CommentImageBody
+              text={data.replyTo.text}
+              images={data.replyTo.images}
+            />
             <span className={styles.secondary}>
               <button
                 className={styles.rowLink}

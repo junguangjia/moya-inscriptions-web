@@ -1,4 +1,5 @@
 import type { z } from "zod";
+export type { CommentImage, CommentImageInput } from "./comment-images.ts";
 
 /** Server-only account admission port; no credential or database row crosses it. */
 export interface BetaAccountAccessPort {

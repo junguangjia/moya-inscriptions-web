@@ -9,6 +9,19 @@ import {
 } from "./auth-schemas.ts";
 import { z } from "zod";
 import {
+  commentImageInputsSchema,
+  commentImagesSchema,
+  validCommentImageOffsets,
+} from "./comment-images.ts";
+export {
+  COMMENT_IMAGE_LIMITS,
+  commentImageInputSchema,
+  commentImageSchema,
+  commentImageInputsSchema,
+  commentImagesSchema,
+  validCommentImageOffsets,
+} from "./comment-images.ts";
+import {
   mentionReferencesSchema,
   validMentionReferences,
 } from "./mention-references.ts";
@@ -660,17 +673,21 @@ export const commentAuthorSchema = z.strictObject({
 });
 
 /**
- * Comment text is plain. Resolved mention references are separate from text; no rich text, links, media or attachments.
+ * Comment text remains plain; #358 images and mentions are separate references.
  * The bound is fixed by the Mission 2B Contract review and enforced by the
  * Backend; Web never relaxes it.
  */
 export const COMMENT_TEXT_MAXIMUM = 1_000;
-const commentTextSchema = exactTextSchema(COMMENT_TEXT_MAXIMUM);
+const commentTextSchema = z
+  .string()
+  .max(COMMENT_TEXT_MAXIMUM)
+  .refine((value) => value === value.trim());
 
 export const catalogCommentReplySchema = z.strictObject({
   id: catalogCommentIdSchema,
   author: commentAuthorSchema,
   text: commentTextSchema,
+  images: commentImagesSchema.optional(),
   createdAt: z.iso.datetime({ offset: false }),
   /** PR #106's 回复 X： pointer; absent when the reply answers the root. */
   replyTo: commentAuthorSchema.optional(),
@@ -681,6 +698,7 @@ export const catalogCommentSchema = z.strictObject({
   catalogId: catalogIdSchema,
   author: commentAuthorSchema,
   text: commentTextSchema,
+  images: commentImagesSchema.optional(),
   createdAt: z.iso.datetime({ offset: false }),
   /** A bounded first page of visible replies, in server order. */
   replies: z.array(catalogCommentReplySchema),
@@ -775,22 +793,44 @@ export const catalogCommentListingTransportQuerySchema =
 export const createCatalogCommentRequestSchema = z
   .strictObject({
     text: commentTextSchema,
+    images: commentImageInputsSchema.optional(),
+    requestId: z.uuid().optional(),
     mentions: mentionReferencesSchema.optional(),
   })
   .refine((value) => validMentionReferences(value.text, value.mentions ?? []), {
     message: "Invalid mention references",
-  });
+  })
+  .refine(
+    (value) =>
+      (value.text.length > 0 || (value.images?.length ?? 0) > 0) &&
+      (!value.images?.length || !!value.requestId) &&
+      validCommentImageOffsets(value.text, value.images ?? []),
+    {
+      message: "Invalid comment images or empty body",
+    },
+  );
 
 export const createCatalogCommentReplyRequestSchema = z
   .strictObject({
     text: commentTextSchema,
+    images: commentImageInputsSchema.optional(),
+    requestId: z.uuid().optional(),
     /** Answers a sibling reply; the new reply stays a sibling under the same root. */
     replyTo: catalogCommentIdSchema.optional(),
     mentions: mentionReferencesSchema.optional(),
   })
   .refine((value) => validMentionReferences(value.text, value.mentions ?? []), {
     message: "Invalid mention references",
-  });
+  })
+  .refine(
+    (value) =>
+      (value.text.length > 0 || (value.images?.length ?? 0) > 0) &&
+      (!value.images?.length || !!value.requestId) &&
+      validCommentImageOffsets(value.text, value.images ?? []),
+    {
+      message: "Invalid comment images or empty body",
+    },
+  );
 
 export const healthResponseSchema = z.strictObject({
   status: z.literal("ok"),
@@ -1159,6 +1199,7 @@ export const discussionReplySchema = z.strictObject({
   id: catalogCommentIdSchema,
   author: commentAuthorSchema,
   text: z.string().max(1000),
+  images: commentImagesSchema.optional(),
   createdAt: z.iso.datetime(),
   replyTo: commentAuthorSchema.optional(),
   likeCount: z.number().int().nonnegative(),
@@ -1193,6 +1234,7 @@ export const ownCommentSchema = z.strictObject({
   id: catalogCommentIdSchema,
   rootId: catalogCommentIdSchema,
   text: z.string(),
+  images: commentImagesSchema.optional(),
   createdAt: z.iso.datetime(),
   deleted: z.boolean(),
   target: discussionTargetSchema.nullable(),

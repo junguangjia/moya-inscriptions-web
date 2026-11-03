@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { validateAuthorPng } from "./author-png.js";
 import {
+  CommunityNotFoundError,
   isCommunityConflictError,
   parseCommentListingQuery,
   isCommunityInputError,
@@ -32,6 +33,7 @@ import { sendApiError } from "../http/api-error-response.js";
 import { ifNoneMatchIncludes, strongEntityTag } from "../http/entity-tag.js";
 import { JsonBodyError, readJsonBody } from "../http/json-body.js";
 import { sendJson } from "../http/json-response.js";
+import { sendCommentJson } from "../http/comment-json-response.js";
 import { collectTransportQuery } from "../http/transport-query.js";
 import { deliverPublishingMedia } from "./publishing-media-read.js";
 import { refuseTransfer } from "./publishing-upload.js";
@@ -166,6 +168,8 @@ export const handleAuthorRequest = async (
     const method = request.method;
     const reply = (value: unknown, status = 200) =>
       sendJson(response, status, value, noStore);
+    const commentReply = (value: unknown, status = 200) =>
+      sendCommentJson(request, response, status, value, noStore);
     const query = () => {
       if (
         [...url.searchParams.keys()].some(
@@ -281,6 +285,45 @@ export const handleAuthorRequest = async (
     }
     if (service.discussion && path[0] === "discussion") {
       const discussion = service.discussion;
+      if (path[1] === "images" && path.length === 5) {
+        if (!publishing || !discussion.resolveDiscussionImage)
+          throw new CommunityNotFoundError();
+        if (method !== "GET" && method !== "HEAD") {
+          response.writeHead(405, { allow: "GET, HEAD", ...noStore });
+          response.end();
+          return;
+        }
+        if (
+          url.search ||
+          !/^comment-[0-9a-f]{32}$/u.test(path[2] ?? "") ||
+          !/^media-item-[0-9a-f]{32}$/u.test(path[3] ?? "") ||
+          !["thumb", "display", "full"].includes(path[4] ?? "")
+        )
+          throw new InvalidInput();
+        if (
+          request.headers["x-author-account"] !== undefined &&
+          request.headers["x-author-account"] !== viewer
+        )
+          throw new Unauthorized();
+        const target = await discussion.discussionTarget(path[2]!);
+        await service.assertTarget(target, viewer);
+        await deliverPublishingMedia(
+          request,
+          response,
+          async (range) => {
+            const image = await discussion.resolveDiscussionImage!(
+              path[2]!,
+              path[3]!,
+              path[4] as "thumb" | "display" | "full",
+              viewer,
+            );
+            if (!image) throw new CommunityNotFoundError();
+            return publishing.openAuthorizedMedia(image, range);
+          },
+          noStore,
+        );
+        return;
+      }
       if (
         path[1] === "items" &&
         path[2] &&
@@ -325,7 +368,9 @@ export const handleAuthorRequest = async (
         });
         await service.assertTarget(target, viewer);
         if (method === "GET" && path.length === 3) {
-          reply(await discussion.readDiscussion(target, viewer, listing()));
+          commentReply(
+            await discussion.readDiscussion(target, viewer, listing()),
+          );
           return;
         }
         if (
@@ -349,7 +394,7 @@ export const handleAuthorRequest = async (
             ? parsed(catalogCommentIdSchema, path[4])
             : undefined;
         if (root && method === "GET") {
-          reply(
+          commentReply(
             await discussion.readDiscussionReplies(
               target,
               root,
@@ -366,7 +411,7 @@ export const handleAuthorRequest = async (
               await body(),
             );
           if (!root && input.replyTo) throw new InvalidInput();
-          reply(
+          commentReply(
             await discussion.submitDiscussion(
               target,
               actor,
@@ -374,6 +419,8 @@ export const handleAuthorRequest = async (
               root,
               input.replyTo,
               input.mentions,
+              input.images,
+              input.requestId,
             ),
             201,
           );
@@ -382,7 +429,7 @@ export const handleAuthorRequest = async (
       }
     }
     if (method === "GET" && path.join("/") === "me/comments") {
-      reply(await service.ownComments(requireActor(), query()));
+      commentReply(await service.ownComments(requireActor(), query()));
       return;
     }
     if (method === "GET" && path[0] === "authors" && path[1]) {

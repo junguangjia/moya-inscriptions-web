@@ -40,8 +40,16 @@ const ScopedDiscussionSection = ({ target }: { target: ContentIdentity }) => {
         currentUser={t.currentUser}
         items={t.items}
         hotItems={t.hot}
-        onSendComment={(text, refs) => t.sendComment(text, refs)}
-        onSendReply={(reply, text, refs) => t.sendReply(reply, text, refs)}
+        onSendComment={(text, refs, images, requestId) =>
+          images?.length || requestId
+            ? t.sendComment(text, refs, images, requestId)
+            : t.sendComment(text, refs)
+        }
+        onSendReply={(reply, text, refs, images, requestId) =>
+          images?.length || requestId
+            ? t.sendReply(reply, text, refs, images, requestId)
+            : t.sendReply(reply, text, refs)
+        }
         onToggleLike={(root, reply) => t.toggleLike(root, reply)}
         onOpenAuthor={(id, opener) => shell.openProfile(id, opener)}
         onDeleteBody={(id) => {

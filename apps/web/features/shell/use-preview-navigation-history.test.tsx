@@ -71,6 +71,87 @@ afterEach(async () => {
 });
 
 describe("preview child history", () => {
+  it("passes another child's pop through an unchanged parent preview depth", async () => {
+    const node = await render();
+    await click(node, "Open");
+    const nested = vi.fn();
+    window.addEventListener("popstate", nested);
+    await pop({
+      ...window.history.state,
+      commentImageNavigation: { id: "synthetic-gallery", depth: 0 },
+    });
+    expect(nested).toHaveBeenCalledOnce();
+    expect(node.querySelector("output")?.textContent).toBe("1");
+    expect(restore).not.toHaveBeenCalled();
+    window.removeEventListener("popstate", nested);
+  });
+
+  it("closes a native child before replaying a history jump beyond its base", async () => {
+    const destination = { screen: "primary", destination: "home" };
+    const NativeViewer = () => {
+      const [depth, setDepth] = useState(1);
+      usePreviewNavigationHistory({
+        depth,
+        nativeModal: true,
+        stateKey: "commentImageNavigation",
+        onBack: setDepth,
+      });
+      return depth ? <dialog open /> : <output>closed</output>;
+    };
+    window.history.replaceState(source, "", "/");
+    const node = document.createElement("div");
+    document.body.append(node);
+    root = createRoot(node);
+    await act(async () => root!.render(<NativeViewer />));
+    const underlying = vi.fn(() =>
+      expect(document.querySelector("dialog")).toBeNull(),
+    );
+    window.addEventListener("popstate", underlying);
+    await pop(destination);
+    expect(underlying).toHaveBeenCalledOnce();
+    expect(node.querySelector("output")?.textContent).toBe("closed");
+    window.removeEventListener("popstate", underlying);
+  });
+  it("lets a native image viewer own Back without replacing its parent preview marker", async () => {
+    const parent = {
+      ...source,
+      yoyiPreviewNavigation: { id: "synthetic-parent", depth: 2 },
+    };
+    window.history.replaceState(parent, "", "/?topic=synthetic-topic");
+    const close = vi.fn();
+    const NativeViewer = () => {
+      usePreviewNavigationHistory({
+        depth: 1,
+        stateKey: "commentImageNavigation",
+        nativeModal: true,
+        onBack: close,
+      });
+      return <dialog open />;
+    };
+    const node = document.createElement("div");
+    document.body.append(node);
+    root = createRoot(node);
+    await act(async () => root!.render(<NativeViewer />));
+    expect(window.history.state.yoyiPreviewNavigation).toEqual(
+      parent.yoyiPreviewNavigation,
+    );
+    const underlying = vi.fn();
+    window.addEventListener("popstate", underlying);
+    const base = {
+      ...window.history.state,
+      commentImageNavigation: {
+        ...window.history.state.commentImageNavigation,
+        depth: 0,
+      },
+    };
+    await pop(base);
+    expect(close).toHaveBeenCalledWith(0);
+    expect(underlying).not.toHaveBeenCalled();
+    expect(window.history.state.yoyiPreviewNavigation).toEqual(
+      parent.yoyiPreviewNavigation,
+    );
+    window.removeEventListener("popstate", underlying);
+  });
   it("keeps the shell parent entry and returns nested profile then post before the shell", async () => {
     const push = vi.spyOn(window.history, "pushState");
     const underlying = vi.fn();

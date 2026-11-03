@@ -50,6 +50,8 @@ const routes: Readonly<Record<string, string>> = {
   "api/community/[...path]/route.ts": "session",
   "api/community/analytics/route.ts": "analytics",
   "api/community/media/[mediaId]/[rendition]/route.ts": "session",
+  "api/community/discussion/images/[commentId]/[itemId]/[variant]/route.ts":
+    "session",
   "api/community/notifications/stream/route.ts": "session",
   "api/community/publishing/media/[itemId]/[variant]/[editKey]/route.ts":
     "session",
@@ -92,7 +94,7 @@ const proof: Readonly<Record<string, RegExp>> = {
   // Either the handler hands the session cookie on itself, or it uses a relay
   // from the server module, each of which does.
   session:
-    /\breadCommunitySessionToken\(|\brelay(?:ServerAuthorCommunity|NotificationStream|ServerPublishingMedia|ServerPublishingUpload|ServerProfileMedia)\b/u,
+    /\breadCommunitySessionToken\(|\brelay(?:ServerAuthorCommunity|NotificationStream|ServerPublishingMedia|ServerPublishingUpload|ServerProfileMedia|ServerDiscussionImage)\b/u,
   bootstrap:
     /\brelayServerCommunity(?:Auth|Accounts)\b|\bfetchServerCurrentUser\b|<AuthPage\b|<AppealLogin\b/u,
   operator: /\bfetchServerEditorialPreview\(/u,

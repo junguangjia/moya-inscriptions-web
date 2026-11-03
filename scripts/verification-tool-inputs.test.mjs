@@ -559,10 +559,16 @@ test("known shim and arbitrary correctly named bin code do not establish determi
     }).length,
     0,
   );
-  assert.deepEqual(reviewedStaticToolInputs(root, { searchPath }), {
-    eligible: false,
-    reason: "unreviewed-static-tool-package-closure",
-  });
+  const refused = reviewedStaticToolInputs(root, { searchPath });
+  assert.equal(refused.eligible, false);
+  // A platform's unreviewed native helper can be refused before the package
+  // closure is inspected; neither refusal establishes determinism.
+  assert.ok(
+    [
+      "unreviewed-static-tool-bootstrap",
+      "unreviewed-static-tool-package-closure",
+    ].includes(refused.reason),
+  );
   write(input, "7");
   assert.throws(
     () =>

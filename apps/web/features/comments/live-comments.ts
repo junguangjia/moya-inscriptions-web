@@ -21,6 +21,8 @@ import type {
   CatalogComment,
   CatalogCommentReply,
   CommentAuthor,
+  CommentImageInput,
+  MentionReference,
   PublicUserProfile,
 } from "@moya/contracts";
 import { DELETED_AUTHOR_NAME } from "./comment-types";
@@ -86,6 +88,7 @@ export const toCommentReplyPresentation = (
     ? {}
     : { replyToUser: toCommentUserPresentation(reply.replyTo) }),
   text: reply.text,
+  ...(reply.images?.length ? { images: reply.images } : {}),
   user: toCommentUserPresentation(reply.author),
 });
 
@@ -103,6 +106,7 @@ export const toCommentItemPresentation = (
   ),
   replyTotal: comment.replyTotal,
   text: comment.text,
+  ...(comment.images?.length ? { images: comment.images } : {}),
   user: toCommentUserPresentation(comment.author),
 });
 
@@ -126,12 +130,18 @@ export interface LiveCommentSource {
   readonly submitComment: (
     catalogId: string,
     text: string,
+    mentions?: readonly MentionReference[],
+    images?: readonly CommentImageInput[],
+    requestId?: string,
   ) => Promise<CommentSubmissionTransportResult<CatalogComment>>;
   readonly submitReply: (
     catalogId: string,
     commentId: string,
     text: string,
     replyTo?: string,
+    mentions?: readonly MentionReference[],
+    images?: readonly CommentImageInput[],
+    requestId?: string,
   ) => Promise<CommentSubmissionTransportResult<CatalogCommentReply>>;
   readonly readViewer: (
     signal?: AbortSignal,
@@ -151,13 +161,36 @@ export const createLiveCommentSource = (
       signal,
       context,
     ),
-  submitComment: (catalogId, text) =>
-    createSameOriginCatalogComment(catalogId, { text }, context),
-  submitReply: (catalogId, commentId, text, replyTo) =>
+  submitComment: (catalogId, text, mentions, images, requestId) =>
+    createSameOriginCatalogComment(
+      catalogId,
+      {
+        text,
+        ...(mentions?.length ? { mentions: [...mentions] } : {}),
+        ...(images?.length ? { images: [...images] } : {}),
+        ...(requestId ? { requestId } : {}),
+      },
+      context,
+    ),
+  submitReply: (
+    catalogId,
+    commentId,
+    text,
+    replyTo,
+    mentions,
+    images,
+    requestId,
+  ) =>
     createSameOriginCatalogCommentReply(
       catalogId,
       commentId,
-      replyTo === undefined ? { text } : { replyTo, text },
+      {
+        text,
+        ...(replyTo === undefined ? {} : { replyTo }),
+        ...(mentions?.length ? { mentions: [...mentions] } : {}),
+        ...(images?.length ? { images: [...images] } : {}),
+        ...(requestId ? { requestId } : {}),
+      },
       context,
     ),
   readViewer: (signal) => fetchSameOriginCurrentUser(signal, context),

@@ -14,6 +14,7 @@ import {
   VerticalText,
 } from "./vertical-text";
 import styles from "./feed-colophon.module.css";
+import { InlineCommentBody } from "../comments/inline-comment-body";
 
 /**
  * Long colophons fold after this many characters (code points) at most;
@@ -56,7 +57,7 @@ export const colophonHeadName = (name: string): string => {
 export interface ColophonInteractions {
   /** The reader's id; never matches a row for a guest. */
   readonly actorId: string;
-  /** The live composition supplies reporting; QA presentations leave it absent. */
+  /** Live reporting or an explicitly local QA presentation of its control. */
   readonly renderReport?: ((id: string) => ReactNode) | undefined;
   readonly now: Date;
   /** The row briefly marked after it was sent. */
@@ -255,21 +256,56 @@ const ColophonBody = ({
   const sealId = useId();
   const wordsId = useId();
   const textRef = useRef<HTMLDivElement>(null);
+  const [authorRight, setAuthorRight] = useState<number | undefined>();
   const folded = foldColophonText(item.text);
+  const foldedLength = folded === null ? item.text.length : folded.length - 1;
   const expanded = interactions.expanded.has(item.id);
   // Measured while folded, kept while expanded: 收起 stays offered.
   const [overflows, setOverflows] = useState(false);
   useLayoutEffect(() => {
     const node = textRef.current;
-    if (node === null || expanded) return undefined;
-    const measure = () => setOverflows(colophonTextOverflows(node));
+    if (node === null) return undefined;
+    let active = true;
+    const measure = () => {
+      if (!active) return;
+      if (!expanded) setOverflows(colophonTextOverflows(node));
+      if (!item.images?.length) {
+        setAuthorRight(undefined);
+        return;
+      }
+      const body = node.parentElement;
+      const author = body?.querySelector<HTMLElement>(
+        ":scope > [data-colophon-author]",
+      );
+      const name = node.querySelector<HTMLElement>("[data-colophon-name]");
+      const first = name?.getClientRects()[0];
+      if (!body || !author || !first || first.width <= 0) return;
+      const width = Number.parseFloat(getComputedStyle(author).width);
+      const scale = author.getBoundingClientRect().width / width;
+      if (!Number.isFinite(scale) || scale <= 0) return;
+      // A first-column picture widens its line box. Follow the rendered
+      // nickname, including after wrapping, expanding or loading a font.
+      const right =
+        (body.getBoundingClientRect().right - first.left - first.width / 2) /
+          scale -
+        width / 2;
+      setAuthorRight(
+        Math.abs(right) < 1 ? undefined : Math.round(right * 64) / 64,
+      );
+    };
     measure();
-    if (typeof ResizeObserver !== "function") return undefined;
+    void document.fonts?.ready.then(measure);
+    document.fonts?.addEventListener("loadingdone", measure);
     // A rotation changes the view, and 全文 itself takes room from the text.
-    const observer = new ResizeObserver(measure);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [expanded, item.text]);
+    const observer =
+      typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    observer?.observe(node);
+    return () => {
+      active = false;
+      observer?.disconnect();
+      document.fonts?.removeEventListener("loadingdone", measure);
+    };
+  }, [expanded, item.text, item.images, item.user.name]);
   const foldable = folded !== null || overflows;
   const target: CommentReplyTarget =
     replyId === undefined
@@ -290,7 +326,11 @@ const ColophonBody = ({
     >
       {item.user.deleted === true ? (
         // A deleted author (account-deletion-v1) has no profile to open.
-        <span className={styles.author} data-colophon-author="">
+        <span
+          className={styles.author}
+          data-colophon-author=""
+          style={authorRight === undefined ? undefined : { right: authorRight }}
+        >
           <ColophonFace className={styles.face} user={item.user} />
         </span>
       ) : (
@@ -298,6 +338,7 @@ const ColophonBody = ({
           aria-label={`打开${item.user.name}的主页`}
           className={styles.author}
           data-colophon-author=""
+          style={authorRight === undefined ? undefined : { right: authorRight }}
           onClick={(event) =>
             interactions.openAuthor(item.user.id, event.currentTarget)
           }
@@ -316,7 +357,11 @@ const ColophonBody = ({
           interactions.canReply ? `回复 ${item.user.name}` : undefined
         }
         aria-description={
-          interactions.canReply ? "点击回复这条题跋" : undefined
+          interactions.canReply
+            ? item.images?.length
+              ? "点击文字或按回车回复，点击图片放大查看"
+              : "点击回复这条题跋"
+            : undefined
         }
         aria-disabled={!interactions.canReply}
         className={styles.text}
@@ -324,6 +369,8 @@ const ColophonBody = ({
         data-folded={foldable ? String(!expanded) : undefined}
         data-overflow={overflows && !expanded ? "true" : undefined}
         onMouseDown={(event) => {
+          if ((event.target as Element).closest?.("[data-comment-image]"))
+            return;
           // While a colophon is being written, choosing another one to
           // answer keeps the keyboard up: the text never takes the focus.
           if (document.activeElement?.closest("[data-colophon-input]") != null)
@@ -340,7 +387,7 @@ const ColophonBody = ({
           answer(event.currentTarget);
         }}
         ref={textRef}
-        role="button"
+        role={item.images?.length ? "group" : "button"}
         tabIndex={interactions.canReply ? 0 : -1}
       >
         {/* Read once, as the text's description, not as part of it; a
@@ -364,8 +411,16 @@ const ColophonBody = ({
               {COLOPHON_DELETED_TEXT}
             </span>
           ) : (
-            <VerticalText
+            <InlineCommentBody
               text={folded !== null && !expanded ? folded : item.text}
+              images={
+                !expanded && folded !== null
+                  ? item.images?.filter((image) => image.offset <= foldedLength)
+                  : item.images
+              }
+              renderText={(text) => <VerticalText text={text} />}
+              viewerImages={item.images}
+              vertical
             />
           )}
         </span>
