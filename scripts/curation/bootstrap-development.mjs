@@ -69,7 +69,7 @@ try {
   const req = await createLocalReq({ user: owner }, payload);
   const automation = await payload.create({
     collection: "users",
-    overrideAccess: false,
+    overrideAccess: true,
     req,
     user: owner,
     data: {

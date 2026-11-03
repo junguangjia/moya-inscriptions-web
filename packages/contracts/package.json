@@ -27,6 +27,10 @@
       "types": "./src/json-schema.ts",
       "import": "./dist/json-schema.js"
     },
+    "./internal/admin-mcp": {
+      "types": "./src/internal/admin-mcp/index.ts",
+      "import": "./dist/internal/admin-mcp/index.js"
+    },
     "./internal/catalog-import": {
       "types": "./src/internal/catalog-import/index.ts",
       "import": "./dist/internal/catalog-import/index.js"

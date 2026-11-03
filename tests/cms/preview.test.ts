@@ -47,7 +47,7 @@ beforeAll(async () => {
   owner = { ...created, collection: "users" };
   const scoped = await payload.create({
     collection: "users",
-    overrideAccess: false,
+    overrideAccess: true,
     req: await reqFor(owner),
     data: {
       email: `preview-automation-${suffix}@example.invalid`,

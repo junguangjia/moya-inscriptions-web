@@ -137,13 +137,14 @@ describe("native editorial form presentation", () => {
     });
   });
 
-  it("keeps the two existing operator roles while distinguishing them from website users", () => {
+  it("keeps the two existing operator roles, plus ai_operator, while distinguishing them from website users", () => {
     expect(Users.labels).toEqual({ singular: "后台账号", plural: "后台账号" });
     expect(findField(Users.fields, "role")).toMatchObject({
       defaultValue: "automation",
       options: [
         { label: "管理员", value: "owner" },
         { label: "自动化账号", value: "automation" },
+        { label: "AI 操作账号", value: "ai_operator" },
       ],
     });
     expect(paths(Users.fields)).toEqual([

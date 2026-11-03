@@ -61,7 +61,7 @@ beforeAll(async () => {
   });
   automation = await payload.create({
     collection: "users",
-    overrideAccess: false,
+    overrideAccess: true,
     req: await reqFor(owner),
     user: owner,
     data: {

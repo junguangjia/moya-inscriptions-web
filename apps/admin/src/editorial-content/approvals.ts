@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 
 import type { CollectionConfig, PayloadRequest } from "payload";
 
-import { isAutomation, isOwner } from "../editorial/access";
+import { isAutomation, actsAsOwner } from "../editorial/access";
 import { relationshipID } from "../editorial/collections";
 import { EditorialError } from "../editorial/errors";
 import { lockEditorialKey } from "../editorial/transaction";
@@ -101,14 +101,14 @@ export const EditorialArticleApprovals: CollectionConfig = {
     defaultColumns: ["label", "automationUser", "status", "approvedAt"],
   },
   access: {
-    create: ({ req }) => isOwner(req),
+    create: ({ req }) => actsAsOwner(req),
     delete: () => false,
     read: ({ req }) =>
-      isOwner(req) ||
+      actsAsOwner(req) ||
       (isAutomation(req)
         ? { automationUser: { equals: req.user?.id } }
         : false),
-    update: ({ req }) => isOwner(req),
+    update: ({ req }) => actsAsOwner(req),
   },
   fields: [
     {
@@ -182,7 +182,7 @@ export const EditorialArticleApprovals: CollectionConfig = {
     beforeOperation: [
       async ({ args, operation, req }) => {
         if (operation === "update") {
-          if (!isOwner(req))
+          if (!actsAsOwner(req))
             throw new EditorialError("APPROVAL_OWNER_ONLY", 403);
           if (!("id" in args) || !args.id)
             throw new EditorialError("SINGLE_RECORD_REQUIRED", 400);
@@ -195,7 +195,8 @@ export const EditorialArticleApprovals: CollectionConfig = {
     ],
     beforeValidate: [
       async ({ data, operation, originalDoc, req }) => {
-        if (!isOwner(req)) throw new EditorialError("APPROVAL_OWNER_ONLY", 403);
+        if (!actsAsOwner(req))
+          throw new EditorialError("APPROVAL_OWNER_ONLY", 403);
         if (!data) throw new EditorialError("APPROVAL_INVALID", 400);
         if (operation === "update") {
           if (data.status !== "revoked")
@@ -212,7 +213,9 @@ export const EditorialArticleApprovals: CollectionConfig = {
           collection: "users",
           id: automationUserID,
           depth: 0,
-          overrideAccess: false,
+          // After the gate; account rows are reserved to the Owner's browser.
+          select: { role: true },
+          overrideAccess: true,
           req,
           user: req.user,
         });

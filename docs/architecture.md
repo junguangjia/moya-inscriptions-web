@@ -283,7 +283,15 @@ both, is never selected by `MOYA_CONTENT_SOURCE`, and runs only with the
 migration-privileged `APP_MIGRATION_DATABASE_URL`. Startup never performs DDL;
 the Backend only verifies each ledger read-only.
 
-Payload users serve Owner/automation only and are never public users. Community
+Payload users hold three roles and are never public users: `owner`, `automation`
+and, by the 2026-11-03 Admin MCP amendment, `ai_operator`, which has authority
+only through an MCP key on `/api/mcp`, with no password login and no REST key.
+An MCP key binds only to `ai_operator` or `automation` and expires within 30
+days; a key bound to the Owner is refused. Accounts, MCP keys, the pause switch
+and audit records are reserved to an Owner browser session: a session cookie and
+no `Authorization` header. No key passes, an Owner REST key included, and
+neither does an Owner JWT in a header, so an ingress that forwards a browser's
+`Authorization` header to the Admin would lock the Owner out of them. Community
 V1 is the one approved social domain (Owner amendment 2026-09-11): public-user
 identity and Backend-owned sessions are implemented (Mission 2A, including the
 Development-only test-account sign-in that is never composed in Production), and

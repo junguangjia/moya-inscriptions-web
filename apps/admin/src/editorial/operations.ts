@@ -9,7 +9,7 @@ import {
 import { restoreVersionOperation, type PayloadRequest } from "payload";
 import type { EditorialReceipt } from "../payload-types";
 
-import { isAutomation, isOwner, requireActor } from "./access";
+import { isAutomation, actsAsOwner, requireActor } from "./access";
 import { relationshipID } from "./collections";
 import {
   contentFingerprint,
@@ -246,7 +246,7 @@ export const saveDraft = async (req: PayloadRequest, input: unknown) => {
 };
 
 export const approveBatch = async (req: PayloadRequest, input: unknown) => {
-  if (!isOwner(req)) throw new EditorialError("APPROVAL_OWNER_ONLY", 403);
+  if (!actsAsOwner(req)) throw new EditorialError("APPROVAL_OWNER_ONLY", 403);
   const parsed = parse(editorialApproveBatchSchema, input);
   const approval = await req.payload.create({
     collection: "editorial-approvals",
@@ -342,7 +342,7 @@ export const publishApproved = async (req: PayloadRequest, input: unknown) => {
 };
 
 export const restoreDraft = async (req: PayloadRequest, input: unknown) => {
-  if (!isOwner(req)) throw new EditorialError("RESTORE_OWNER_ONLY", 403);
+  if (!actsAsOwner(req)) throw new EditorialError("RESTORE_OWNER_ONLY", 403);
   const parsed = parse(editorialRestoreDraftSchema, input);
   const originalExpected = req.query.expectedRevision;
   req.query.expectedRevision = String(parsed.expectedRevision);

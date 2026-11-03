@@ -115,9 +115,11 @@ const canonicalRoutes = [
   "/admin/community-moderation/publishing-jobs",
   "/admin/community-moderation/history",
   "/admin/collections/editorial-receipts",
+  "/admin/collections/mcp-audit-events",
   "/admin/community-moderation/settings",
   "/admin/collections/users",
   "/admin/collections/payload-mcp-api-keys",
+  "/admin/mcp-control",
 ];
 const location = (href: string) => {
   const url = new URL(href, "https://admin.example.test");
@@ -277,6 +279,7 @@ describe("canonical workspace ownership", () => {
     ["editorial-approvals", "publishing"],
     ["editorial-article-approvals", "publishing"],
     ["editorial-receipts", "history"],
+    ["mcp-audit-events", "history"],
     ["users", "settings"],
     ["payload-mcp-api-keys", "settings"],
   ])(

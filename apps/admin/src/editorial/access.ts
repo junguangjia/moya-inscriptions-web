@@ -1,4 +1,5 @@
 import type { Access, PayloadRequest, Where } from "payload";
+import { parseCookies } from "payload/shared";
 
 import { EditorialError } from "./errors";
 
@@ -7,6 +8,34 @@ export const isOwner = (req: PayloadRequest): boolean =>
 
 export const isAutomation = (req: PayloadRequest): boolean =>
   req.user?.collection === "users" && req.user.role === "automation";
+
+// Set by the server after credential lookup, never by the caller. Payload does
+// not type it on req.user.
+const strategyOf = (req: PayloadRequest): unknown =>
+  (req.user as { _strategy?: unknown } | null | undefined)?._strategy;
+
+/** The role grants authority only through an MCP key: a JWT or REST key on the row grants nothing. */
+export const isAiOperator = (req: PayloadRequest): boolean =>
+  req.user?.collection === "users" &&
+  req.user.role === "ai_operator" &&
+  strategyOf(req) === "mcp-api-key";
+
+/** Owner authority on every gate explicitly converted (amendment 2026-11-03). */
+export const actsAsOwner = (req: PayloadRequest): boolean =>
+  isOwner(req) || isAiOperator(req);
+
+/**
+ * Reserved surfaces: an Owner browser session only. `local-jwt` alone is any
+ * valid Owner JWT, which Payload also accepts from `Authorization: JWT` and
+ * `Authorization: Bearer`, so no key and no header token passes here.
+ */
+export const isHumanOwner = (req: PayloadRequest): boolean =>
+  isOwner(req) &&
+  strategyOf(req) === "local-jwt" &&
+  !req.headers.has("authorization") &&
+  Boolean(
+    parseCookies(req.headers).get(`${req.payload.config.cookiePrefix}-token`),
+  );
 
 export const catalogScope = (req: PayloadRequest): string[] => {
   const value: unknown =
@@ -20,12 +49,13 @@ export const canEditCatalog = (
   req: PayloadRequest,
   catalogId: string,
 ): boolean =>
-  isOwner(req) || (isAutomation(req) && catalogScope(req).includes(catalogId));
+  actsAsOwner(req) ||
+  (isAutomation(req) && catalogScope(req).includes(catalogId));
 
 export const requireActor = (req: PayloadRequest) => {
   if (
     req.user?.collection !== "users" ||
-    !["owner", "automation"].includes(req.user.role)
+    !(actsAsOwner(req) || isAutomation(req))
   ) {
     throw new EditorialError("AUTHORIZATION_REQUIRED", 403);
   }
@@ -33,7 +63,7 @@ export const requireActor = (req: PayloadRequest) => {
 };
 
 export const catalogScopeAccess = (req: PayloadRequest): boolean | Where => {
-  if (isOwner(req)) return true;
+  if (actsAsOwner(req)) return true;
   if (!isAutomation(req) || catalogScope(req).length === 0) return false;
   return { catalogId: { in: catalogScope(req) } };
 };
@@ -42,7 +72,7 @@ const scoped: Access = ({ req }) => catalogScopeAccess(req);
 
 export const catalogAccess = {
   create: ({ req }: { req: PayloadRequest }) =>
-    isOwner(req) || isAutomation(req),
+    actsAsOwner(req) || isAutomation(req),
   delete: () => false,
   read: scoped,
   readVersions: scoped,

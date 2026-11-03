@@ -1,0 +1,45 @@
+/* Scoped to the AI control page; everything else comes from community.module.css. */
+.switchList {
+  display: grid;
+  gap: var(--yoyi-space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.switchRow {
+  display: grid;
+  gap: 6px;
+  padding-top: var(--yoyi-space-4);
+  border-top: 1px solid var(--yoyi-color-border-subtle);
+}
+
+.switchHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.confirm {
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.confirm label {
+  display: grid;
+  gap: 4px;
+  color: var(--yoyi-color-text-secondary);
+}
+
+.confirm input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--yoyi-color-border-default);
+  border-radius: 6px;
+  background: var(--yoyi-color-background-surface);
+  color: var(--yoyi-color-text-primary);
+  font: inherit;
+}

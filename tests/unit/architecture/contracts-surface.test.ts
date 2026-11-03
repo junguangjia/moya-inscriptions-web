@@ -250,6 +250,7 @@ describe("contracts package surface", () => {
         ".",
         "./analytics",
         "./comment-images-protocol",
+        "./internal/admin-mcp",
         "./internal/catalog-import",
         "./internal/community-operator",
         "./internal/editorial",
@@ -290,6 +291,27 @@ describe("contracts package surface", () => {
     ]) {
       expect(publicDeclaration).not.toContain(name);
       expect(operatorDeclaration).toContain(name);
+    }
+  });
+
+  it("keeps the Admin MCP shapes on the explicit internal subpath", async () => {
+    const publicDeclaration = await readFile(
+      path.join(contractsRoot, "dist", "index.d.ts"),
+      "utf8",
+    );
+    const adminMcpDeclaration = await readFile(
+      path.join(contractsRoot, "dist", "internal", "admin-mcp", "index.d.ts"),
+      "utf8",
+    );
+
+    for (const name of [
+      "AdminMcpEnvelope",
+      "AdminMcpCodeGuide",
+      "AdminOpMeta",
+      "AdminMcpToolProfile",
+    ]) {
+      expect(publicDeclaration).not.toContain(name);
+      expect(adminMcpDeclaration).toContain(name);
     }
   });
 

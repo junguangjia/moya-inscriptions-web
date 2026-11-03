@@ -302,7 +302,15 @@ AI gets automation account ids and no emails. Approvals keep requiring
 - MCP keys (apps/admin/src/mcp.ts:50,208-210): `isHumanOwner`. Delete and unlock
   stay false. Add `disableBulkEdit`. Remove the creator default on `user`
   (plugin dist/collections/createApiKeysCollection.js:83). Binding is limited to
-  `ai_operator` or `automation` at create and re-checked by the door.
+  `ai_operator` or `automation` at create and re-checked by the door. Payload
+  also gives this collection its auth routes, and access does not decide them.
+  `POST /refresh-token` reads the row whose id equals the caller's `users.id`
+  with overrideAccess on and returns its decrypted key (payload
+  dist/auth/operations/refresh.js:32-42,63,109), so it is shadowed with a plain
+  403 `RESERVED_SURFACE` for everyone. The rest refuse under
+  `disableLocalStrategy` or return no row (`me`, `init`, `logout`). A test pins
+  the collection's whole route list, so an upgrade adding one fails. The same
+  route on `users` is unchanged.
 - `mcp-control` global: read and update `isHumanOwner`.
 - `mcp-audit-events`: read `isHumanOwner`; update and delete `() => false`;
   create only through the ledger token (editorial/state.ts:46,61-71).
@@ -410,6 +418,13 @@ to role `ai_operator` goes to the native handler. Everything else, including
 connection tokens, automation keys and refusals, goes to the plugin handler
 untouched.
 
+Only the exact path is served. Payload matches a route without regard to case
+and strips `/globals`, and Next decodes the slug, so `/api/MCP`, `/api/Mcp`,
+`/api/globals/mcp` and `/api/%4Dcp` all reach the wrapped handler, while Nginx's
+limit and body cap sit on `location = /api/mcp` alone. `adminMcpDispatch`
+therefore answers 404 unless the request's own raw pathname equals
+`${routes.api}/mcp`, before any key lookup and on both paths.
+
 Why AI does not stay on the plugin. It registers custom tools with only
 description and inputSchema (plugin dist/mcp/getMcpHandler.js:123-126), so
 annotations, outputSchema and tool `_meta` cannot be set, and its handler type
@@ -483,7 +498,7 @@ door is unchanged. On the native path dispatch calls it directly:
 1. Run the default lookup. Unknown or disabled key: generic 401.
 2. Owner-bound key: 401 `KEY_OWNER_BOUND`. Other roles: generic 401.
 3. `expiresAt` null or past: 401 `KEY_EXPIRED`.
-4. Read `mcp-control` by primary key, uncached. Failure: 503.
+4. Read the one `mcp-control` row, uncached. Failure or no row: 503.
 5. Produce the tool list for this POST. On the plugin path this is the
    synthesized `payload-mcp-tool`.
 6. Update `last_used_at` by raw SQL at most once per 60 s, not through hooks.
@@ -524,10 +539,13 @@ Read and write isolation: a `read` profile key cannot write, enforced by the map
 and tested. The server does not force AI sessions onto it, because Decision 2
 needs one session to find and act.
 
-Pause is therefore unforgettable: a tool that is not listed cannot run. The
-guard also re-reads pause between targets, so a run stops at the next target. A
-target already in flight finishes. Pause does not stop Owner or automation REST
-keys on /api/editorial/* (see risks). Clients may hold a cached list, and an
+Pause is therefore unforgettable: a tool that is not listed cannot run. A
+request keeps the answer its door read (`controlFor` caches it per request, as
+the Matrix's "next request" allows), so `MCP_PAUSED` does not reach a call
+already past the door. The run engine re-reads pause between targets with
+`readMcpControl`, not `controlFor`, so a run stops at the next target. A target
+already in flight finishes. Pause does not stop Owner or automation REST keys on
+/api/editorial/* (see risks). Clients may hold a cached list, and an
 unregistered tool yields a generic not-found error, so `admin_whoami`'s
 description says to call it when an admin_ tool is reported missing.
 
@@ -1496,9 +1514,13 @@ code, so this changes the document; S7 checks user-facing strings.
 
 ## 13. Control page and audit
 
-Payload global `mcp-control`. View `/admin/mcp-control` in the 设置 workspace,
-self-gated by `isHumanOwner`, because Payload skips the login redirect for
-custom views; anonymous and API-key tests required. The view registers in
+Payload global `mcp-control`. Its migration seeds the one row and adds a unique
+index on `((true))`, so the door, the page and a save always mean the same row,
+and turning pause on still works when the ledger is down on the first save.
+Neither is in the Payload snapshot, as the triggers are not. View
+`/admin/mcp-control` in the 设置 workspace, self-gated by `isHumanOwner`,
+because Payload skips the login redirect for custom views; anonymous and API-key
+tests required. The view registers in
 apps/admin/app/(payload)/admin/importMap.ts. Contents: pause, threshold, four
 switches with policy-text status, awaiting confirmations with action, reason,
 count, impact and sample; stalled runs, expiring keys with one-click renew,
@@ -1531,8 +1553,10 @@ mcp_audit_events (the editorial_receipts pattern, :33-37), SELECT, INSERT,
 UPDATE on mcp_runs, mcp_run_targets and control tables, `USAGE` on
 `mcp_audit_events_id_seq` and the mcp_control id sequence, and extend
 tests/cms/runtime-role.test.ts. Without the sequences the first audit insert
-fails and every op answers AUDIT_UNAVAILABLE. A trigger raising on UPDATE and
-DELETE is the second net.
+fails and every op answers AUDIT_UNAVAILABLE. Triggers raising on UPDATE, DELETE
+and TRUNCATE are the second net. The seeded row means the runtime's INSERT on
+`mcp_control` and USAGE on its sequence are no longer used; the singleton index
+refuses a second row whatever the grant says.
 
 ## 14. Prompt injection
 
@@ -1559,7 +1583,9 @@ content, recommended and not forced. Data marking: `untrusted[]` lists JSON
 pointers, with a test that no user-authored field escapes it, including
 analytics `searchQuery`, titles and paths. Unicode tag characters, bidi controls
 and zero-width characters are stripped from returned text only, never from
-stored data. Tool descriptions and codes never interpolate content.
+stored data, in `toolResult`, which sets `meta.stripped`. Variation selectors
+stay, because rare Chinese glyph variants use them. Tool descriptions and codes
+never interpolate content.
 
 Remaining outbound channels: reason, forward text, thread text, draft text.
 Bounded by existing limits and recorded, not filtered. There is no content-based
@@ -1673,8 +1699,9 @@ AGENT_CONNECTIONS_ENABLED.
 - Hostile-content fixtures on every read path.
 - Known-answer analytics tests on scripts/analytics/seed-synthetic-umami.mjs
   data with oracles computed at seed time.
-- Size gates: tools/list tokens per profile, checked-in tools/list snapshot,
-  top-level count lock, admin_actions index, text result cap.
+- Size gates: tools/list tokens per profile, checked-in tools/list snapshot
+  (`tests/unit/admin/__snapshots__/admin-mcp-native.test.ts.snap`, one entry per
+  profile), top-level count lock, admin_actions index, text result cap.
 - Measured and recorded in S1 and again at the end: tools/list size on Claude
   Code and Codex, image content, isError handling, which of text and
   structuredContent reaches the model, truncation point, door floor, read audit
@@ -1710,6 +1737,33 @@ Also:
   anyone today.
 - Only Claude Code and Codex are verified; no hosted or phone client, because no
   Production OAuth exists.
+
+Accepted limits, recorded and not fixed:
+
+- An automation REST key can hold a document lock on a key or account row:
+  `payload-locked-documents` lets any logged-in user write. The Owner's save of
+  that row then answers 423 for up to 5 minutes, and the lock can be repeated.
+  Pause and one-click renewal are unaffected: the control global sets
+  `lockDocuments: false`, and renewal uses the Local API, whose `overrideLock`
+  defaults to true. Setting `lockDocuments: false` on `users` and
+  `payload-mcp-api-keys` would close it, but needs a migration of the lock
+  table's columns that section 10 of the amendment does not list. Present at the
+  base commit too. Not verified: whether the Admin's take-over modal clears it
+  against repeated relocking.
+- `admin_whoami` on the plugin path needs `arguments: {}`. The plugin's SDK
+  server validates an absent value against the tool's object schema and answers
+  `-32602` as a tool error before `withGuard` runs, so the refused call writes
+  no audit row. The native path takes the same call with no arguments. A
+  plugin-path test pins both.
+- A proxy forwarding a browser's `Authorization` header to the Admin would lock
+  the Owner out of reserved surfaces, because `isHumanOwner` refuses on any such
+  header, as designed. No template in this repository does this. A release check
+  reads the live ingress.
+- `POST /api/payload-mcp-api-keys/refresh-token` was open at the base commit
+  too, so a key row whose id matched a REST credential's or saved Owner JWT's
+  account could have been read before this slice deploys. Production ids were
+  not checked. Whether to replace automation keys at deployment is the Owner's
+  call.
 
 ## 18. Reuse
 

@@ -119,6 +119,7 @@ export const workspaces = [
     pages: [
       { label: "社区操作", href: "/admin/community-moderation/history" },
       { label: "批量执行记录", href: "/admin/collections/editorial-receipts" },
+      { label: "AI 操作记录", href: "/admin/collections/mcp-audit-events" },
     ],
   },
   {
@@ -129,6 +130,7 @@ export const workspaces = [
       { label: "发布规则", href: "/admin/community-moderation/settings" },
       { label: "后台账号", href: "/admin/collections/users" },
       { label: "自动化密钥", href: "/admin/collections/payload-mcp-api-keys" },
+      { label: "AI 控制", href: "/admin/mcp-control" },
     ],
   },
 ] as const;

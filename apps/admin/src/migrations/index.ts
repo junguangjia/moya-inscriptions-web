@@ -11,6 +11,10 @@ import * as migration_20260922_021836_editorial_article_approvals from "./202609
 import * as migration_20261020_160000_catalog_delivery_intents from "./20261020_160000_catalog_delivery_intents";
 import * as migration_20261023_000000_catalog_media_keyed_reads from "./20261023_000000_catalog_media_keyed_reads";
 import * as migration_20261024_000000_catalog_delivery_live_prepare from "./20261024_000000_catalog_delivery_live_prepare";
+import * as migration_20261103_143652_ai_operator_role from "./20261103_143652_ai_operator_role";
+import * as migration_20261103_150451_mcp_key_lifecycle from "./20261103_150451_mcp_key_lifecycle";
+import * as migration_20261103_153046_mcp_control from "./20261103_153046_mcp_control";
+import * as migration_20261103_153057_mcp_audit_events from "./20261103_153057_mcp_audit_events";
 
 export const migrations = [
   {
@@ -77,5 +81,25 @@ export const migrations = [
     up: migration_20261024_000000_catalog_delivery_live_prepare.up,
     down: migration_20261024_000000_catalog_delivery_live_prepare.down,
     name: "20261024_000000_catalog_delivery_live_prepare",
+  },
+  {
+    up: migration_20261103_143652_ai_operator_role.up,
+    down: migration_20261103_143652_ai_operator_role.down,
+    name: "20261103_143652_ai_operator_role",
+  },
+  {
+    up: migration_20261103_150451_mcp_key_lifecycle.up,
+    down: migration_20261103_150451_mcp_key_lifecycle.down,
+    name: "20261103_150451_mcp_key_lifecycle",
+  },
+  {
+    up: migration_20261103_153046_mcp_control.up,
+    down: migration_20261103_153046_mcp_control.down,
+    name: "20261103_153046_mcp_control",
+  },
+  {
+    up: migration_20261103_153057_mcp_audit_events.up,
+    down: migration_20261103_153057_mcp_audit_events.down,
+    name: "20261103_153057_mcp_audit_events",
   },
 ];

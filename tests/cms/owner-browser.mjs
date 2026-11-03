@@ -11,6 +11,7 @@ import {
   editorialContentFromDocument,
   catalogThumbnailRequestSchema,
 } from "@moya/contracts/internal/editorial";
+import { verifyAdminMcpSurfaces } from "./admin-mcp-browser-checks.mjs";
 
 // Run only against a task-created synthetic CMS. The access file is external,
 // mode-restricted operator state, never an artifact or command-line secret.
@@ -169,6 +170,16 @@ try {
   await page.locator('button[type="submit"]').click();
   await page.waitForURL((url) => url.pathname === "/admin");
   completed.push(stage);
+
+  await verifyAdminMcpSurfaces({
+    browser,
+    page,
+    origin,
+    access,
+    setStage: (name) => {
+      stage = name;
+    },
+  });
 
   stage = "native-create-renders-before-empty-write";
   await page.goto(`${origin}/admin/collections/catalogs/create`);

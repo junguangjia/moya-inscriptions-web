@@ -9,12 +9,12 @@ import {
 } from "@moya/contracts/internal/editorial";
 import type { PayloadRequest } from "payload";
 
-import { isOwner } from "./access";
+import { actsAsOwner } from "./access";
 import { draftContent } from "./content";
 import { EditorialError, validationError } from "./errors";
 
 const requireOwner = (req: PayloadRequest) => {
-  if (!isOwner(req)) throw new EditorialError("OWNER_WORKFLOW_ONLY", 403);
+  if (!actsAsOwner(req)) throw new EditorialError("OWNER_WORKFLOW_ONLY", 403);
 };
 
 /** Owner summaries never contain complete original text, object keys or notes. */
@@ -44,7 +44,8 @@ export const ownerDraftPage = async (
     limit: 100,
     req,
     user: req.user,
-    overrideAccess: false,
+    // After the gate; account rows are reserved to the Owner's browser.
+    overrideAccess: true,
   });
   const docs = await Promise.all(
     page.docs.map(async (document) => {

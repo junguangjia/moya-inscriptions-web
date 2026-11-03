@@ -10,6 +10,7 @@ import { repositoryRoot } from "./workspace-scanner.js";
 // the mission named in that section replaces the pinned value in the same pull
 // request that changes it. Mission 2A replaced rows 2, 3, 4 and 5 with the
 // identity/session values below; 2B owns the next change to rows 1, 2 and 3.
+// The 2026-11-03 Admin MCP amendment replaced rows 1 and 6.
 
 const read = (file: string) =>
   readFile(path.join(repositoryRoot, file), "utf8");
@@ -44,8 +45,9 @@ const walkFiles = async (
 };
 
 describe("Community V1 freeze (amendment 2026-09-11, section 9)", () => {
-  it("1. keeps the internal contracts subpaths at catalog-import, community-operator and editorial (2B)", async () => {
+  it("1. keeps the internal contracts subpaths at admin-mcp (amendment 2026-11-03), catalog-import, community-operator and editorial (2B)", async () => {
     expect(await visibleEntries("packages/contracts/src/internal")).toEqual([
+      "admin-mcp",
       "catalog-import",
       "community-operator",
       "editorial",
@@ -53,10 +55,11 @@ describe("Community V1 freeze (amendment 2026-09-11, section 9)", () => {
     // The operator shapes stay server-only: never a root export, never OpenAPI.
     const rootExports = await read("packages/contracts/src/index.ts");
     expect(rootExports).not.toMatch(
-      /PublicationPolicy|OperatorComment|Moderation/u,
+      /PublicationPolicy|OperatorComment|Moderation|AdminMcp|admin-mcp/u,
     );
     const openapi = await read("services/public-api/src/openapi-document.ts");
     expect(openapi).not.toContain("community-operator");
+    expect(openapi).not.toContain("admin-mcp");
   });
 
   it("2. keeps ApiErrorCode at the four existing codes plus UNAUTHENTICATED (2A), INVALID_INPUT (2B) and ACCESS_RESTRICTED (closed-beta-access-v1)", async () => {
@@ -181,11 +184,12 @@ describe("Community V1 freeze (amendment 2026-09-11, section 9)", () => {
     ]);
   });
 
-  it("6. keeps Payload users limited to owner and automation roles", async () => {
+  it("6. keeps Payload users limited to owner, automation and ai_operator roles (amendment 2026-11-03)", async () => {
     const users = await read("apps/admin/src/users.ts");
-    expect([...users.matchAll(/value: "([a-z]+)"/gu)].map((m) => m[1])).toEqual(
-      ["owner", "automation"],
-    );
+    // The underscore is in the class so a value like ai_operator is never skipped.
+    expect(
+      [...users.matchAll(/value: "([a-z_]+)"/gu)].map((m) => m[1]),
+    ).toEqual(["owner", "automation", "ai_operator"]);
   });
 
   it("keeps Payload free of community collections and community database access (2B)", async () => {

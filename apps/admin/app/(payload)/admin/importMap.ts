@@ -41,6 +41,7 @@ import {
   WorkspaceTabs,
 } from "../../../src/workspace/Navigation";
 import { WorkspaceDashboard } from "../../../src/community/View";
+import { McpControlView } from "../../../src/admin-mcp/control/View";
 
 /** @type import('payload').ImportMap */
 export const importMap = {
@@ -49,6 +50,7 @@ export const importMap = {
   "/src/workspace/Navigation#WorkspaceNavigation": WorkspaceNavigation,
   "/src/workspace/Navigation#WorkspaceTabs": WorkspaceTabs,
   "/src/community/View#WorkspaceDashboard": WorkspaceDashboard,
+  "/src/admin-mcp/control/View#McpControlView": McpControlView,
   "/src/community/View#CommunityReportsView": CommunityReportsView,
   "/src/community/View#CommunityAppealsView": CommunityAppealsView,
   "/src/analytics/View#AnalyticsView": AnalyticsView,

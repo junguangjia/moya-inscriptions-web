@@ -57,6 +57,9 @@ importers:
       '@aws-sdk/s3-request-presigner':
         specifier: 3.1127.0
         version: 3.1127.0
+      '@modelcontextprotocol/sdk':
+        specifier: 1.30.0
+        version: 1.30.0(zod@4.4.3)
       '@moya/api':
         specifier: workspace:*
         version: link:../../services/api

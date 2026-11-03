@@ -423,7 +423,7 @@ describe
       automation = await payload.create({
         collection: "users",
         req: await reqFor(),
-        overrideAccess: false,
+        overrideAccess: true,
         data: {
           email: `delivery-automation-${run}@example.invalid`,
           password: syntheticPassword,
@@ -434,7 +434,7 @@ describe
       outside = await payload.create({
         collection: "users",
         req: await reqFor(),
-        overrideAccess: false,
+        overrideAccess: true,
         data: {
           email: `delivery-outside-${run}@example.invalid`,
           password: syntheticPassword,

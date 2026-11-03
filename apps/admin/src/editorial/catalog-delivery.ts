@@ -20,7 +20,7 @@ import {
 import { sql } from "@payloadcms/db-postgres";
 import type { PayloadRequest } from "payload";
 
-import { canEditCatalog, isOwner, requireActor } from "./access";
+import { canEditCatalog, actsAsOwner, requireActor } from "./access";
 import {
   catalogDeliveryReadiness,
   catalogRenderBacklog,
@@ -427,7 +427,7 @@ export const requestCatalogRelease = async (
   input: unknown,
 ) => {
   requireActor(req);
-  if (!isOwner(req))
+  if (!actsAsOwner(req))
     throw new EditorialError("CATALOG_RELEASE_OWNER_ONLY", 403);
   const parsed = parse(requestCatalogReleaseSchema, input);
   return mutation(
@@ -462,7 +462,7 @@ export const releaseCatalogDelivery = async (
   const parsed = parse(releaseCatalogDeliverySchema, input);
   const publishKey = `catalog-release:${requestFingerprint([parsed.intentId, parsed.idempotencyKey])}`;
   return mutation(req, parsed.idempotencyKey, "release", parsed, async () => {
-    if (!isOwner(req)) {
+    if (!actsAsOwner(req)) {
       if (!parsed.approvalId)
         throw new EditorialError("CATALOG_RELEASE_APPROVAL_REQUIRED", 403);
       await lockEditorialKey(
@@ -497,7 +497,7 @@ export const releaseCatalogDelivery = async (
       req,
       { intentId: row.id, fingerprint: row.draft_fingerprint },
       async () => {
-        if (isOwner(req))
+        if (actsAsOwner(req))
           return req.payload.update({
             collection: "catalogs",
             id: row.catalog_document_id,
@@ -536,7 +536,7 @@ export const cancelCatalogDelivery = async (
   const parsed = parse(cancelCatalogDeliverySchema, input);
   return mutation(req, parsed.idempotencyKey, "cancel", parsed, async () => {
     const row = await lockedIntent(req, parsed.intentId);
-    if (!isOwner(req) && row.actor_id !== actor.id)
+    if (!actsAsOwner(req) && row.actor_id !== actor.id)
       throw new EditorialError("CATALOG_DELIVERY_CANCEL_FORBIDDEN", 403);
     expectState(row, parsed.expectedStateVersion);
     const db = await editorialTransaction(req);

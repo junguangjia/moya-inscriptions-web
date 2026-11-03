@@ -6,7 +6,12 @@ import type {
   PayloadRequest,
 } from "payload";
 
-import { canEditCatalog, isAutomation, isOwner, requireActor } from "./access";
+import {
+  canEditCatalog,
+  isAutomation,
+  actsAsOwner,
+  requireActor,
+} from "./access";
 import { draftContent, payloadContentData, publishedContent } from "./content";
 import { EditorialError } from "./errors";
 import {
@@ -57,7 +62,7 @@ const beforeOperation: CollectionBeforeOperationHook = async ({
   input.overrideLock = false;
 
   if (operation === "restoreVersion") {
-    if (!isOwner(req)) throw new EditorialError("RESTORE_OWNER_ONLY", 403);
+    if (!actsAsOwner(req)) throw new EditorialError("RESTORE_OWNER_ONLY", 403);
     // Payload captures this argument before beforeOperation. Do not mutate it
     // here and assume that the operation will honor the changed value.
     if (input.draft !== true)
@@ -151,7 +156,7 @@ const beforeOperation: CollectionBeforeOperationHook = async ({
       `source:${content.sourceId}`,
     ].sort();
     for (const key of keys) await lockEditorialKey(req, key);
-    if (data._status === "published" && !isOwner(req)) {
+    if (data._status === "published" && !actsAsOwner(req)) {
       throw new EditorialError("PUBLISH_NOT_APPROVED", 403);
     }
     if (data._status !== "published") {
@@ -171,7 +176,7 @@ const beforeOperation: CollectionBeforeOperationHook = async ({
   await lockEditorialKey(req, `document:${String(input.id)}`);
   const expectedRevision = revisionNumber(data.revision);
   const publishing = data._status === "published";
-  if (publishing && !isOwner(req) && !isApprovedPublishRequest(req)) {
+  if (publishing && !actsAsOwner(req) && !isApprovedPublishRequest(req)) {
     throw new EditorialError("PUBLISH_NOT_APPROVED", 403);
   }
   if (isAutomation(req) && !isApprovedPublishRequest(req)) {
@@ -192,7 +197,7 @@ const beforeOperation: CollectionBeforeOperationHook = async ({
     throw new EditorialError("PUBLICATION_STATE_REQUIRED", 400, ["_status"]);
   }
   const mode = publishing ? "publish" : input.draft ? "draft" : "withdraw";
-  if (mode === "withdraw" && !isOwner(req)) {
+  if (mode === "withdraw" && !actsAsOwner(req)) {
     throw new EditorialError("WITHDRAW_OWNER_ONLY", 403);
   }
   setMutationState(req, { mode, expectedRevision });
@@ -241,7 +246,7 @@ export const catalogHooks: NonNullable<CollectionConfig["hooks"]> = {
       const state = mutationState(req);
       if (!state) throw new EditorialError("WORKFLOW_REQUIRED", 403);
       if (state.mode === "publish") {
-        if (!isOwner(req) && !isApprovedPublishRequest(req)) {
+        if (!actsAsOwner(req) && !isApprovedPublishRequest(req)) {
           throw new EditorialError("PUBLISH_NOT_APPROVED", 403);
         }
         Object.assign(
