@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { createServer } from "node:http";
+import { CatalogCommentService, CommunityModerationService } from "@moya/api";
+import type { PublishingOperatorService } from "@moya/api";
+import { handleOperatorRequest } from "@moya/backend-runtime/internal/community-operator";
 import {
   createPostgresPool,
   parsePostgresConfig,
@@ -17,6 +21,7 @@ import {
 import { requireSyntheticTestDatabaseUrl } from "./synthetic-test-database.js";
 import {
   emptyArticleDocument,
+  catalogIdSchema,
   publicUserIdSchema,
 } from "@moya/contracts/schemas";
 import type { CatalogCommentId, DiscussionTarget } from "@moya/contracts";
@@ -109,6 +114,408 @@ const readyImage = async (
   }
   return id;
 };
+
+const moderationReview = () =>
+  new CommunityModerationService(
+    discussion,
+    {} as ConstructorParameters<typeof CommunityModerationService>[1],
+    { isPublished: async () => true, readTitle: async () => null },
+  );
+
+/** Real Operator admission and PostgreSQL authorization; only blob IO is synthetic. */
+const ownerImageReader = async () => {
+  const credential = "EXPLICIT_SYNTHETIC_PLACEHOLDER";
+  const dependencies: Parameters<typeof handleOperatorRequest>[3] = {
+    operatorCredential: credential,
+    moderationService: moderationReview(),
+    discussionPort: discussion,
+    publishingOperatorService: {
+      openAuthorizedMedia: async () => ({
+        contentType: "image/webp",
+        sha256: "a".repeat(64),
+        read: {
+          status: "ok",
+          byteSize: 1,
+          start: 0,
+          end: 0,
+          contentLength: 1,
+          body: (async function* () {
+            yield Uint8Array.from([1]);
+          })(),
+          close: async () => {},
+        },
+      }),
+    } as unknown as PublishingOperatorService,
+  };
+  const server = createServer((request, response) => {
+    void handleOperatorRequest(
+      request,
+      response,
+      new URL(request.url ?? "/", "http://synthetic.invalid").pathname,
+      dependencies,
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string")
+    throw new Error("Synthetic Operator listener absent");
+  return {
+    read: async (id: string, image: string, authorized = true) => {
+      const response = await fetch(
+        `http://127.0.0.1:${address.port}/internal/community/comments/${id}/images/${image}/display`,
+        {
+          headers: authorized ? { authorization: `Bearer ${credential}` } : {},
+        },
+      );
+      return {
+        status: response.status,
+        cacheControl: response.headers.get("cache-control"),
+        body: new Uint8Array(await response.arrayBuffer()),
+      };
+    },
+    close: async () => {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    },
+  };
+};
+
+const imageOnlyThread = async (post: DiscussionTarget = target()) => {
+  const rootImage = await readyImage(alice),
+    replyImage = await readyImage(bob);
+  const root = await discussion.submitDiscussion(
+    post,
+    alice,
+    "",
+    undefined,
+    undefined,
+    [],
+    [{ itemId: rootImage, offset: 0 }],
+    randomUUID(),
+  );
+  const reply = await discussion.submitDiscussion(
+    post,
+    bob,
+    "",
+    root.id,
+    undefined,
+    [],
+    [{ itemId: replyImage, offset: 0 }],
+    randomUUID(),
+  );
+  return [
+    { id: root.id, image: rootImage },
+    { id: reply.id, image: replyImage },
+  ];
+};
+
+describe("#358 retained Operator image review", () => {
+  it.each(["visible", "hidden", "removed", "private"] as const)(
+    "reviews image-only roots and replies in %s state without opening public images",
+    async (state) => {
+      const entries = await imageOnlyThread(),
+        root = entries[0]!;
+      if (state === "hidden") {
+        await db.setup.query(
+          "UPDATE community.catalog_comments SET moderation='hidden' WHERE id=$1",
+          [root.id],
+        );
+        await db.setup.query(
+          "UPDATE community.catalog_comment_replies SET moderation='hidden' WHERE root_comment_id=$1",
+          [root.id],
+        );
+      } else if (state === "removed")
+        await discussion.removeDiscussionThread(
+          "owner",
+          root.id,
+          randomUUID(),
+          2,
+          "Synthetic retained image review",
+        );
+      else if (state === "private")
+        await db.setup.query(
+          "UPDATE community.works SET visibility='self' WHERE id=$1",
+          [work],
+        );
+      const review = moderationReview(),
+        page = await review.readComments({ page: 1, pageSize: 50 }),
+        reader = await ownerImageReader();
+      try {
+        expect((await reader.read(root.id, root.image, false)).status).toBe(
+          401,
+        );
+        for (const entry of entries) {
+          expect(page.items.find((item) => item.id === entry.id)).toMatchObject(
+            { text: "", images: [{ id: entry.image, offset: 0 }] },
+          );
+          expect(
+            (await review.readCommentDetail(entry.id as CatalogCommentId)).item,
+          ).toMatchObject({ text: "", images: [{ id: entry.image }] });
+          const image = await reader.read(entry.id, entry.image);
+          expect(image.status).toBe(200);
+          expect(image.cacheControl).toBe("private, no-store");
+          expect(image.body).toEqual(Uint8Array.from([1]));
+          if (state === "private")
+            await expect(
+              discussion.resolveDiscussionImage(
+                entry.id,
+                entry.image,
+                "display",
+                alice,
+              ),
+            ).rejects.toMatchObject({ name: "CommunityNotFoundError" });
+          else if (state === "visible")
+            expect(
+              await discussion.resolveDiscussionImage(
+                entry.id,
+                entry.image,
+                "display",
+                null,
+              ),
+            ).not.toBeNull();
+          else
+            expect(
+              await discussion.resolveDiscussionImage(
+                entry.id,
+                entry.image,
+                "display",
+                null,
+              ),
+            ).toBeNull();
+        }
+        expect((await reader.read(root.id, entries[1]!.image)).status).toBe(
+          404,
+        );
+      } finally {
+        await reader.close();
+      }
+    },
+  );
+
+  it("keeps deleted image-only queue/detail tombstones while denying every image byte", async () => {
+    const entries = await imageOnlyThread();
+    await discussion.deleteDiscussionBody(alice, entries[0]!.id, randomUUID());
+    await discussion.operatorDeleteBody(
+      "owner",
+      entries[1]!.id,
+      randomUUID(),
+      "Synthetic irreversible image deletion",
+    );
+    const review = moderationReview(),
+      page = await review.readComments({ page: 1, pageSize: 50 }),
+      reader = await ownerImageReader();
+    try {
+      for (const [index, entry] of entries.entries()) {
+        expect(page.items.find((item) => item.id === entry.id)).toMatchObject({
+          text: "This comment has been deleted",
+          bodyDeleted: true,
+          images: [],
+        });
+        expect(
+          (await review.readCommentDetail(entry.id as CatalogCommentId)).item,
+        ).toMatchObject({
+          text: "This comment has been deleted",
+          bodyDeleted: true,
+          images: [],
+        });
+        // The retained canonical image fact also permits an empty deleted
+        // body. It remains a tombstone, never an invalid live image-only row.
+        await db.setup.query(
+          `UPDATE community.${index === 0 ? "catalog_comments" : "catalog_comment_replies"} SET text='' WHERE id=$1 AND body_deleted_at IS NOT NULL`,
+          [entry.id],
+        );
+        expect(
+          (await review.readComments({ page: 1, pageSize: 50 })).items.find(
+            (item) => item.id === entry.id,
+          ),
+        ).toMatchObject({ text: "", bodyDeleted: true, images: [] });
+        expect(
+          (await review.readCommentDetail(entry.id as CatalogCommentId)).item,
+        ).toMatchObject({ text: "", bodyDeleted: true, images: [] });
+        expect((await reader.read(entry.id, entry.image)).status).toBe(404);
+        expect(
+          await discussion.resolveDiscussionImage(
+            entry.id,
+            entry.image,
+            "display",
+            null,
+          ),
+        ).toBeNull();
+      }
+    } finally {
+      await reader.close();
+    }
+  });
+
+  it("fails closed when an empty live body has no validated ready attachment", async () => {
+    const entries = await imageOnlyThread(),
+      root = entries[0]!;
+    await db.setup.query(
+      "UPDATE community.media_items SET state='processing' WHERE id=$1",
+      [root.image],
+    );
+    try {
+      await expect(
+        discussion.findOperatorComment(root.id as CatalogCommentId),
+      ).rejects.toThrow("Invalid PostgreSQL community comment row");
+      await expect(
+        moderationReview().readComments({ page: 1, pageSize: 50 }),
+      ).rejects.toThrow("Invalid PostgreSQL community comment row");
+    } finally {
+      await db.setup.query(
+        "UPDATE community.media_items SET state='ready' WHERE id=$1",
+        [root.image],
+      );
+    }
+  });
+
+  it("retains Owner review of root/reply images after actual authored Article withdrawal", async () => {
+    const articles = new PostgresArticleAuthoringAdapter(db.app),
+      actor = {
+        source: "human" as const,
+        userId: publicUserIdSchema.parse(alice),
+      };
+    const draft = await articles.create(
+      actor,
+      {
+        requestId: randomUUID(),
+        title: "Synthetic retained review",
+        coverRefId: null,
+        document: {
+          ...emptyArticleDocument(),
+          blocks: [
+            {
+              id: "retained-paragraph",
+              type: "paragraph",
+              props: {
+                textAlignment: "left",
+                textColor: "default",
+                backgroundColor: "default",
+              },
+              content: [
+                {
+                  type: "text",
+                  text: "Synthetic retained Article",
+                  styles: {},
+                },
+              ],
+              children: [],
+            },
+          ],
+        },
+      },
+      new Date(),
+    );
+    const published = await articles.publish(
+      actor,
+      draft.id,
+      {
+        requestId: randomUUID(),
+        expectedVersion: draft.version,
+        fingerprint: draft.fingerprint,
+      },
+      new Date(),
+    );
+    const post = { type: "article" as const, id: draft.id },
+      entries = await imageOnlyThread(post);
+    await articles.withdraw(
+      actor,
+      draft.id,
+      {
+        requestId: randomUUID(),
+        expectedVersion: published.version,
+        fingerprint: published.fingerprint,
+      },
+      new Date(),
+    );
+    await expect(
+      discussion.readDiscussion(post, alice, { page: 1, pageSize: 50 }),
+    ).rejects.toMatchObject({ name: "CommunityNotFoundError" });
+    const review = moderationReview(),
+      page = await review.readComments({ page: 1, pageSize: 50 }),
+      reader = await ownerImageReader();
+    try {
+      for (const entry of entries) {
+        expect(
+          page.items.find((item) => item.id === entry.id)?.images?.[0]?.id,
+        ).toBe(entry.image);
+        expect(
+          (await review.readCommentDetail(entry.id as CatalogCommentId)).item
+            .images?.[0]?.id,
+        ).toBe(entry.image);
+        expect((await reader.read(entry.id, entry.image)).status).toBe(200);
+        await expect(
+          discussion.resolveDiscussionImage(
+            entry.id,
+            entry.image,
+            "display",
+            alice,
+          ),
+        ).rejects.toMatchObject({ name: "CommunityNotFoundError" });
+      }
+    } finally {
+      await reader.close();
+    }
+  });
+
+  it("preserves image-only Catalog root/reply submission and reads through the configured canonical legacy service", async () => {
+    const catalogId = catalogIdSchema.parse(opaque("catalog")),
+      service = new CatalogCommentService(
+        discussion,
+        {
+          isPublished: async () => true,
+          readTitle: async () => "Synthetic Catalog",
+        },
+        { discussionPort: discussion },
+      ),
+      first = await readyImage(alice),
+      second = await readyImage(bob);
+    const root = await service.createComment(
+      catalogId,
+      publicUserIdSchema.parse(alice),
+      {
+        text: "",
+        images: [{ itemId: first, offset: 0 }],
+        requestId: randomUUID(),
+      },
+    );
+    const reply = await service.createReply(
+      catalogId,
+      root.item.id,
+      publicUserIdSchema.parse(bob),
+      {
+        text: "",
+        images: [{ itemId: second, offset: 0 }],
+        requestId: randomUUID(),
+      },
+    );
+    expect(root.item).toMatchObject({ text: "", images: [{ id: first }] });
+    expect(reply.item).toMatchObject({ text: "", images: [{ id: second }] });
+    const page = await service.readComments(catalogId, {
+      page: 1,
+      pageSize: 50,
+    });
+    expect(
+      [...page.hot, ...page.items].find((item) => item.id === root.item.id),
+    ).toMatchObject({
+      text: "",
+      images: [{ id: first }],
+      replies: [{ id: reply.item.id, text: "", images: [{ id: second }] }],
+    });
+    expect(
+      (
+        await service.readReplies(catalogId, root.item.id, {
+          page: 1,
+          pageSize: 50,
+        })
+      ).items,
+    ).toMatchObject([
+      { id: reply.item.id, text: "", images: [{ id: second }] },
+    ]);
+  });
+});
 
 describe("#358 real comment media persistence and authorization", () => {
   it("commits immutable ordered positions, replies and image-only text; concurrent retries are one submission", async () => {

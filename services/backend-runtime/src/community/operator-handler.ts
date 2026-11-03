@@ -541,12 +541,10 @@ export const handleOperatorRequest = async (
         if (new URL(request.url ?? "/", "http://request.invalid").search)
           throw new CommunityInputError();
         const id = imagePath[1]! as import("@moya/contracts").CatalogCommentId;
-        const detail = await moderationService.readCommentDetail(id);
-        if (
-          (await discussionPort.discussionTarget(id)).type === "catalog" &&
-          detail.item.catalogTitle === null
-        )
-          throw new CommunityNotFoundError();
+        // This separately credentialed review follows retained moderation
+        // detail, rather than public target/thread admission. The byte lookup
+        // still rejects permanently deleted bodies and unrelated media items.
+        await moderationService.readCommentDetail(id);
         await deliverPublishingMedia(
           request,
           response,

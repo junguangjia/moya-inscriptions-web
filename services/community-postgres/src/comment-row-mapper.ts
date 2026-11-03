@@ -1,4 +1,5 @@
 import { operatorCommentImagesSchema } from "@moya/contracts/internal/community-operator";
+import { validCommentImageOffsets } from "@moya/contracts/schemas";
 import type {
   CatalogCommentRecord,
   CatalogCommentReplyRecord,
@@ -62,10 +63,10 @@ type Moderation = (typeof moderationStates)[number];
 const asCommentId = (value: unknown): string =>
   typeof value === "string" && commentIdPattern.test(value) ? value : invalid();
 
-const asText = (value: unknown): string =>
+const asText = (value: unknown, allowEmpty = false): string =>
   typeof value === "string" &&
   value.trim() === value &&
-  value.length >= 1 &&
+  (allowEmpty || value.length >= 1) &&
   value.length <= 1_000
     ? value
     : invalid();
@@ -187,6 +188,22 @@ export const mapOperatorCommentRow = (
     row.reply_to_reply_id === null || row.reply_to_reply_id === undefined
       ? undefined
       : (asCommentId(row.reply_to_reply_id) as OperatorCommentRecord["id"]);
+  // Reversible removal keeps the retained body available to the Owner. An
+  // irreversible body deletion carries only its existing tombstone marker.
+  const images = row.body_deleted_at
+    ? []
+    : operatorCommentImagesSchema.parse(row.images ?? []);
+  const text = asText(
+    row.text,
+    Boolean(row.body_deleted_at) || images.length > 0,
+  );
+  if (
+    !validCommentImageOffsets(
+      text,
+      images.map((image) => ({ itemId: image.id, offset: image.offset })),
+    )
+  )
+    invalid();
   return {
     id: asCommentId(row.id) as OperatorCommentRecord["id"],
     kind,
@@ -225,11 +242,8 @@ export const mapOperatorCommentRow = (
       displayName: author.displayName,
       status: asUserStatus(row.author_status),
     },
-    text: asText(row.text),
-    images:
-      row.body_deleted_at || row.thread_removed_at
-        ? []
-        : operatorCommentImagesSchema.parse(row.images ?? []),
+    text,
+    images,
     createdAt: isoUtc(asDate(row.created_at)),
     moderation: asModeration(row.moderation),
   };

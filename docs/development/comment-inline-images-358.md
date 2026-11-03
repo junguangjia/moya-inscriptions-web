@@ -65,7 +65,10 @@ real/QA isolation remain intact.
   request identity. Reusing it for different content is a conflict.
 - Reads remain comment-authorized and non-cacheable, including pending own
   previews and Operator review. Hiding/deleting a body or thread, blocking and
-  withdrawing/private target content must revoke attachment access accordingly.
+  withdrawing/private target content revoke ordinary/public and owner publishing
+  preview access accordingly. The existing authenticated Operator boundary may
+  review retained hidden/removed/private-target attachments when the associated
+  text remains reviewable; irreversible body deletion still denies image bytes.
 
 ## Frozen behavior matrix
 

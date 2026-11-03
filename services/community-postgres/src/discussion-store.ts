@@ -766,24 +766,17 @@ export class PostgresDiscussionStore implements DiscussionPort {
       ).rows;
       if (subjects.length !== 1) return null;
       const subject = subjects[0]!;
-      // Media access ends on target withdrawal/privacy even for an old owner URL.
-      await this.workAllowed(
-        db,
-        discussionTargetSchema.parse({
+      // Public media access ends on withdrawal/privacy even for an old owner
+      // URL. The separate authenticated Owner review retains the same body
+      // access as the existing moderation detail, including reversible removal.
+      if (!operator) {
+        const target = discussionTargetSchema.parse({
           type: subject.target_type,
           id: subject.catalog_id,
-        }),
-        null,
-      );
-      if (!operator && viewer !== null)
-        await this.workAllowed(
-          db,
-          discussionTargetSchema.parse({
-            type: subject.target_type,
-            id: subject.catalog_id,
-          }),
-          viewer,
-        );
+        });
+        await this.workAllowed(db, target, null);
+        if (viewer !== null) await this.workAllowed(db, target, viewer);
+      }
       const audience = operator
         ? "($3::text IS NULL OR $3::text IS NOT NULL)"
         : `${rootEligible} AND c.moderation<>'hidden'${subject.is_reply ? ` AND ${replyAudience} AND r.moderation<>'hidden'` : ""}`;
@@ -792,7 +785,7 @@ export class PostgresDiscussionStore implements DiscussionPort {
         await db.query(
           `SELECT 1 FROM community.catalog_comments c JOIN community.public_users u ON u.id=c.author_id
         ${subject.is_reply ? "JOIN community.catalog_comment_replies r ON r.root_comment_id=c.id JOIN community.public_users ru ON ru.id=r.author_id" : ""}
-        WHERE c.target_type=$1 AND c.catalog_id=$2 AND ${alias}.id=$4 AND c.thread_removed_at IS NULL AND ${alias}.body_deleted_at IS NULL
+        WHERE c.target_type=$1 AND c.catalog_id=$2 AND ${alias}.id=$4 AND ${operator ? "TRUE" : "c.thread_removed_at IS NULL"} AND ${alias}.body_deleted_at IS NULL
         AND ${audience} AND EXISTS(SELECT 1 FROM jsonb_array_elements(${alias}.image_refs) v WHERE v->>'itemId'=$5)`,
           [subject.target_type, subject.catalog_id, viewer, commentId, itemId],
         )
