@@ -119,17 +119,21 @@ key 和放在请求头里的 JWT 在 `/api/*`
 - `ALREADY_PUBLISHED`：用新 key 重试一次已成功的发布，批准的内容已经上线。草稿之后又改过，则仍是
   `APPROVED_REVISION_CHANGED`。
 - `IDENTITY_ALREADY_BOUND`（REST 409）：用新 key 创建的记录已经存在，`catalogId`
-  或 `sourceId` 已被占用。内容本身没有问题，不要为此修改内容；要改这条记录，带
-  `id` 和 `expectedRevision`
-  保存。记录不能硬删，同一命令会再次遇到这条拒绝，所以它写永久回执。
+  或 `sourceId`
+  已被占用。这条记录已经建过时，内容没有问题，不要为此修改内容；要改这条记录，带
+  `id` 和 `expectedRevision` 保存。`sourceId`
+  属于另一条记录时，内容就是错的，要先改正来源身份。记录不能硬删，同一命令会再次遇到这条拒绝，所以它写永久回执。
 - 保存草稿如果使已准备的交付意图失效，结果带
   `supersededIntents`（意图 id 列表）。没有失效的意图时不带此字段；回执不保存它，回放时也不带。
 - `editorial_*` 上没有代码的失败回答 `OUTCOME_UNKNOWN`，不再回答
   `EDITORIAL_OPERATION_REJECTED`；Payload的明确拒绝分别回答
   `RECORD_UNAVAILABLE`、`FORBIDDEN`、`CONTENT_INVALID`。REST 上没有代码的失败仍是 500
   `OPERATION_FAILED`。
-- integer 列放不下的 id（如 `3000000000`、`"12.5"`）不可能对应任何记录，同样回答
-  `RECORD_UNAVAILABLE`，REST `read-draft` 回答 404，不写回执。
+- integer 列放不下的 id（如
+  `3000000000`、`"12.5"`、`"abc"`）不可能对应任何记录，`editorial_*` 同样回答
+  `RECORD_UNAVAILABLE`，REST `read-draft` 回答 404，不写回执。REST `save-draft`
+  和 `publish-approved` 对这样的 id 仍回答 500 `OPERATION_FAILED`，`batch.mjs`
+  会把它当作可重试的失败（`SERVER_RETRYABLE`），默认尝试 3 次。
 - 批准批次不能复制：`POST /api/editorial-approvals/:id/duplicate` 和
   `POST /api/editorial-article-approvals/:id/duplicate` 回答 403
   `APPROVAL_DUPLICATE_DISABLED`。

@@ -75,7 +75,6 @@ async function call<T>(name: string, input: unknown): Promise<T> {
     !("ok" in body) ||
     body.ok !== true
   ) {
-    let code = "OPERATION_FAILED";
     if (
       body &&
       typeof body === "object" &&
@@ -85,14 +84,23 @@ async function call<T>(name: string, input: unknown): Promise<T> {
       "code" in body.error &&
       typeof body.error.code === "string"
     ) {
-      code = body.error.code;
+      throw new WorkflowFailure(errorMessage(body.error.code));
     }
-    throw new WorkflowFailure(errorMessage(code));
+    throw new Error("UNNAMED_ANSWER");
   }
-  if (!response.ok || !("result" in body))
-    throw new WorkflowFailure(errorMessage("OPERATION_FAILED"));
+  if (!response.ok || !("result" in body)) throw new Error("UNNAMED_ANSWER");
   return body.result as T;
 }
+
+/**
+ * A named refusal says what happened. Anything else, a dropped connection or an
+ * answer the route did not name, says nothing about the commit, so a write cannot
+ * call it undone.
+ */
+const failureText = (error: unknown, fallback: string) =>
+  error instanceof WorkflowFailure ? error.message : errorMessage(fallback);
+const readFailure = (error: unknown) => failureText(error, "OPERATION_FAILED");
+const writeFailure = (error: unknown) => failureText(error, "OUTCOME_UNKNOWN");
 
 export const OwnerWorkflowClient = () => {
   const [data, setData] = useState<OwnerDraftPage | null>(null);
@@ -121,11 +129,7 @@ export const OwnerWorkflowClient = () => {
       setHistory(null);
       setVersionId("");
     } catch (error) {
-      setFailure(
-        error instanceof WorkflowFailure
-          ? error.message
-          : errorMessage("OPERATION_FAILED"),
-      );
+      setFailure(readFailure(error));
     } finally {
       setBusy(false);
     }
@@ -151,11 +155,7 @@ export const OwnerWorkflowClient = () => {
       );
       setSelected([]);
     } catch (error) {
-      setFailure(
-        error instanceof WorkflowFailure
-          ? error.message
-          : errorMessage("OPERATION_FAILED"),
-      );
+      setFailure(writeFailure(error));
     } finally {
       mutationLock.current = false;
       setBusy(false);
@@ -172,11 +172,7 @@ export const OwnerWorkflowClient = () => {
     try {
       setHistory(await call<OwnerHistoryPage>("owner-history", { id, page }));
     } catch (error) {
-      setFailure(
-        error instanceof WorkflowFailure
-          ? error.message
-          : errorMessage("OPERATION_FAILED"),
-      );
+      setFailure(readFailure(error));
     } finally {
       setBusy(false);
     }
@@ -200,11 +196,7 @@ export const OwnerWorkflowClient = () => {
       setVersionId("");
       await load(data?.page ?? 1);
     } catch (error) {
-      setFailure(
-        error instanceof WorkflowFailure
-          ? error.message
-          : errorMessage("OPERATION_FAILED"),
-      );
+      setFailure(writeFailure(error));
     } finally {
       mutationLock.current = false;
       setBusy(false);

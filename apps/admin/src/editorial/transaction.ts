@@ -109,7 +109,11 @@ const IMPOSSIBLE_ID_SQLSTATES: ReadonlySet<unknown> = new Set([
   "22P02",
 ]);
 
-/** A read that truly found nothing. Any other failure stays what it is. */
+/**
+ * No such record for this caller: a miss, a refusal that reads as one, or an id
+ * the integer column cannot hold, so no record can have it. Any other failure
+ * stays what it is.
+ */
 export const isMissingRecord = (error: unknown): boolean =>
   error instanceof NotFound ||
   error instanceof Forbidden ||

@@ -32,6 +32,13 @@ import {
   type CatalogRecipePolicy,
   type CatalogRenderBacklogReport,
 } from "@moya/contracts/internal/editorial";
+import {
+  AI_OPERATOR_CREDENTIALS,
+  AI_OPERATOR_LABEL,
+  AI_OPERATOR_RUN_HEADER,
+  aiOperatorRouteFor,
+  type AiOperatorCredential,
+} from "@moya/contracts/internal/admin-mcp";
 
 import { deliverPublishingMedia } from "./publishing-media-read.js";
 import { JsonBodyError, readJsonBody } from "../http/json-body.js";
@@ -100,12 +107,26 @@ export interface OperatorRouteDependencies {
   readonly directMessageService?: DirectMessageService | undefined;
   /** Shared credential the Owner's Payload Admin holds server-side. */
   readonly operatorCredential: string;
+  /** Absent or empty: that AI credential is accepted nowhere. */
+  readonly aiCredentials?: OperatorAiCredentials | undefined;
 }
+
+export type OperatorAiCredentials = Readonly<
+  Partial<Record<AiOperatorCredential, string>>
+>;
+
+/** Who is calling, which the route and every audit row take from here. */
+export type OperatorActor =
+  | { readonly label: "owner" }
+  | {
+      readonly label: typeof AI_OPERATOR_LABEL;
+      readonly credential: AiOperatorCredential;
+    };
 
 /** The operator boundary is not the Public API: it returns bare codes, no ApiError. */
 const sendOperatorError = (
   response: ServerResponse,
-  status: 400 | 401 | 404 | 405 | 409 | 500 | 503,
+  status: 400 | 401 | 403 | 404 | 405 | 409 | 500 | 503,
   code: string,
 ): void => sendJson(response, status, { error: { status, code } });
 
@@ -123,6 +144,46 @@ export const isAuthorizedOperator = (
   if (typeof header !== "string" || credential.length === 0) return false;
   const presented = /^Bearer (\S+)$/.exec(header)?.[1];
   return presented !== undefined && constantTimeEquals(presented, credential);
+};
+
+export const resolveOperatorActor = (
+  request: IncomingMessage,
+  ownerCredential: string,
+  aiCredentials: OperatorAiCredentials = {},
+): OperatorActor | null => {
+  if (isAuthorizedOperator(request, ownerCredential)) return { label: "owner" };
+  const credential = AI_OPERATOR_CREDENTIALS.find((name) =>
+    isAuthorizedOperator(request, aiCredentials[name] ?? ""),
+  );
+  return credential === undefined
+    ? null
+    : { label: AI_OPERATOR_LABEL, credential };
+};
+
+/**
+ * What stands between an AI credential and a route. Default deny: only a row of
+ * the route table naming this credential passes. No sensitive category is
+ * provisioned on this path yet, so a sensitive row refuses.
+ */
+export const aiOperatorRefusal = (
+  request: IncomingMessage,
+  pathname: string,
+  credential: AiOperatorCredential,
+): string | null => {
+  const route = aiOperatorRouteFor(
+    request.method ?? "GET",
+    pathname,
+    new URL(request.url ?? "/", "http://request.invalid").searchParams,
+  );
+  if (route === undefined || !route.credentials.includes(credential))
+    return "AI_ROUTE_FORBIDDEN";
+  if (
+    route.klass === "irreversible" &&
+    !request.headers[AI_OPERATOR_RUN_HEADER]
+  )
+    return "AI_RUN_REQUIRED";
+  if (route.klass.startsWith("sensitive:")) return "SENSITIVE_SWITCH_OFF";
+  return null;
 };
 
 const sendFailure = (response: ServerResponse, error: unknown): void => {
@@ -229,6 +290,7 @@ export const handleOperatorRequest = async (
     catalogPublishedRenditions,
     catalogRenderBacklog,
     operatorCredential,
+    aiCredentials,
     contentOperatorPort,
     discussionPort,
     publishingOperatorService,
@@ -243,9 +305,21 @@ export const handleOperatorRequest = async (
     response.setHeader("cache-control", "private, no-store");
     response.setHeader("vary", "Authorization");
   }
-  if (!isAuthorizedOperator(request, operatorCredential)) {
+  const actor = resolveOperatorActor(
+    request,
+    operatorCredential,
+    aiCredentials,
+  );
+  if (actor === null) {
     sendOperatorError(response, 401, "OPERATOR_UNAUTHORIZED");
     return;
+  }
+  if (actor.label === AI_OPERATOR_LABEL) {
+    const refusal = aiOperatorRefusal(request, pathname, actor.credential);
+    if (refusal !== null) {
+      sendOperatorError(response, 403, refusal);
+      return;
+    }
   }
   const method = request.method ?? "GET";
   const methodNotAllowed = () =>
@@ -426,7 +500,7 @@ export const handleOperatorRequest = async (
         response,
         pathname,
         directMessageService,
-        "owner",
+        actor.label,
       ))
     )
       return;
@@ -437,13 +511,14 @@ export const handleOperatorRequest = async (
         response,
         pathname,
         threadService,
-        "owner",
+        actor.label,
       ))
     )
       return;
     const operatorService = new CommunityContentOperatorService(
       contentOperatorPort,
       discussionPort,
+      actor.label,
     );
     const commandBody = async () => {
       if (new URL(request.url ?? "/", "http://request.invalid").search)

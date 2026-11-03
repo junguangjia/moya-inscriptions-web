@@ -11,183 +11,21 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
     },
     "description": "Who this key is, what it can call now, when it expires. Call it first, and again when an admin_ tool is reported missing: a client may hold a stale tool list.",
     "inputSchema": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {},
       "type": "object",
     },
     "name": "admin_whoami",
     "outputSchema": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "additionalProperties": false,
       "properties": {
         "code": {
-          "enum": [
-            "OK",
-            "IN_PROGRESS",
-            "QUEUED",
-            "AWAITING_OWNER",
-            "PARTIAL",
-            "STATE_CONFLICT",
-            "DOCUMENT_LOCKED",
-            "CONCURRENT_OPERATION_BUSY",
-            "OUTCOME_UNKNOWN",
-            "MEDIA_JOB_FAILED",
-            "MCP_PAUSED",
-            "SENSITIVE_SWITCH_OFF",
-            "SELF_ONLY_OWNER_REVIEW",
-            "IDEMPOTENCY_CONFLICT",
-            "USE_EXECUTE_IRREVERSIBLE",
-            "USE_PREVIEW",
-            "PREVIEW_REQUIRED",
-            "INPUT_INVALID",
-            "UNKNOWN_OP",
-            "AUDIT_UNAVAILABLE",
-            "AI_CREDENTIAL_NOT_CONFIGURED",
-          ],
           "type": "string",
-        },
-        "data": {},
-        "done": {
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer",
-        },
-        "hint": {
-          "minLength": 1,
-          "type": "string",
-        },
-        "issues": {
-          "items": {
-            "additionalProperties": false,
-            "properties": {
-              "allowedKeys": {
-                "items": {
-                  "type": "string",
-                },
-                "type": "array",
-              },
-              "code": {
-                "minLength": 1,
-                "type": "string",
-              },
-              "path": {
-                "items": {
-                  "anyOf": [
-                    {
-                      "type": "string",
-                    },
-                    {
-                      "type": "number",
-                    },
-                  ],
-                },
-                "type": "array",
-              },
-            },
-            "required": [
-              "path",
-              "code",
-            ],
-            "type": "object",
-          },
-          "type": "array",
-        },
-        "meta": {
-          "additionalProperties": false,
-          "properties": {
-            "excluded": {
-              "items": {
-                "type": "string",
-              },
-              "type": "array",
-            },
-            "partial": {
-              "const": true,
-              "type": "boolean",
-            },
-            "redacted": {
-              "items": {
-                "type": "string",
-              },
-              "type": "array",
-            },
-            "repeat": {
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
-              "type": "integer",
-            },
-            "replayed": {
-              "const": true,
-              "type": "boolean",
-            },
-            "stripped": {
-              "const": true,
-              "type": "boolean",
-            },
-            "truncated": {
-              "const": true,
-              "type": "boolean",
-            },
-          },
-          "type": "object",
         },
         "next": {
-          "additionalProperties": false,
-          "properties": {
-            "afterMs": {
-              "maximum": 9007199254740991,
-              "minimum": 0,
-              "type": "integer",
-            },
-            "args": {
-              "additionalProperties": {},
-              "propertyNames": {
-                "type": "string",
-              },
-              "type": "object",
-            },
-            "tool": {
-              "minLength": 1,
-              "type": "string",
-            },
-          },
-          "required": [
-            "tool",
-            "args",
-          ],
           "type": "object",
         },
         "ok": {
           "type": "boolean",
-        },
-        "remaining": {
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer",
-        },
-        "retryable": {
-          "type": "boolean",
-        },
-        "runId": {
-          "format": "uuid",
-          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
-          "type": "string",
-        },
-        "state": {
-          "minLength": 1,
-          "type": "string",
-        },
-        "total": {
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer",
-        },
-        "untrusted": {
-          "items": {
-            "type": "string",
-          },
-          "type": "array",
         },
       },
       "required": [
@@ -198,6 +36,516 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
       ],
       "type": "object",
     },
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+    },
+    "description": "Resolve a reference in one call: id, pasted public or Admin link, @handle, sourceId, or free text. {query:"/catalog/abc"}, {query:"https://.../?articleId=article-..."}, {query:"兰亭序",type:"catalog"}. resolution says exact, candidates or none. Use resolution.ref for a mutation, never the first candidate. A branch that did not answer is named in meta.sources, never read as zero.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "maximum": 25,
+          "minimum": 1,
+          "type": "integer",
+        },
+        "query": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string",
+        },
+        "skip": {
+          "maximum": 25,
+          "minimum": 0,
+          "type": "integer",
+        },
+        "type": {
+          "enum": [
+            "catalog",
+            "article",
+            "collection",
+            "media",
+            "user",
+            "work",
+            "comment",
+            "thread",
+            "report",
+            "feedback",
+            "publishing_job",
+            "work_revision",
+            "media_item",
+            "invitation",
+          ],
+          "type": "string",
+        },
+      },
+      "required": [
+        "query",
+      ],
+      "type": "object",
+    },
+    "name": "admin_find",
+    "outputSchema": {
+      "properties": {
+        "code": {
+          "type": "string",
+        },
+        "next": {
+          "type": "object",
+        },
+        "ok": {
+          "type": "boolean",
+        },
+      },
+      "required": [
+        "ok",
+        "code",
+        "untrusted",
+        "meta",
+      ],
+      "type": "object",
+    },
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+    },
+    "description": "Read one record, and always say which version was read. Default outline: per-field state, length, hash, no long text. {type:"catalog",id:7}. Long text in windows, offsets in code points: {type,id,field:"transcription",offset}. Inside one field: {type,id,field:"transcription",find:{text:"..."}}. view also full, published, preview, history, diff.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer",
+        },
+        "field": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string",
+        },
+        "fields": {
+          "items": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string",
+          },
+          "maxItems": 40,
+          "minItems": 1,
+          "type": "array",
+        },
+        "find": {
+          "additionalProperties": false,
+          "properties": {
+            "context": {
+              "maximum": 200,
+              "minimum": 0,
+              "type": "integer",
+            },
+            "mode": {
+              "enum": [
+                "raw",
+                "normalized",
+              ],
+              "type": "string",
+            },
+            "text": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          "required": [
+            "text",
+          ],
+          "type": "object",
+        },
+        "from": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+            {
+              "enum": [
+                "draft",
+                "published",
+              ],
+              "type": "string",
+            },
+          ],
+        },
+        "id": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string",
+            },
+          ],
+        },
+        "maxChars": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer",
+        },
+        "offset": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer",
+        },
+        "to": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+            {
+              "enum": [
+                "draft",
+                "published",
+              ],
+              "type": "string",
+            },
+          ],
+        },
+        "type": {
+          "enum": [
+            "catalog",
+            "article",
+            "collection",
+            "media",
+            "user",
+            "work",
+            "comment",
+            "thread",
+            "report",
+            "feedback",
+            "publishing_job",
+            "work_revision",
+            "media_item",
+            "invitation",
+          ],
+          "type": "string",
+        },
+        "view": {
+          "enum": [
+            "outline",
+            "full",
+            "field",
+            "published",
+            "preview",
+            "history",
+            "diff",
+          ],
+          "type": "string",
+        },
+      },
+      "required": [
+        "type",
+        "id",
+      ],
+      "type": "object",
+    },
+    "name": "admin_get",
+    "outputSchema": {
+      "properties": {
+        "code": {
+          "type": "string",
+        },
+        "next": {
+          "type": "object",
+        },
+        "ok": {
+          "type": "boolean",
+        },
+      },
+      "required": [
+        "ok",
+        "code",
+        "untrusted",
+        "meta",
+      ],
+      "type": "object",
+    },
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+    },
+    "description": "Read a queue or page by op. Rows are compact; long text is only ever state, length and hash. {op:"list.catalogs",input:{filter:{missing:["transcription"]}}}. Count in SQL with no rows: {op:"list.catalogs",view:"count",groupBy:"dynasty",input:{filter:{missing:["transcription"]}}}. Project with fields:[...], continue with next. admin_actions gives each op's filter.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string",
+        },
+        "fields": {
+          "items": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string",
+          },
+          "maxItems": 40,
+          "minItems": 1,
+          "type": "array",
+        },
+        "groupBy": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string",
+        },
+        "input": {
+          "additionalProperties": {},
+          "propertyNames": {
+            "type": "string",
+          },
+          "type": "object",
+        },
+        "op": {
+          "enum": [
+            "community.read-reports",
+            "community.read-report",
+            "community.read-feedback",
+            "community.read-works",
+            "community.read-users",
+            "community.read-featured",
+            "community.read-threads",
+            "community.read-feature-catalogs",
+            "community.read-policy",
+            "community.read-comments",
+            "community.read-comment",
+            "community.read-events",
+            "community.read-summary",
+            "community.read-work-publishing-settings",
+            "community.read-article-submissions",
+            "community.read-article-submission",
+            "community.read-work-submissions",
+            "community.read-work-submission",
+            "community.read-account-capacity",
+            "community.read-publishing-jobs",
+            "editorial.owner-drafts",
+            "editorial.owner-history",
+            "editorial.read-draft",
+            "editorial.read-catalog-delivery",
+            "editorial.catalog-delivery-capabilities",
+            "editorial.catalog-render-backlog",
+            "list.comments",
+            "list.works",
+            "list.users",
+            "list.threads",
+            "list.featured",
+            "list.feature_catalogs",
+            "list.reports",
+            "list.appeals",
+            "list.work_submissions",
+            "list.article_submissions",
+            "list.jobs",
+            "list.feedback",
+            "list.events",
+            "list.policy",
+            "list.work_settings",
+            "list.overview",
+            "list.catalogs",
+            "list.review_page",
+            "list.approvals",
+            "list.article_approvals",
+            "list.receipts",
+            "list.articles",
+            "list.collections",
+            "list.media",
+            "list.render_backlog",
+            "list.invitations",
+            "list.masters",
+            "list.runs",
+            "catalog_search.status",
+            "ops.invitation.status",
+            "ops.master.candidates",
+            "ops.master.status",
+            "ops.master.guard",
+            "ops.upload_gc.plan",
+          ],
+          "type": "string",
+        },
+        "pageSize": {
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer",
+        },
+        "view": {
+          "enum": [
+            "compact",
+            "full",
+            "count",
+          ],
+          "type": "string",
+        },
+      },
+      "required": [
+        "op",
+      ],
+      "type": "object",
+    },
+    "name": "admin_read",
+    "outputSchema": {
+      "properties": {
+        "code": {
+          "type": "string",
+        },
+        "next": {
+          "type": "object",
+        },
+        "ok": {
+          "type": "boolean",
+        },
+      },
+      "required": [
+        "ok",
+        "code",
+        "untrusted",
+        "meta",
+      ],
+      "type": "object",
+    },
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+    },
+    "description": "Op catalog for admin_read and the execute tools. No arguments: an index by tool, rows as name(required,fields). {ops:[up to 5 names]}: each op's JSON Schema, class, recovery, completion and an example. Inputs refuse unknown fields.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string",
+        },
+        "ops": {
+          "items": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string",
+          },
+          "maxItems": 5,
+          "minItems": 1,
+          "type": "array",
+        },
+      },
+      "type": "object",
+    },
+    "name": "admin_actions",
+    "outputSchema": {
+      "properties": {
+        "code": {
+          "type": "string",
+        },
+        "next": {
+          "type": "object",
+        },
+        "ok": {
+          "type": "boolean",
+        },
+      },
+      "required": [
+        "ok",
+        "code",
+        "untrusted",
+        "meta",
+      ],
+      "type": "object",
+    },
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+    },
+    "description": "See a Catalog image as a WebP of at most 512 KiB, with original and rendered size in the text. {kind:"catalog_thumb",mediaId:"..."}. One passage of the original, in its pixels: {kind:"catalog_original",mediaId:"...",region:{left,top,width,height}}. Only save a transcription from text you can read; if you cannot read it, say so.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "catalog_thumb",
+            "catalog_original",
+          ],
+          "type": "string",
+        },
+        "maxEdge": {
+          "maximum": 2048,
+          "minimum": 64,
+          "type": "integer",
+        },
+        "mediaId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string",
+        },
+        "region": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+            "left": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer",
+            },
+            "top": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer",
+            },
+            "width": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+          "required": [
+            "left",
+            "top",
+            "width",
+            "height",
+          ],
+          "type": "object",
+        },
+      },
+      "required": [
+        "kind",
+        "mediaId",
+      ],
+      "type": "object",
+    },
+    "name": "admin_view_media",
   },
 ]
 `;
@@ -213,183 +561,21 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
     },
     "description": "Who this key is, what it can call now, when it expires. Call it first, and again when an admin_ tool is reported missing: a client may hold a stale tool list.",
     "inputSchema": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {},
       "type": "object",
     },
     "name": "admin_whoami",
     "outputSchema": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "additionalProperties": false,
       "properties": {
         "code": {
-          "enum": [
-            "OK",
-            "IN_PROGRESS",
-            "QUEUED",
-            "AWAITING_OWNER",
-            "PARTIAL",
-            "STATE_CONFLICT",
-            "DOCUMENT_LOCKED",
-            "CONCURRENT_OPERATION_BUSY",
-            "OUTCOME_UNKNOWN",
-            "MEDIA_JOB_FAILED",
-            "MCP_PAUSED",
-            "SENSITIVE_SWITCH_OFF",
-            "SELF_ONLY_OWNER_REVIEW",
-            "IDEMPOTENCY_CONFLICT",
-            "USE_EXECUTE_IRREVERSIBLE",
-            "USE_PREVIEW",
-            "PREVIEW_REQUIRED",
-            "INPUT_INVALID",
-            "UNKNOWN_OP",
-            "AUDIT_UNAVAILABLE",
-            "AI_CREDENTIAL_NOT_CONFIGURED",
-          ],
           "type": "string",
-        },
-        "data": {},
-        "done": {
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer",
-        },
-        "hint": {
-          "minLength": 1,
-          "type": "string",
-        },
-        "issues": {
-          "items": {
-            "additionalProperties": false,
-            "properties": {
-              "allowedKeys": {
-                "items": {
-                  "type": "string",
-                },
-                "type": "array",
-              },
-              "code": {
-                "minLength": 1,
-                "type": "string",
-              },
-              "path": {
-                "items": {
-                  "anyOf": [
-                    {
-                      "type": "string",
-                    },
-                    {
-                      "type": "number",
-                    },
-                  ],
-                },
-                "type": "array",
-              },
-            },
-            "required": [
-              "path",
-              "code",
-            ],
-            "type": "object",
-          },
-          "type": "array",
-        },
-        "meta": {
-          "additionalProperties": false,
-          "properties": {
-            "excluded": {
-              "items": {
-                "type": "string",
-              },
-              "type": "array",
-            },
-            "partial": {
-              "const": true,
-              "type": "boolean",
-            },
-            "redacted": {
-              "items": {
-                "type": "string",
-              },
-              "type": "array",
-            },
-            "repeat": {
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
-              "type": "integer",
-            },
-            "replayed": {
-              "const": true,
-              "type": "boolean",
-            },
-            "stripped": {
-              "const": true,
-              "type": "boolean",
-            },
-            "truncated": {
-              "const": true,
-              "type": "boolean",
-            },
-          },
-          "type": "object",
         },
         "next": {
-          "additionalProperties": false,
-          "properties": {
-            "afterMs": {
-              "maximum": 9007199254740991,
-              "minimum": 0,
-              "type": "integer",
-            },
-            "args": {
-              "additionalProperties": {},
-              "propertyNames": {
-                "type": "string",
-              },
-              "type": "object",
-            },
-            "tool": {
-              "minLength": 1,
-              "type": "string",
-            },
-          },
-          "required": [
-            "tool",
-            "args",
-          ],
           "type": "object",
         },
         "ok": {
           "type": "boolean",
-        },
-        "remaining": {
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer",
-        },
-        "retryable": {
-          "type": "boolean",
-        },
-        "runId": {
-          "format": "uuid",
-          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
-          "type": "string",
-        },
-        "state": {
-          "minLength": 1,
-          "type": "string",
-        },
-        "total": {
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer",
-        },
-        "untrusted": {
-          "items": {
-            "type": "string",
-          },
-          "type": "array",
         },
       },
       "required": [
@@ -400,6 +586,516 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
       ],
       "type": "object",
     },
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+    },
+    "description": "Resolve a reference in one call: id, pasted public or Admin link, @handle, sourceId, or free text. {query:"/catalog/abc"}, {query:"https://.../?articleId=article-..."}, {query:"兰亭序",type:"catalog"}. resolution says exact, candidates or none. Use resolution.ref for a mutation, never the first candidate. A branch that did not answer is named in meta.sources, never read as zero.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "maximum": 25,
+          "minimum": 1,
+          "type": "integer",
+        },
+        "query": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string",
+        },
+        "skip": {
+          "maximum": 25,
+          "minimum": 0,
+          "type": "integer",
+        },
+        "type": {
+          "enum": [
+            "catalog",
+            "article",
+            "collection",
+            "media",
+            "user",
+            "work",
+            "comment",
+            "thread",
+            "report",
+            "feedback",
+            "publishing_job",
+            "work_revision",
+            "media_item",
+            "invitation",
+          ],
+          "type": "string",
+        },
+      },
+      "required": [
+        "query",
+      ],
+      "type": "object",
+    },
+    "name": "admin_find",
+    "outputSchema": {
+      "properties": {
+        "code": {
+          "type": "string",
+        },
+        "next": {
+          "type": "object",
+        },
+        "ok": {
+          "type": "boolean",
+        },
+      },
+      "required": [
+        "ok",
+        "code",
+        "untrusted",
+        "meta",
+      ],
+      "type": "object",
+    },
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+    },
+    "description": "Read one record, and always say which version was read. Default outline: per-field state, length, hash, no long text. {type:"catalog",id:7}. Long text in windows, offsets in code points: {type,id,field:"transcription",offset}. Inside one field: {type,id,field:"transcription",find:{text:"..."}}. view also full, published, preview, history, diff.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer",
+        },
+        "field": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string",
+        },
+        "fields": {
+          "items": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string",
+          },
+          "maxItems": 40,
+          "minItems": 1,
+          "type": "array",
+        },
+        "find": {
+          "additionalProperties": false,
+          "properties": {
+            "context": {
+              "maximum": 200,
+              "minimum": 0,
+              "type": "integer",
+            },
+            "mode": {
+              "enum": [
+                "raw",
+                "normalized",
+              ],
+              "type": "string",
+            },
+            "text": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          "required": [
+            "text",
+          ],
+          "type": "object",
+        },
+        "from": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+            {
+              "enum": [
+                "draft",
+                "published",
+              ],
+              "type": "string",
+            },
+          ],
+        },
+        "id": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string",
+            },
+          ],
+        },
+        "maxChars": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer",
+        },
+        "offset": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer",
+        },
+        "to": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+            {
+              "enum": [
+                "draft",
+                "published",
+              ],
+              "type": "string",
+            },
+          ],
+        },
+        "type": {
+          "enum": [
+            "catalog",
+            "article",
+            "collection",
+            "media",
+            "user",
+            "work",
+            "comment",
+            "thread",
+            "report",
+            "feedback",
+            "publishing_job",
+            "work_revision",
+            "media_item",
+            "invitation",
+          ],
+          "type": "string",
+        },
+        "view": {
+          "enum": [
+            "outline",
+            "full",
+            "field",
+            "published",
+            "preview",
+            "history",
+            "diff",
+          ],
+          "type": "string",
+        },
+      },
+      "required": [
+        "type",
+        "id",
+      ],
+      "type": "object",
+    },
+    "name": "admin_get",
+    "outputSchema": {
+      "properties": {
+        "code": {
+          "type": "string",
+        },
+        "next": {
+          "type": "object",
+        },
+        "ok": {
+          "type": "boolean",
+        },
+      },
+      "required": [
+        "ok",
+        "code",
+        "untrusted",
+        "meta",
+      ],
+      "type": "object",
+    },
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+    },
+    "description": "Read a queue or page by op. Rows are compact; long text is only ever state, length and hash. {op:"list.catalogs",input:{filter:{missing:["transcription"]}}}. Count in SQL with no rows: {op:"list.catalogs",view:"count",groupBy:"dynasty",input:{filter:{missing:["transcription"]}}}. Project with fields:[...], continue with next. admin_actions gives each op's filter.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string",
+        },
+        "fields": {
+          "items": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string",
+          },
+          "maxItems": 40,
+          "minItems": 1,
+          "type": "array",
+        },
+        "groupBy": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string",
+        },
+        "input": {
+          "additionalProperties": {},
+          "propertyNames": {
+            "type": "string",
+          },
+          "type": "object",
+        },
+        "op": {
+          "enum": [
+            "community.read-reports",
+            "community.read-report",
+            "community.read-feedback",
+            "community.read-works",
+            "community.read-users",
+            "community.read-featured",
+            "community.read-threads",
+            "community.read-feature-catalogs",
+            "community.read-policy",
+            "community.read-comments",
+            "community.read-comment",
+            "community.read-events",
+            "community.read-summary",
+            "community.read-work-publishing-settings",
+            "community.read-article-submissions",
+            "community.read-article-submission",
+            "community.read-work-submissions",
+            "community.read-work-submission",
+            "community.read-account-capacity",
+            "community.read-publishing-jobs",
+            "editorial.owner-drafts",
+            "editorial.owner-history",
+            "editorial.read-draft",
+            "editorial.read-catalog-delivery",
+            "editorial.catalog-delivery-capabilities",
+            "editorial.catalog-render-backlog",
+            "list.comments",
+            "list.works",
+            "list.users",
+            "list.threads",
+            "list.featured",
+            "list.feature_catalogs",
+            "list.reports",
+            "list.appeals",
+            "list.work_submissions",
+            "list.article_submissions",
+            "list.jobs",
+            "list.feedback",
+            "list.events",
+            "list.policy",
+            "list.work_settings",
+            "list.overview",
+            "list.catalogs",
+            "list.review_page",
+            "list.approvals",
+            "list.article_approvals",
+            "list.receipts",
+            "list.articles",
+            "list.collections",
+            "list.media",
+            "list.render_backlog",
+            "list.invitations",
+            "list.masters",
+            "list.runs",
+            "catalog_search.status",
+            "ops.invitation.status",
+            "ops.master.candidates",
+            "ops.master.status",
+            "ops.master.guard",
+            "ops.upload_gc.plan",
+          ],
+          "type": "string",
+        },
+        "pageSize": {
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer",
+        },
+        "view": {
+          "enum": [
+            "compact",
+            "full",
+            "count",
+          ],
+          "type": "string",
+        },
+      },
+      "required": [
+        "op",
+      ],
+      "type": "object",
+    },
+    "name": "admin_read",
+    "outputSchema": {
+      "properties": {
+        "code": {
+          "type": "string",
+        },
+        "next": {
+          "type": "object",
+        },
+        "ok": {
+          "type": "boolean",
+        },
+      },
+      "required": [
+        "ok",
+        "code",
+        "untrusted",
+        "meta",
+      ],
+      "type": "object",
+    },
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+    },
+    "description": "Op catalog for admin_read and the execute tools. No arguments: an index by tool, rows as name(required,fields). {ops:[up to 5 names]}: each op's JSON Schema, class, recovery, completion and an example. Inputs refuse unknown fields.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string",
+        },
+        "ops": {
+          "items": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string",
+          },
+          "maxItems": 5,
+          "minItems": 1,
+          "type": "array",
+        },
+      },
+      "type": "object",
+    },
+    "name": "admin_actions",
+    "outputSchema": {
+      "properties": {
+        "code": {
+          "type": "string",
+        },
+        "next": {
+          "type": "object",
+        },
+        "ok": {
+          "type": "boolean",
+        },
+      },
+      "required": [
+        "ok",
+        "code",
+        "untrusted",
+        "meta",
+      ],
+      "type": "object",
+    },
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+    },
+    "description": "See a Catalog image as a WebP of at most 512 KiB, with original and rendered size in the text. {kind:"catalog_thumb",mediaId:"..."}. One passage of the original, in its pixels: {kind:"catalog_original",mediaId:"...",region:{left,top,width,height}}. Only save a transcription from text you can read; if you cannot read it, say so.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "catalog_thumb",
+            "catalog_original",
+          ],
+          "type": "string",
+        },
+        "maxEdge": {
+          "maximum": 2048,
+          "minimum": 64,
+          "type": "integer",
+        },
+        "mediaId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string",
+        },
+        "region": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+            "left": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer",
+            },
+            "top": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer",
+            },
+            "width": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+          "required": [
+            "left",
+            "top",
+            "width",
+            "height",
+          ],
+          "type": "object",
+        },
+      },
+      "required": [
+        "kind",
+        "mediaId",
+      ],
+      "type": "object",
+    },
+    "name": "admin_view_media",
   },
 ]
 `;
@@ -415,183 +1111,21 @@ exports[`tool table > matches the checked-in tools/list for the read profile 1`]
     },
     "description": "Who this key is, what it can call now, when it expires. Call it first, and again when an admin_ tool is reported missing: a client may hold a stale tool list.",
     "inputSchema": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {},
       "type": "object",
     },
     "name": "admin_whoami",
     "outputSchema": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "additionalProperties": false,
       "properties": {
         "code": {
-          "enum": [
-            "OK",
-            "IN_PROGRESS",
-            "QUEUED",
-            "AWAITING_OWNER",
-            "PARTIAL",
-            "STATE_CONFLICT",
-            "DOCUMENT_LOCKED",
-            "CONCURRENT_OPERATION_BUSY",
-            "OUTCOME_UNKNOWN",
-            "MEDIA_JOB_FAILED",
-            "MCP_PAUSED",
-            "SENSITIVE_SWITCH_OFF",
-            "SELF_ONLY_OWNER_REVIEW",
-            "IDEMPOTENCY_CONFLICT",
-            "USE_EXECUTE_IRREVERSIBLE",
-            "USE_PREVIEW",
-            "PREVIEW_REQUIRED",
-            "INPUT_INVALID",
-            "UNKNOWN_OP",
-            "AUDIT_UNAVAILABLE",
-            "AI_CREDENTIAL_NOT_CONFIGURED",
-          ],
           "type": "string",
-        },
-        "data": {},
-        "done": {
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer",
-        },
-        "hint": {
-          "minLength": 1,
-          "type": "string",
-        },
-        "issues": {
-          "items": {
-            "additionalProperties": false,
-            "properties": {
-              "allowedKeys": {
-                "items": {
-                  "type": "string",
-                },
-                "type": "array",
-              },
-              "code": {
-                "minLength": 1,
-                "type": "string",
-              },
-              "path": {
-                "items": {
-                  "anyOf": [
-                    {
-                      "type": "string",
-                    },
-                    {
-                      "type": "number",
-                    },
-                  ],
-                },
-                "type": "array",
-              },
-            },
-            "required": [
-              "path",
-              "code",
-            ],
-            "type": "object",
-          },
-          "type": "array",
-        },
-        "meta": {
-          "additionalProperties": false,
-          "properties": {
-            "excluded": {
-              "items": {
-                "type": "string",
-              },
-              "type": "array",
-            },
-            "partial": {
-              "const": true,
-              "type": "boolean",
-            },
-            "redacted": {
-              "items": {
-                "type": "string",
-              },
-              "type": "array",
-            },
-            "repeat": {
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
-              "type": "integer",
-            },
-            "replayed": {
-              "const": true,
-              "type": "boolean",
-            },
-            "stripped": {
-              "const": true,
-              "type": "boolean",
-            },
-            "truncated": {
-              "const": true,
-              "type": "boolean",
-            },
-          },
-          "type": "object",
         },
         "next": {
-          "additionalProperties": false,
-          "properties": {
-            "afterMs": {
-              "maximum": 9007199254740991,
-              "minimum": 0,
-              "type": "integer",
-            },
-            "args": {
-              "additionalProperties": {},
-              "propertyNames": {
-                "type": "string",
-              },
-              "type": "object",
-            },
-            "tool": {
-              "minLength": 1,
-              "type": "string",
-            },
-          },
-          "required": [
-            "tool",
-            "args",
-          ],
           "type": "object",
         },
         "ok": {
           "type": "boolean",
-        },
-        "remaining": {
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer",
-        },
-        "retryable": {
-          "type": "boolean",
-        },
-        "runId": {
-          "format": "uuid",
-          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
-          "type": "string",
-        },
-        "state": {
-          "minLength": 1,
-          "type": "string",
-        },
-        "total": {
-          "maximum": 9007199254740991,
-          "minimum": 0,
-          "type": "integer",
-        },
-        "untrusted": {
-          "items": {
-            "type": "string",
-          },
-          "type": "array",
         },
       },
       "required": [
@@ -602,6 +1136,516 @@ exports[`tool table > matches the checked-in tools/list for the read profile 1`]
       ],
       "type": "object",
     },
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+    },
+    "description": "Resolve a reference in one call: id, pasted public or Admin link, @handle, sourceId, or free text. {query:"/catalog/abc"}, {query:"https://.../?articleId=article-..."}, {query:"兰亭序",type:"catalog"}. resolution says exact, candidates or none. Use resolution.ref for a mutation, never the first candidate. A branch that did not answer is named in meta.sources, never read as zero.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "maximum": 25,
+          "minimum": 1,
+          "type": "integer",
+        },
+        "query": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string",
+        },
+        "skip": {
+          "maximum": 25,
+          "minimum": 0,
+          "type": "integer",
+        },
+        "type": {
+          "enum": [
+            "catalog",
+            "article",
+            "collection",
+            "media",
+            "user",
+            "work",
+            "comment",
+            "thread",
+            "report",
+            "feedback",
+            "publishing_job",
+            "work_revision",
+            "media_item",
+            "invitation",
+          ],
+          "type": "string",
+        },
+      },
+      "required": [
+        "query",
+      ],
+      "type": "object",
+    },
+    "name": "admin_find",
+    "outputSchema": {
+      "properties": {
+        "code": {
+          "type": "string",
+        },
+        "next": {
+          "type": "object",
+        },
+        "ok": {
+          "type": "boolean",
+        },
+      },
+      "required": [
+        "ok",
+        "code",
+        "untrusted",
+        "meta",
+      ],
+      "type": "object",
+    },
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+    },
+    "description": "Read one record, and always say which version was read. Default outline: per-field state, length, hash, no long text. {type:"catalog",id:7}. Long text in windows, offsets in code points: {type,id,field:"transcription",offset}. Inside one field: {type,id,field:"transcription",find:{text:"..."}}. view also full, published, preview, history, diff.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer",
+        },
+        "field": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string",
+        },
+        "fields": {
+          "items": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string",
+          },
+          "maxItems": 40,
+          "minItems": 1,
+          "type": "array",
+        },
+        "find": {
+          "additionalProperties": false,
+          "properties": {
+            "context": {
+              "maximum": 200,
+              "minimum": 0,
+              "type": "integer",
+            },
+            "mode": {
+              "enum": [
+                "raw",
+                "normalized",
+              ],
+              "type": "string",
+            },
+            "text": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          "required": [
+            "text",
+          ],
+          "type": "object",
+        },
+        "from": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+            {
+              "enum": [
+                "draft",
+                "published",
+              ],
+              "type": "string",
+            },
+          ],
+        },
+        "id": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string",
+            },
+          ],
+        },
+        "maxChars": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer",
+        },
+        "offset": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer",
+        },
+        "to": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+            {
+              "enum": [
+                "draft",
+                "published",
+              ],
+              "type": "string",
+            },
+          ],
+        },
+        "type": {
+          "enum": [
+            "catalog",
+            "article",
+            "collection",
+            "media",
+            "user",
+            "work",
+            "comment",
+            "thread",
+            "report",
+            "feedback",
+            "publishing_job",
+            "work_revision",
+            "media_item",
+            "invitation",
+          ],
+          "type": "string",
+        },
+        "view": {
+          "enum": [
+            "outline",
+            "full",
+            "field",
+            "published",
+            "preview",
+            "history",
+            "diff",
+          ],
+          "type": "string",
+        },
+      },
+      "required": [
+        "type",
+        "id",
+      ],
+      "type": "object",
+    },
+    "name": "admin_get",
+    "outputSchema": {
+      "properties": {
+        "code": {
+          "type": "string",
+        },
+        "next": {
+          "type": "object",
+        },
+        "ok": {
+          "type": "boolean",
+        },
+      },
+      "required": [
+        "ok",
+        "code",
+        "untrusted",
+        "meta",
+      ],
+      "type": "object",
+    },
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+    },
+    "description": "Read a queue or page by op. Rows are compact; long text is only ever state, length and hash. {op:"list.catalogs",input:{filter:{missing:["transcription"]}}}. Count in SQL with no rows: {op:"list.catalogs",view:"count",groupBy:"dynasty",input:{filter:{missing:["transcription"]}}}. Project with fields:[...], continue with next. admin_actions gives each op's filter.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string",
+        },
+        "fields": {
+          "items": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string",
+          },
+          "maxItems": 40,
+          "minItems": 1,
+          "type": "array",
+        },
+        "groupBy": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string",
+        },
+        "input": {
+          "additionalProperties": {},
+          "propertyNames": {
+            "type": "string",
+          },
+          "type": "object",
+        },
+        "op": {
+          "enum": [
+            "community.read-reports",
+            "community.read-report",
+            "community.read-feedback",
+            "community.read-works",
+            "community.read-users",
+            "community.read-featured",
+            "community.read-threads",
+            "community.read-feature-catalogs",
+            "community.read-policy",
+            "community.read-comments",
+            "community.read-comment",
+            "community.read-events",
+            "community.read-summary",
+            "community.read-work-publishing-settings",
+            "community.read-article-submissions",
+            "community.read-article-submission",
+            "community.read-work-submissions",
+            "community.read-work-submission",
+            "community.read-account-capacity",
+            "community.read-publishing-jobs",
+            "editorial.owner-drafts",
+            "editorial.owner-history",
+            "editorial.read-draft",
+            "editorial.read-catalog-delivery",
+            "editorial.catalog-delivery-capabilities",
+            "editorial.catalog-render-backlog",
+            "list.comments",
+            "list.works",
+            "list.users",
+            "list.threads",
+            "list.featured",
+            "list.feature_catalogs",
+            "list.reports",
+            "list.appeals",
+            "list.work_submissions",
+            "list.article_submissions",
+            "list.jobs",
+            "list.feedback",
+            "list.events",
+            "list.policy",
+            "list.work_settings",
+            "list.overview",
+            "list.catalogs",
+            "list.review_page",
+            "list.approvals",
+            "list.article_approvals",
+            "list.receipts",
+            "list.articles",
+            "list.collections",
+            "list.media",
+            "list.render_backlog",
+            "list.invitations",
+            "list.masters",
+            "list.runs",
+            "catalog_search.status",
+            "ops.invitation.status",
+            "ops.master.candidates",
+            "ops.master.status",
+            "ops.master.guard",
+            "ops.upload_gc.plan",
+          ],
+          "type": "string",
+        },
+        "pageSize": {
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer",
+        },
+        "view": {
+          "enum": [
+            "compact",
+            "full",
+            "count",
+          ],
+          "type": "string",
+        },
+      },
+      "required": [
+        "op",
+      ],
+      "type": "object",
+    },
+    "name": "admin_read",
+    "outputSchema": {
+      "properties": {
+        "code": {
+          "type": "string",
+        },
+        "next": {
+          "type": "object",
+        },
+        "ok": {
+          "type": "boolean",
+        },
+      },
+      "required": [
+        "ok",
+        "code",
+        "untrusted",
+        "meta",
+      ],
+      "type": "object",
+    },
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+    },
+    "description": "Op catalog for admin_read and the execute tools. No arguments: an index by tool, rows as name(required,fields). {ops:[up to 5 names]}: each op's JSON Schema, class, recovery, completion and an example. Inputs refuse unknown fields.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string",
+        },
+        "ops": {
+          "items": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string",
+          },
+          "maxItems": 5,
+          "minItems": 1,
+          "type": "array",
+        },
+      },
+      "type": "object",
+    },
+    "name": "admin_actions",
+    "outputSchema": {
+      "properties": {
+        "code": {
+          "type": "string",
+        },
+        "next": {
+          "type": "object",
+        },
+        "ok": {
+          "type": "boolean",
+        },
+      },
+      "required": [
+        "ok",
+        "code",
+        "untrusted",
+        "meta",
+      ],
+      "type": "object",
+    },
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+    },
+    "description": "See a Catalog image as a WebP of at most 512 KiB, with original and rendered size in the text. {kind:"catalog_thumb",mediaId:"..."}. One passage of the original, in its pixels: {kind:"catalog_original",mediaId:"...",region:{left,top,width,height}}. Only save a transcription from text you can read; if you cannot read it, say so.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "catalog_thumb",
+            "catalog_original",
+          ],
+          "type": "string",
+        },
+        "maxEdge": {
+          "maximum": 2048,
+          "minimum": 64,
+          "type": "integer",
+        },
+        "mediaId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string",
+        },
+        "region": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+            "left": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer",
+            },
+            "top": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer",
+            },
+            "width": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+          "required": [
+            "left",
+            "top",
+            "width",
+            "height",
+          ],
+          "type": "object",
+        },
+      },
+      "required": [
+        "kind",
+        "mediaId",
+      ],
+      "type": "object",
+    },
+    "name": "admin_view_media",
   },
 ]
 `;

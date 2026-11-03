@@ -28,3 +28,38 @@ export {
 } from "./tools";
 export type { AdminMcpTool } from "./tools";
 export { whoamiPluginTool } from "./tools/whoami";
+export {
+  ACTIONS_TOOL_NAME,
+  actionDetail,
+  actionsContinuation,
+  actionsEnvelope,
+  actionsIndex,
+} from "./tools/actions";
+export {
+  adminOpMeta,
+  classToolViolations,
+  isAdminOpName,
+  nearestOps,
+  opUnavailable,
+  opsOnTool,
+  toolForOp,
+} from "./registry";
+export type { AdminOpContext, AdminOpEntry } from "./registry";
+export { ADMIN_SURFACES } from "./surfaces";
+export type { AdminSurface, AdminSurfaceExclusion } from "./surfaces";
+export { renderAdminMcpCapabilities } from "./capabilities";
+export { actionsFor, candidateActions } from "./actions-for";
+export {
+  classifyQuery,
+  LINK_PARAMETER_EXCLUSIONS,
+  LINK_PARAMETER_RULES,
+} from "./locate-reference";
+export { withinBudget } from "./locate";
+export { CMS_FAMILIES } from "./records";
+export {
+  findInText,
+  normalizeSearchQuery,
+  textHash,
+  textWindow,
+  WINDOW_BYTES,
+} from "./text-window";

@@ -28,6 +28,10 @@ export const ADMIN_MCP_CODES = [
   "UNKNOWN_OP",
   "AUDIT_UNAVAILABLE",
   "AI_CREDENTIAL_NOT_CONFIGURED",
+  "NOT_FOUND",
+  "NOT_AVAILABLE",
+  "MEDIA_UNAVAILABLE",
+  "AI_ROUTE_FORBIDDEN",
 ] as const;
 
 export const adminMcpCodeSchema = z.enum(ADMIN_MCP_CODES);
@@ -55,6 +59,10 @@ export const adminMcpMetaSchema = z.strictObject({
   redacted: z.array(z.string()).optional(),
   excluded: z.array(z.string()).optional(),
   repeat: z.number().int().positive().optional(),
+  /** Per source on a search. A branch that did not answer is named, never read as zero. */
+  sources: z
+    .record(z.string(), z.enum(["ok", "timed_out", "failed", "not_available"]))
+    .optional(),
 });
 
 export const adminMcpEnvelopeSchema = z
@@ -78,6 +86,33 @@ export const adminMcpEnvelopeSchema = z
   .refine((envelope) => envelope.ok === (envelope.code === "OK"), {
     path: ["code"],
   });
+
+/**
+ * A text result never exceeds this: Codex truncates at 10,000 bytes by default and
+ * Chinese is 3 bytes per character, so the cap is in bytes. Past it the server cuts
+ * whole records and says so (admin-mcp-completion-v1 section 5).
+ */
+export const ADMIN_MCP_TEXT_CAP_BYTES = 9_000;
+
+/** tools/list per profile, and the admin_actions index, in estimated tokens. */
+export const ADMIN_MCP_TOKEN_BUDGET = 4_000;
+
+/**
+ * Every tool's result schema as tools/list advertises it. The whole envelope is
+ * still checked on the way out; its generated JSON Schema runs 2.2 KB, and repeated
+ * on 11 tools it alone would pass the token budget above. This names what a client
+ * acts on and stays true of every envelope, by test. admin_actions and each answer's
+ * hint carry the rest.
+ */
+export const ADMIN_MCP_RESULT_SCHEMA = {
+  type: "object",
+  properties: {
+    ok: { type: "boolean" },
+    code: { type: "string" },
+    next: { type: "object" },
+  },
+  required: ["ok", "code", "untrusted", "meta"],
+};
 
 export type AdminMcpCode = z.infer<typeof adminMcpCodeSchema>;
 export type AdminMcpIssue = z.infer<typeof adminMcpIssueSchema>;

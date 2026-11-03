@@ -1192,6 +1192,7 @@ describe.sequential("truthful codes on the plugin path", () => {
     ["above the integer column", 3_000_000_000],
     ["a digit string above it", "99999999999"],
     ["a fraction", "12.5"],
+    ["not a number", "abc"],
   ])(
     "answers RECORD_UNAVAILABLE, and 404 on REST, for an id that cannot exist: %s",
     async (_label, id) => {
@@ -1206,8 +1207,43 @@ describe.sequential("truthful codes on the plugin path", () => {
         ok: false,
         error: { code: "RECORD_UNAVAILABLE", fields: [] },
       });
+      const save = {
+        id,
+        expectedRevision: 0,
+        idempotencyKey: `${run}:impossible-save:${String(id)}`,
+        content: draftFor("impossible-save"),
+      };
+      // REST keeps its 500 for an unclassified failure: errors.ts is shared.
+      const restSave = await restPost(
+        "editorial/save-draft",
+        save,
+        jwtHeader(automationToken),
+      );
+      expect(restSave.status).toBe(500);
+      expect(await restSave.json()).toEqual({
+        ok: false,
+        error: { code: "OPERATION_FAILED", fields: [] },
+      });
+      const restPublish = await restPost(
+        "editorial/publish-approved",
+        {
+          approvalId: id,
+          id: 1,
+          idempotencyKey: `${run}:impossible-publish:${String(id)}`,
+        },
+        jwtHeader(automationToken),
+      );
+      expect(restPublish.status).toBe(500);
+      expect(await restPublish.json()).toEqual({
+        ok: false,
+        error: { code: "OPERATION_FAILED", fields: [] },
+      });
       await withClient(async (call) => {
         expect(await call("editorial_read", { id })).toEqual({
+          ok: false,
+          code: "RECORD_UNAVAILABLE",
+        });
+        expect(await call("editorial_save_draft", save)).toEqual({
           ok: false,
           code: "RECORD_UNAVAILABLE",
         });

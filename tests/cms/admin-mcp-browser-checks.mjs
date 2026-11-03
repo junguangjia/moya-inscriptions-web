@@ -150,10 +150,7 @@ export const verifyAdminMcpSurfaces = async ({
   const native = await clientFor(aiKey.secret);
   try {
     const { tools } = await native.listTools();
-    assert.deepEqual(
-      tools.map(({ name }) => name),
-      ["admin_whoami"],
-    );
+    assert.equal(tools[0].name, "admin_whoami");
     assert.deepEqual(tools[0].annotations, {
       readOnlyHint: true,
       destructiveHint: false,

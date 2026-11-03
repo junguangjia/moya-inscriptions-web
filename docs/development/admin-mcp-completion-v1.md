@@ -405,6 +405,33 @@ Audit attribution: Payload rows record the AI user (lastEditedBy, approvedBy,
 receipt actor, intent actor_id); Backend rows record `ai-admin`; the MCP ledger
 links both through requestId and key id.
 
+Recorded when built in S3, tests in
+tests/unit/backend/operator-ai-base-credential.test.ts and
+tests/unit/backend/operator-ai-label.test.ts:
+
+- The table is `AI_OPERATOR_ROUTES` in
+  packages/contracts/src/internal/admin-mcp/ai-routes.ts. It refuses with 403
+  `AI_ROUTE_FORBIDDEN`, `AI_RUN_REQUIRED` for an irreversible row without its
+  header, and `SENSITIVE_SWITCH_OFF` for a sensitive row.
+- The map's `catalog-master/*` is written out as exact rows, because `erase` has
+  a different class and a wildcard would pass a future route unclassified. This
+  design fixes only `attach`; the others take their op name in kebab case, and
+  the slice that builds them may rename them in the table.
+- `ai/settlement` passes on the base credential only with `type=item`, once. The
+  other subjects stay refused until S6 lists them for the community credential.
+- The raw IP route is `/internal/community/analytics/ips`. The router gives it
+  to analytics-handler.ts before the operator handler, and that handler still
+  takes only the Owner's token, so the base token gets 401 there until S4 builds
+  `insights/*` and calls `resolveOperatorActor` in it. The sensitive row already
+  refuses in `aiOperatorRefusal`, because `COMMUNITY_OPERATOR_AI_SENSITIVE` does
+  not exist yet.
+- Distinctness at startup compares the value with the whole environment, not a
+  list, so a later token cannot be missed. The analytics list names it too.
+- Not built, because no base route reaches them yet: the service factory per
+  label, which S6 needs, and `callAiBase`, which comes with its first JSON
+  route. The literal `"owner"` sites already take the resolved actor, proven by
+  a test that widens the table.
+
 ## 3. Door and native transport
 
 One URL, two paths. A small local Payload plugin, listed after `editorialMcp()`
@@ -759,6 +786,41 @@ through the companion, never as text.
 
 `editorial_*` keep their field names; additions only.
 
+Recorded when built in S3, tests in
+tests/unit/backend/admin-mcp-registry.test.ts and the `admin_actions` block of
+tests/cms/admin-mcp-native.test.ts:
+
+- The envelope's generated JSON Schema is 2.2 KB. Repeated on 11 tools it passes
+  the 4,000-token budget alone, so tools/list advertises the much smaller
+  `ADMIN_MCP_RESULT_SCHEMA` (`ok`, `code`, `next` and the four required names)
+  and names no dialect. `adminMcpEnvelopeSchema` still checks every answer on
+  the way out, and the official client validates each result against what was
+  advertised.
+- Budgets in tokens are estimated as UTF-8 bytes / 3, which reads dense JSON a
+  little high on purpose. The whole `admin_actions` index is 5.1 KB, about 1,700
+  tokens by this measure, and the text cap binds it first.
+- `admin_actions` removes what a client does not act on from a schema: the draft
+  name, `additionalProperties:false` (its description says inputs are strict),
+  the pattern of a `format`, and safe-integer bounds. Past 4 KB repeated parts
+  move to `$defs`, which `editorial.save-draft` needs. A detail that still would
+  not fit drops its result schema and says `outputOmitted`, as
+  `community.read-article-submission` does. Its input schema always fits, by
+  test.
+- A cut result reports the records it dropped in `remaining`, unless the op
+  already uses that field for its own targets. With no way on, because not one
+  record fits, it carries a fixed hint and no `next`, so a client cannot repeat
+  the same call forever.
+- `catalog.duplicate`, `article.duplicate` and `collection.duplicate` are
+  classed irreversible outright, because a duplicate always binds a new
+  identity. The ops whose class rises with the input are `editorial.save-draft`,
+  `editorial.save-article-draft`, `collection.save`, `media.register_existing`
+  and `community.set-report-metadata`.
+- `analytics.ips` joins the op list, on `admin_sensitive_read`: raw IP records
+  are not a report on `admin_analytics`.
+- An op with no implementation yet keeps its row and class, and `admin_actions`
+  files it under `not_available`. Ops on a tool no key has yet leave the index
+  and answer `tool_not_listed` in a detail.
+
 ## 6. Locate
 
 Principle: one call resolves a human reference to a stable ref and says whether
@@ -928,6 +990,53 @@ Whether that is readable is unknown; S3 measures it with a real rubbing.
 inscription passage can be read without a shell. Tool rule: AI saves a
 transcription only from a readable or supplied source and otherwise reports that
 it cannot. It never invents original text.
+
+Recorded when built in S3, tests in tests/cms/admin-mcp-locate.test.ts and
+tests/unit/backend/admin-mcp-locate.test.ts:
+
+- `admin_find` takes `{query, type?, limit?, skip?}`. Source names in
+  `meta.sources` are `catalogs`, `articles`, `collections`, `media` on the exact
+  step, `catalogs_published`, `catalogs_draft` and the same three on the fuzzy
+  step, and `users`, `works`, `comments`, `threads`, `reports` as
+  `not_available` until S6. An `article-` id is on both sides, because
+  `community.article_documents` uses the same shape: a hit in the CMS settles
+  it, a miss names `article_documents`.
+- Unique means one identity hit from one reference. A link naming two records,
+  or a bare number that is a row in two families, answers candidates. `type`
+  narrows a number to one family.
+- A `sourceId` bound only in a record's provenance list resolves through
+  `editorial-identities`, after the indexed lookup on the main column.
+- Trigram is its own branch, `catalogs_similar`, tried only when no branch
+  contains the words, so a close spelling never crowds out a real hit. Branches
+  run in turn: the Admin pool is five connections and the screens share it.
+- `state` on find, get and read is one word: `draft`, `published`, or
+  `draft_over_published` for a live record with a newer draft. The status filter
+  goes by the latest version, as Payload's draft read does, so the last of those
+  is a draft there. `list.catalogs` filters to drafts unless asked, and every
+  answer echoes the filter it resolved.
+- Rows page on the record's own id, newest first, so a row edited while paging
+  is neither lost nor seen twice. A count's groups page on an offset. A
+  non-VALUE state keeps its own group row, so unsupplied never reads as a
+  dynasty or as zero.
+- `editorial.read-draft` answers the outline for a key, because the whole draft
+  would not fit a text result. `editorial.owner-drafts` and `owner-history`
+  relay their small rows. The delivery reads stay unbuilt: they call the Backend
+  on the Owner's token, and S5 owes them the AI one.
+- `admin_get` on a Catalog says `deepZoom: "not_available"` until the master
+  routes arrive, so a missing master state never reads as no master.
+- Reading the lock row needs no change to `defaultAccess`: it admits any user,
+  so S5's question about `ai_operator` is answered for reads and open for the
+  takeover.
+- Codes added: `NOT_FOUND`, `NOT_AVAILABLE`, `MEDIA_UNAVAILABLE`,
+  `AI_ROUTE_FORBIDDEN`. `meta.sources` joins the envelope. `INPUT_INVALID` names
+  the allowed keys of the object an unknown key sits in, however deep.
+- `admin_view_media`: `catalog_original` requires a `region`; a full-size region
+  is allowed for a record with no thumbnail. It reads the original by the media
+  row this key can read, through the storage handler or the local directory, as
+  `GET /api/media/file/:filename` does. Regions are in stored pixels, with no
+  EXIF rotation. To fit 512 KiB it lowers quality first, then size, and the
+  answer reports the size it rendered. One original decodes at a time per
+  process.
 
 ## 7. Reversible execution, direct
 
@@ -1282,6 +1391,22 @@ not yet run:
 7. The screenshot goes to a 0600 PNG inside the configured roots. The result is
    text plus image content bounded to 512 KiB, reporting rendered and page size,
    with no structuredContent and no outputSchema.
+
+Recorded when built in S3, for the structured view:
+
+- `previewCatalogDetail` takes where an image's URL starts, so the structured
+  view needs no `CMS_PUBLIC_URL`: it replaces each image with its media id
+  anyway.
+- A citation's link becomes `hasUrl: true`, because the Matrix allows no
+  absolute URL here. The link itself is in `view=full`. This is the one place
+  the answer differs from the page's projection, apart from text past 200 code
+  points, which travels as length, hash and head.
+- `renderAvailable:false` says `PREVIEW_ORIGIN_NOT_CONFIGURED`,
+  `PREVIEW_HOST_MISMATCH`, `PREVIEW_INCOMPLETE` or `NO_PREVIEW_PAGE`.
+- `issues` covers the publish schema and media validity. Delivery readiness is
+  not in it, because that check calls the Backend on the Owner's token. Articles
+  and collections carry no `issues`: their rules live in hooks outside this
+  view.
 
 A stale revision, a used ticket or an expired ticket makes the Web page show its
 generic unavailable text; the companion reports `RENDER_FAILED` with a hint to
@@ -1791,9 +1916,17 @@ Also:
 
 Accepted limits, recorded and not fixed:
 
+- A draft Catalog title is matched as typed and in simplified form against the
+  stored text, with no normalized copy, so simplified words do not reach a
+  stored traditional draft title. Published Catalogs have the normalized search
+  document.
 - A rejected receipt written before S2 keeps answering its key with its old
   code, transient ones included, because a key's receipt cannot be replaced. A
   new key gets past it. Whether Production holds any such row was not checked.
+- A REST refusal for a Catalog outside the account's scope leaves no application
+  row: CATALOG_OUT_OF_SCOPE writes no receipt, because the Owner can widen the
+  scope, and REST calls do not pass the MCP audit ledger. Only the HTTP access
+  log shows it. The same refusal on `editorial_*` has its audit finish row.
 - A retry after OUTCOME_UNKNOWN on approve-batch can leave a second active
   approval of the same revisions, because the route has no key, and
   approve-article-batch has the same shape. The page reports only the later id,
@@ -2280,3 +2413,42 @@ How each runs:
   from audit rows on the control page.
 
 Results are published as one table per client, with failures shown.
+
+Recorded when built in S3, in tests/cms/admin-mcp-bench/. Numbers stay in the
+private evidence of each run, not here.
+
+- `node tests/cms/admin-mcp-bench/run.mjs l0 --profile complete` and
+  `... l1 --output <private directory>`. Each makes its own database beside
+  `CMS_TEST_DATABASE_URL`, marks it, refuses a server other than 16.15, and
+  drops it. The shared database is only read for its marker. L1 needs the Admin
+  production build first. CI runs L0 in the `cms` job, whose `postgres16`
+  service has the Payload schema; the `test` job's has none.
+- The seed is plain SQL and every row is a pure function of its index, so a run
+  is repeatable and costs seconds. The oracle is computed from the generated
+  rows, never through a tool. Older versions and a live row under a draft hold
+  the opposite transcription state, so a count that reads the wrong row is
+  wrong. 2.6 versions per record, 200 Articles and 40 Collections are this
+  seed's own assumptions; the design names no number for them.
+- Target scale: L1 seeds all of it except the 1M Umami events, because Umami's
+  schema comes from its image, not this repository, and no tool reads them
+  before S4, which owes that seed. L0 seeds the CMS side only, because nothing
+  in S3 reads the community tables; the slice that reads them turns them on
+  there.
+- L0's statement ceilings are measured at this scale and pinned, audit row and
+  transaction control included. The tool description ceiling of 1,024 characters
+  is this bench's own; the design asks for a check and names no number. Large
+  means at least 1,000 planner rows. The scan check catches a sequential scan
+  only: with the identity indexes gone an exact locate falls to a bitmap scan on
+  `latest`, which passes it, and only the timing alarm would notice.
+- L1's clock is the driver's, POST sent to last byte over loopback, an upper
+  bound on the design's POST received to last byte. The server's own clock from
+  the audit rows stands beside it; tools/list writes no audit row. The first
+  call of each class is reported apart. Media classes take 30 samples, below the
+  200 of Gate A, because they are not this slice's latency question, and say so.
+- C4's master half reads `deepZoom: "not_available"` until the master routes
+  arrive, so C4 passes here on id and publication state only.
+- Legibility: S3 has no real rubbing, so whether `catalog_thumb` can be read on
+  one stays NOT TESTED. The bench measures the mechanism on a synthetic chart of
+  bars of known width: which widths each view keeps, and that each answer stays
+  within 512 KiB and reports its size. Its thumbnail copies the thumb recipe's
+  size and quality; the worker's renderer is not run.

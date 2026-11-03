@@ -3,6 +3,7 @@ import {
   COMMENT_IMAGE_CAPABILITY_HEADER,
   COMMENT_IMAGE_CAPABILITY_VERSION,
 } from "@moya/contracts/comment-images-protocol";
+import type { AiOperatorCredential } from "@moya/contracts/internal/admin-mcp";
 
 /**
  * The Owner's Payload Admin is only a client of the Backend operator boundary:
@@ -59,6 +60,23 @@ const operatorToken = (): string => {
   return value;
 };
 
+const aiTokenVariables: Readonly<Record<AiOperatorCredential, string>> = {
+  base: "OPERATOR_AI_BASE_TOKEN",
+  community: "COMMUNITY_OPERATOR_AI_TOKEN",
+};
+
+export const aiCredentialConfigured = (
+  credential: AiOperatorCredential,
+): boolean => Boolean(process.env[aiTokenVariables[credential]]);
+
+/** Never falls back to the Owner's token: an AI call without its own answers so. */
+const aiToken = (credential: AiOperatorCredential): string => {
+  const value = process.env[aiTokenVariables[credential]];
+  if (value === undefined || value === "")
+    throw new CommunityOperatorError("AI_CREDENTIAL_NOT_CONFIGURED", 503);
+  return value;
+};
+
 /** A refused request (400/422) keeps its status so a view never offers to re-send it. */
 const statusCode = (status: number): number =>
   status === 404
@@ -92,6 +110,18 @@ const operatorFailureCode = (status: number): string =>
 /** The agent boundary answers 403 for a principal without the scope: final, never re-sent. */
 const agentFailureCode = (status: number): string | null =>
   status === 403 ? "AGENT_FORBIDDEN" : null;
+
+/** The bare code the Backend answered with, when it answered with one. */
+const backendCode = async (response: Response): Promise<string | null> => {
+  const reported = (
+    (await response.json().catch(() => null)) as {
+      error?: { code?: unknown };
+    } | null
+  )?.error?.code;
+  return typeof reported === "string" && /^[A-Z_]{3,64}$/u.test(reported)
+    ? reported
+    : null;
+};
 
 const operatorCallWith =
   (extraHeaders: Readonly<Record<string, string>>) =>
@@ -127,15 +157,8 @@ const operatorCallWith =
       // or an unresolved author. Those survive the loopback hop unchanged;
       // every other status keeps the existing narrowing.
       let code = agentFailureCode(response.status);
-      if (code === null && response.status === 422) {
-        const reported = (
-          (await response.json().catch(() => null)) as {
-            error?: { code?: unknown };
-          } | null
-        )?.error?.code;
-        if (typeof reported === "string" && /^[A-Z_]{3,64}$/u.test(reported))
-          code = reported;
-      }
+      if (code === null && response.status === 422)
+        code = await backendCode(response);
       throw new CommunityOperatorError(
         code ?? operatorFailureCode(response.status),
         response.status === 403 || response.status === 422
@@ -242,6 +265,8 @@ const partialAnswerMatches = (
  * and range, and the bytes themselves are handed back. A stalled Backend, a
  * viewer that stops reading and an overlong response are cut off; a viewer
  * that goes away cancels the Backend request, before or after its headers.
+ * `aiCredential` carries the call on that token instead of the Owner's and keeps
+ * the Backend's status and bare code, so the Backend's route table decides it.
  */
 const openOperatorBinary = async (
   path: string,
@@ -249,9 +274,11 @@ const openOperatorBinary = async (
   signal: AbortSignal | undefined,
   allowedTypes: ReadonlySet<string>,
   maximumBytes: number,
+  aiCredential?: AiOperatorCredential,
 ): Promise<OperatorMediaResponse> => {
   const url = new URL(`internal/community/${path}`, operatorBaseUrl());
-  const token = operatorToken();
+  const token =
+    aiCredential === undefined ? operatorToken() : aiToken(aiCredential);
   const controller = new AbortController();
   let finished = false;
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
@@ -311,6 +338,15 @@ const openOperatorBinary = async (
   };
   if (finished) throw refusal("OPERATOR_UNREACHABLE", 502);
   if (response.status === 416) throw refusal("RANGE_NOT_SATISFIABLE", 416);
+  if (!response.ok && aiCredential !== undefined) {
+    // A stalled answer is cut off like any other; the read then finds no code.
+    armStall();
+    const code = await backendCode(response);
+    throw refusal(
+      code ?? operatorFailureCode(response.status),
+      response.status,
+    );
+  }
   if (!response.ok)
     throw refusal(
       operatorFailureCode(response.status),
@@ -435,10 +471,34 @@ export const openCommunityOperatorEvidence: OperatorMediaCall = (
     OPERATOR_EVIDENCE_MAXIMUM_BYTES,
   );
 
+const CATALOG_THUMBNAIL_TYPES: ReadonlySet<string> = new Set(["image/webp"]);
+const CATALOG_THUMBNAIL_MAXIMUM_BYTES = 512 * 1024;
+
 /** The same bounded private relay, restricted to existing small Catalog WebP. */
 export const openCatalogOperatorThumbnail: OperatorMediaCall = (
   path,
   _range,
   signal,
 ) =>
-  openOperatorBinary(path, null, signal, new Set(["image/webp"]), 512 * 1024);
+  openOperatorBinary(
+    path,
+    null,
+    signal,
+    CATALOG_THUMBNAIL_TYPES,
+    CATALOG_THUMBNAIL_MAXIMUM_BYTES,
+  );
+
+/** The same thumbnail for Admin MCP, on the base credential and never the Owner's. */
+export const openCatalogAiThumbnail: OperatorMediaCall = (
+  path,
+  _range,
+  signal,
+) =>
+  openOperatorBinary(
+    path,
+    null,
+    signal,
+    CATALOG_THUMBNAIL_TYPES,
+    CATALOG_THUMBNAIL_MAXIMUM_BYTES,
+    "base",
+  );
