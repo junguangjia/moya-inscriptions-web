@@ -270,6 +270,8 @@ describe("shared private author transport without AbortSignal.any", () => {
       ),
     ).resolves.toEqual({ ok: true });
     const calls = fetch.mock.calls as unknown as [string, RequestInit][];
+    for (const [, init] of calls)
+      expect(new Headers(init.headers).get("x-yoyi-comment-images")).toBe("1");
     expect(calls.map(([url]) => url)).toEqual([
       "/api/community/threads",
       "/api/community/command",

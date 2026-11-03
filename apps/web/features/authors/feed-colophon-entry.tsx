@@ -57,7 +57,7 @@ export const colophonHeadName = (name: string): string => {
 export interface ColophonInteractions {
   /** The reader's id; never matches a row for a guest. */
   readonly actorId: string;
-  /** The live composition supplies reporting; QA presentations leave it absent. */
+  /** Live reporting or an explicitly local QA presentation of its control. */
   readonly renderReport?: ((id: string) => ReactNode) | undefined;
   readonly now: Date;
   /** The row briefly marked after it was sent. */
@@ -256,6 +256,7 @@ const ColophonBody = ({
   const sealId = useId();
   const wordsId = useId();
   const textRef = useRef<HTMLDivElement>(null);
+  const [authorRight, setAuthorRight] = useState<number | undefined>();
   const folded = foldColophonText(item.text);
   const foldedLength = folded === null ? item.text.length : folded.length - 1;
   const expanded = interactions.expanded.has(item.id);
@@ -263,15 +264,48 @@ const ColophonBody = ({
   const [overflows, setOverflows] = useState(false);
   useLayoutEffect(() => {
     const node = textRef.current;
-    if (node === null || expanded) return undefined;
-    const measure = () => setOverflows(colophonTextOverflows(node));
+    if (node === null) return undefined;
+    let active = true;
+    const measure = () => {
+      if (!active) return;
+      if (!expanded) setOverflows(colophonTextOverflows(node));
+      if (!item.images?.length) {
+        setAuthorRight(undefined);
+        return;
+      }
+      const body = node.parentElement;
+      const author = body?.querySelector<HTMLElement>(
+        ":scope > [data-colophon-author]",
+      );
+      const name = node.querySelector<HTMLElement>("[data-colophon-name]");
+      const first = name?.getClientRects()[0];
+      if (!body || !author || !first || first.width <= 0) return;
+      const width = Number.parseFloat(getComputedStyle(author).width);
+      const scale = author.getBoundingClientRect().width / width;
+      if (!Number.isFinite(scale) || scale <= 0) return;
+      // A first-column picture widens its line box. Follow the rendered
+      // nickname, including after wrapping, expanding or loading a font.
+      const right =
+        (body.getBoundingClientRect().right - first.left - first.width / 2) /
+          scale -
+        width / 2;
+      setAuthorRight(
+        Math.abs(right) < 1 ? undefined : Math.round(right * 64) / 64,
+      );
+    };
     measure();
-    if (typeof ResizeObserver !== "function") return undefined;
+    void document.fonts?.ready.then(measure);
+    document.fonts?.addEventListener("loadingdone", measure);
     // A rotation changes the view, and 全文 itself takes room from the text.
-    const observer = new ResizeObserver(measure);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [expanded, item.text, item.images]);
+    const observer =
+      typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    observer?.observe(node);
+    return () => {
+      active = false;
+      observer?.disconnect();
+      document.fonts?.removeEventListener("loadingdone", measure);
+    };
+  }, [expanded, item.text, item.images, item.user.name]);
   const foldable = folded !== null || overflows;
   const target: CommentReplyTarget =
     replyId === undefined
@@ -292,7 +326,11 @@ const ColophonBody = ({
     >
       {item.user.deleted === true ? (
         // A deleted author (account-deletion-v1) has no profile to open.
-        <span className={styles.author} data-colophon-author="">
+        <span
+          className={styles.author}
+          data-colophon-author=""
+          style={authorRight === undefined ? undefined : { right: authorRight }}
+        >
           <ColophonFace className={styles.face} user={item.user} />
         </span>
       ) : (
@@ -300,6 +338,7 @@ const ColophonBody = ({
           aria-label={`打开${item.user.name}的主页`}
           className={styles.author}
           data-colophon-author=""
+          style={authorRight === undefined ? undefined : { right: authorRight }}
           onClick={(event) =>
             interactions.openAuthor(item.user.id, event.currentTarget)
           }

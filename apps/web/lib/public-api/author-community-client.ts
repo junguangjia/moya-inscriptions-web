@@ -1,4 +1,8 @@
 import {
+  COMMENT_IMAGE_CAPABILITY_HEADER,
+  COMMENT_IMAGE_CAPABILITY_VERSION,
+} from "@moya/contracts/comment-images-protocol";
+import {
   notificationPageSchema,
   mentionLookupPageSchema,
   authorProfileSchema,
@@ -157,8 +161,18 @@ const request = async <T>(
             "x-request-id": options.requestId ?? "",
           }
         : options.body === undefined
-          ? { ...identityHeaders, accept: "application/json" }
-          : { ...identityHeaders, "content-type": "application/json" },
+          ? {
+              ...identityHeaders,
+              accept: "application/json",
+              [COMMENT_IMAGE_CAPABILITY_HEADER]:
+                COMMENT_IMAGE_CAPABILITY_VERSION,
+            }
+          : {
+              ...identityHeaders,
+              "content-type": "application/json",
+              [COMMENT_IMAGE_CAPABILITY_HEADER]:
+                COMMENT_IMAGE_CAPABILITY_VERSION,
+            },
       ...(options.upload
         ? { body: options.upload }
         : options.body === undefined

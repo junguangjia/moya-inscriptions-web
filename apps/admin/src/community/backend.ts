@@ -1,4 +1,8 @@
 import { APIError } from "payload";
+import {
+  COMMENT_IMAGE_CAPABILITY_HEADER,
+  COMMENT_IMAGE_CAPABILITY_VERSION,
+} from "@moya/contracts/comment-images-protocol";
 
 /**
  * The Owner's Payload Admin is only a client of the Backend operator boundary:
@@ -108,6 +112,7 @@ const operatorCallWith =
           Accept: "application/json",
           Authorization: `Bearer ${operatorToken()}`,
           ...extraHeaders,
+          [COMMENT_IMAGE_CAPABILITY_HEADER]: COMMENT_IMAGE_CAPABILITY_VERSION,
           ...(body === undefined ? {} : { "Content-Type": "application/json" }),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),

@@ -1,4 +1,8 @@
 import {
+  COMMENT_IMAGE_CAPABILITY_HEADER,
+  COMMENT_IMAGE_CAPABILITY_VERSION,
+} from "@moya/contracts/comment-images-protocol";
+import {
   catalogCommentIdSchema,
   catalogCommentPageSchema,
   catalogCommentReplyPageSchema,
@@ -48,7 +52,10 @@ export interface CommentReplyPageClientQuery {
 
 const readInit = (signal?: AbortSignal): RequestInit => ({
   credentials: "same-origin",
-  headers: { Accept: "application/json" },
+  headers: {
+    Accept: "application/json",
+    [COMMENT_IMAGE_CAPABILITY_HEADER]: COMMENT_IMAGE_CAPABILITY_VERSION,
+  },
   method: "GET",
   ...(signal === undefined ? {} : { signal }),
 });
@@ -70,6 +77,7 @@ const writeInit = (
   headers: {
     Accept: "application/json",
     "Content-Type": "application/json",
+    [COMMENT_IMAGE_CAPABILITY_HEADER]: COMMENT_IMAGE_CAPABILITY_VERSION,
     ...(account === undefined ? {} : { "x-author-account": account }),
   },
   method: "POST",

@@ -36,6 +36,7 @@ import {
 import { deliverPublishingMedia } from "./publishing-media-read.js";
 import { JsonBodyError, readJsonBody } from "../http/json-body.js";
 import { sendJson } from "../http/json-response.js";
+import { sendCommentJson } from "../http/comment-json-response.js";
 import { failureLabel } from "../http/request-boundary.js";
 import { collectTransportQuery } from "../http/transport-query.js";
 import { handleAgentRequest } from "./agent-handler.js";
@@ -619,7 +620,8 @@ export const handleOperatorRequest = async (
         return;
       }
       const query = queryOf(request);
-      sendJson(
+      sendCommentJson(
+        request,
         response,
         200,
         await moderationService.readComments({
@@ -713,7 +715,8 @@ export const handleOperatorRequest = async (
           methodNotAllowed();
           return;
         }
-        sendJson(
+        sendCommentJson(
+          request,
           response,
           200,
           await moderationService.readCommentDetail(id.data),

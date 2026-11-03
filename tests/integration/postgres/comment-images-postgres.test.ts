@@ -1,8 +1,23 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
-import { CatalogCommentService, CommunityModerationService } from "@moya/api";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import {
+  CatalogCommentService,
+  CommunityModerationService,
+  WorkPublishingService,
+} from "@moya/api";
 import type { PublishingOperatorService } from "@moya/api";
+import { createPublishingJobHandlers } from "@moya/backend-production/internal/publishing-job-handlers";
+import { FilesystemPublishingMediaStore } from "@moya/backend-production/internal/publishing-media-store";
+import { createPublishingMediaProcessor } from "@moya/backend-production/internal/publishing-processing";
+import {
+  createSandboxRunner,
+  defaultSandboxAppDist,
+} from "@moya/backend-production/internal/publishing-sandbox";
 import { handleOperatorRequest } from "@moya/backend-runtime/internal/community-operator";
+import { commentImagePayloadFor } from "@moya/contracts/comment-images-protocol";
 import {
   createPostgresPool,
   parsePostgresConfig,
@@ -14,6 +29,8 @@ import {
   PostgresCommunityReportingAdapter,
 } from "@moya/community-postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import sharp from "sharp";
+import { inProcessSandbox } from "../../unit/backend/publishing-sandbox-fixture.js";
 import {
   createCatalogScaleDatabase,
   type CatalogScaleDatabase,
@@ -23,6 +40,7 @@ import {
   emptyArticleDocument,
   catalogIdSchema,
   publicUserIdSchema,
+  registerMediaItemCommandSchema,
 } from "@moya/contracts/schemas";
 import type { CatalogCommentId, DiscussionTarget } from "@moya/contracts";
 let db: CatalogScaleDatabase;
@@ -212,6 +230,42 @@ const imageOnlyThread = async (post: DiscussionTarget = target()) => {
 };
 
 describe("#358 retained Operator image review", () => {
+  it("keeps canonical image-only PostgreSQL text empty when projecting the legacy display hint", async () => {
+    const entries = await imageOnlyThread();
+    const stored = async () =>
+      (
+        await db.setup.query(
+          "SELECT id,text,image_refs FROM community.catalog_comments WHERE id=$1 UNION ALL SELECT id,text,image_refs FROM community.catalog_comment_replies WHERE id=$2 ORDER BY id",
+          [entries[0]!.id, entries[1]!.id],
+        )
+      ).rows;
+    const before = await stored();
+    const canonical = await discussion.readDiscussion(target(), null, {
+      page: 1,
+      pageSize: 50,
+    });
+    const root = [...canonical.hot, ...canonical.items].find(
+      (item) => item.id === entries[0]!.id,
+    )!;
+    expect(root.text).toBe("");
+    expect(root.replies[0]?.text).toBe("");
+    const projected = commentImagePayloadFor(undefined, root) as typeof root;
+    expect(projected.text).toBe("【此条含附图，请刷新页面查看】");
+    expect(projected.replies[0]?.text).toBe("【此条含附图，请刷新页面查看】");
+    expect(projected).not.toHaveProperty("images");
+    expect(commentImagePayloadFor("1", root)).toBe(root);
+    expect(
+      (
+        await moderationReview().readCommentDetail(
+          entries[0]!.id as CatalogCommentId,
+        )
+      ).item.text,
+    ).toBe("");
+    expect(await stored()).toEqual(before);
+    expect(
+      before.every((item) => item.text === "" && item.image_refs.length === 1),
+    ).toBe(true);
+  });
   it.each(["visible", "hidden", "removed", "private"] as const)(
     "reviews image-only roots and replies in %s state without opening public images",
     async (state) => {
@@ -1486,3 +1540,262 @@ it("preserves root/reply image pins across reversible Staff thread removal and r
       status: "referenced",
     });
 });
+
+it.each(["standard", "original"] as const)(
+  "processes a real %s comment PNG from transfer to an image-only durable association",
+  { timeout: 30_000 },
+  async (qualityMode) => {
+    const directory = await mkdtemp(path.join(tmpdir(), "moya-comment-png-"));
+    try {
+      await mkdir(path.join(directory, "store"), { mode: 0o700 });
+      await mkdir(path.join(directory, "jobs"), { mode: 0o700 });
+      const store = await FilesystemPublishingMediaStore.open(
+        path.join(directory, "store"),
+        { temporaryRoots: [] },
+      );
+      // Only Docker transport/isolation are synthetic. This fixture runs the
+      // production renderer, Sharp decoder/encoder and framed-stream protocol.
+      const sandbox = inProcessSandbox();
+      const silent = { info: () => undefined, error: () => undefined };
+      const runner = await createSandboxRunner({
+        image: "yoyi-work-publishing-media-tools:v2",
+        workDirectory: path.join(directory, "jobs"),
+        appDist: defaultSandboxAppDist().appDist,
+        temporaryRoots: [],
+        environment: { PATH: "/usr/bin" },
+        spawn: sandbox.spawn,
+        logger: silent,
+      });
+      const processor = createPublishingMediaProcessor({
+        store,
+        sandbox: runner,
+        logger: silent,
+      });
+      const service = new WorkPublishingService(publishing, {
+        store,
+        processor,
+        logger: silent,
+      });
+      const png = await sharp({
+        create: {
+          width: 64,
+          height: 32,
+          channels: 4,
+          background: { r: 20, g: 40, b: 60, alpha: 0.5 },
+        },
+      })
+        .png()
+        .toBuffer();
+      const session = await service.createSession(alice, {
+        requestId: randomUUID(),
+        workId: null,
+      });
+      const item = await service.registerItem(
+        alice,
+        registerMediaItemCommandSchema.parse({
+          requestId: randomUUID(),
+          purpose: "comment",
+          holder: { sessionId: session.id },
+          kind: "static",
+          qualityMode,
+          ...(qualityMode === "standard"
+            ? { processingProfile: "standard-image-v1" }
+            : {}),
+          components: [
+            {
+              role: "still",
+              byteSize: png.byteLength,
+              contentType: "image/png",
+              ...(qualityMode === "standard"
+                ? { standardOutcome: "retained" }
+                : {}),
+            },
+          ],
+        }),
+      );
+      expect(item.state).toBe("awaiting_upload");
+      const transferred = await service.uploadComponent(
+        alice,
+        item.components[0]!.id,
+        {
+          attempt: randomUUID(),
+          contentLength: png.byteLength,
+          signal: new AbortController().signal,
+          source: (async function* () {
+            yield png.subarray(0, 32);
+            yield png.subarray(32);
+          })(),
+        },
+      );
+      expect(transferred.status).toBe("committed");
+      expect((await service.readItem(alice, item.id)).state).toBe("processing");
+
+      const handlers = createPublishingJobHandlers({
+        port: publishing,
+        store,
+        processor,
+        logger: silent,
+      });
+      const runJob = async (kind: "process_item" | "derive_edit") => {
+        // This file owns a fresh disposable database. Claim the real queued
+        // job rather than inserting a ready item or fabricating its result.
+        const claims = await publishing.claimJobs(
+          {
+            owner: "comment-png-test",
+            limit: 1,
+            leaseMs: 60_000,
+            kinds: [kind],
+          },
+          new Date(),
+        );
+        expect(claims).toHaveLength(1);
+        const claim = claims[0]!;
+        expect(claim.subjectId).toBe(item.id);
+        expect(await handlers.run(claim, new AbortController().signal)).toEqual(
+          {
+            status: "completed",
+          },
+        );
+        expect(await publishing.completeJob(claim, new Date())).toBe(true);
+      };
+      await runJob("process_item");
+      const ready = await service.readItem(alice, item.id);
+      expect(ready).toMatchObject({
+        state: "ready",
+        qualityMode,
+        presentation: { width: 64, height: 32 },
+        components: [{ state: "verified" }],
+        media: {
+          thumbSrc: `/api/community/publishing/media/${item.id}/thumb/base`,
+          displaySrc: `/api/community/publishing/media/${item.id}/display/base`,
+        },
+      });
+      expect(
+        (
+          await db.setup.query(
+            "SELECT purpose,private_metadata,declared_total_bytes::int AS declared,received_total_bytes::int AS received FROM community.media_items WHERE id=$1",
+            [item.id],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          purpose: "comment",
+          private_metadata: null,
+          declared: png.byteLength,
+          received: png.byteLength,
+        },
+      ]);
+
+      const decoded = async (
+        delivery: Awaited<ReturnType<typeof service.openMedia>>,
+      ) => {
+        expect(delivery.contentType).toBe("image/webp");
+        const read = delivery.read;
+        if (read.status !== "ok") throw new Error("Expected rendition bytes");
+        const chunks: Buffer[] = [];
+        try {
+          for await (const chunk of read.body) chunks.push(Buffer.from(chunk));
+        } finally {
+          await read.close();
+        }
+        const bytes = Buffer.concat(chunks);
+        expect(createHash("sha256").update(bytes).digest("hex")).toBe(
+          delivery.sha256,
+        );
+        const metadata = await sharp(bytes).metadata();
+        expect(metadata).toMatchObject({
+          format: "webp",
+          width: 64,
+          height: 32,
+          hasAlpha: true,
+        });
+        expect(metadata.exif).toBeUndefined();
+        expect(bytes.equals(png)).toBe(false);
+        return bytes;
+      };
+      const previewBytes = await decoded(
+        await service.openMedia(alice, item.id, "display", "base"),
+      );
+      await expect(
+        service.openMedia(null, item.id, "display", "base"),
+      ).rejects.toMatchObject({ name: "CommunityNotFoundError" });
+
+      const sent = await discussion.submitDiscussion(
+        target(),
+        alice,
+        "",
+        undefined,
+        undefined,
+        [],
+        [{ itemId: item.id, offset: 0 }],
+        randomUUID(),
+      );
+      expect(sent.item).toMatchObject({
+        text: "",
+        images: [
+          {
+            id: item.id,
+            offset: 0,
+            width: 64,
+            height: 32,
+            thumbSrc: `/api/community/discussion/images/${sent.id}/${item.id}/thumb`,
+            src: `/api/community/discussion/images/${sent.id}/${item.id}/display`,
+          },
+        ],
+      });
+      await service.discardSession(alice, session.id, {
+        requestId: randomUUID(),
+      });
+      expect(
+        (
+          await db.setup.query(
+            "SELECT holder_kind,holder_id FROM community.media_item_refs WHERE item_id=$1",
+            [item.id],
+          )
+        ).rows,
+      ).toEqual([{ holder_kind: "comment", holder_id: sent.id }]);
+      expect(
+        await publishing.resolveMediaRead(alice, item.id, "display", "base"),
+      ).toBeNull();
+      const association = await discussion.resolveDiscussionImage(
+        sent.id,
+        item.id,
+        "display",
+        null,
+      );
+      expect(association).not.toBeNull();
+      expect(
+        await decoded(await service.openAuthorizedMedia(association!)),
+      ).toEqual(previewBytes);
+
+      // The background full rendition also survives removal of the temporary
+      // session: the actual comment pin is sufficient, without a Work draft.
+      await runJob("derive_edit");
+      const full = await discussion.resolveDiscussionImage(
+        sent.id,
+        item.id,
+        "full",
+        null,
+      );
+      expect(full).not.toBeNull();
+      await decoded(await service.openAuthorizedMedia(full!));
+      const page = await discussion.readDiscussion(target(), null, {
+        page: 1,
+        pageSize: 50,
+      });
+      expect(
+        [...page.hot, ...page.items].find((comment) => comment.id === sent.id),
+      ).toMatchObject({
+        text: "",
+        images: [
+          {
+            id: item.id,
+            fullSrc: `/api/community/discussion/images/${sent.id}/${item.id}/full`,
+          },
+        ],
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);

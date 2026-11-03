@@ -1,6 +1,24 @@
-# Comment inline images — Issue #358 r1
+# Comment inline images — Issue #358 r3
 
 ## Owner direction and scope
+
+Owner release direction (2026-11-03 UTC, r3): after reporting the supplied R2
+computer/LAN previews passed, the Owner requested "推进上线". This supersedes
+the earlier Draft-only stop. Finish accepted source delivery, independent
+review, current cumulative CI, merge and merged-head verification; then prepare
+and activate an immutable tagged release on the existing Production services
+under the established backup, migration, native approval, smoke and recovery
+gates. This does not authorize unrelated data changes, new resources, credential
+or permission changes, destructive cleanup, or bypassing required checks.
+Preview services stay closed; only validation environments needed for release
+may run.
+
+Owner visual correction (2026-11-03, r2): align each avatar with its rendered
+first nickname column when inline pictures widen that column, and restore the
+original report flag in QA with local simulated feedback. Reuse the live flag
+presentation; do not submit QA reports or change live permissions. All other
+requirements stayed unchanged at that revision; the R3 release direction above
+now governs delivery.
 
 The Owner selected option A on 2026-11-02: use the Figma exploration as a
 reference and implement a more complete real feature. Images remain inline at
@@ -22,16 +40,18 @@ Allowed supporting paths: `apps/web/features/authors`, the existing
 `scripts/verification-tool-inputs.test.mjs` platform regression (accept either
 explicit refusal when Ubuntu 26 native helpers resolve outside the trusted
 paths; preserve all production verification and trust rules),
-`apps/web/features/comments`, the existing publishing integration helpers, the
-existing `use-preview-navigation-history` helper and its regression tests, the
-optional QA Home composition seams in `features/qa`, `features/home` and
+`apps/web/features/comments`, the existing report-flag presentation and its
+tests, the existing publishing integration helpers, the existing
+`use-preview-navigation-history` helper and its regression tests, the optional
+QA Home composition seams in `features/qa`, `features/home` and
 `features/product-preview` (the new renderer is supplied only by the explicit
 inline-image QA scenario; Formal/default Home behavior is unchanged),
 `apps/web/lib/public-api`, the corresponding same-origin Web routes,
 `packages/contracts`, `services/api/src/modules/community`,
 `services/backend-runtime/src/community`, `services/community-postgres/src`, the
 existing Backend runtime index and Admin package export table (narrow
-handler/component entry points used by tests, without dependency changes),
+handler/component entry points used by tests, without dependency changes), the
+existing Backend comment HTTP handlers and their JSON response boundary,
 `services/public-api`, `database/community-migrations`, the existing runtime
 grant files, the existing Admin moderation preview and its client boundary,
 affected architecture, contract, unit, PostgreSQL and browser tests, and this
@@ -40,10 +60,10 @@ task record. Shared semantic visual additions, if needed, belong in
 
 Non-goals: option B, stickers, video/Live Photo comments, new decoders or
 dependencies, general rich-text authoring, editing an already submitted comment,
-a new moderation system, new cloud services, Production data changes or
-deployment. Existing text-only comments, mentions, ordering, publication modes,
-author identity, delete/report/like behavior, viewer/navigation ownership and
-real/QA isolation remain intact.
+a new moderation system, new cloud services, or unrelated Production data,
+credential and permission changes. Existing text-only comments, mentions,
+ordering, publication modes, author identity, delete/report/like behavior,
+viewer/navigation ownership and real/QA isolation remain intact.
 
 ## Initial bounded policy
 
@@ -86,6 +106,17 @@ real/QA isolation remain intact.
 
 ## Delivery and validation
 
+The public `x-yoyi-comment-images: 1` representation marker selects canonical
+comment-image JSON. Current Web browser clients, trusted SSR and the Owner
+server request it; same-origin browser boundaries preserve the requesting
+browser's marker. Already-open older pages receive their strict legacy shape,
+including omission of empty `images` arrays. Image-only entries use an explicit
+refresh hint for legacy display only; canonical text remains empty in storage
+and version-1 responses. Nonempty text, mentions, ordering and counts remain
+unchanged. This marker grants no authority and changes neither accepted inputs
+nor image-byte authorization. Comment JSON stays private and uncached, with the
+representation marker included in `Vary`.
+
 One integration worktree has the integration writer. Parallel implementation
 uses separate worktrees and bounded file ownership; patches are integrated only
 after the producing writer stops. Normal independent code review is required.
@@ -97,7 +128,19 @@ failure recovery, viewer behavior and mobile/desktop rendering. Run applicable
 lint, typecheck, relevant tests and builds; bind evidence to the actual
 candidate.
 
-Delivery stops at a validated, independently reviewed Draft PR with a usable
-Development preview. Owner visual/real-device acceptance and any Production
-migration/deployment remain separate gates. Do not mark Ready, merge or deploy
-under this delivery stop.
+The Owner reported the supplied R2 previews passed; retain that presentation
+acceptance only when the reviewed final integration preserves its behavior and
+dependencies. Complete source delivery now requires an independent exact-head
+review, current cumulative CI, reviewer-managed Ready/merge and merged-head
+verification. Production delivery then uses an approved annotated tag on that
+verified main commit and the established concrete native approval gate.
+
+Before activation, refresh actual service/configuration/release identities,
+freeze immutable artifacts and the target role changes, verify a database
+backup, and apply only required forward migrations with the existing distinct
+authority. Verify process/readiness, asset bindings and real authorized media
+behavior after activation. Preserve required data and unrelated services. An old
+Backend lacking comment-reference and private-media protections is not a safe
+rollback after new comment-purpose data exists; the concrete recovery plan must
+retain those protections or refuse that rollback. Do not mark the release
+complete from a successful build, CI or health code alone.

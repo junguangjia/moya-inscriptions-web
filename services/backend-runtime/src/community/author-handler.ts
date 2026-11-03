@@ -33,6 +33,7 @@ import { sendApiError } from "../http/api-error-response.js";
 import { ifNoneMatchIncludes, strongEntityTag } from "../http/entity-tag.js";
 import { JsonBodyError, readJsonBody } from "../http/json-body.js";
 import { sendJson } from "../http/json-response.js";
+import { sendCommentJson } from "../http/comment-json-response.js";
 import { collectTransportQuery } from "../http/transport-query.js";
 import { deliverPublishingMedia } from "./publishing-media-read.js";
 import { refuseTransfer } from "./publishing-upload.js";
@@ -167,6 +168,8 @@ export const handleAuthorRequest = async (
     const method = request.method;
     const reply = (value: unknown, status = 200) =>
       sendJson(response, status, value, noStore);
+    const commentReply = (value: unknown, status = 200) =>
+      sendCommentJson(request, response, status, value, noStore);
     const query = () => {
       if (
         [...url.searchParams.keys()].some(
@@ -365,7 +368,9 @@ export const handleAuthorRequest = async (
         });
         await service.assertTarget(target, viewer);
         if (method === "GET" && path.length === 3) {
-          reply(await discussion.readDiscussion(target, viewer, listing()));
+          commentReply(
+            await discussion.readDiscussion(target, viewer, listing()),
+          );
           return;
         }
         if (
@@ -389,7 +394,7 @@ export const handleAuthorRequest = async (
             ? parsed(catalogCommentIdSchema, path[4])
             : undefined;
         if (root && method === "GET") {
-          reply(
+          commentReply(
             await discussion.readDiscussionReplies(
               target,
               root,
@@ -406,7 +411,7 @@ export const handleAuthorRequest = async (
               await body(),
             );
           if (!root && input.replyTo) throw new InvalidInput();
-          reply(
+          commentReply(
             await discussion.submitDiscussion(
               target,
               actor,
@@ -424,7 +429,7 @@ export const handleAuthorRequest = async (
       }
     }
     if (method === "GET" && path.join("/") === "me/comments") {
-      reply(await service.ownComments(requireActor(), query()));
+      commentReply(await service.ownComments(requireActor(), query()));
       return;
     }
     if (method === "GET" && path[0] === "authors" && path[1]) {

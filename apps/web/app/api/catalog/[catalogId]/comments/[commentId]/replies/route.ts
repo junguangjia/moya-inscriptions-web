@@ -1,4 +1,5 @@
 import { readCommunitySessionToken } from "../../../../../../../lib/public-api/community-session-cookie";
+import { COMMENT_IMAGE_CAPABILITY_HEADER } from "@moya/contracts/comment-images-protocol";
 import {
   assertedAccountOf,
   isSameOriginWrite,
@@ -14,7 +15,10 @@ const allowedParameters = new Set(["page", "pageSize"]);
 const maximumBodyBytes = 4_096;
 
 // The answer depends on who asks, so no cache may keep it for someone else.
-const headers = { "Cache-Control": "private, no-store", Vary: "Cookie" };
+const headers = {
+  "Cache-Control": "private, no-store",
+  Vary: `Cookie, ${COMMENT_IMAGE_CAPABILITY_HEADER}`,
+};
 
 const emptyResponse = (status: number) =>
   new Response(null, { status, headers });
@@ -81,6 +85,7 @@ export const GET = async (
       query,
       undefined,
       readCommunitySessionToken(request.headers.get("cookie")),
+      request.headers.get(COMMENT_IMAGE_CAPABILITY_HEADER),
     );
     switch (result.state) {
       case "success":
@@ -124,6 +129,7 @@ export const POST = async (
       token,
       body,
       asserted.account,
+      request.headers.get(COMMENT_IMAGE_CAPABILITY_HEADER),
     );
     switch (result.state) {
       case "success":

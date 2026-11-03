@@ -19,6 +19,10 @@
       "types": "./src/schemas.ts",
       "import": "./dist/schemas.js"
     },
+    "./comment-images-protocol": {
+      "types": "./src/comment-images-protocol.ts",
+      "import": "./dist/comment-images-protocol.js"
+    },
     "./json-schema": {
       "types": "./src/json-schema.ts",
       "import": "./dist/json-schema.js"

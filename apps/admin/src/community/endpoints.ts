@@ -64,6 +64,10 @@ import {
   operatorReportForwardRequestSchema,
 } from "@moya/contracts/internal/community-operator";
 import { z } from "zod";
+import {
+  COMMENT_IMAGE_CAPABILITY_HEADER,
+  commentImagePayloadFor,
+} from "@moya/contracts/comment-images-protocol";
 
 import { isOwner } from "../editorial/access";
 import {
@@ -701,8 +705,19 @@ const endpoint = (name: string, operation: CommunityOperation): Endpoint => ({
       const input = await readJson(req);
       const result = await operation(req, input);
       return Response.json(
-        { ok: true, result },
-        { headers: { "Cache-Control": "no-store" } },
+        {
+          ok: true,
+          result: commentImagePayloadFor(
+            req.headers?.get(COMMENT_IMAGE_CAPABILITY_HEADER),
+            result,
+          ),
+        },
+        {
+          headers: {
+            "Cache-Control": "no-store",
+            Vary: `Cookie, ${COMMENT_IMAGE_CAPABILITY_HEADER}`,
+          },
+        },
       );
     } catch (error) {
       return failure(error, req);

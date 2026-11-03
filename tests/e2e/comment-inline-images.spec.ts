@@ -43,6 +43,32 @@ test("inline images retain the current home/detail reader through Viewer Back an
 }, info) => {
   const desktop = info.project.name.startsWith("desktop");
   const stage = await openReading(page, desktop);
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+  });
+  await expect
+    .poll(() =>
+      stage.locator("[data-colophon-author]").evaluateAll((authors) => {
+        if (authors.length !== 9) return Infinity;
+        return Math.max(
+          ...authors.map((author) => {
+            const name = author.parentElement
+              ?.querySelector("[data-colophon-name]")
+              ?.getClientRects()[0];
+            const face = author
+              .querySelector("[data-comment-avatar]")
+              ?.getBoundingClientRect();
+            return name && face
+              ? Math.abs(
+                  name.left + name.width / 2 - face.left - face.width / 2,
+                )
+              : Infinity;
+          }),
+        );
+      }),
+    )
+    .toBeLessThan(1);
+  await expect(stage.locator("[data-comment-report]")).toHaveCount(9);
   const image = stage.locator("[data-comment-image]").first();
   await image.scrollIntoViewIfNeeded();
   const box = (await image.boundingBox())!;
@@ -147,6 +173,7 @@ test("standard comments keep inline image clicks separate from the existing repl
     await detail.getByRole("tab", { name: /^评论/u }).click();
   const comments = detail.locator("[data-comment-section]");
   await expect(comments).toBeVisible();
+  await expect(comments.locator("[data-comment-report]")).toHaveCount(9);
   const image = comments.locator("[data-comment-image]").first();
   await image.click();
   await expect(
@@ -158,4 +185,32 @@ test("standard comments keep inline image clicks separate from the existing repl
   ).toHaveCount(0);
   await expect(comments.locator("[data-comment-reply-mode]")).toHaveCount(0);
   await expect(detail).toBeVisible();
+});
+
+test("QA report flags acknowledge locally without sending a real report", async ({
+  page,
+}, info) => {
+  const stage = await openReading(
+    page,
+    info.project.name.startsWith("desktop"),
+  );
+  const posts: string[] = [];
+  page.on("request", (request) => {
+    if (
+      request.method() === "POST" &&
+      /\/api\/community\/.+report|\/api\/community\/reports/u.test(
+        request.url(),
+      )
+    )
+      posts.push(request.url());
+  });
+  const flag = stage.locator("[data-comment-report]").first();
+  await expect(flag).toHaveAccessibleName("举报评论");
+  await flag.click();
+  await expect(flag).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByText("QA 演示：已标记，未提交真实举报", { exact: true }),
+  ).toBeVisible();
+  expect(posts).toEqual([]);
+  await expect(stage.locator("[data-colophon-input-reply]")).toHaveCount(0);
 });

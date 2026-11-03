@@ -272,6 +272,17 @@ describe("FeedColophon", () => {
       expect($("[data-comment-image]")).not.toBeNull();
       expect($('[aria-label="添加图片"]')).toBeNull();
       expect($('input[type="file"]')).toBeNull();
+      const flags = host.querySelectorAll<HTMLButtonElement>(
+        "[data-comment-report]",
+      );
+      expect(flags).toHaveLength(9);
+      click(flags[0]!);
+      expect(flags[0]?.getAttribute("aria-pressed")).toBe("true");
+      expect(flags[0]?.disabled).toBe(true);
+      expect(h.authors.notify).toHaveBeenCalledWith(
+        "QA 演示：已标记，未提交真实举报",
+      );
+      expect($("[data-colophon-input-reply]")).toBeNull();
       const box = $<HTMLTextAreaElement>("textarea")!;
       act(() => {
         Object.getOwnPropertyDescriptor(
@@ -286,6 +297,8 @@ describe("FeedColophon", () => {
         );
       });
       expect(host.textContent).toContain("Local QA text only");
+      // The newly written local comment belongs to the QA actor.
+      expect(host.querySelectorAll("[data-comment-report]")).toHaveLength(9);
       expect(fetch).not.toHaveBeenCalled();
     },
   );

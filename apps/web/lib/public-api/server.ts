@@ -4,6 +4,10 @@ import {
   serializeClearedAppealSessionCookie,
 } from "./appeal-session-cookie";
 import "server-only";
+import {
+  COMMENT_IMAGE_CAPABILITY_HEADER,
+  COMMENT_IMAGE_CAPABILITY_VERSION,
+} from "@moya/contracts/comment-images-protocol";
 import { trustedAuthSourceHeaders } from "./auth-request-source";
 import {
   ARTICLE_DOCUMENT_LIMITS,
@@ -128,10 +132,19 @@ const withVisitorSession = async <Result>(
   send: (fetch: typeof globalThis.fetch) => Promise<Result>,
   // A write already reports a missing session itself; only 403 is new to it.
   write = false,
+  commentImageCapability?: string | null,
 ): Promise<Result | AccessDeniedTransportResult> => {
   let denied: AccessDeniedTransportResult | null = null;
   const result = await send(async (input, init) => {
     const headers = new Headers(init?.headers);
+    if (commentImageCapability !== undefined) {
+      headers.delete(COMMENT_IMAGE_CAPABILITY_HEADER);
+      if (commentImageCapability === COMMENT_IMAGE_CAPABILITY_VERSION)
+        headers.set(
+          COMMENT_IMAGE_CAPABILITY_HEADER,
+          COMMENT_IMAGE_CAPABILITY_VERSION,
+        );
+    }
     if (token !== undefined) headers.set("Authorization", `Bearer ${token}`);
     const response = await globalThis.fetch(input, {
       ...init,
@@ -224,17 +237,22 @@ export const fetchServerCatalogCommentPage = async (
   query: CatalogCommentListingTransportQuery = {},
   signal?: AbortSignal,
   token?: string,
+  commentImageCapability: string | null = COMMENT_IMAGE_CAPABILITY_VERSION,
 ): Promise<CommentPageTransportResult | AccessDeniedTransportResult> => {
   try {
     const baseUrl = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
-    return await withVisitorSession(token, (fetch) =>
-      fetchCatalogCommentPage(
-        { baseUrl, fetch },
-        catalogId,
-        query,
-        signal,
-        token,
-      ),
+    return await withVisitorSession(
+      token,
+      (fetch) =>
+        fetchCatalogCommentPage(
+          { baseUrl, fetch },
+          catalogId,
+          query,
+          signal,
+          token,
+        ),
+      false,
+      commentImageCapability,
     );
   } catch (error) {
     if (signal?.aborted === true) throw error;
@@ -248,18 +266,23 @@ export const fetchServerCatalogCommentReplyPage = async (
   query: CatalogCommentTransportQuery = {},
   signal?: AbortSignal,
   token?: string,
+  commentImageCapability: string | null = COMMENT_IMAGE_CAPABILITY_VERSION,
 ): Promise<CommentReplyPageTransportResult | AccessDeniedTransportResult> => {
   try {
     const baseUrl = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
-    return await withVisitorSession(token, (fetch) =>
-      fetchCatalogCommentReplyPage(
-        { baseUrl, fetch },
-        catalogId,
-        commentId,
-        query,
-        signal,
-        token,
-      ),
+    return await withVisitorSession(
+      token,
+      (fetch) =>
+        fetchCatalogCommentReplyPage(
+          { baseUrl, fetch },
+          catalogId,
+          commentId,
+          query,
+          signal,
+          token,
+        ),
+      false,
+      commentImageCapability,
     );
   } catch (error) {
     if (signal?.aborted === true) throw error;
@@ -273,6 +296,7 @@ export const createServerCatalogComment = async (
   token: string,
   body: unknown,
   account?: string,
+  commentImageCapability: string | null = COMMENT_IMAGE_CAPABILITY_VERSION,
 ): Promise<
   CommentSubmissionTransportResult<CatalogComment> | AccessDeniedTransportResult
 > => {
@@ -289,6 +313,7 @@ export const createServerCatalogComment = async (
           account,
         ),
       true,
+      commentImageCapability,
     );
   } catch {
     return { state: "unexpected-error" };
@@ -301,6 +326,7 @@ export const createServerCatalogCommentReply = async (
   token: string,
   body: unknown,
   account?: string,
+  commentImageCapability: string | null = COMMENT_IMAGE_CAPABILITY_VERSION,
 ): Promise<
   | CommentSubmissionTransportResult<CatalogCommentReply>
   | AccessDeniedTransportResult
@@ -319,6 +345,7 @@ export const createServerCatalogCommentReply = async (
           account,
         ),
       true,
+      commentImageCapability,
     );
   } catch {
     return { state: "unexpected-error" };
@@ -485,6 +512,12 @@ export const relayServerAuthorCommunity = async (
     const outgoing: Record<string, string> = {
       accept: "application/json, image/png",
     };
+    if (
+      request.headers.get(COMMENT_IMAGE_CAPABILITY_HEADER) ===
+      COMMENT_IMAGE_CAPABILITY_VERSION
+    )
+      outgoing[COMMENT_IMAGE_CAPABILITY_HEADER] =
+        COMMENT_IMAGE_CAPABILITY_VERSION;
     if (token !== undefined) outgoing.Authorization = `Bearer ${token}`;
     // Bind private inbox reads to the UI's confirmed account when another tab
     // changed the cookie (account-switching-v1: direct messages too).
@@ -623,6 +656,9 @@ export const relayServerAuthorCommunity = async (
       headers: {
         ...headers,
         "content-type": type,
+        ...(type === "application/json"
+          ? { vary: `Cookie, ${COMMENT_IMAGE_CAPABILITY_HEADER}` }
+          : {}),
         ...(reportEvidence && type !== "application/json"
           ? { "content-disposition": "attachment" }
           : {}),

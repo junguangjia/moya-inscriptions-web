@@ -12,7 +12,10 @@ import {
   qaCommentScenarioNames,
 } from "../comments/comment-scenarios";
 import { useQaCommentStore } from "../comments/use-qa-comment-store";
-import { QaDetailColophon } from "./qa-detail-colophon";
+import {
+  QaDetailColophon,
+  createQaCommentReportRenderer,
+} from "./qa-detail-colophon";
 import { homeScenarioNames } from "./home-scenario-contract";
 import { loadCatalogDetailPresentation } from "../detail/load-catalog-detail";
 import {
@@ -365,6 +368,9 @@ export const T02pQaHarness = ({
                     catalogId={catalogId}
                     currentUser={qaCurrentUser}
                     items={commentStore.getItems(catalogId)}
+                    renderReport={createQaCommentReportRenderer(
+                      commentStore.getItems(catalogId),
+                    )}
                     key={`${commentScenario}:${catalogId}`}
                     onSendComment={(text) =>
                       commentStore.sendComment(catalogId, text, qaCurrentUser)
