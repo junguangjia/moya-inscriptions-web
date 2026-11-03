@@ -27,7 +27,7 @@ import {
 } from "./admin-mcp-wire.js";
 
 // Synthetic values built at runtime, so no credential-shaped literal is tracked.
-const bearer = (value: string) => ["Bearer", value].join(" ");
+const bearerHeader = (value: string) => ["Bearer", value].join(" ");
 const forgedConnectionToken = ["artvenn", "ct", "forged"].join("_");
 const forgedArticleToken = ["artvenn", "article", "ct", "a".repeat(43)].join(
   "_",
@@ -716,7 +716,7 @@ describe("the key door", () => {
     expect(
       await refusal(
         await post(rpc("ping"), {
-          authorization: bearer(forgedArticleToken),
+          authorization: bearerHeader(forgedArticleToken),
         }),
       ),
     ).toEqual(generic);
@@ -724,7 +724,9 @@ describe("the key door", () => {
 
   it("refuses a connection token presented with the surface off, with no key lookup", async () => {
     const response = await refusal(
-      await post(rpc("ping"), { authorization: bearer(forgedConnectionToken) }),
+      await post(rpc("ping"), {
+        authorization: bearerHeader(forgedConnectionToken),
+      }),
     );
     expect(response.status).toBe(401);
     expect(response.body.errors[0]?.message).not.toMatch(/KEY_/u);
