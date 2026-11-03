@@ -1,4 +1,6 @@
 export type {
+  CommentImage,
+  CommentImageInput,
   ApiError,
   ApiErrorCode,
   CatalogCitationScope,

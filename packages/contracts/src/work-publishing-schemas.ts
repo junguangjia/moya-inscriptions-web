@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { COMMENT_IMAGE_LIMITS } from "./comment-images.ts";
 export const FEEDBACK_IMAGE_LIMITS = Object.freeze({
   maxImages: 3,
   maxBytes: 10 * 1024 * 1024,
@@ -1049,7 +1050,7 @@ export const registerMediaItemCommandSchema = z
   .strictObject({
     requestId: requestIdSchema,
     holder: publishingHolderSchema,
-    purpose: z.enum(["content", "feedback"]).optional(),
+    purpose: z.enum(["content", "feedback", "comment"]).optional(),
     kind: mediaItemKindSchema,
     qualityMode: mediaUploadQualityModeSchema,
     processingProfile: mediaProcessingProfileSchema.optional(),
@@ -1059,12 +1060,15 @@ export const registerMediaItemCommandSchema = z
   })
   .superRefine((command, context) => {
     if (
-      command.purpose === "feedback" &&
+      (command.purpose === "feedback" || command.purpose === "comment") &&
       (!("sessionId" in command.holder) ||
         command.kind !== "static" ||
         command.components.length !== 1 ||
         command.components[0]?.role !== "still" ||
-        command.components[0].byteSize > FEEDBACK_IMAGE_LIMITS.maxBytes)
+        command.components[0].byteSize >
+          (command.purpose === "comment"
+            ? COMMENT_IMAGE_LIMITS.maxBytes
+            : FEEDBACK_IMAGE_LIMITS.maxBytes))
     )
       context.addIssue({
         code: "custom",

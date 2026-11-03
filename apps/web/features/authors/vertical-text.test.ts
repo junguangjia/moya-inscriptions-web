@@ -86,6 +86,20 @@ describe("VerticalText", () => {
 });
 
 describe("colophonClipboardText", () => {
+  it("copies the body without inline image retry/control labels", () => {
+    const host = render(
+      '前文<button data-comment-image="qa-inline">重试</button>后文',
+    );
+    document.body.append(host);
+    const range = document.createRange();
+    range.selectNodeContents(host);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    expect(colophonClipboardText(selection)).toBe("前文后文");
+    selection.removeAllRanges();
+    host.remove();
+  });
   it("copies the selected digits, not their numerals", () => {
     const host = render(
       renderToStaticMarkup(createElement(VerticalDigits, { text: "128则" })),

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CommentImageInput, MentionReference } from "@moya/contracts";
 
 import {
   createLiveCommentSource,
@@ -283,11 +284,25 @@ export const useLiveComments = (
 
   /** Resolves true when the Backend accepted the comment (201 or 202). */
   const sendComment = useCallback(
-    async (text: string): Promise<boolean> => {
+    async (
+      text: string,
+      mentions: readonly MentionReference[] = [],
+      images: readonly CommentImageInput[] = [],
+      requestId?: string,
+    ): Promise<boolean> => {
       if (submitting) return false;
       setSubmitting(true);
       try {
-        const result = await source.submitComment(catalogId, text);
+        const result =
+          mentions.length || images.length || requestId
+            ? await source.submitComment(
+                catalogId,
+                text,
+                mentions,
+                images,
+                requestId,
+              )
+            : await source.submitComment(catalogId, text);
         if (result.state !== "success") {
           reportFailure(result.state);
           return false;
@@ -316,16 +331,33 @@ export const useLiveComments = (
    * refreshed total already counting it.
    */
   const sendReply = useCallback(
-    async (target: CommentReplyTarget, text: string): Promise<boolean> => {
+    async (
+      target: CommentReplyTarget,
+      text: string,
+      mentions: readonly MentionReference[] = [],
+      images: readonly CommentImageInput[] = [],
+      requestId?: string,
+    ): Promise<boolean> => {
       if (submitting) return false;
       setSubmitting(true);
       try {
-        const result = await source.submitReply(
-          catalogId,
-          target.rootCommentId,
-          text,
-          target.replyId,
-        );
+        const result =
+          mentions.length || images.length || requestId
+            ? await source.submitReply(
+                catalogId,
+                target.rootCommentId,
+                text,
+                target.replyId,
+                mentions,
+                images,
+                requestId,
+              )
+            : await source.submitReply(
+                catalogId,
+                target.rootCommentId,
+                text,
+                target.replyId,
+              );
         if (result.state !== "success") {
           reportFailure(result.state);
           return false;

@@ -60,8 +60,16 @@ export const LiveCommentSection = ({
       loading={live.status === "loading"}
       notice={live.notice}
       onLoadMoreReplies={(rootId) => void live.loadMoreReplies(rootId)}
-      onSendComment={(text) => live.sendComment(text)}
-      onSendReply={(target, text) => live.sendReply(target, text)}
+      onSendComment={(text, mentions, images, requestId) =>
+        mentions?.length || images?.length || requestId
+          ? live.sendComment(text, mentions, images, requestId)
+          : live.sendComment(text)
+      }
+      onSendReply={(target, text, mentions, images, requestId) =>
+        mentions?.length || images?.length || requestId
+          ? live.sendReply(target, text, mentions, images, requestId)
+          : live.sendReply(target, text)
+      }
       presentation="live"
       status={
         live.status === "ready" || live.status === "loading"

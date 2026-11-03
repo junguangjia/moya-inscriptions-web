@@ -256,7 +256,11 @@ export class AuthorCommunityService {
         !published.has(item.target.id as CatalogId)) ||
       (item.target?.type === "article" &&
         !publishedArticles.has(item.target.id))
-        ? { ...item, target: null }
+        ? {
+            ...item,
+            target: null,
+            ...(item.images === undefined ? {} : { images: [] }),
+          }
         : item,
     );
     return { ...page, items };

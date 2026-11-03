@@ -1116,3 +1116,23 @@
     z-index: 1;
   }
 }
+.commentImage {
+  display: inline-flex;
+  max-width: 160px;
+  margin: 4px;
+  vertical-align: middle;
+}
+
+.commentImage img {
+  display: block;
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border: 1px solid var(--theme-elevation-150);
+  border-radius: 4px;
+}
+
+.commentImage:focus-visible {
+  outline: 2px solid var(--theme-success-500);
+  outline-offset: 2px;
+}

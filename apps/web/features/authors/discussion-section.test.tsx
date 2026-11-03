@@ -34,6 +34,7 @@ vi.mock("./author-data", () => ({
     replies,
     send,
     account: () => context.viewer?.id ?? null,
+    accountEpoch: () => 0,
   },
   AuthorRequestError: class extends Error {},
 }));

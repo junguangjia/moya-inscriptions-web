@@ -44,6 +44,7 @@ import type {
   DiscoveryQuery,
   DiscussionTarget,
   MentionReference,
+  CommentImageInput,
 } from "@moya/contracts";
 import { linkAbortSignals } from "../platform/abort-signals";
 interface Parser<T> {
@@ -460,13 +461,21 @@ export const authorClient = {
     root?: string,
     replyTo?: string,
     mentions: readonly MentionReference[] = [],
+    images: readonly CommentImageInput[] = [],
+    requestId?: string,
   ) =>
     request(
       `discussion/${targetPath(target)}${root ? `/replies/${root}` : ""}`,
       discussionSubmitResultSchema,
       {
         method: "POST",
-        body: { text, mentions, ...(replyTo ? { replyTo } : {}) },
+        body: {
+          text,
+          mentions,
+          ...(replyTo ? { replyTo } : {}),
+          ...(images.length ? { images } : {}),
+          ...(requestId ? { requestId } : {}),
+        },
       },
     ),
   locate: (target: DiscussionTarget, id: string, pinned: readonly string[]) =>

@@ -44,6 +44,8 @@ import type {
 export type CatalogCardVariant = "feed" | "inscription";
 
 export interface CatalogCardProps {
+  /** Optional explicit QA colophons; ordinary callers retain their existing card. */
+  readonly colophon?: ReactNode;
   readonly item: CatalogSummary;
   readonly onMediaSettled?: () => void;
   readonly onOpenCatalog?: (
@@ -243,6 +245,7 @@ export const CatalogCardMedia = ({
 };
 
 export const CatalogCardPresentation = ({
+  colophon,
   item,
   onMediaSettled,
   onOpenCatalog,
@@ -342,6 +345,7 @@ export const CatalogCardPresentation = ({
   if (post)
     return (
       <CatalogFeedPost
+        {...(colophon === undefined ? {} : { colophon })}
         feedSpan={feedSpan}
         item={item}
         metadata={metadata}

@@ -32,6 +32,8 @@ export {
   operatorCommentPageSchema,
   operatorCommentQuerySchema,
   operatorCommentSchema,
+  operatorCommentMediaRequestSchema,
+  operatorCommentImagesSchema,
   operatorLabelSchema,
   operatorQueueCountsSchema,
   parentRestrictionSchema,
@@ -358,3 +360,5 @@ export type {
   OperatorFeedback,
   OperatorFeedbackPage,
 } from "./feedback-schemas.js";
+
+export type { OperatorCommentMediaRequest } from "./types.js";

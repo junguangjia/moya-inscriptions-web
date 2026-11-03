@@ -42,6 +42,8 @@ describe("contracts package surface", () => {
       "CatalogCommentListingTransportQuery",
       "CatalogCommentTransportQuery",
       "CommentAuthor",
+      "CommentImage",
+      "CommentImageInput",
       "CreateCatalogCommentReplyRequest",
       "CreateCatalogCommentRequest",
       "HealthResponse",

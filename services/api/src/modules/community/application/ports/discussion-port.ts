@@ -1,4 +1,5 @@
-import type { MentionReference } from "@moya/contracts";
+import type { MentionReference, CommentImageInput } from "@moya/contracts";
+import type { PublishingMediaReadTarget } from "./work-publishing-port.js";
 import type {
   DiscussionTarget,
   DiscussionPage,
@@ -32,12 +33,21 @@ export interface DiscussionPort {
     rootId?: string,
     replyTo?: string,
     mentions?: readonly MentionReference[],
+    images?: readonly CommentImageInput[],
+    requestId?: string,
   ): Promise<{
     id: string;
     rootId: string;
     item: DiscussionReply;
     awaitingApproval: boolean;
   }>;
+  resolveDiscussionImage?(
+    commentId: string,
+    itemId: string,
+    variant: "thumb" | "display" | "full",
+    viewer: string | null,
+    operator?: boolean,
+  ): Promise<PublishingMediaReadTarget | null>;
   setDiscussionLike(
     actor: string,
     id: string,

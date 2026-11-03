@@ -284,6 +284,7 @@ describe("Production PNVS invitation registration on PostgreSQL", () => {
       migration,
       "20261027010000",
       "20261028010000",
+      "20261102010000",
     ]);
     expect(await authority()).toEqual(before);
     expect(before.definer).toBe(true);

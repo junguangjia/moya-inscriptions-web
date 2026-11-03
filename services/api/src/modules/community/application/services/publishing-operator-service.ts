@@ -123,6 +123,13 @@ export class PublishingOperatorService {
   }
 
   /** Submitted derivatives or the unedited legacy PNG, for the private Admin proxy. */
+  openAuthorizedMedia(
+    target: import("../ports/work-publishing-port.js").PublishingMediaReadTarget,
+    range?: PublishingMediaByteRange,
+  ): Promise<PublishingMediaDelivery> {
+    return openPublishingMedia(this.store, async () => target, range);
+  }
+
   async openMedia(
     revisionId: string,
     itemId: string,

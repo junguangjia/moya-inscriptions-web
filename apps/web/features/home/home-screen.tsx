@@ -23,7 +23,7 @@ import { AnimatedCategoryIcon, Icon } from "@moya/ui";
 import { AnimatedTopTabs } from "../shell/animated-top-tabs";
 
 import type { ReactNode } from "react";
-import type { CatalogSummary } from "@moya/contracts";
+import type { CatalogSummary, ContentIdentity } from "@moya/contracts";
 import type { HomeFeedPagerHandle } from "./home-feed-pager";
 import type {
   HomeFeed,
@@ -144,6 +144,10 @@ const renderFeedState = <T,>(
 };
 
 export interface HomeScreenProps {
+  readonly renderFeedColophon?: (
+    target: ContentIdentity,
+    title: string,
+  ) => ReactNode;
   readonly renderDiscover?: (active: boolean) => ReactNode;
   readonly headerStart?: ReactNode;
   readonly headerEnd?: ReactNode;
@@ -155,6 +159,7 @@ export interface HomeScreenProps {
 }
 
 export const HomeScreen = ({
+  renderFeedColophon,
   renderDiscover,
   headerStart,
   headerEnd,
@@ -239,6 +244,14 @@ export const HomeScreen = ({
             platform={platform}
             renderItem={(item, onMediaSettled, index) => (
               <CatalogCard
+                {...(renderFeedColophon
+                  ? {
+                      colophon: renderFeedColophon(
+                        { type: "catalog", id: item.id },
+                        item.title,
+                      ),
+                    }
+                  : {})}
                 item={item}
                 onMediaSettled={onMediaSettled}
                 onOpenCatalog={(catalog, opener) =>

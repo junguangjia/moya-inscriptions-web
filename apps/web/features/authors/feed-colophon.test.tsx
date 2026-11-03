@@ -64,6 +64,8 @@ vi.mock("../product-shell/product-shell", () => ({
 }));
 import { FeedColophon, FeedColophonPresentation } from "./feed-colophon";
 import { COLOPHON_INPUT_BLUR_MS } from "./feed-colophon-input";
+import { QaDetailColophon } from "../qa/qa-detail-colophon";
+import { useQaCommentStore } from "../comments/use-qa-comment-store";
 
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -246,6 +248,48 @@ afterEach(() => {
 });
 
 describe("FeedColophon", () => {
+  it.each(["detail", "feed"] as const)(
+    "keeps %s QA colophons local even with a real signed-in account",
+    async (presentation) => {
+      const fetch = vi.fn();
+      vi.stubGlobal("fetch", fetch);
+      h.stage = { ...h.stage, region: "comments" };
+      const QaHost = () => {
+        const store = useQaCommentStore("comment-inline-images");
+        return (
+          <QaDetailColophon
+            target={target}
+            title="QA题跋"
+            store={store}
+            scenario="comment-inline-images"
+            presentation={presentation}
+          />
+        );
+      };
+      act(() => root.render(<QaHost />));
+      expect(h.authors.viewer).toMatchObject({ id: "reader" });
+      expect(h.options).toHaveLength(0);
+      expect($("[data-comment-image]")).not.toBeNull();
+      expect($('[aria-label="添加图片"]')).toBeNull();
+      expect($('input[type="file"]')).toBeNull();
+      const box = $<HTMLTextAreaElement>("textarea")!;
+      act(() => {
+        Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          "value",
+        )!.set!.call(box, "Local QA text only");
+        box.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => {
+        $("form")!.dispatchEvent(
+          new Event("submit", { bubbles: true, cancelable: true }),
+        );
+      });
+      expect(host.textContent).toContain("Local QA text only");
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
   it("gives Detail its own locator and restoration slot while keeping the feed default", () => {
     h.stage = { ...h.stage, surface: "reading", count: 0 };
     h.authors.cache.set("discussion-location", { target, id: "c1" });

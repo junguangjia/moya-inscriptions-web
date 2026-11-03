@@ -1,3 +1,4 @@
+import { operatorCommentMediaRequestSchema } from "./schemas.js";
 import type { z } from "zod";
 
 import type {
@@ -107,3 +108,7 @@ export type CommentAnalysisRecommendation = z.infer<
 >;
 export type CommentAnalysisResult = z.infer<typeof commentAnalysisResultSchema>;
 export type CommentAnalysisState = z.infer<typeof commentAnalysisStateSchema>;
+
+export type OperatorCommentMediaRequest = z.infer<
+  typeof operatorCommentMediaRequestSchema
+>;

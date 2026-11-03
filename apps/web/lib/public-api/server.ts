@@ -10,6 +10,7 @@ import {
   authAccountDeletionResultSchema,
   authCapabilitiesSchema,
   authPasswordResetResultSchema,
+  catalogCommentIdSchema,
   legacyMediaSrcSchema,
   profileMediaRenditionRoleSchema,
   userMediaIdSchema,
@@ -1296,6 +1297,165 @@ export const relayServerPublishingMedia = async (
     return new Response(null, { status: upstream.status, headers });
   }
   return new Response(upstream.body, { status: upstream.status, headers });
+};
+
+/** #358: managed images are read through their current discussion association. */
+export const relayServerDiscussionImage = async (
+  request: Request,
+  commentId: string,
+  itemId: string,
+  variant: string,
+): Promise<Response> => {
+  const cleared: Record<string, string> = {};
+  const privateHeaders: Record<string, string> = {
+    ...publishingPrivateHeaders,
+    vary: "Cookie, Range",
+    "cross-origin-resource-policy": "same-origin",
+    "content-security-policy": "default-src 'none'; sandbox",
+    "referrer-policy": "no-referrer",
+  };
+  const fail = (status: number, extra: Record<string, string> = {}) =>
+    new Response(null, {
+      status,
+      headers: { ...privateHeaders, ...cleared, ...extra },
+    });
+  if (request.method !== "GET" && request.method !== "HEAD") return fail(405);
+  if (
+    new URL(request.url).search !== "" ||
+    !catalogCommentIdSchema.safeParse(commentId).success ||
+    !/^comment-[0-9a-f]{32}$/u.test(commentId) ||
+    !publishingItemIdPattern.test(itemId) ||
+    !["thumb", "display", "full"].includes(variant)
+  )
+    return fail(404);
+  const range = request.headers.get("range");
+  if (range !== null && !isSingleByteRange(range)) return fail(416);
+  let base: URL;
+  try {
+    base = parsePublicApiBaseUrl(process.env.MOYA_PUBLIC_API_BASE_URL);
+  } catch {
+    return fail(503);
+  }
+  if (request.signal.aborted) return fail(400);
+  const target = new URL(
+    `v1/community/discussion/images/${commentId}/${itemId}/${variant}`,
+    base,
+  );
+  const token = readCommunitySessionToken(request.headers.get("cookie"));
+  const outgoing: Record<string, string> = {
+    accept: "image/webp, image/jpeg, image/png",
+  };
+  if (range !== null) outgoing.range = range;
+  const abort = new AbortController();
+  const cancel = () => abort.abort();
+  request.signal.addEventListener("abort", cancel, { once: true });
+  const send = async (session: string | undefined): Promise<Response> => {
+    const wait = setTimeout(cancel, publishingMediaResponseWaitMs);
+    try {
+      return await fetch(target, {
+        method: "GET",
+        headers:
+          session === undefined
+            ? outgoing
+            : { ...outgoing, Authorization: `Bearer ${session}` },
+        cache: "no-store",
+        redirect: "error",
+        signal: abort.signal,
+      });
+    } finally {
+      clearTimeout(wait);
+    }
+  };
+  let upstream: Response;
+  try {
+    upstream = await send(token);
+    // A refused session must not hide an otherwise public image. This is
+    // still an association-authorized read, never an item-id-only fallback.
+    if (
+      upstream.status === 401 &&
+      token !== undefined &&
+      (await communitySessionRefused(base, token))
+    ) {
+      cleared["set-cookie"] = serializeClearedCommunitySessionCookie(
+        isSecureRequest(request),
+      );
+      await cancelQuietly(upstream.body);
+      upstream = await send(undefined);
+    }
+  } catch {
+    request.signal.removeEventListener("abort", cancel);
+    return fail(503);
+  }
+  const contentRange = upstream.headers.get("content-range");
+  if (upstream.status !== 200 && upstream.status !== 206) {
+    await cancelQuietly(upstream.body);
+    request.signal.removeEventListener("abort", cancel);
+    return fail(
+      [401, 403, 404, 416, 429, 503].includes(upstream.status)
+        ? upstream.status
+        : 502,
+      upstream.status === 416 &&
+        contentRange !== null &&
+        /^bytes \*\/\d{1,16}$/u.test(contentRange)
+        ? { "content-range": contentRange }
+        : {},
+    );
+  }
+  const type = mediaTypeOf(upstream);
+  const length = upstream.headers.get("content-length");
+  const encoding = (upstream.headers.get("content-encoding") ?? "identity")
+    .trim()
+    .toLowerCase();
+  if (
+    !type ||
+    !["image/webp", "image/jpeg", "image/png"].includes(type) ||
+    encoding !== "identity" ||
+    upstream.body === null ||
+    (length !== null && !/^\d{1,16}$/u.test(length)) ||
+    (upstream.status === 206 &&
+      (!contentRange ||
+        !/^bytes \d{1,16}-\d{1,16}\/\d{1,16}$/u.test(contentRange)))
+  ) {
+    await cancelQuietly(upstream.body);
+    request.signal.removeEventListener("abort", cancel);
+    return fail(502);
+  }
+  const headers: Record<string, string> = {
+    ...privateHeaders,
+    ...cleared,
+    "content-type": type,
+  };
+  if (length !== null) headers["content-length"] = length;
+  if (upstream.status === 206 && contentRange !== null)
+    headers["content-range"] = contentRange;
+  if (upstream.headers.get("accept-ranges") === "bytes")
+    headers["accept-ranges"] = "bytes";
+  if (request.method === "HEAD") {
+    await cancelQuietly(upstream.body);
+    request.signal.removeEventListener("abort", cancel);
+    return new Response(null, { status: upstream.status, headers });
+  }
+  const reader = upstream.body.getReader();
+  const body = new ReadableStream<Uint8Array>({
+    async pull(stream) {
+      try {
+        const part = await reader.read();
+        if (part.done) {
+          request.signal.removeEventListener("abort", cancel);
+          stream.close();
+        } else stream.enqueue(part.value);
+      } catch (error) {
+        request.signal.removeEventListener("abort", cancel);
+        stream.error(error);
+      }
+    },
+    async cancel(reason) {
+      request.signal.removeEventListener("abort", cancel);
+      abort.abort();
+      await reader.cancel(reason).catch(() => undefined);
+    },
+  });
+  return new Response(body, { status: upstream.status, headers });
 };
 
 /** The validator the Backend sends for a current profile rendition: its quoted SHA-256. */

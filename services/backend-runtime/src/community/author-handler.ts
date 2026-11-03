@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { validateAuthorPng } from "./author-png.js";
 import {
+  CommunityNotFoundError,
   isCommunityConflictError,
   parseCommentListingQuery,
   isCommunityInputError,
@@ -281,6 +282,45 @@ export const handleAuthorRequest = async (
     }
     if (service.discussion && path[0] === "discussion") {
       const discussion = service.discussion;
+      if (path[1] === "images" && path.length === 5) {
+        if (!publishing || !discussion.resolveDiscussionImage)
+          throw new CommunityNotFoundError();
+        if (method !== "GET" && method !== "HEAD") {
+          response.writeHead(405, { allow: "GET, HEAD", ...noStore });
+          response.end();
+          return;
+        }
+        if (
+          url.search ||
+          !/^comment-[0-9a-f]{32}$/u.test(path[2] ?? "") ||
+          !/^media-item-[0-9a-f]{32}$/u.test(path[3] ?? "") ||
+          !["thumb", "display", "full"].includes(path[4] ?? "")
+        )
+          throw new InvalidInput();
+        if (
+          request.headers["x-author-account"] !== undefined &&
+          request.headers["x-author-account"] !== viewer
+        )
+          throw new Unauthorized();
+        const target = await discussion.discussionTarget(path[2]!);
+        await service.assertTarget(target, viewer);
+        await deliverPublishingMedia(
+          request,
+          response,
+          async (range) => {
+            const image = await discussion.resolveDiscussionImage!(
+              path[2]!,
+              path[3]!,
+              path[4] as "thumb" | "display" | "full",
+              viewer,
+            );
+            if (!image) throw new CommunityNotFoundError();
+            return publishing.openAuthorizedMedia(image, range);
+          },
+          noStore,
+        );
+        return;
+      }
       if (
         path[1] === "items" &&
         path[2] &&
@@ -374,6 +414,8 @@ export const handleAuthorRequest = async (
               root,
               input.replyTo,
               input.mentions,
+              input.images,
+              input.requestId,
             ),
             201,
           );

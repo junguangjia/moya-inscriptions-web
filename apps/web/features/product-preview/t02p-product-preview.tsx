@@ -99,6 +99,11 @@ export interface T02pProductPreviewProps {
     target: ContentIdentity,
     title: string,
   ) => ReactNode;
+  /** Explicit fixture injection; normal Formal Home composition is unchanged. */
+  readonly renderFeedColophon?: (
+    target: ContentIdentity,
+    title: string,
+  ) => ReactNode;
   readonly renderDetailActions?: (
     detail: CatalogDetailPresentation,
     refresh: () => void,
@@ -136,6 +141,7 @@ export const T02pProductPreview = ({
   workDetailPeek,
   renderDiscussion,
   renderColophon,
+  renderFeedColophon,
   renderDetailActions,
   renderDiscover,
   renderInscriptions,
@@ -182,6 +188,7 @@ export const T02pProductPreview = ({
           <div data-product-panel="home">
             <ContentQuickActionsProvider environment={quickActions}>
               <HomeScreen
+                {...(renderFeedColophon ? { renderFeedColophon } : {})}
                 data={states.home}
                 initialFeed={initialHomeFeed}
                 {...(onHomeFeedChange

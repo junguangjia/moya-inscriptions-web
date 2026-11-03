@@ -13,6 +13,7 @@ import type {
 import {
   PUBLISHING_MEDIA_PATH_PREFIX,
   FEEDBACK_IMAGE_LIMITS,
+  COMMENT_IMAGE_LIMITS,
   publishingMediaItemSchema,
 } from "@moya/contracts/schemas";
 import type {
@@ -261,7 +262,8 @@ export interface RefRelease {
     | "revision"
     | "article_draft"
     | "article_revision"
-    | "feedback";
+    | "feedback"
+    | "comment";
   readonly holderIds: readonly string[];
   readonly itemIds?: readonly string[];
 }
@@ -404,7 +406,7 @@ export const cancelItems = async (
     await db.query<{ id: string }>(
       `SELECT i.id FROM community.media_items i
        WHERE i.id=ANY($1::text[]) AND i.state <> 'purged'
-       AND NOT EXISTS (SELECT 1 FROM community.media_item_refs r WHERE r.item_id=i.id AND r.holder_kind IN ('article_revision','feedback'))
+       AND NOT EXISTS (SELECT 1 FROM community.media_item_refs r WHERE r.item_id=i.id AND r.holder_kind IN ('article_revision','feedback','comment'))
        ${options.onlyUnreferenced === true ? "AND NOT EXISTS (SELECT 1 FROM community.media_item_refs r WHERE r.item_id=i.id)" : ""}
        ORDER BY i.id`,
       [unique],
@@ -920,14 +922,18 @@ export const registerItem = async (
     async (db) => {
       const at = nowParam(now);
       const holder = await lockHolder(db, actorId, command.holder, now);
-      const feedbackPurpose = command.purpose === "feedback";
+      const feedbackPurpose =
+        command.purpose === "feedback" || command.purpose === "comment";
       if (feedbackPurpose) {
         if (
           holder.kind !== "session" ||
           command.kind !== "static" ||
           command.components.length !== 1 ||
           command.components[0]?.role !== "still" ||
-          command.components[0].byteSize > FEEDBACK_IMAGE_LIMITS.maxBytes
+          command.components[0].byteSize >
+            (command.purpose === "comment"
+              ? COMMENT_IMAGE_LIMITS.maxBytes
+              : FEEDBACK_IMAGE_LIMITS.maxBytes)
         )
           throw new CommunityInputError("Invalid feedback image upload");
         const session = (
@@ -1131,7 +1137,7 @@ export const cancelItem = async (
         // unavailable) and holds the purge back until it is evicted; the
         // explicit cancel still stops the transfer (U07).
         const kept = await db.query(
-          "SELECT 1 FROM community.media_item_refs WHERE item_id=$1 AND holder_kind IN ('revision','article_revision','feedback') LIMIT 1",
+          "SELECT 1 FROM community.media_item_refs WHERE item_id=$1 AND holder_kind IN ('revision','article_revision','feedback','comment') LIMIT 1",
           [itemId],
         );
         if ((kept.rowCount ?? 0) === 0)
@@ -1565,7 +1571,7 @@ export const markItemReady = async (
       `UPDATE community.media_items
        SET state='ready', failure_code=NULL, ready_at=$2::timestamptz, updated_at=$2::timestamptz, version=version+1,
            presentation=$3::jsonb, pairing=$4::jsonb,
-           private_metadata=CASE WHEN purpose='feedback' THEN NULL ELSE COALESCE(private_metadata,'{}'::jsonb) || jsonb_build_object('server', $5::jsonb) END,
+           private_metadata=CASE WHEN purpose IN ('feedback','comment') THEN NULL ELSE COALESCE(private_metadata,'{}'::jsonb) || jsonb_build_object('server', $5::jsonb) END,
            placeholder_color=CASE WHEN $6::boolean THEN $7::text ELSE placeholder_color END
        WHERE id=$1`,
       [

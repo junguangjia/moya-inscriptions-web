@@ -16,11 +16,13 @@ export const QaDetailColophon = ({
   title,
   store,
   scenario,
+  presentation = "detail",
 }: {
   readonly target: DiscussionTarget;
   readonly title: string;
   readonly store: ReturnType<typeof useQaCommentStore>;
   readonly scenario: QaCommentScenarioName;
+  readonly presentation?: "detail" | "feed";
 }) => {
   const [highlightId, setHighlight] = useState<string | undefined>(undefined);
   const items = store.getItems(target.id);
@@ -69,10 +71,11 @@ export const QaDetailColophon = ({
   };
   return (
     <FeedColophonPresentation
+      imageUploadsEnabled={false}
       target={target}
       title={title}
       thread={thread}
-      presentation="detail"
+      presentation={presentation}
     />
   );
 };

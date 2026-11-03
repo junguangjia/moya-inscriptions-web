@@ -1,0 +1,97 @@
+# Comment inline images — Issue #358 r1
+
+## Owner direction and scope
+
+The Owner selected option A on 2026-11-02: use the Figma exploration as a
+reference and implement a more complete real feature. Images remain inline at
+the selected start, middle or end position in comments and replies. The Figma
+sample content and its simulated layout are not production data or code.
+
+Reference:
+[mobile home calligraphy exploration](https://www.figma.com/design/PKhG0jrFs2xCbHb8Ri5kW9?node-id=424-492).
+
+This task implements that direction in the existing Web comment/discussion
+composition, shared contracts, Backend services, community PostgreSQL adapter
+and media pipeline. The narrow additive contract and migration work is required
+to persist and authorize the requested attachments; it does not introduce a
+second comment system or editable content master. The historical Community V1
+and content-track deferral of comment images is superseded for #358 only by the
+Owner's current implementation instruction.
+
+Allowed supporting paths: `apps/web/features/authors`,
+`apps/web/features/comments`, the existing publishing integration helpers, the
+existing `use-preview-navigation-history` helper and its regression tests, the
+optional QA Home composition seams in `features/qa`, `features/home` and
+`features/product-preview` (the new renderer is supplied only by the explicit
+inline-image QA scenario; Formal/default Home behavior is unchanged),
+`apps/web/lib/public-api`, the corresponding same-origin Web routes,
+`packages/contracts`, `services/api/src/modules/community`,
+`services/backend-runtime/src/community`, `services/community-postgres/src`, the
+existing Backend runtime index and Admin package export table (narrow
+handler/component entry points used by tests, without dependency changes),
+`services/public-api`, `database/community-migrations`, the existing runtime
+grant files, the existing Admin moderation preview and its client boundary,
+affected architecture, contract, unit, PostgreSQL and browser tests, and this
+task record. Shared semantic visual additions, if needed, belong in
+`packages/design-tokens`.
+
+Non-goals: option B, stickers, video/Live Photo comments, new decoders or
+dependencies, general rich-text authoring, editing an already submitted comment,
+a new moderation system, new cloud services, Production data changes or
+deployment. Existing text-only comments, mentions, ordering, publication modes,
+author identity, delete/report/like behavior, viewer/navigation ownership and
+real/QA isolation remain intact.
+
+## Initial bounded policy
+
+- At most six static images per comment or reply, each at most 10 MiB, enforced
+  in the shared contract and server. This uses the existing bounded temporary
+  upload model; it is an initial adjustable product limit, not a Figma-implied
+  restriction.
+- Image positions use offsets into the canonical normalized plain-text body,
+  measured in UTF-16 code units, with no split surrogate pair. Draft edits, CRLF
+  normalization and trimming must preserve placement and mentions.
+- Text remains bounded at the existing 1,000-character limit. An empty body is
+  valid only when at least one validated ready image is submitted; no invented
+  placeholder text is stored.
+- Images use the existing processing/transfer/session/quota machinery with a
+  distinct `comment` upload purpose. Submission atomically validates ownership,
+  readiness, purpose and target permissions, and pins durable references before
+  temporary upload cleanup can run.
+- Repeated transport attempts for one unchanged submission use one stable
+  request identity. Reusing it for different content is a conflict.
+- Reads remain comment-authorized and non-cacheable, including pending own
+  previews and Operator review. Hiding/deleting a body or thread, blocking and
+  withdrawing/private target content must revoke attachment access accordingly.
+
+## Frozen behavior matrix
+
+| Scenario                                       | Development                                                             | Production code behavior when deployed                       | Must preserve                                                                      |
+| ---------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
+| Read existing text-only entries                | Real data plus clearly separate synthetic QA                            | Real runtime data only                                       | Text, mentions, ordering and reply identity                                        |
+| Insert images at start/middle/end              | Actual upload plus deterministic QA coverage                            | Authenticated upload through existing media pipeline         | Plain text is preserved; chosen positions survive edits and normalization          |
+| Main comment, reply and image-only body        | Validated ready static attachments, six-image bound                     | Same server validation and publication policy                | Existing target, root, account and moderation permissions                          |
+| Upload in progress, rejection, retry, removal  | Clear per-item state; text and successful items remain                  | Same truthful state; no premature success                    | Current single text field and send placement, account isolation                    |
+| Submission failure or ambiguous response       | Draft remains; unchanged retry is idempotent                            | Same behavior                                                | No duplicate comment or accidental loss of uploaded images                         |
+| Home calligraphy, detail and standard comments | Inline images in existing vertical/horizontal composition               | Same rendering of authorized returned data                   | Reading direction, nickname/body flow, reply indentation, fold and scroll behavior |
+| Open an image and close viewer                 | Existing viewer with current-entry image sequence                       | Same behavior                                                | Image click is independent of body reply; focus and reading position return        |
+| Hidden/deleted/pending/private content         | Exercise actual visibility rules on disposable test data                | Recheck the existing comment/target visibility on every read | No public bypass through a media item URL                                          |
+| Operator review                                | Images are visible through the existing authorized moderation workspace | Same operator-only access                                    | No public-user/Operator identity mixing                                            |
+
+## Delivery and validation
+
+One integration worktree has the integration writer. Parallel implementation
+uses separate worktrees and bounded file ownership; patches are integrated only
+after the producing writer stops. Normal independent code review is required.
+
+Use the repository task-resource and verification entries on task-owned
+disposable resources. Cover contracts/offsets, session and image ownership,
+atomic durable pins, visibility and moderation, request retries, frontend
+failure recovery, viewer behavior and mobile/desktop rendering. Run applicable
+lint, typecheck, relevant tests and builds; bind evidence to the actual
+candidate.
+
+Delivery stops at a validated, independently reviewed Draft PR with a usable
+Development preview. Owner visual/real-device acceptance and any Production
+migration/deployment remain separate gates. Do not mark Ready, merge or deploy
+under this delivery stop.

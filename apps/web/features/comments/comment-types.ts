@@ -1,3 +1,5 @@
+import type { CommentImage } from "@moya/contracts";
+
 /** The name every deleted author is shown under (account-deletion-v1). */
 export const DELETED_AUTHOR_NAME = "已注销用户";
 
@@ -21,6 +23,7 @@ export interface CommentMediaPresentation {
 }
 
 export interface CommentReply {
+  readonly images?: readonly CommentImage[];
   readonly deleted?: boolean;
   readonly createdAtLabel: string;
   /** The raw ISO time, for renderers that format it themselves. */
@@ -35,6 +38,7 @@ export interface CommentReply {
 }
 
 export interface CommentItem {
+  readonly images?: readonly CommentImage[];
   readonly deleted?: boolean;
   readonly replyPageTotal?: number;
   readonly replyRemaining?: number;

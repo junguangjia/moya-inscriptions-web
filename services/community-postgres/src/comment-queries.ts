@@ -1,3 +1,4 @@
+import { commentImagesSql } from "./comment-images.js";
 /**
  * Every statement is parameterized and confined to the community namespace.
  * Root comments read newest-first and replies oldest-first; both orders are
@@ -193,7 +194,7 @@ export const applyCommentModerationSql = `
 const operatorCommentUnion = `
   SELECT c.id, 'comment' AS kind, c.catalog_id,c.target_type,c.body_deleted_at,c.thread_removed_at, NULL::text AS root_comment_id,
          NULL::text AS reply_to_reply_id,
-         c.text, c.created_at, c.moderation,
+         c.text, c.created_at, c.moderation, ${commentImagesSql("c", true)} AS images,
          u.id AS author_id, u.handle AS author_handle,
          u.display_name AS author_display_name, u.status AS author_status
   FROM community.catalog_comments c
@@ -201,7 +202,7 @@ const operatorCommentUnion = `
   UNION ALL
   SELECT r.id, 'reply' AS kind, c.catalog_id,c.target_type,r.body_deleted_at,c.thread_removed_at,r.root_comment_id,
          r.reply_to_reply_id,
-         r.text, r.created_at, r.moderation,
+         r.text, r.created_at, r.moderation, ${commentImagesSql("r", true)} AS images,
          u.id AS author_id, u.handle AS author_handle,
          u.display_name AS author_display_name, u.status AS author_status
   FROM community.catalog_comment_replies r

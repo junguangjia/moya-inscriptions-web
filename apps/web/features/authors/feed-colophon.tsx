@@ -45,6 +45,8 @@ export interface FeedColophonProps {
 }
 
 export interface FeedColophonPresentationProps extends FeedColophonProps {
+  /** Synthetic presentations must never acquire live upload ownership. */
+  readonly imageUploadsEnabled?: boolean;
   readonly renderReport?: ColophonInteractions["renderReport"];
   /** QA supplies the same thread shape without mounting a live data reader. */
   readonly thread: DiscussionThread;
@@ -213,6 +215,7 @@ export const FeedColophonPresentation = ({
   thread,
   renderReport,
   enabled = true,
+  imageUploadsEnabled = true,
   headRef: suppliedHeadRef,
 }: FeedColophonPresentationProps) => {
   const key = contentKey(target);
@@ -878,6 +881,7 @@ export const FeedColophonPresentation = ({
         // is held there however little the colophons fill.
         <div className={styles.inputAnchor} data-colophon-input-anchor="">
           <FeedColophonInput
+            imageUploadsEnabled={imageUploadsEnabled}
             actorId={author.viewer?.id ?? null}
             closed={thread.composerClosed}
             closedNote={thread.closedNote}
@@ -885,10 +889,20 @@ export const FeedColophonPresentation = ({
               presentation === "detail" ? `detail-colophon:${key}` : key
             }
             notice={toast.message}
-            onSubmit={(text, replyTarget) =>
-              replyTarget === null
-                ? thread.sendComment(text)
-                : thread.sendReply(replyTarget, text)
+            onSubmit={(text, replyTarget, images, requestId) =>
+              images?.length || requestId
+                ? replyTarget === null
+                  ? thread.sendComment(text, undefined, images, requestId)
+                  : thread.sendReply(
+                      replyTarget,
+                      text,
+                      undefined,
+                      images,
+                      requestId,
+                    )
+                : replyTarget === null
+                  ? thread.sendComment(text)
+                  : thread.sendReply(replyTarget, text)
             }
             onWritingChange={onWritingChange}
             ref={inputRef}

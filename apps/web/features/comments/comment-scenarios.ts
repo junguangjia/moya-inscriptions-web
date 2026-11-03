@@ -9,6 +9,7 @@ export const qaCommentScenarioNames = [
   "comment-empty",
   "comment-long",
   "comment-media",
+  "comment-inline-images",
   "comment-many-replies",
   "comment-loading",
 ] as const;
@@ -21,6 +22,7 @@ export const qaCommentScenarioLabels = {
   "comment-loading": "Comment loading",
   "comment-long": "Comment long",
   "comment-media": "Comment media",
+  "comment-inline-images": "Inline comment images (A)",
   "comment-many-replies": "Comment many replies",
 } as const satisfies Record<QaCommentScenarioName, string>;
 
@@ -170,6 +172,79 @@ const mediaItems = (catalogId: string): readonly CommentItem[] => [
   },
 ];
 
+/** Presentation-only QA records: never bound to runtime IDs or sent to the API. */
+const inlineItems = (catalogId: string): readonly CommentItem[] => {
+  const assets = ["rubbing-fragment", "stone-detail"];
+  const actor = (index: number): CommentUserPresentation => ({
+    id: `${catalogId}-qa-inline-author-${index}`,
+    name: `QA·${["砚边", "山窗", "溪堂", "墨池", "听松", "青禾"][index]}`,
+  });
+  const images = (key: string, offsets: readonly number[]) =>
+    offsets.map((offset, i) => ({
+      id: `${catalogId}-qa-inline-image-${key}-${i}`,
+      offset,
+      width: 360,
+      height: i % assets.length === 0 ? 480 : 610,
+      thumbSrc: `/docs/design-system/assets/demo/${assets[i % assets.length]}.svg`,
+      src: `/docs/design-system/assets/demo/${assets[i % assets.length]}.svg`,
+    }));
+  const makeReply = (
+    index: number,
+    text: string,
+    offsets: readonly number[],
+  ): CommentReply => ({
+    ...reply(
+      catalogId,
+      index,
+      actor([1, 0, 4][index]!),
+      text,
+      actor([0, 1, 3][index]!),
+    ),
+    createdAt: "2026-11-02T16:00:00.000Z",
+    images: images(`reply-${index}`, offsets),
+  });
+  const root = (
+    index: number,
+    text: string,
+    offsets: readonly number[],
+    replies: readonly CommentReply[] = [],
+  ): CommentItem => ({
+    id: `${catalogId}-qa-inline-root-${index}`,
+    createdAt: "2026-11-02T15:00:00.000Z",
+    createdAtLabel: "QA 演示",
+    isQaGenerated: false,
+    user: actor(index),
+    text,
+    images: images(`root-${index}`, offsets),
+    replies,
+    likeCount: 0,
+    liked: false,
+  });
+  return [
+    root(
+      0,
+      "这处转折之后仍有余势，再看下一字更明显。",
+      [4, 12],
+      [makeReply(0, "放大看这里更清楚。", [3])],
+    ),
+    root(
+      1,
+      "先看这一处起笔，落墨很轻。",
+      [0],
+      [makeReply(1, "是的，下一笔又收住了。", [])],
+    ),
+    root(2, "这一行疏密很舒服。", []),
+    root(
+      3,
+      "前半段与后半段连起来读更自然。",
+      [3, 7],
+      [makeReply(2, "中间这处也可以对读。", [4])],
+    ),
+    root(4, "", [0]),
+    root(5, "补一张全幅作对照。", [9]),
+  ];
+};
+
 export const createQaCommentFixture = (
   scenario: QaCommentScenarioName,
   catalogId: string,
@@ -177,6 +252,7 @@ export const createQaCommentFixture = (
   if (scenario === "comment-empty") return [];
   if (scenario === "comment-long") return longItems(catalogId);
   if (scenario === "comment-media") return mediaItems(catalogId);
+  if (scenario === "comment-inline-images") return inlineItems(catalogId);
   if (scenario === "comment-many-replies") return manyReplies(catalogId);
   return defaultItems(catalogId);
 };

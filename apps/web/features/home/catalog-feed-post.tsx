@@ -1,7 +1,9 @@
 "use client";
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
+import type { ReactNode } from "react";
 import type { CatalogSummary } from "@moya/contracts";
 import { FeedPostStage } from "../authors/feed-post-stage";
+import type { FeedPostStageHandle } from "../authors/feed-post-stage";
 import { requestDetailComments } from "../detail/detail-comments-request";
 import {
   localCatalogMediaSrc,
@@ -19,7 +21,8 @@ import styles from "./home-screen.module.css";
 /**
  * A Catalog summary in the phone single-column feed (QA preview, Topics,
  * Search): the post style with its one representative image and no author
- * bar or comments region. Without a shell the image opens the record.
+ * bar or comments region by default. An explicit QA renderer may supply
+ * colophons in the same existing strip. Without a shell the image opens the record.
  */
 export const CatalogFeedPost = ({
   item,
@@ -29,6 +32,7 @@ export const CatalogFeedPost = ({
   onOpenCatalog,
   onMediaSettled,
   priority,
+  colophon,
 }: {
   readonly item: CatalogSummary;
   /** Kind and period, in place of a publication day. */
@@ -39,7 +43,9 @@ export const CatalogFeedPost = ({
     ((item: CatalogSummary, opener: HTMLButtonElement) => void) | undefined;
   readonly onMediaSettled?: (() => void) | undefined;
   readonly priority?: MediaPriority | undefined;
+  readonly colophon?: ReactNode;
 }) => {
+  const stageRef = useRef<FeedPostStageHandle>(null);
   const shell = useOptionalProductShell();
   const content = { kind: "catalog", id: item.id, title: item.title } as const;
   const target = { type: "catalog", id: item.id } as const;
@@ -80,6 +86,8 @@ export const CatalogFeedPost = ({
     >
       {media.length > 0 ? (
         <FeedPostStage
+          ref={stageRef}
+          comments={colophon}
           badge={badge}
           burstEnabled={quickActions !== null && quickActions.ready !== false}
           media={media}
@@ -132,6 +140,8 @@ export const CatalogFeedPost = ({
           content={content}
           environment={quickActions}
           onComment={(opener) => {
+            if (colophon !== undefined && stageRef.current?.scrollToComments())
+              return;
             requestDetailComments(item.id);
             open(opener);
           }}

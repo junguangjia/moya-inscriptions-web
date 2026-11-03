@@ -1,0 +1,193 @@
+.controls {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--yoyi-space-3);
+  min-width: 0;
+  color: var(--yoyi-color-text-primary);
+  font-family: var(--yoyi-font-interface);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.5;
+  writing-mode: horizontal-tb;
+}
+
+.fileInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  opacity: 0;
+}
+
+.trigger,
+.action,
+.actions button,
+.heading button {
+  min-height: 44px;
+  padding: var(--yoyi-space-2) var(--yoyi-space-3);
+  color: var(--yoyi-color-text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--yoyi-radius-sm);
+  font: inherit;
+  cursor: pointer;
+}
+
+.trigger:hover:not(:disabled),
+.action:hover:not(:disabled),
+.actions button:hover:not(:disabled),
+.heading button:hover:not(:disabled) {
+  color: var(--yoyi-color-seal-red);
+  background: var(--yoyi-color-background-muted);
+}
+
+.trigger:disabled,
+.action:disabled,
+.actions button:disabled,
+.heading button:disabled {
+  color: var(--yoyi-color-text-disabled);
+  cursor: default;
+}
+
+.trigger:focus-visible,
+.action:focus-visible,
+.actions button:focus-visible,
+.heading button:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.liveStatus {
+  min-width: 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-caption-size);
+}
+
+.panel {
+  grid-column: 1 / -1;
+  min-width: 0;
+  padding: var(--yoyi-space-3);
+  background: var(--yoyi-color-background-surface);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-md);
+}
+
+.heading,
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--yoyi-space-2);
+}
+
+.heading {
+  justify-content: space-between;
+}
+
+.help,
+.status,
+.position {
+  margin: 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-caption-size);
+  overflow-wrap: anywhere;
+}
+
+.help {
+  display: block;
+  margin: var(--yoyi-space-2) 0;
+}
+
+.items {
+  display: grid;
+  gap: var(--yoyi-space-3);
+  margin: var(--yoyi-space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: start;
+  gap: var(--yoyi-space-3);
+}
+
+.thumbnail {
+  display: grid;
+  width: 64px;
+  height: 64px;
+  overflow: hidden;
+  place-items: center;
+  background: var(--yoyi-color-background-muted);
+  border-radius: var(--yoyi-radius-md);
+  font-size: var(--yoyi-type-caption-size);
+}
+
+.thumbnail img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.details {
+  display: grid;
+  min-width: 0;
+  gap: var(--yoyi-space-1);
+}
+
+.preview {
+  margin-top: var(--yoyi-space-3);
+  padding-top: var(--yoyi-space-3);
+  overflow-wrap: anywhere;
+  border-top: 1px solid var(--yoyi-color-border-subtle);
+}
+
+/* Keep the idle column narrow; management opens above its controls, not as
+   another editor or a second send row. Its host remains the stage's owner. */
+.controls[data-orientation="vertical"] {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-self: flex-start;
+  flex-direction: column;
+  width: 48px;
+  gap: 0;
+}
+
+.controls[data-orientation="vertical"] .trigger {
+  min-width: 44px;
+  padding-inline: var(--yoyi-space-2);
+  font-size: var(--yoyi-type-caption-size);
+}
+
+.controls[data-orientation="vertical"] .liveStatus {
+  max-width: 44px;
+  max-height: 96px;
+  overflow: auto;
+  text-align: center;
+}
+
+.controls[data-orientation="vertical"] .panel {
+  position: absolute;
+  z-index: calc(var(--yoyi-z-index-content) + 2);
+  bottom: calc(100% + var(--yoyi-space-3));
+  left: 0;
+  box-sizing: border-box;
+  width: min(320px, calc(100vw - 32px));
+  max-height: min(50svh, 360px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  box-shadow: var(--yoyi-shadow-dialog);
+  text-align: start;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .controls *,
+  .controls *::before,
+  .controls *::after {
+    scroll-behavior: auto;
+  }
+}

@@ -34,6 +34,7 @@ export {
 } from "./process-lifecycle.js";
 export { createBackendServer, startServer, stopServer } from "./server.js";
 export { trustedRequestSource } from "./community/auth-handler.js";
+export { handleAuthorRequest } from "./community/author-handler.js";
 
 export type {
   ConfiguredPort,

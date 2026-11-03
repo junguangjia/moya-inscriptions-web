@@ -1,3 +1,4 @@
+import { commentImageWasCommittedSql } from "../comment-image-lifecycle.js";
 import type {
   PublishingBlobUnlink,
   PublishingCleanupCounts,
@@ -775,6 +776,7 @@ export const scheduleCleanup = async (
        CROSS JOIN community.work_publishing_settings s
        WHERE s.id='settings' AND i.state <> 'purged'
          AND NOT EXISTS (SELECT 1 FROM community.media_item_refs r WHERE r.item_id=i.id)
+         AND (i.purpose<>'comment' OR NOT ${commentImageWasCommittedSql("i.id", true)} OR i.cancelled_at IS NULL OR i.cancelled_at < $1::timestamptz - make_interval(days => s.orphan_grace_days))
          AND (
            i.state='cancelled'
            OR GREATEST(i.updated_at, COALESCE((SELECT max(c.updated_at) FROM community.media_components c WHERE c.item_id=i.id), i.updated_at))
@@ -877,6 +879,7 @@ export const purgeItem = async (
        CROSS JOIN community.work_publishing_settings st
        WHERE i.id=$1 AND st.id='settings' AND (
          EXISTS (SELECT 1 FROM community.media_item_refs r WHERE r.item_id=i.id)
+         OR (i.purpose='comment' AND ${commentImageWasCommittedSql("i.id", true)} AND i.cancelled_at IS NOT NULL AND i.cancelled_at >= $2::timestamptz - make_interval(days => st.orphan_grace_days))
          OR EXISTS (
            SELECT 1 FROM community.work_revision_items ri
            JOIN community.work_revisions rv ON rv.id=ri.revision_id

@@ -5,6 +5,8 @@ import {
   catalogCommentReplySchema,
   catalogCommentSchema,
   catalogIdSchema,
+  createCatalogCommentRequestSchema,
+  createCatalogCommentReplyRequestSchema,
   publicUserProfileSchema,
 } from "@moya/contracts/schemas";
 
@@ -215,15 +217,17 @@ export const fetchSameOriginCatalogCommentReplyPage = async (
 
 export const createSameOriginCatalogComment = async (
   catalogId: string,
-  body: { readonly text: string },
+  body: unknown,
   context: CatalogCommentClientContext = defaultContext(),
 ): Promise<CommentSubmissionTransportResult<CatalogComment>> => {
   const parsedId = catalogIdSchema.safeParse(catalogId);
   if (!parsedId.success) return { state: "not-found" };
+  const parsedBody = createCatalogCommentRequestSchema.safeParse(body);
+  if (!parsedBody.success) return { state: "invalid-input" };
   return submit(
     context,
     commentsUrl(context.baseUrl, parsedId.data, {}),
-    body,
+    parsedBody.data,
     parseWith(catalogCommentSchema),
   );
 };
@@ -231,17 +235,19 @@ export const createSameOriginCatalogComment = async (
 export const createSameOriginCatalogCommentReply = async (
   catalogId: string,
   commentId: string,
-  body: { readonly text: string; readonly replyTo?: string },
+  body: unknown,
   context: CatalogCommentClientContext = defaultContext(),
 ): Promise<CommentSubmissionTransportResult<CatalogCommentReply>> => {
   const parsedId = catalogIdSchema.safeParse(catalogId);
   const parsedCommentId = catalogCommentIdSchema.safeParse(commentId);
   if (!parsedId.success || !parsedCommentId.success)
     return { state: "not-found" };
+  const parsedBody = createCatalogCommentReplyRequestSchema.safeParse(body);
+  if (!parsedBody.success) return { state: "invalid-input" };
   return submit(
     context,
     repliesUrl(context.baseUrl, parsedId.data, parsedCommentId.data, {}),
-    body,
+    parsedBody.data,
     parseWith(catalogCommentReplySchema),
   );
 };

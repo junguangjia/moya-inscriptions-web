@@ -86,7 +86,9 @@ export const colophonClipboardText = (selection: Selection): string => {
   const parts: string[] = [];
   for (let index = 0; index < selection.rangeCount; index += 1) {
     const fragment = selection.getRangeAt(index).cloneContents();
-    for (const hidden of fragment.querySelectorAll('[aria-hidden="true"]'))
+    for (const hidden of fragment.querySelectorAll(
+      '[aria-hidden="true"], [data-comment-image]',
+    ))
       hidden.remove();
     parts.push(fragment.textContent ?? "");
   }

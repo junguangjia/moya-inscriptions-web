@@ -63,6 +63,7 @@ describe("@moya/backend-runtime package boundary", () => {
       "handleArticleAuthoringRequest",
       "handleArticleDelegationHttpRequest",
       "handleArticleDelegationRequest",
+      "handleAuthorRequest",
       "installProcessShutdownHandlers",
       "interpretAliyunCheck",
       "interpretAliyunSend",

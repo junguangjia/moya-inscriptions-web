@@ -14,6 +14,7 @@ import {
   VerticalText,
 } from "./vertical-text";
 import styles from "./feed-colophon.module.css";
+import { InlineCommentBody } from "../comments/inline-comment-body";
 
 /**
  * Long colophons fold after this many characters (code points) at most;
@@ -256,6 +257,7 @@ const ColophonBody = ({
   const wordsId = useId();
   const textRef = useRef<HTMLDivElement>(null);
   const folded = foldColophonText(item.text);
+  const foldedLength = folded === null ? item.text.length : folded.length - 1;
   const expanded = interactions.expanded.has(item.id);
   // Measured while folded, kept while expanded: 收起 stays offered.
   const [overflows, setOverflows] = useState(false);
@@ -269,7 +271,7 @@ const ColophonBody = ({
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [expanded, item.text]);
+  }, [expanded, item.text, item.images]);
   const foldable = folded !== null || overflows;
   const target: CommentReplyTarget =
     replyId === undefined
@@ -316,7 +318,11 @@ const ColophonBody = ({
           interactions.canReply ? `回复 ${item.user.name}` : undefined
         }
         aria-description={
-          interactions.canReply ? "点击回复这条题跋" : undefined
+          interactions.canReply
+            ? item.images?.length
+              ? "点击文字或按回车回复，点击图片放大查看"
+              : "点击回复这条题跋"
+            : undefined
         }
         aria-disabled={!interactions.canReply}
         className={styles.text}
@@ -324,6 +330,8 @@ const ColophonBody = ({
         data-folded={foldable ? String(!expanded) : undefined}
         data-overflow={overflows && !expanded ? "true" : undefined}
         onMouseDown={(event) => {
+          if ((event.target as Element).closest?.("[data-comment-image]"))
+            return;
           // While a colophon is being written, choosing another one to
           // answer keeps the keyboard up: the text never takes the focus.
           if (document.activeElement?.closest("[data-colophon-input]") != null)
@@ -340,7 +348,7 @@ const ColophonBody = ({
           answer(event.currentTarget);
         }}
         ref={textRef}
-        role="button"
+        role={item.images?.length ? "group" : "button"}
         tabIndex={interactions.canReply ? 0 : -1}
       >
         {/* Read once, as the text's description, not as part of it; a
@@ -364,8 +372,16 @@ const ColophonBody = ({
               {COLOPHON_DELETED_TEXT}
             </span>
           ) : (
-            <VerticalText
+            <InlineCommentBody
               text={folded !== null && !expanded ? folded : item.text}
+              images={
+                !expanded && folded !== null
+                  ? item.images?.filter((image) => image.offset <= foldedLength)
+                  : item.images
+              }
+              renderText={(text) => <VerticalText text={text} />}
+              viewerImages={item.images}
+              vertical
             />
           )}
         </span>

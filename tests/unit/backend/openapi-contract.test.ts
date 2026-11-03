@@ -164,6 +164,7 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
         "/v1/community/content/{type}/{id}/state",
         "/v1/community/authors/{authorId}/favorites",
         "/v1/community/authors/{authorId}/likes",
+        "/v1/community/discussion/images/{commentId}/{itemId}/{variant}",
         "/v1/community/discussion/{type}/{id}",
         "/v1/community/discussion/{type}/{id}/replies/{rootId}",
         "/v1/community/discussion/{type}/{id}/locate/{commentId}",
@@ -269,6 +270,10 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
       "/v1/community/content/{type}/{id}/state": ["get"],
       "/v1/community/authors/{authorId}/favorites": ["get"],
       "/v1/community/authors/{authorId}/likes": ["get"],
+      "/v1/community/discussion/images/{commentId}/{itemId}/{variant}": [
+        "get",
+        "head",
+      ],
       "/v1/community/discussion/{type}/{id}": ["get", "post"],
       "/v1/community/discussion/{type}/{id}/replies/{rootId}": ["get", "post"],
       "/v1/community/discussion/{type}/{id}/locate/{commentId}": ["get"],
@@ -487,13 +492,14 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
       "catalogId",
       "author",
       "text",
+      "images",
       "createdAt",
       "replies",
       "replyTotal",
     ]);
     expect(
       Object.keys(asObject(asObject(schemas.CatalogCommentReply).properties)),
-    ).toEqual(["id", "author", "text", "createdAt", "replyTo"]);
+    ).toEqual(["id", "author", "text", "images", "createdAt", "replyTo"]);
     expect(requiredProperties(schemas.CatalogCommentReply)).not.toContain(
       "replyTo",
     );
@@ -863,7 +869,29 @@ describe("inscription-first OpenAPI 3.1.1 contract", () => {
       "citationid",
       "workflow",
     ]) {
-      expect(serialized).not.toContain(term);
+      // #358 adds managed images only to comment bodies, not Catalog data.
+      const approvedCommentImages = new Set([
+        "CatalogComment",
+        "CatalogCommentReply",
+        "CatalogCommentPage",
+        "CatalogCommentReplyPage",
+        "CreateCatalogCommentRequest",
+        "CreateCatalogCommentReplyRequest",
+      ]);
+      const checked =
+        term === "images"
+          ? JSON.stringify({
+              ...JSON.parse(serialized),
+              schemas: Object.fromEntries(
+                Object.entries(schemas).filter(
+                  ([name]) =>
+                    !authorSchemaNames.has(name) &&
+                    !approvedCommentImages.has(name),
+                ),
+              ),
+            }).toLowerCase()
+          : serialized;
+      expect(checked).not.toContain(term);
     }
   });
 

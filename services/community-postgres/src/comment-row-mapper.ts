@@ -1,3 +1,4 @@
+import { operatorCommentImagesSchema } from "@moya/contracts/internal/community-operator";
 import type {
   CatalogCommentRecord,
   CatalogCommentReplyRecord,
@@ -14,6 +15,7 @@ export interface CommentRow extends QueryResultRow {
   readonly catalog_id?: unknown;
   readonly root_comment_id?: unknown;
   readonly text: unknown;
+  readonly images?: unknown;
   readonly created_at: unknown;
   readonly moderation: unknown;
   readonly author_id: unknown;
@@ -224,6 +226,10 @@ export const mapOperatorCommentRow = (
       status: asUserStatus(row.author_status),
     },
     text: asText(row.text),
+    images:
+      row.body_deleted_at || row.thread_removed_at
+        ? []
+        : operatorCommentImagesSchema.parse(row.images ?? []),
     createdAt: isoUtc(asDate(row.created_at)),
     moderation: asModeration(row.moderation),
   };

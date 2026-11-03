@@ -1,0 +1,58 @@
+.image {
+  display: inline-flex;
+  box-sizing: border-box;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  color: var(--yoyi-color-text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--yoyi-radius-sm);
+  font: inherit;
+  font-size: var(--yoyi-type-caption-size);
+  line-height: 1;
+  text-indent: 0;
+  writing-mode: horizontal-tb;
+  direction: ltr;
+  cursor: zoom-in;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.image img,
+.unavailable {
+  display: block;
+  box-sizing: border-box;
+  width: 32px;
+  height: 32px;
+  overflow: hidden;
+  object-fit: cover;
+  background: var(--yoyi-color-background-muted);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-sm);
+}
+
+.unavailable {
+  display: grid;
+  place-items: center;
+}
+
+.image:hover {
+  background: var(--yoyi-color-background-muted);
+}
+
+.image:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.viewerHost {
+  writing-mode: horizontal-tb;
+  direction: ltr;
+}
