@@ -18,7 +18,10 @@ second comment system or editable content master. The historical Community V1
 and content-track deferral of comment images is superseded for #358 only by the
 Owner's current implementation instruction.
 
-Allowed supporting paths: `apps/web/features/authors`,
+Allowed supporting paths: `apps/web/features/authors`, the existing
+`scripts/verification-tool-inputs.test.mjs` platform regression (accept either
+explicit refusal when Ubuntu 26 native helpers resolve outside the trusted
+paths; preserve all production verification and trust rules),
 `apps/web/features/comments`, the existing publishing integration helpers, the
 existing `use-preview-navigation-history` helper and its regression tests, the
 optional QA Home composition seams in `features/qa`, `features/home` and
