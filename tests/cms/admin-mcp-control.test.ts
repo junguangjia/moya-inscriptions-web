@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 
 import { sql, type PostgresAdapter } from "@payloadcms/db-postgres";
 import {
@@ -17,6 +18,7 @@ import {
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
+  controlFor,
   readControlPage,
   readMcpControl,
   withGuard,
@@ -396,10 +398,10 @@ describe("the pause", () => {
     expect(replyOf(answer)).toHaveProperty("docs");
   });
 
-  it("refuses a tool at the guard too, for a call already past the door", async () => {
+  it("refuses a tool at the guard for a request no door has read control for", async () => {
     let ran = false;
     const req = await createLocalReq({}, payload);
-    // The control row changes after this request's door would have read it.
+    // Nothing read control on this request, so the guard's read is the first one.
     await saveControl({ pause: true });
     const answer = await withGuard({
       name: "editorial_save_draft",
@@ -415,6 +417,31 @@ describe("the pause", () => {
       ok: false,
       code: "MCP_PAUSED",
     });
+  });
+
+  it("keeps one answer per request: a request that read control before the pause still runs", async () => {
+    // The Matrix says "next request". A real call has this shape, because the door
+    // reads control first, so MCP_PAUSED cannot reach a call already past it. A run
+    // that must stop between targets reads the row itself, with readMcpControl.
+    let ran = false;
+    const req = await createLocalReq({}, payload);
+    expect((await controlFor(req)).pause).toBe(false);
+    await saveControl({ pause: true });
+    expect((await readMcpControl(payload)).pause).toBe(true);
+    const answer = await withGuard({
+      name: "editorial_save_draft",
+      description: "",
+      parameters: {},
+      handler: () => {
+        ran = true;
+        return { content: [{ type: "text", text: JSON.stringify({ id: 1 }) }] };
+      },
+    }).handler({}, req, undefined);
+    expect(ran).toBe(true);
+    expect(JSON.parse(answer.content[0]!.text)).toEqual({ id: 1 });
+    // The next request, with its own read, stops.
+    const next = await createLocalReq({}, payload);
+    expect((await controlFor(next)).pause).toBe(true);
   });
 
   it("leaves the Owner Admin and REST keys on the native routes alone", async () => {
@@ -470,6 +497,140 @@ describe("the pause", () => {
       expect(resume.status).toBe(503);
       expect((await readMcpControl(payload)).pause).toBe(true);
     });
+  });
+});
+
+describe("the one control row", () => {
+  /** The state the migration leaves, or none, for a save that is truly the first. */
+  const resetRow = async (state: "seeded" | "missing") => {
+    await db().execute(sql`DELETE FROM mcp_control`);
+    if (state === "seeded")
+      await db().execute(
+        sql`INSERT INTO mcp_control (updated_at, created_at) VALUES (now(), now())`,
+      );
+  };
+
+  afterEach(async () => {
+    const { rows } = await db().execute(sql`SELECT id FROM mcp_control`);
+    if (rows.length === 0)
+      await db().execute(
+        sql`INSERT INTO mcp_control (updated_at, created_at) VALUES (now(), now())`,
+      );
+  });
+
+  /** The text the migration runs, from its file, as the delivery suites read theirs. */
+  const controlMigrationSql = async () => {
+    const statements = /function up[\s\S]*?sql`([\s\S]*?)`\);/u.exec(
+      await readFile(
+        new URL(
+          "../../apps/admin/src/migrations/20261103_153046_mcp_control.ts",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    )?.[1];
+    if (!statements) throw new Error("Control migration text not found");
+    return statements;
+  };
+
+  it("is seeded closed by the migration, and the migration refuses a second", async () => {
+    const statements = await controlMigrationSql();
+    const rollback = new Error("ROLLBACK");
+    await expect(
+      db().transaction(async (tx) => {
+        await tx.execute(sql`DROP TABLE mcp_control CASCADE`);
+        await tx.execute(sql.raw(statements));
+        const { rows } = await tx.execute(sql`
+          SELECT pause, threshold, dm, evidence, raw_ip, self_only,
+            updated_at IS NOT NULL AS stamped FROM mcp_control`);
+        expect(rows).toEqual([
+          {
+            pause: false,
+            threshold: "20",
+            dm: false,
+            evidence: false,
+            raw_ip: false,
+            self_only: false,
+            stamped: true,
+          },
+        ]);
+        await expect(
+          tx.execute(sql`INSERT INTO mcp_control DEFAULT VALUES`),
+        ).rejects.toMatchObject({ cause: { code: "23505" } });
+        throw rollback;
+      }),
+    ).rejects.toBe(rollback);
+  });
+
+  it("refuses a second row on the real table, whatever writes it", async () => {
+    await expect(
+      db().execute(sql`INSERT INTO mcp_control DEFAULT VALUES`),
+    ).rejects.toMatchObject({ cause: { code: "23505" } });
+    const { rows } = await db().execute(sql`
+      SELECT indexdef FROM pg_indexes
+      WHERE tablename = 'mcp_control' AND indexname = 'mcp_control_singleton'`);
+    expect(String(rows[0]?.indexdef)).toContain("UNIQUE");
+  });
+
+  it("stays one row under two saves at once, and the door, the page and a save agree on it", async () => {
+    await resetRow("seeded");
+    const saves = await Promise.all([
+      saveControl({ threshold: 8 }),
+      saveControl({ threshold: 8 }),
+    ]);
+    expect(saves.map(({ status }) => status)).toEqual([200, 200]);
+    const { rows } = await db().execute(sql`SELECT threshold FROM mcp_control`);
+    expect(rows).toEqual([{ threshold: "8" }]);
+    expect((await readMcpControl(payload)).threshold).toBe(8);
+    expect((await readControlPage(await ownerSessionRequest())).threshold).toBe(
+      8,
+    );
+    const stored = await payload.findGlobal({
+      slug: "mcp-control",
+      overrideAccess: true,
+      depth: 0,
+    });
+    expect(stored.threshold).toBe(8);
+  });
+
+  it.each(["seeded", "missing"] as const)(
+    "takes a pause on the first save from the %s state while the ledger is down",
+    async (state) => {
+      await resetRow(state);
+      await withFailingAudit("NEW.op = 'mcp-control.change'", async () => {
+        const answer = await saveControl({ pause: true });
+        expect(answer.status).toBe(200);
+        expect((await readMcpControl(payload)).pause).toBe(true);
+      });
+      const { rows } = await db().execute(sql`SELECT pause FROM mcp_control`);
+      expect(rows).toEqual([{ pause: true }]);
+    },
+  );
+
+  it("records a first save by what changed, never by the row's id", async () => {
+    await resetRow("seeded");
+    expect((await saveControl({ threshold: 6 })).status).toBe(200);
+    const row = (await auditRows(sql`op = 'mcp-control.change'`)).at(-1);
+    expect(row?.changed_fields).toEqual(["threshold"]);
+  });
+
+  it("shuts the door with no row at all, rather than reading it as not paused", async () => {
+    await resetRow("missing");
+    await expect(readMcpControl(payload)).rejects.toThrow(
+      "MCP_CONTROL_ROW_MISSING",
+    );
+    for (const name of ["ai", "automation"]) {
+      const answer = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          accept: STREAMABLE_ACCEPT,
+          "content-type": "application/json",
+          authorization: `Bearer ${secrets[name]}`,
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }),
+      });
+      expect([name, answer.status]).toEqual([name, 503]);
+    }
   });
 });
 
@@ -646,7 +807,7 @@ describe("the audit ledger", () => {
     expect(created.status).toBe(403);
   });
 
-  it("refuses update and delete for everyone, by access and by trigger", async () => {
+  it("refuses update, delete and truncate for everyone, by access and by trigger", async () => {
     await callTool("ai", "admin_whoami");
     const [row] = await auditRowsForKey("ai");
     expect(row).toBeDefined();
@@ -686,6 +847,15 @@ describe("the audit ledger", () => {
     ).rejects.toMatchObject({
       cause: { message: "MCP_AUDIT_APPEND_ONLY", code: "42501" },
     });
+    // A plain TRUNCATE stops at the lock table's foreign key. CASCADE gets past that.
+    await expect(
+      db().execute(sql`TRUNCATE mcp_audit_events`),
+    ).rejects.toThrow();
+    await expect(
+      db().execute(sql`TRUNCATE mcp_audit_events CASCADE`),
+    ).rejects.toMatchObject({
+      cause: { message: "MCP_AUDIT_APPEND_ONLY", code: "42501" },
+    });
     const [after] = await auditRows(sql`id = ${row!.id}`);
     expect(after?.code).toBe(row!.code);
   });
@@ -717,19 +887,29 @@ describe("the audit ledger", () => {
     expect(JSON.stringify(row)).not.toContain("synthetic-canary-value");
   });
 
-  it("records a plugin write as a start and a finish with one callId, target and no content", async () => {
+  it("records a plugin save with no id as a start and a finish with one callId, the created target on the finish and no content", async () => {
     const before = (await auditRowsForKey("automation")).length;
     const content = catalogDraft("write");
     const answer = await callTool("automation", "editorial_save_draft", {
       idempotencyKey: `control-${randomUUID()}`,
       content,
     });
-    expect(replyOf(answer)).toHaveProperty("id");
+    const created = replyOf(answer).id;
+    expect(created).toBeDefined();
     const rows = (await auditRowsForKey("automation")).slice(before);
     expect(rows.map(({ phase }) => phase)).toEqual(["start", "finish"]);
     expect(rows[1]?.call_id).toBe(rows[0]?.call_id);
-    expect(rows[0]).toMatchObject({ class: "write", ok: null });
-    expect(rows[1]).toMatchObject({ ok: true, code: "OK" });
+    expect(rows[0]).toMatchObject({
+      class: "write",
+      ok: null,
+      target_id: null,
+    });
+    expect(rows[1]).toMatchObject({
+      ok: true,
+      code: "OK",
+      target_type: "catalogs",
+      target_id: String(created),
+    });
     expect(JSON.stringify(rows)).not.toContain(content.catalogId);
   });
 

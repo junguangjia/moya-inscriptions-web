@@ -243,8 +243,37 @@ describe("Admin MCP identity (admin-mcp-completion-v1, section 2)", () => {
     for (const column of ["dm", "evidence", "raw_ip", "self_only"])
       expect(control).toContain(`"${column}" boolean DEFAULT false`);
     expect(control).toContain('"threshold" numeric DEFAULT 20 NOT NULL');
+    expect(control).toContain(
+      'CREATE UNIQUE INDEX "mcp_control_singleton" ON "mcp_control" ((true));',
+    );
+    expect(control).toContain(
+      'INSERT INTO "mcp_control" ("updated_at", "created_at") VALUES (now(), now());',
+    );
     const audit = await read(`src/migrations/${names[3]}.ts`);
     expect(audit).toContain("BEFORE UPDATE OR DELETE ON");
+    expect(audit).toContain('BEFORE TRUNCATE ON "mcp_audit_events"');
+    expect(audit).toContain("FOR EACH STATEMENT EXECUTE FUNCTION");
     expect(audit).toContain("MCP_AUDIT_APPEND_ONLY");
+  });
+
+  it("keeps the singleton index and the seed out of the Payload snapshot, as the triggers are", async () => {
+    // A snapshot holds what the config generates. An index it did not generate
+    // listed there would read as drift, and the next migrate:create would drop it.
+    const snapshot = await read(
+      "src/migrations/20261103_153057_mcp_audit_events.json",
+    );
+    expect(snapshot).not.toContain("mcp_control_singleton");
+    expect(snapshot).not.toContain("mcp_audit_events_no_truncate");
+    const parsed = JSON.parse(snapshot) as {
+      tables: Record<string, { indexes: Record<string, unknown> }>;
+    };
+    expect(
+      Object.keys(parsed.tables["public.mcp_control"]!.indexes).sort(),
+    ).toEqual([
+      "mcp_control_dm_opened_by_idx",
+      "mcp_control_evidence_opened_by_idx",
+      "mcp_control_raw_ip_opened_by_idx",
+      "mcp_control_self_only_opened_by_idx",
+    ]);
   });
 });

@@ -52,7 +52,18 @@ type PluginTool = NonNullable<
   NonNullable<MCPPluginConfig["mcp"]>["tools"]
 >[number];
 
-/** The plugin path carries text only, and reads its key from the door. */
+/**
+ * artvenn_* stay listed by the plugin but answer NOT_FOUND outside Development
+ * (agent-admin/mcp-tools.ts), and this answer says what the key can call.
+ */
+const callableHere = (name: string) =>
+  !name.startsWith("artvenn_") || process.env.NODE_ENV === "development";
+
+/**
+ * The plugin path carries text only, and reads its key from the door. The plugin's
+ * SDK server needs an arguments object here: a call with none is refused before
+ * withGuard runs, so it writes no audit row (recorded in the task's accepted limits).
+ */
 export const whoamiPluginTool = (toolNames: readonly string[]): PluginTool => ({
   name: WHOAMI_TOOL_NAME,
   description: WHOAMI_DESCRIPTION,
@@ -65,7 +76,10 @@ export const whoamiPluginTool = (toolNames: readonly string[]): PluginTool => ({
       whoamiEnvelope(key, [
         ...(key.paused
           ? []
-          : toolNames.filter((name) => key.pluginTools[toolGrantKey(name)])),
+          : toolNames.filter(
+              (name) =>
+                key.pluginTools[toolGrantKey(name)] && callableHere(name),
+            )),
         WHOAMI_TOOL_NAME,
       ]),
     );

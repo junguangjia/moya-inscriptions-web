@@ -1,5 +1,4 @@
 import { sql, type PostgresAdapter } from "@payloadcms/db-postgres";
-import { ADMIN_MCP_DEFAULT_THRESHOLD } from "@moya/contracts/internal/admin-mcp";
 import type { AdminMcpSensitiveCategory } from "@moya/contracts/internal/admin-mcp";
 import type { Payload, PayloadRequest } from "payload";
 
@@ -10,40 +9,36 @@ export interface AdminMcpControl extends Readonly<
   readonly threshold: number;
 }
 
-/** A global has no row until its first save, and these are its starting values. */
-const UNSAVED: AdminMcpControl = {
-  pause: false,
-  threshold: ADMIN_MCP_DEFAULT_THRESHOLD,
-  dm: false,
-  evidence: false,
-  rawIp: false,
-  selfOnly: false,
-};
-
-/** The row by primary key, uncached, on the pool: never a business transaction. */
+/**
+ * The one row the migration seeds and a singleton index keeps alone, uncached, on
+ * the pool: never a business transaction. A missing row throws, so the door stays
+ * shut rather than reading it as not paused.
+ */
 export const readMcpControl = async (
   payload: Payload,
 ): Promise<AdminMcpControl> => {
   const { drizzle } = payload.db as unknown as Pick<PostgresAdapter, "drizzle">;
   const { rows } = await drizzle.execute(sql`
-    SELECT pause, threshold, dm, evidence, raw_ip, self_only
-    FROM mcp_control ORDER BY id LIMIT 1`);
+    SELECT pause, threshold, dm, evidence, raw_ip, self_only FROM mcp_control`);
   const row = rows[0];
-  return row === undefined
-    ? UNSAVED
-    : {
-        pause: row.pause === true,
-        threshold: Number(row.threshold),
-        dm: row.dm === true,
-        evidence: row.evidence === true,
-        rawIp: row.raw_ip === true,
-        selfOnly: row.self_only === true,
-      };
+  if (row === undefined) throw new Error("MCP_CONTROL_ROW_MISSING");
+  return {
+    pause: row.pause === true,
+    threshold: Number(row.threshold),
+    dm: row.dm === true,
+    evidence: row.evidence === true,
+    rawIp: row.raw_ip === true,
+    selfOnly: row.self_only === true,
+  };
 };
 
 const requestControls = new WeakMap<PayloadRequest, AdminMcpControl>();
 
-/** Read once per request: the door decides, and a tool sees the same answer. */
+/**
+ * Read once per request: the door decides, and a tool sees the same answer. A pause
+ * saved after that read stops the next request, not this one, so anything that must
+ * see it mid-request, such as a run between targets, calls readMcpControl.
+ */
 export const controlFor = async (
   req: PayloadRequest,
 ): Promise<AdminMcpControl> => {

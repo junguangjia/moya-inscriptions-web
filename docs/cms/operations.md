@@ -52,6 +52,31 @@ API 只读身份与 COS 权限分别保持最小范围。
 REST API key 用于确定性批处理，官方 MCP key 用于 MCP
 Bearer，两者与部署凭据分离。Owner 创建账号及工具范围，自动化不能解锁/管理其他账号。
 
+后台账号有三种角色：`owner`、`automation` 和 `ai_operator`。`ai_operator`
+只有持官方 MCP key 访问 `/api/mcp` 时才有权限，不能用密码登录，也不能持有 REST
+key（修订 2026-11-03）。
+
+密钥规则：
+
+- 官方 MCP key 只绑定 `ai_operator` 或 `automation`。绑定 Owner 的 key 回答 401
+  `KEY_OWNER_BOUND`，已有的这类 key 从部署起停止工作。
+- 每个 key 最长 30 天到期，到期回答 401 `KEY_EXPIRED`。在 `/admin/mcp-control`
+  一键续期，或在密钥页修改，每次上限 30 天。伪造或已停用的 key 回答普通 401，不区分原因。
+- `ai_operator`
+  key 走原生路径，工具由创建时选择的范围决定：只读、操作或全部。`automation`
+  key 走插件路径，保留已勾选的工具和资料范围，只增加到期、暂停、审计，没有新权限。
+- 暂停后，所有 key 只剩
+  `admin_whoami`，从下一个请求生效。它不覆盖 Owner 和自动化 REST key 对
+  `/api/editorial/*` 的调用。
+- 账号、密钥、暂停、阈值、敏感开关和审计记录只接受 Owner 浏览器会话：会话 Cookie，且没有
+  `Authorization` 请求头。任何 key（包括 Owner REST key）和放在请求头里的 Owner
+  JWT 都被拒绝。这些 Owner 凭据仍可读取自己的
+  `/api/users/me`。`POST /api/payload-mcp-api-keys/refresh-token`
+  对所有人回答 403 `RESERVED_SURFACE`。
+- 只有 `/api/mcp` 这一种写法有效。`/api/MCP`、`/api/globals/mcp`、`/api/%4Dcp`
+  等回答 404，因为 Nginx 的限流和请求体上限只设在这个精确路径上。
+- 插件路径上调用 `admin_whoami` 须带 `arguments: {}`，否则回答 `-32602`。
+
 客户端仅新增本任务服务器项；先核对并保留其他配置。模板：
 
 ```toml
@@ -68,6 +93,11 @@ tool_timeout_sec = 30
 现有 HTTPS 入口若也占用 `Authorization` 做 Basic 身份验证，会与 MCP
 Bearer 冲突。具体目标需核实代理配置；保留现有入口保护，把 CMS
 Bearer 透传至 CMS，必要的上游身份验证使用已批准的兼容通道。不得取消 CMS 鉴权、开放原始管理端口或改用新网络平台来绕过冲突。
+
+透传只限 MCP 调用。入口不得把浏览器请求上的 `Authorization`
+转发给 Admin：只要带着这个请求头，已登录的 Owner 就不再算 Owner 浏览器会话，账号、密钥、审计和
+`/admin/mcp-control`
+都会拒绝他，等于把 Owner 锁在这些受保护页面之外。仓库内的 Nginx 模板不会这样转发；具体目标在发布时只读核实。
 
 程序准备受保护清单后运行 `scripts/editorial/batch.mjs`：默认 dry-run；执行时增加
 `--execute --config <PROTECTED_CONFIG> --receipt <PROTECTED_RECEIPT>`。每项稳定 replay

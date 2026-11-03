@@ -169,6 +169,7 @@ const UNNAMED_FIELDS: ReadonlySet<string> = new Set([
   "createdAt",
   "globalType",
   "hash",
+  "id",
   "lockUntil",
   "loginAttempts",
   "salt",

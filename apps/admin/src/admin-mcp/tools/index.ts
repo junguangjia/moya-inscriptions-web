@@ -63,35 +63,43 @@ const OUTPUT_SCHEMA = z.toJSONSchema(adminMcpEnvelopeSchema, {
   target: "draft-2020-12",
 });
 
+export const listingTable = (tools: readonly AdminMcpTool[]) =>
+  tools.map((tool) => ({
+    tool,
+    listing: {
+      name: tool.name,
+      description: tool.description,
+      inputSchema: z.toJSONSchema(tool.input, {
+        target: "draft-2020-12",
+        io: "input",
+        unrepresentable: "any",
+      }),
+      outputSchema: OUTPUT_SCHEMA,
+      annotations: tool.annotations,
+    },
+  }));
+
 /** Built once per process, so a tools/list costs no schema conversion. */
-const LISTED = ADMIN_MCP_TOOLS.map((tool) => ({
-  tool,
-  listing: {
-    name: tool.name,
-    description: tool.description,
-    inputSchema: z.toJSONSchema(tool.input, {
-      target: "draft-2020-12",
-      io: "input",
-      unrepresentable: "any",
-    }),
-    outputSchema: OUTPUT_SCHEMA,
-    annotations: tool.annotations,
-  },
-}));
+const LISTED = listingTable(ADMIN_MCP_TOOLS);
 
 /** While paused only admin_whoami is listed: a tool not listed is not offered. */
-export const toolListingFor = (profile: AdminMcpToolProfile, paused: boolean) =>
-  LISTED.filter(
-    ({ tool }) =>
-      tool.profiles.includes(profile) &&
-      (!paused || tool.name === WHOAMI_TOOL_NAME),
-  ).map(({ listing }) => listing);
+export const toolListingFor = (
+  profile: AdminMcpToolProfile,
+  paused: boolean,
+  table: ReturnType<typeof listingTable> = LISTED,
+) =>
+  table
+    .filter(
+      ({ tool }) =>
+        tool.profiles.includes(profile) &&
+        (!paused || tool.name === WHOAMI_TOOL_NAME),
+    )
+    .map(({ listing }) => listing);
 
 /** A tool outside the key's profile does not exist for that key. */
 export const toolFor = (
   profile: AdminMcpToolProfile,
   name: string,
+  tools: readonly AdminMcpTool[] = ADMIN_MCP_TOOLS,
 ): AdminMcpTool | undefined =>
-  ADMIN_MCP_TOOLS.find(
-    (tool) => tool.name === name && tool.profiles.includes(profile),
-  );
+  tools.find((tool) => tool.name === name && tool.profiles.includes(profile));

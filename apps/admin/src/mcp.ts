@@ -5,7 +5,12 @@ import {
 import type { AdminMcpToolProfile } from "@moya/contracts/internal/admin-mcp";
 import { mcpPlugin } from "@payloadcms/plugin-mcp";
 import type { MCPPluginConfig } from "@payloadcms/plugin-mcp";
-import type { Field, FilterOptionsProps, PayloadRequest } from "payload";
+import type {
+  CollectionConfig,
+  Field,
+  FilterOptionsProps,
+  PayloadRequest,
+} from "payload";
 import { z } from "zod3";
 import { auditReservedCollection } from "./admin-mcp/audit";
 import { withKeyDoor } from "./admin-mcp/door";
@@ -82,6 +87,23 @@ const keyFields = (fields: Field[]): Field[] =>
         return { ...field, fields: keyFields(field.fields) } as Field;
       return field;
     });
+/**
+ * Payload adds its auth routes to this collection too, and refresh-token is the one
+ * that returns a row (payload dist/auth/operations/refresh.js): it reads the row
+ * whose id equals the caller's users.id, skips the session check because the local
+ * strategy is off, leaves overrideAccess on, and answers with the decrypted key. The
+ * others refuse under disableLocalStrategy, or answer nothing about a row (me, init,
+ * logout). Auth routes are pushed after these and the first match wins. A plain
+ * Response, not a thrown APIError: door.ts says why.
+ */
+const keyCollectionEndpoints: NonNullable<CollectionConfig["endpoints"]> = [
+  {
+    path: "/refresh-token",
+    method: "post",
+    handler: () =>
+      Response.json({ error: "RESERVED_SURFACE" }, { status: 403 }),
+  },
+];
 const TOOL_PROFILE_LABELS: Record<AdminMcpToolProfile, string> = {
   read: "只读",
   operate: "操作",
@@ -283,6 +305,7 @@ export const editorialMcp = () => {
         description: "管理自动化工具的访问密钥与操作权限。",
       },
       disableBulkEdit: true,
+      endpoints: keyCollectionEndpoints,
       access: {
         create: ({ req }) => isHumanOwner(req),
         read: ({ req }) => isHumanOwner(req),

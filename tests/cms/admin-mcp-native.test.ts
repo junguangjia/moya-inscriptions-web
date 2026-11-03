@@ -135,6 +135,15 @@ const callRaw = async (name: string, tool: string, args: unknown = {}) => {
   };
 };
 
+const auditRowCount = async (name: string) =>
+  Number(
+    (
+      await db().execute(
+        sql`SELECT count(*) AS rows FROM mcp_audit_events WHERE key_id = ${keyIds[name]}`,
+      )
+    ).rows[0]!.rows,
+  );
+
 const lastUsedOf = async (name: string) => {
   const { rows } = await db().execute(
     sql`SELECT last_used_at, updated_at FROM payload_mcp_api_keys WHERE id = ${keyIds[name]}`,
@@ -609,16 +618,18 @@ describe("the key door", () => {
         body: { errors: [{ message: "KEY_EXPIRED" }] },
       });
     }
-    expect(
-      await refusal(
-        await fetch(endpoint, {
-          headers: { accept: STREAMABLE_ACCEPT, ...bearer("ai-expired") },
-        }),
-      ),
-    ).toMatchObject({
-      status: 401,
-      body: { errors: [{ message: "KEY_EXPIRED" }] },
-    });
+    for (const name of ["ai-expired", "automation-expired"])
+      expect([
+        name,
+        await refusal(
+          await fetch(endpoint, {
+            headers: { accept: STREAMABLE_ACCEPT, ...bearer(name) },
+          }),
+        ),
+      ]).toMatchObject([
+        name,
+        { status: 401, body: { errors: [{ message: "KEY_EXPIRED" }] } },
+      ]);
   });
 
   it("answers 401 KEY_OWNER_BOUND for a key bound to the Owner", async () => {
@@ -880,6 +891,151 @@ describe("key lifecycle fields", () => {
   });
 });
 
+describe("one spelling of the URL", () => {
+  // Payload matches without regard to case and strips /globals, so each of these
+  // reached the handlers, outside Nginx's limit and body cap on the exact location.
+  const SPELLINGS = ["/api/MCP", "/api/Mcp", "/api/globals/mcp", "/api/mcp/"];
+  const LIST = rpc("tools/list");
+
+  const send = (pathname: string, method: string, headers = {}) =>
+    fetch(new URL(pathname, endpoint), {
+      method,
+      headers: {
+        accept: STREAMABLE_ACCEPT,
+        ...(method === "POST" ? { "content-type": "application/json" } : {}),
+        ...headers,
+      },
+      ...(method === "POST" ? { body: JSON.stringify(LIST) } : {}),
+    });
+
+  /** Next decodes the slug into `path` and leaves the request's own URL raw. */
+  const sendDecoded = (headers = {}) =>
+    handleEndpoints({
+      config,
+      path: "/api/Mcp",
+      request: new Request(new URL("/api/%4Dcp", endpoint), {
+        method: "POST",
+        headers: {
+          accept: STREAMABLE_ACCEPT,
+          "content-type": "application/json",
+          ...headers,
+        },
+        body: JSON.stringify(LIST),
+      }),
+    });
+
+  const credentials = () =>
+    [
+      ["no credential", {}],
+      ["an AI key", bearer("ai-full")],
+      ["an automation key", bearer("automation")],
+      ["a forged key", bearer("forged-spelling")],
+      [
+        "a connection token",
+        { authorization: bearerHeader(forgedConnectionToken) },
+      ],
+    ] as const;
+
+  it("answers 404 on every other spelling, for every credential, on both paths", async () => {
+    secrets["forged-spelling"] = randomBytes(32).toString("hex");
+    for (const [label, headers] of credentials()) {
+      for (const pathname of SPELLINGS)
+        for (const method of ["POST", "GET"]) {
+          const answer = await send(pathname, method, headers);
+          expect([label, pathname, method, answer.status]).toEqual([
+            label,
+            pathname,
+            method,
+            404,
+          ]);
+          expect(await answer.text()).not.toContain("admin_whoami");
+        }
+      const decoded = await sendDecoded(headers);
+      expect([label, "/api/%4Dcp", decoded.status]).toEqual([
+        label,
+        "/api/%4Dcp",
+        404,
+      ]);
+    }
+  });
+
+  it("costs an alias no door: no last-used stamp and no audit row", async () => {
+    await makeKey("spelling", aiOperator);
+    const before = await auditRowCount("spelling");
+    for (const pathname of SPELLINGS)
+      await send(pathname, "POST", bearer("spelling"));
+    await sendDecoded(bearer("spelling"));
+    expect((await lastUsedOf("spelling")).last_used_at).toBeNull();
+    expect(await auditRowCount("spelling")).toBe(before);
+    expect((await send("/api/mcp", "POST", bearer("spelling"))).status).toBe(
+      200,
+    );
+    expect((await lastUsedOf("spelling")).last_used_at).not.toBeNull();
+  });
+
+  it("still serves the configured path, on both paths, a query included", async () => {
+    for (const name of ["ai-full", "automation"]) {
+      const { client } = await connectClient(endpoint, bearer(name));
+      try {
+        expect(
+          (await client.listTools()).tools.map(({ name: tool }) => tool),
+        ).toContain("admin_whoami");
+      } finally {
+        await client.close();
+      }
+    }
+    expect((await send("/api/mcp?x=1", "POST", bearer("ai-full"))).status).toBe(
+      200,
+    );
+    expect((await send("/api/mcp", "POST")).status).toBe(401);
+    expect((await send("/api/mcp", "GET", bearer("ai-full"))).status).toBe(405);
+  });
+});
+
+describe("invisible characters in a key label", () => {
+  const hidden = `synthetic${"\u{E0041}"}label${"\u202E"}here${"\u200B"}`;
+
+  it("reach neither path's answer, and stay in the stored row", async () => {
+    for (const [name, user] of [
+      ["ai-hidden-label", aiOperator],
+      ["automation-hidden-label", automation],
+    ] as const) {
+      await makeKey(name, user, { label: hidden });
+      const client = await clientFor(name);
+      try {
+        const result = await client.callTool({
+          name: "admin_whoami",
+          arguments: {},
+        });
+        const { content } = result as { content: { text: string }[] };
+        const envelope = JSON.parse(content[0]!.text) as {
+          data: { key: { label: string } };
+          meta: { stripped?: boolean };
+        };
+        expect([name, envelope.data.key.label]).toEqual([
+          name,
+          "syntheticlabelhere",
+        ]);
+        expect(envelope.meta.stripped).toBe(true);
+      } finally {
+        await client.close();
+      }
+      const row = await payload.findByID({
+        collection: "payload-mcp-api-keys",
+        id: keyIds[name]!,
+        overrideAccess: true,
+        depth: 0,
+      });
+      expect(row.label).toBe(hidden);
+    }
+  });
+
+  it("set no flag on an ordinary label", async () => {
+    const answer = await callRaw("ai-full", "admin_whoami");
+    expect(answer.result.structuredContent!.meta).toEqual({});
+  });
+});
+
 describe("the plugin path stays the plugin path", () => {
   const replyOf = (result: unknown) =>
     JSON.parse(
@@ -999,6 +1155,33 @@ describe("the plugin path stays the plugin path", () => {
     }
   });
 
+  it("refuses admin_whoami with no arguments here, before the guard, and answers it with {}", async () => {
+    // Recorded in the task's accepted limits: the plugin's SDK server validates the
+    // absent value against its object schema. The native path takes the same call.
+    const client = await clientFor("automation");
+    const before = await auditRowCount("automation");
+    try {
+      const refused = await client.callTool({ name: "admin_whoami" });
+      expect(refused.isError).toBe(true);
+      expect(JSON.stringify(refused.content)).toContain("-32602");
+      expect(await auditRowCount("automation")).toBe(before);
+      expect(
+        replyOf(await client.callTool({ name: "admin_whoami", arguments: {} })),
+      ).toMatchObject({ ok: true, data: { path: "plugin" } });
+      expect(await auditRowCount("automation")).toBe(before + 1);
+    } finally {
+      await client.close();
+    }
+    const native = await clientFor("ai-read");
+    try {
+      await expect(
+        native.callTool({ name: "admin_whoami" }),
+      ).resolves.toMatchObject({ structuredContent: { ok: true } });
+    } finally {
+      await native.close();
+    }
+  });
+
   it("answers artvenn_* NOT_FOUND outside Development, even for a key with the tick", async () => {
     await makeKey("artvenn", automation, {
       "payload-mcp-tool": { artvennUsersFind: true },
@@ -1017,6 +1200,10 @@ describe("the plugin path stays the plugin path", () => {
           }),
         ),
       ).toEqual({ ok: false, code: "NOT_FOUND" });
+      // So admin_whoami, which says what this key can call, leaves it out.
+      expect(
+        replyOf(await client.callTool({ name: "admin_whoami", arguments: {} })),
+      ).toMatchObject({ data: { tools: ["admin_whoami"] } });
     } finally {
       await client.close();
     }

@@ -578,7 +578,9 @@ sensitive switches) and the audit list is `/admin/collections/mcp-audit-events`.
 Both need an Owner browser session. Its migrations add `mcp_control` and
 `mcp_audit_events`, so re-apply `infra/development/grant-cms-runtime.sql` after
 migrating: without those grants the door answers 503 and every tool answers
-`AUDIT_UNAVAILABLE`. Pause takes effect on the next request and needs no
+`AUDIT_UNAVAILABLE`, and the Owner's own account and key edits, a password
+change and a key renewal included, answer 503 `AUDIT_UNAVAILABLE` and roll back.
+Sign-in is not affected. Pause takes effect on the next request and needs no
 restart. It does not cover Owner or automation REST keys on `/api/editorial/*`.
 
 Client settings stay on the client machine and never on this host:

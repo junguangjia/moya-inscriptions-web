@@ -18,6 +18,13 @@ export { guardCall, withGuard } from "./guard";
 export { changedFieldNames, McpAuditEvents, writeAuditEvent } from "./audit";
 export { McpControl } from "./control/global";
 export { readControlPage } from "./control/page-data";
-export { readMcpControl } from "./control/state";
+export { controlFor, readMcpControl } from "./control/state";
 export { ADMIN_MCP_INSTRUCTIONS } from "./native";
-export { ADMIN_MCP_TOOLS, toolFor, toolListingFor } from "./tools";
+export {
+  ADMIN_MCP_TOOLS,
+  listingTable,
+  toolFor,
+  toolListingFor,
+} from "./tools";
+export type { AdminMcpTool } from "./tools";
+export { whoamiPluginTool } from "./tools/whoami";

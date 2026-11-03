@@ -88,7 +88,7 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     retryable: false,
   },
   AUDIT_UNAVAILABLE: {
-    hint: "The audit ledger could not record this call, so nothing ran. Retry shortly.",
+    hint: "The audit ledger could not record this call, so nothing was done or delivered. Retry shortly.",
     retryable: true,
   },
   AI_CREDENTIAL_NOT_CONFIGURED: {
@@ -155,6 +155,26 @@ const withRepeat = (
 };
 
 /**
+ * Unicode tag characters, bidi controls and zero-width characters: text a model
+ * reads and a person does not. Variation selectors stay, because rare Chinese
+ * glyph variants use them.
+ */
+const INVISIBLE =
+  /[\u{E0000}-\u{E007F}\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069\u180E\u200B-\u200D\u2060-\u2064\uFEFF]/gu;
+
+/**
+ * From returned text only, never from stored data. On the serialized form, which
+ * reaches every string and key at once and has none of these characters of its own.
+ */
+const withoutInvisible = (envelope: AdminMcpEnvelope): AdminMcpEnvelope => {
+  const text = JSON.stringify(envelope);
+  const clean = text.replace(INVISIBLE, "");
+  if (clean === text) return envelope;
+  const stripped = JSON.parse(clean) as AdminMcpEnvelope;
+  return { ...stripped, meta: { ...stripped.meta, stripped: true } };
+};
+
+/**
  * The tool result of one call: the JSON in content[0].text and structuredContent,
  * validated on the way out, with isError exactly when ok is false.
  */
@@ -163,7 +183,7 @@ export const toolResult = (
   envelope: AdminMcpEnvelope,
 ) => {
   const checked = adminMcpEnvelopeSchema.parse(
-    withRepeat(`${scope.keyId}:${scope.tool}`, envelope),
+    withRepeat(`${scope.keyId}:${scope.tool}`, withoutInvisible(envelope)),
   );
   return {
     content: [{ type: "text" as const, text: JSON.stringify(checked) }],

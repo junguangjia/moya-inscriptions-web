@@ -174,11 +174,12 @@ export const verifyAdminMcpSurfaces = async ({
       (await plugin.listTools()).tools.map(({ name }) => name).sort(),
       ["admin_whoami", "artvenn_users_find", "editorial_query"],
     );
-    assert.equal(
-      replyOf(await plugin.callTool({ name: "admin_whoami", arguments: {} }))
-        .data.path,
-      "plugin",
-    );
+    const pluginWhoami = replyOf(
+      await plugin.callTool({ name: "admin_whoami", arguments: {} }),
+    ).data;
+    assert.equal(pluginWhoami.path, "plugin");
+    // Listed by the plugin, but this answer says what the key can call.
+    assert.deepEqual(pluginWhoami.tools, ["editorial_query", "admin_whoami"]);
     assert.deepEqual(
       replyOf(
         await plugin.callTool({
@@ -230,6 +231,40 @@ export const verifyAdminMcpSurfaces = async ({
     ).status,
     400,
   );
+
+  setStage("admin-mcp-one-path-spelling");
+  // On a real Next route: it decodes the slug, so only here does %4D reach dispatch.
+  for (const spelling of ["MCP", "Mcp", "globals/mcp", "%4Dcp"])
+    for (const headers of [
+      {},
+      aiHeaders,
+      bearer(automationKey.secret),
+      bearer(secret()),
+    ]) {
+      const answer = await globalThis.fetch(`${origin}/api/${spelling}`, {
+        method: "POST",
+        redirect: "manual",
+        headers: {
+          accept: ACCEPT,
+          "content-type": "application/json",
+          ...headers,
+        },
+        body: JSON.stringify(rpc("tools/list")),
+      });
+      assert.equal(answer.status, 404, spelling);
+    }
+  const trailing = await globalThis.fetch(`${origin}/api/mcp/`, {
+    method: "POST",
+    redirect: "manual",
+    headers: {
+      accept: ACCEPT,
+      "content-type": "application/json",
+      ...aiHeaders,
+    },
+    body: JSON.stringify(rpc("tools/list")),
+  });
+  assert([308, 404].includes(trailing.status));
+  assert.equal((await post(rpc("ping"), aiHeaders)).status, 200);
 
   setStage("admin-mcp-door-refusals");
   const refusal = async (headers) => {
@@ -290,6 +325,7 @@ export const verifyAdminMcpSurfaces = async ({
   const surfaces = [
     ["GET", "payload-mcp-api-keys?limit=1"],
     ["POST", "payload-mcp-api-keys", { user: automation.id, label: "refused" }],
+    ["POST", "payload-mcp-api-keys/refresh-token"],
     ["PATCH", `users/${automation.id}`, { agentPrincipal: "agent-refused" }],
     ["GET", "mcp-audit-events?limit=1"],
     ["POST", "mcp-audit-events", { callId: run }],
@@ -344,6 +380,55 @@ export const verifyAdminMcpSurfaces = async ({
   ])
     await asOwner("GET", route);
   assert.equal((await asOwner("GET", "users/me")).user.id, access.ownerId);
+  // Shadowed for everyone, the Owner's session too: its own refresh is on users.
+  const keyRefresh = await page.request.post(
+    `${origin}/api/payload-mcp-api-keys/refresh-token`,
+  );
+  assert.equal(keyRefresh.status(), 403);
+  assert.deepEqual(await keyRefresh.json(), { error: "RESERVED_SURFACE" });
+  assert.equal(
+    (await page.request.post(`${origin}/api/users/refresh-token`)).status(),
+    200,
+  );
+
+  setStage("admin-mcp-owner-key-form");
+  // The reserved surfaces rest on the render path passing the session's real
+  // headers, and until now these three screens had only REST behind them.
+  const formLabel = `synthetic-form-${run}`;
+  await page.goto(`${origin}/admin/collections/payload-mcp-api-keys/create`);
+  await page.locator('input[name="label"]').fill(formLabel);
+  const userPicker = page.locator("#field-user").getByRole("combobox");
+  await userPicker.click();
+  await userPicker.fill(automation.email);
+  await page
+    .getByRole("option", { name: automation.email, exact: true })
+    .click();
+  const keySaved = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/api/payload-mcp-api-keys" &&
+      response.request().method() === "POST",
+  );
+  await page.locator("#action-save").click();
+  const savedKey = await keySaved;
+  assert.equal(savedKey.status(), 201);
+  const { doc: formKey } = await savedKey.json();
+  assert.equal(formKey.label, formLabel);
+  assert.equal(formKey.user.id ?? formKey.user, automation.id);
+  await page.waitForURL(
+    (url) =>
+      url.pathname === `/admin/collections/payload-mcp-api-keys/${formKey.id}`,
+  );
+
+  setStage("admin-mcp-owner-account-screens");
+  // Another account's row: only the Owner's session reads past its own.
+  await page.goto(
+    `${origin}/admin/collections/users?where[email][equals]=${encodeURIComponent(automation.email)}`,
+  );
+  await expect(page.getByText(automation.email).first()).toBeVisible();
+  await page.goto(`${origin}/admin/account`);
+  await expect(page.locator('input[name="email"]')).toHaveValue(
+    access.ownerEmail,
+  );
 
   setStage("admin-mcp-page-loaded-first");
   // This session opened an Admin page before any route, the order a production

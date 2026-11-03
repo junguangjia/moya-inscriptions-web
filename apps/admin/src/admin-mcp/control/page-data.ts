@@ -1,7 +1,6 @@
 import { sql, type PostgresAdapter } from "@payloadcms/db-postgres";
 import {
   ADMIN_MCP_COMPLIANCE_PHRASES,
-  ADMIN_MCP_DEFAULT_THRESHOLD,
   ADMIN_MCP_SENSITIVE_CATEGORIES,
   AI_POLICY_DISCLOSURE,
 } from "@moya/contracts/internal/admin-mcp";
@@ -99,7 +98,7 @@ export const readControlPage = async (
   }
   return {
     pause: control.pause === true,
-    threshold: control.threshold ?? ADMIN_MCP_DEFAULT_THRESHOLD,
+    threshold: control.threshold,
     switches: ADMIN_MCP_SENSITIVE_CATEGORIES.map((category) => ({
       category,
       label: SWITCH_LABELS[category],

@@ -29,6 +29,9 @@ export interface GuardOutcome {
   readonly ok: boolean;
   readonly code: string;
   readonly responseBytes?: number;
+  /** For a call that names its target only in its answer, such as a create. */
+  readonly targetType?: string;
+  readonly targetId?: string;
 }
 
 /**
@@ -59,8 +62,8 @@ export const guardCall = async <T>(
   };
   const finish = ({ responseBytes, ...outcome }: GuardOutcome) =>
     writeAuditEvent(req.payload, {
-      ...call,
       ...outcome,
+      ...call,
       phase: "finish",
       durationMs: Math.round(performance.now() - started),
       ...(responseBytes === undefined ? {} : { responseBytes }),
@@ -128,29 +131,38 @@ const referencesOf = (
   };
 };
 
-/** Both plugin reply shapes carry `ok` and a fixed `code` in the text, when they fail. */
-const pluginOutcomeOf = (
-  result: Awaited<ReturnType<PluginTool["handler"]>>,
-): GuardOutcome => {
-  const text = result.content[0]?.text ?? "";
-  let reply: { ok?: unknown; code?: unknown } = {};
-  try {
-    reply = JSON.parse(text) as typeof reply;
-  } catch {
-    // Not JSON: a success with nothing to read.
-  }
-  const ok = reply.ok !== false;
-  return {
-    ok,
-    code:
-      typeof reply.code === "string" && /^[A-Z0-9_]{1,64}$/u.test(reply.code)
-        ? reply.code
-        : ok
-          ? "OK"
-          : "REJECTED",
-    responseBytes: Buffer.byteLength(text),
+/**
+ * Both plugin reply shapes carry `ok` and a fixed `code` in the text, when they fail.
+ * A save with no id names the record it created only here, so the finish row takes
+ * the id from the reply: the start row cannot know it.
+ */
+const pluginOutcomeOf =
+  (tool: string) =>
+  (result: Awaited<ReturnType<PluginTool["handler"]>>): GuardOutcome => {
+    const text = result.content[0]?.text ?? "";
+    let reply: { ok?: unknown; code?: unknown; id?: unknown } = {};
+    try {
+      reply = JSON.parse(text) as typeof reply;
+    } catch {
+      // Not JSON: a success with nothing to read.
+    }
+    const ok = reply.ok !== false;
+    return {
+      ok,
+      code:
+        typeof reply.code === "string" && /^[A-Z0-9_]{1,64}$/u.test(reply.code)
+          ? reply.code
+          : ok
+            ? "OK"
+            : "REJECTED",
+      responseBytes: Buffer.byteLength(text),
+      ...(tool.startsWith("editorial_") &&
+      ok &&
+      (typeof reply.id === "string" || typeof reply.id === "number")
+        ? { targetType: "catalogs", targetId: String(reply.id) }
+        : {}),
+    };
   };
-};
 
 const chains = new WeakMap<PayloadRequest, Promise<unknown>>();
 
@@ -174,7 +186,7 @@ export const withGuard = (tool: PluginTool): PluginTool => ({
           ...referencesOf(tool.name, args),
         },
         async () => tool.handler(args, req, extra),
-        pluginOutcomeOf,
+        pluginOutcomeOf(tool.name),
       );
       return "refused" in guarded
         ? {

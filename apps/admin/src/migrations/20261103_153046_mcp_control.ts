@@ -5,8 +5,10 @@ import {
 } from "@payloadcms/db-postgres";
 
 // admin-mcp-completion-v1 (amendment 2026-11-03, section 10). The Owner's control
-// global: pause, threshold and four switches, all starting closed. A global has
-// no row until its first save, and the door reads a missing row as these defaults.
+// global: pause, threshold and four switches, all starting closed. Its one row
+// exists from here on, so the door, the page and a save always mean the same row:
+// the index on a constant refuses a second. Neither is in the Payload snapshot,
+// which holds only what the config generates, so no later migration will drop them.
 export async function up({ db }: MigrateUpArgs): Promise<void> {
   await db.execute(sql`
    CREATE TABLE "mcp_control" (
@@ -36,7 +38,9 @@ export async function up({ db }: MigrateUpArgs): Promise<void> {
   CREATE INDEX "mcp_control_dm_opened_by_idx" ON "mcp_control" USING btree ("dm_opened_by_id");
   CREATE INDEX "mcp_control_evidence_opened_by_idx" ON "mcp_control" USING btree ("evidence_opened_by_id");
   CREATE INDEX "mcp_control_raw_ip_opened_by_idx" ON "mcp_control" USING btree ("raw_ip_opened_by_id");
-  CREATE INDEX "mcp_control_self_only_opened_by_idx" ON "mcp_control" USING btree ("self_only_opened_by_id");`);
+  CREATE INDEX "mcp_control_self_only_opened_by_idx" ON "mcp_control" USING btree ("self_only_opened_by_id");
+  CREATE UNIQUE INDEX "mcp_control_singleton" ON "mcp_control" ((true));
+  INSERT INTO "mcp_control" ("updated_at", "created_at") VALUES (now(), now());`);
 }
 
 export async function down({ db }: MigrateDownArgs): Promise<void> {

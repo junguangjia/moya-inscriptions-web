@@ -197,7 +197,8 @@ describe
         (
           await setupPool().query(
             `SELECT tgenabled, pg_get_triggerdef(oid) AS definition FROM pg_trigger
-             WHERE tgrelid = 'public.mcp_audit_events'::regclass AND NOT tgisinternal`,
+             WHERE tgrelid = 'public.mcp_audit_events'::regclass AND NOT tgisinternal
+             ORDER BY tgname`,
           )
         ).rows,
       ).toEqual([
@@ -205,6 +206,12 @@ describe
           tgenabled: "O",
           definition: expect.stringContaining(
             "BEFORE DELETE OR UPDATE ON public.mcp_audit_events FOR EACH ROW EXECUTE FUNCTION mcp_audit_events_refuse_change()",
+          ) as string,
+        },
+        {
+          tgenabled: "O",
+          definition: expect.stringContaining(
+            "BEFORE TRUNCATE ON public.mcp_audit_events FOR EACH STATEMENT EXECUTE FUNCTION mcp_audit_events_refuse_change()",
           ) as string,
         },
       ]);
@@ -425,9 +432,9 @@ describe
             scopeCatalogIds: [catalogId],
           },
         });
-        // The two named sequences: without them the first audit insert fails and
-        // every tool answers AUDIT_UNAVAILABLE. Creating the account above already
-        // wrote a ledger row through this role; the global's first save needs its own.
+        // Without the ledger's sequence the first audit insert fails and every tool
+        // answers AUDIT_UNAVAILABLE. Creating the account above already wrote a row
+        // through this role; this writes one directly, then saves the seeded control row.
         await writeAuditEvent(payload, {
           callId: randomUUID(),
           phase: "finish",

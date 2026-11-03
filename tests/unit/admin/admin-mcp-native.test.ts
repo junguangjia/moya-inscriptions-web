@@ -15,19 +15,23 @@ import {
   ADMIN_MCP_INSTRUCTIONS,
   ADMIN_MCP_TOOLS,
   CODE_GUIDE,
+  type AdminMcpTool,
   adminMcpDispatch,
   adminMcpDispatchPlugin,
   admitKey,
   admittedKeyOf,
   bearerKeyOf,
+  changedFieldNames,
   failedEnvelope,
   guardCall,
   inputInvalidEnvelope,
+  listingTable,
   markRequestStart,
   okEnvelope,
   toolFor,
   toolListingFor,
   toolResult,
+  whoamiPluginTool,
   withGuard,
   withKeyDoor,
 } from "admin/admin-mcp";
@@ -66,6 +70,12 @@ describe("code guide", () => {
     );
   });
 
+  it("says an unrecorded call did nothing and delivered nothing, because a read has already run", () => {
+    expect(failedEnvelope("AUDIT_UNAVAILABLE").hint).toBe(
+      "The audit ledger could not record this call, so nothing was done or delivered. Retry shortly.",
+    );
+  });
+
   it("builds a failed envelope from the guide and omits a false retryable", () => {
     expect(
       adminMcpEnvelopeSchema.parse(failedEnvelope("OUTCOME_UNKNOWN")),
@@ -97,6 +107,65 @@ describe("tool result", () => {
     const failure = toolResult(scope(100), invalid());
     expect(failure.isError).toBe(true);
     expect(failure.structuredContent.code).toBe("INPUT_INVALID");
+  });
+
+  it("strips tag, bidi and zero-width characters from returned text, and says so", () => {
+    const hidden = (text: string) => ({
+      label: text,
+      nested: [{ [`k${"\u200B"}ey`]: text }],
+    });
+    for (const [name, character] of [
+      ["tag", "\u{E0041}"],
+      ["language tag", "\u{E0001}"],
+      ["cancel tag", "\u{E007F}"],
+      ["right-to-left override", "\u202E"],
+      ["pop directional", "\u202C"],
+      ["right-to-left isolate", "\u2067"],
+      ["pop isolate", "\u2069"],
+      ["left-to-right mark", "\u200E"],
+      ["right-to-left mark", "\u200F"],
+      ["Arabic letter mark", "\u061C"],
+      ["zero-width space", "\u200B"],
+      ["zero-width non-joiner", "\u200C"],
+      ["zero-width joiner", "\u200D"],
+      ["word joiner", "\u2060"],
+      ["invisible plus", "\u2064"],
+      ["Mongolian vowel separator", "\u180E"],
+      ["byte order mark", "\uFEFF"],
+    ] as const) {
+      const result = toolResult(
+        scope(300),
+        okEnvelope(hidden(`碑${character}刻`)),
+      );
+      expect([name, result.structuredContent.data]).toEqual([
+        name,
+        { label: "碑刻", nested: [{ key: "碑刻" }] },
+      ]);
+      expect(result.structuredContent.meta).toEqual({ stripped: true });
+      expect(result.content[0]!.text).not.toContain(character);
+      expect(JSON.parse(result.content[0]!.text)).toEqual(
+        result.structuredContent,
+      );
+    }
+  });
+
+  it("leaves ordinary text alone, a rare glyph's variation selector included, with no flag", () => {
+    const text = '摩崖石刻 \u{20000}\u{E0100} e\u0301 🪨 \\u200b\n"quoted"';
+    const result = toolResult(scope(301), okEnvelope({ text }));
+    expect(result.structuredContent.data).toEqual({ text });
+    expect(result.structuredContent.meta).toEqual({});
+  });
+
+  it("strips a failure too, and never drops its other fields", () => {
+    const envelope = failedEnvelope("STATE_CONFLICT", { state: "a\u200Bb" });
+    expect(toolResult(scope(302), envelope).structuredContent).toEqual({
+      ...envelope,
+      state: "ab",
+      meta: { stripped: true },
+    });
+    // The input is what a caller may still hold, so it stays as it was.
+    expect(envelope.state).toBe("a\u200Bb");
+    expect(envelope.meta).toEqual({});
   });
 
   it("refuses to send an envelope that breaks the schema", () => {
@@ -192,6 +261,83 @@ describe("tool table", () => {
     expect(toolFor("read", "editorial_query")).toBeUndefined();
   });
 
+  describe("with a table holding a write tool", () => {
+    const fixture = (
+      name: string,
+      profiles: AdminMcpTool["profiles"],
+      klass: AdminMcpTool["klass"] = "read",
+    ): AdminMcpTool => ({
+      ...ADMIN_MCP_TOOLS[0]!,
+      name,
+      klass,
+      profiles,
+    });
+    // Out of alphabetical order on purpose: the table's own order is the promise.
+    const tools = [
+      fixture("zeta_read", ADMIN_MCP_TOOL_PROFILES),
+      fixture("fixture_write", ["operate", "full"], "reversible"),
+      ADMIN_MCP_TOOLS[0]!,
+      fixture("alpha_irreversible", ["full"], "irreversible"),
+    ];
+    const table = listingTable(tools);
+    const names = (profile: (typeof ADMIN_MCP_TOOL_PROFILES)[number]) =>
+      toolListingFor(profile, false, table).map(({ name }) => name);
+
+    it("keeps a write tool out of the read profile, listed and on lookup", () => {
+      expect(names("read")).toEqual(["zeta_read", "admin_whoami"]);
+      expect(toolFor("read", "fixture_write", tools)).toBeUndefined();
+      expect(toolFor("read", "alpha_irreversible", tools)).toBeUndefined();
+      expect(toolFor("read", "zeta_read", tools)?.name).toBe("zeta_read");
+    });
+
+    it("offers it on operate and full only, each profile to its own tools", () => {
+      expect(names("operate")).toEqual([
+        "zeta_read",
+        "fixture_write",
+        "admin_whoami",
+      ]);
+      expect(toolFor("operate", "fixture_write", tools)?.name).toBe(
+        "fixture_write",
+      );
+      expect(toolFor("operate", "alpha_irreversible", tools)).toBeUndefined();
+      expect(names("full")).toEqual([
+        "zeta_read",
+        "fixture_write",
+        "admin_whoami",
+        "alpha_irreversible",
+      ]);
+      expect(toolFor("full", "alpha_irreversible", tools)?.name).toBe(
+        "alpha_irreversible",
+      );
+    });
+
+    it("lists in the table's own order, not sorted and not reversed", () => {
+      expect(names("full")).not.toEqual([...names("full")].sort());
+      expect(names("full")[0]).toBe("zeta_read");
+      expect(names("full").at(-1)).toBe("alpha_irreversible");
+    });
+
+    it("leaves only admin_whoami while paused, whatever the profile allows", () => {
+      for (const profile of ADMIN_MCP_TOOL_PROFILES)
+        expect(
+          toolListingFor(profile, true, table).map(({ name }) => name),
+        ).toEqual(["admin_whoami"]);
+    });
+
+    it("finds nothing in another table: the default is the shipped one", () => {
+      expect(toolFor("full", "fixture_write")).toBeUndefined();
+      expect(toolFor("full", "admin_whoami", [])).toBeUndefined();
+    });
+  });
+
+  // Section 16's checked-in list: a change to what a client is told shows in review.
+  it.each(ADMIN_MCP_TOOL_PROFILES)(
+    "matches the checked-in tools/list for the %s profile",
+    (profile) => {
+      expect(toolListingFor(profile, false)).toMatchSnapshot();
+    },
+  );
+
   it("lists only admin_whoami while paused, on every profile", () => {
     for (const profile of ADMIN_MCP_TOOL_PROFILES)
       expect(toolListingFor(profile, true).map(({ name }) => name)).toEqual([
@@ -217,7 +363,9 @@ describe("plugin path serialization", () => {
     ({
       payload: {
         create: vi.fn(() => Promise.resolve({})),
-        db: { drizzle: { execute: () => Promise.resolve({ rows: [] }) } },
+        db: {
+          drizzle: { execute: () => Promise.resolve({ rows: [CONTROL_ROW] }) },
+        },
         logger: { error: vi.fn() },
       },
     }) as unknown as PayloadRequest;
@@ -361,6 +509,43 @@ describe("the guard", () => {
     });
     expect(rows[0]?.durationMs).toEqual(expect.any(Number));
     expect(rows[0]?.responseBytes).toBe(8);
+  });
+
+  it("records a created id from the reply on the finish, when the call named none", async () => {
+    const { req, create } = request();
+    await pluginTool("editorial_save_draft", () =>
+      Promise.resolve(reply(JSON.stringify({ id: 58, revision: 1 }))),
+    )({ idempotencyKey: "free text, not an id" }, req, undefined);
+    const [start, finish] = rowsOf(create);
+    expect(start).not.toHaveProperty("targetId");
+    expect(finish).toMatchObject({
+      phase: "finish",
+      targetType: "catalogs",
+      targetId: "58",
+    });
+  });
+
+  it("keeps the id a call named, and takes none from a refusal or from another family", async () => {
+    const named = request();
+    await pluginTool("editorial_save_draft", () =>
+      Promise.resolve(reply(JSON.stringify({ id: 58 }))),
+    )({ id: 41 }, named.req, undefined);
+    expect(rowsOf(named.create).map((row) => row.targetId)).toEqual([
+      "41",
+      "41",
+    ]);
+    const refused = request();
+    await pluginTool("editorial_save_draft", () =>
+      Promise.resolve(
+        reply(JSON.stringify({ ok: false, code: "REFUSED", id: 58 })),
+      ),
+    )({}, refused.req, undefined);
+    expect(rowsOf(refused.create)[1]).not.toHaveProperty("targetId");
+    const other = request();
+    await pluginTool("artvenn_comments_read", () =>
+      Promise.resolve(reply(JSON.stringify({ id: 58 }))),
+    )({}, other.req, undefined);
+    expect(rowsOf(other.create)[0]).not.toHaveProperty("targetId");
   });
 
   it("leaves a caller's dedupe key out of the row unless it reads as an id", async () => {
@@ -524,7 +709,9 @@ describe("the guard", () => {
 describe("the door", () => {
   const future = () => new Date(Date.now() + 60_000).toISOString();
   const request = (
-    execute = vi.fn<ExecuteQuery>(() => Promise.resolve({ rows: [] })),
+    execute = vi.fn<ExecuteQuery>(() =>
+      Promise.resolve({ rows: [CONTROL_ROW] }),
+    ),
   ) => ({
     req: {
       headers: new Headers(),
@@ -659,7 +846,7 @@ describe("the door", () => {
       vi.fn<ExecuteQuery>((query) =>
         isLastUsedWrite(query)
           ? Promise.reject(new Error("db"))
-          : Promise.resolve({ rows: [] }),
+          : Promise.resolve({ rows: [CONTROL_ROW] }),
       ),
     );
     await expect(
@@ -670,7 +857,7 @@ describe("the door", () => {
     });
   });
 
-  it("takes the pause from the control row, and reads a row never saved as not paused", async () => {
+  it("takes the pause from the control row", async () => {
     const paused = request(
       vi.fn<ExecuteQuery>(() =>
         Promise.resolve({ rows: [{ ...CONTROL_ROW, pause: true }] }),
@@ -679,10 +866,22 @@ describe("the door", () => {
     await expect(
       admitKey(paused.req, key("ai_operator"), "native"),
     ).resolves.toMatchObject({ paused: true });
-    const unsaved = request();
     await expect(
-      admitKey(unsaved.req, key("ai_operator"), "native"),
+      admitKey(request().req, key("ai_operator"), "native"),
     ).resolves.toMatchObject({ paused: false });
+  });
+
+  it("stays shut with no control row, rather than reading it as not paused", async () => {
+    const { req } = request(
+      vi.fn<ExecuteQuery>(() => Promise.resolve({ rows: [] })),
+    );
+    await expect(
+      admitKey(req, key("ai_operator"), "native"),
+    ).rejects.toMatchObject({
+      status: 503,
+      message: "MCP_CONTROL_UNAVAILABLE",
+    });
+    expect(admittedKeyOf(req)).toBeUndefined();
   });
 
   it("answers 503 when it cannot read the pause, before stamping last used", async () => {
@@ -712,7 +911,7 @@ describe("the door", () => {
 });
 
 describe("the key door around the connection door", () => {
-  const request = (authorization: string, rows: unknown[] = []) =>
+  const request = (authorization: string, rows: unknown[] = [CONTROL_ROW]) =>
     ({
       headers: new Headers({ authorization }),
       payload: {
@@ -808,18 +1007,23 @@ describe("dispatch", () => {
     authorization: string | null,
     docs: unknown[] = [],
     method = "POST",
+    pathname = "/api/mcp",
   ) => {
     const find = vi.fn(() => Promise.resolve({ docs }));
     return {
       find,
       req: {
         method,
+        url: `http://synthetic${pathname}`,
         headers: new Headers(authorization ? { authorization } : {}),
         payload: {
+          config: { routes: { api: "/api" } },
           secret: "synthetic",
           find,
           db: {
-            drizzle: { execute: vi.fn(() => Promise.resolve({ rows: [] })) },
+            drizzle: {
+              execute: vi.fn(() => Promise.resolve({ rows: [CONTROL_ROW] })),
+            },
           },
           logger: { warn: vi.fn(), error: vi.fn() },
         },
@@ -865,9 +1069,127 @@ describe("dispatch", () => {
     });
   });
 
+  describe.each(["/api/MCP", "/api/Mcp", "/api/globals/mcp", "/api/%4Dcp"])(
+    "for the spelling %s",
+    (pathname) => {
+      it.each([
+        ["no credential", null, []],
+        ["an AI key", "Bearer abc", [keyFor("ai_operator")]],
+        ["an automation key", "Bearer abc", [keyFor("automation")]],
+        ["a connection token", bearerAny, []],
+      ])(
+        "answers 404 to %s, with no lookup and no handler",
+        async (_label, authorization, docs) => {
+          const plugin = vi.fn(() => Promise.resolve(fromPlugin));
+          for (const method of ["POST", "GET"]) {
+            const { req, find } = request(
+              authorization,
+              docs,
+              method,
+              pathname,
+            );
+            const answer = await adminMcpDispatch(plugin)(req);
+            expect(answer.status).toBe(404);
+            expect(find).not.toHaveBeenCalled();
+            expect(req.user).toBeUndefined();
+            // No clock started either: the next read of it is a fresh one.
+            expect(admittedKeyOf(req)).toBeUndefined();
+          }
+          expect(plugin).not.toHaveBeenCalled();
+        },
+      );
+    },
+  );
+
+  it("takes the path from Payload's configured api route, and ignores a query", async () => {
+    const plugin = vi.fn(() => Promise.resolve(fromPlugin));
+    const moved = request(null, [], "POST", "/cms/mcp");
+    (moved.req.payload.config.routes as { api: string }).api = "/cms";
+    await expect(adminMcpDispatch(plugin)(moved.req)).resolves.toBe(fromPlugin);
+    const stale = request(null, [], "POST", "/api/mcp");
+    (stale.req.payload.config.routes as { api: string }).api = "/cms";
+    expect((await adminMcpDispatch(plugin)(stale.req)).status).toBe(404);
+    const query = request(null, [], "POST", "/api/mcp?x=1");
+    await expect(adminMcpDispatch(plugin)(query.req)).resolves.toBe(fromPlugin);
+  });
+
   it("declares a later order than the MCP plugin, because Payload sorts by it", () => {
     // The MCP plugin declares 10. The protocol test proves the wrapping itself.
     expect(adminMcpDispatchPlugin().order).toBe(11);
+  });
+});
+
+describe("admin_whoami on the plugin path", () => {
+  const handler = whoamiPluginTool([
+    "editorial_query",
+    "editorial_read",
+    "artvenn_users_find",
+    "artvenn_comments_query",
+  ]).handler;
+  const whoami = async (nodeEnv: string) => {
+    const req = {
+      headers: new Headers(),
+      payload: {
+        db: {
+          drizzle: {
+            execute: () => Promise.resolve({ rows: [CONTROL_ROW] }),
+          },
+        },
+        logger: { warn: vi.fn(), error: vi.fn() },
+      },
+    } as unknown as PayloadRequest;
+    await admitKey(
+      req,
+      {
+        id: 700 + nodeEnv.length,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        "payload-mcp-tool": {
+          editorialQuery: true,
+          artvennUsersFind: true,
+          artvennCommentsQuery: true,
+        },
+        user: { id: 3, role: "automation" },
+      } as never,
+      "plugin",
+    );
+    vi.stubEnv("NODE_ENV", nodeEnv);
+    try {
+      const { content } = await handler({}, req, undefined);
+      return (JSON.parse(content[0]!.text) as { data: { tools: string[] } })
+        .data.tools;
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  };
+
+  it.each(["production", "test"])(
+    "leaves artvenn_* out under NODE_ENV=%s, where they answer NOT_FOUND",
+    async (nodeEnv) => {
+      expect(await whoami(nodeEnv)).toEqual([
+        "editorial_query",
+        "admin_whoami",
+      ]);
+    },
+  );
+
+  it("names artvenn_* under NODE_ENV=development, for a key with the tick", async () => {
+    expect(await whoami("development")).toEqual([
+      "editorial_query",
+      "artvenn_users_find",
+      "artvenn_comments_query",
+      "admin_whoami",
+    ]);
+  });
+});
+
+describe("changed field names", () => {
+  it("never names a row's id, so a first save reads as what the Owner changed", () => {
+    expect(changedFieldNames({ pause: false }, { id: 1, pause: true })).toEqual(
+      ["pause"],
+    );
+    expect(changedFieldNames({}, { id: 1, label: "synthetic" })).toEqual([
+      "label",
+    ]);
   });
 });
 

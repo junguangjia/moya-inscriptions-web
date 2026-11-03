@@ -1,18 +1,31 @@
 import { definePlugin } from "payload";
-import type { PayloadHandler, TypedUser } from "payload";
+import type { PayloadHandler, PayloadRequest, TypedUser } from "payload";
 
 import { isConnectionToken } from "../agent-connections/contracts";
 import { admitKey, bearerKeyOf, findKey, markRequestStart } from "./door";
 import { nativeMcp } from "./native";
 
 /**
+ * Payload matches a route without regard to case and strips `/globals`, and Next
+ * decodes the slug, so /api/MCP, /api/globals/mcp and /api/%4Dcp all reach this
+ * handler. Nginx's rate limit and body limit sit on the one exact location, so
+ * only the request's own raw pathname counts: `new URL` keeps percent-encoding.
+ */
+const isTheConfiguredPath = (req: PayloadRequest): boolean =>
+  new URL(req.url ?? "http://invalid").pathname ===
+  `${req.payload.config.routes.api}/mcp`;
+
+/**
  * One URL, two paths. A key bound to ai_operator goes to the native handler;
  * every other credential, refusals included, reaches the plugin handler
- * untouched, with its body unread.
+ * untouched, with its body unread. Another spelling of the URL reaches neither,
+ * and costs no key lookup.
  */
 export const adminMcpDispatch =
   (pluginHandler: PayloadHandler): PayloadHandler =>
   async (req) => {
+    if (!isTheConfiguredPath(req))
+      return Response.json({ message: "Not found" }, { status: 404 });
     markRequestStart(req);
     const presented = bearerKeyOf(req);
     if (presented === null || isConnectionToken(presented))

@@ -55,7 +55,10 @@ export async function up({ db }: MigrateUpArgs): Promise<void> {
   REVOKE ALL ON FUNCTION "public"."mcp_audit_events_refuse_change"() FROM PUBLIC;
   CREATE TRIGGER "mcp_audit_events_append_only"
     BEFORE UPDATE OR DELETE ON "mcp_audit_events"
-    FOR EACH ROW EXECUTE FUNCTION "public"."mcp_audit_events_refuse_change"();`);
+    FOR EACH ROW EXECUTE FUNCTION "public"."mcp_audit_events_refuse_change"();
+  CREATE TRIGGER "mcp_audit_events_no_truncate"
+    BEFORE TRUNCATE ON "mcp_audit_events"
+    FOR EACH STATEMENT EXECUTE FUNCTION "public"."mcp_audit_events_refuse_change"();`);
 }
 
 export async function down({ db }: MigrateDownArgs): Promise<void> {

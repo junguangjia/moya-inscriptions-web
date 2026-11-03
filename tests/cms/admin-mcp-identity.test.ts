@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
+import { sql, type PostgresAdapter } from "@payloadcms/db-postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   createLocalReq,
@@ -552,6 +553,304 @@ describe("the reserved surface matrix", () => {
       });
       expect([method, route, answer.status]).toEqual([method, route, status]);
     }
+  });
+
+  describe("Payload's auth routes on the key collection", () => {
+    const db = () =>
+      (payload.db as unknown as Pick<PostgresAdapter, "drizzle">).drizzle;
+    // Every value a read of a key row could give away.
+    const leaks = (text: string, secrets: readonly string[]) =>
+      secrets.some((value) => text.includes(value)) ||
+      /"apiKey(Index)?"\s*:/u.test(text);
+
+    /**
+     * A key row whose id equals the caller's users.id, the one precondition of the
+     * read: both ids are serials, so on a real database this overlap is normal. It
+     * is forced here by moving a fresh row of each table past both sequences.
+     */
+    const alignedAccount = async (
+      role: "owner" | "automation",
+      keySecret: string,
+    ) => {
+      const created = await payload.create({
+        collection: "users",
+        overrideAccess: true,
+        data: {
+          email: email(`aligned-${randomUUID()}`),
+          password,
+          role,
+          scopeCatalogIds: [],
+        },
+      });
+      const key = await payload.create({
+        collection: "payload-mcp-api-keys",
+        overrideAccess: true,
+        data: {
+          user: aiOperator.id,
+          label: `synthetic-${randomUUID()}`,
+          enableAPIKey: true,
+          apiKey: keySecret,
+        } as never,
+      });
+      const { rows } = await db().execute(sql`
+        SELECT greatest(
+          (SELECT max(id) FROM users), (SELECT max(id) FROM payload_mcp_api_keys)
+        ) + 1 AS id`);
+      const id = Number(rows[0]!.id);
+      await db().execute(
+        sql`UPDATE users SET id = ${id} WHERE id = ${created.id}`,
+      );
+      await db().execute(
+        sql`UPDATE payload_mcp_api_keys SET id = ${id} WHERE id = ${key.id}`,
+      );
+      // Past the moved rows, so a later row in either table cannot collide.
+      await db().execute(sql`SELECT setval('users_id_seq', ${id})`);
+      await db().execute(
+        sql`SELECT setval('payload_mcp_api_keys_id_seq', ${id})`,
+      );
+      return { ...created, id };
+    };
+
+    const alignedCredentials = async () => {
+      const ownerSecret = randomBytes(32).toString("hex");
+      const automationSecret = randomBytes(32).toString("hex");
+      const alignedOwner = await alignedAccount("owner", ownerSecret);
+      const alignedAutomation = await alignedAccount(
+        "automation",
+        automationSecret,
+      );
+      const restKey = (account: { id: number }) => {
+        const value = randomBytes(32).toString("hex");
+        return payload
+          .update({
+            collection: "users",
+            id: account.id,
+            overrideAccess: true,
+            data: { enableAPIKey: true, apiKey: value },
+          })
+          .then(() => value);
+      };
+      const token = await login(alignedOwner.email);
+      return {
+        secrets: [ownerSecret, automationSecret],
+        owner: alignedOwner,
+        credentials: [
+          [
+            "an automation REST key on the matching id",
+            {
+              authorization: `users API-Key ${await restKey(alignedAutomation)}`,
+            },
+          ],
+          [
+            "an Owner REST key on the matching id",
+            { authorization: `users API-Key ${await restKey(alignedOwner)}` },
+          ],
+          [
+            "an Owner JWT in a header on the matching id",
+            { authorization: `JWT ${token}` },
+          ],
+          [
+            "an Owner Bearer in a header on the matching id",
+            { authorization: `Bearer ${token}` },
+          ],
+          [
+            "an Owner cookie session on the matching id",
+            { cookie: `payload-token=${token}` },
+          ],
+          ["no credential", {}],
+        ] as const,
+      };
+    };
+
+    it("answers refresh-token with no key for any credential, the Owner session included", async () => {
+      const { secrets, credentials } = await alignedCredentials();
+      for (const [label, headers] of [
+        ...credentials,
+        ...refusedCredentials().map(
+          ([name, authorization]) => [name, { authorization }] as const,
+        ),
+      ])
+        for (const route of [
+          "payload-mcp-api-keys/refresh-token",
+          "payload-mcp-api-keys/REFRESH-TOKEN",
+        ]) {
+          const answer = await call(route, { method: "POST", headers });
+          expect([label, route, answer.status]).toEqual([label, route, 403]);
+          expect(answer.headers.get("set-cookie")).toBeNull();
+          const text = await answer.text();
+          expect([label, route, leaks(text, secrets)]).toEqual([
+            label,
+            route,
+            false,
+          ]);
+          expect(JSON.parse(text)).toEqual({ error: "RESERVED_SURFACE" });
+        }
+    });
+
+    it("keeps every other auth route from returning a row or a key", async () => {
+      const { secrets, credentials } = await alignedCredentials();
+      const routes = [
+        ["POST", "login", { email: email("owner"), password }],
+        ["POST", "logout", {}],
+        ["POST", "first-register", { email: email("first"), password }],
+        ["POST", "forgot-password", { email: email("owner") }],
+        ["POST", "reset-password", { token: "synthetic", password }],
+        ["POST", "unlock", { email: email("owner") }],
+        ["POST", "verify/synthetic", {}],
+        ["GET", "me", undefined],
+        ["GET", "init", undefined],
+      ] as const;
+      for (const [label, headers] of credentials)
+        for (const [method, route, body] of routes) {
+          const answer = await call(`payload-mcp-api-keys/${route}`, {
+            method,
+            headers,
+            ...(body === undefined ? {} : { body }),
+          });
+          const text = await answer.text();
+          expect([label, route, leaks(text, secrets)]).toEqual([
+            label,
+            route,
+            false,
+          ]);
+          // `me` reads as no user and `init` as one boolean; the rest refuse.
+          if (route === "me")
+            expect(JSON.parse(text) as unknown).toMatchObject({ user: null });
+          else if (route === "init")
+            expect(Object.keys(JSON.parse(text) as object)).toEqual([
+              "initialized",
+            ]);
+          else
+            expect([label, route, answer.status >= 400]).toEqual([
+              label,
+              route,
+              true,
+            ]);
+        }
+    });
+
+    it("keeps the document routes from answering a key to anything but the Owner session", async () => {
+      const { secrets, credentials } = await alignedCredentials();
+      const key = await payload.find({
+        collection: "payload-mcp-api-keys",
+        overrideAccess: true,
+        depth: 0,
+        limit: 1,
+        sort: "-id",
+      });
+      const id = key.docs[0]!.id;
+      const session = "an Owner cookie session on the matching id";
+      for (const [label, headers] of credentials) {
+        if (label === session) continue;
+        for (const [method, route, body] of [
+          ["GET", "", undefined],
+          ["GET", "count", undefined],
+          ["GET", String(id), undefined],
+          ["GET", "versions", undefined],
+          ["GET", `versions/${id}`, undefined],
+          ["POST", `versions/${id}`, {}],
+          ["POST", `${id}/duplicate`, {}],
+          ["POST", `access/${id}`, {}],
+        ] as const) {
+          const answer = await call(`payload-mcp-api-keys/${route}`, {
+            method,
+            headers,
+            ...(body === undefined ? {} : { body }),
+          });
+          const text = await answer.text();
+          expect([label, method, route, leaks(text, secrets)]).toEqual([
+            label,
+            method,
+            route,
+            false,
+          ]);
+          // The one answer that is not a refusal is a list of booleans.
+          if (route !== `access/${id}`)
+            expect([label, method, route, answer.status >= 400]).toEqual([
+              label,
+              method,
+              route,
+              true,
+            ]);
+        }
+      }
+    });
+
+    it("has reviewed every route this collection carries, so an upgrade adding one fails here", () => {
+      const keys = config.collections.find(
+        ({ slug }) => slug === "payload-mcp-api-keys",
+      );
+      expect(
+        (keys?.endpoints === false ? [] : (keys?.endpoints ?? [])).map(
+          ({ method, path }) => `${method} ${path}`,
+        ),
+      ).toEqual([
+        // The shadow first, because the first match wins.
+        "post /refresh-token",
+        "post /forgot-password",
+        "get /init",
+        "post /login",
+        "post /logout",
+        "get /me",
+        "post /refresh-token",
+        "post /first-register",
+        "post /reset-password",
+        "post /unlock",
+        "post /verify/:id",
+        // Payload's document routes, each behind this collection's access.
+        "get /count",
+        "post /",
+        "delete /",
+        "delete /:id",
+        "post /access/:id?",
+        "get /versions",
+        "post /:id/duplicate",
+        "get /",
+        "get /:id",
+        "get /versions/:id",
+        "post /versions/:id",
+        "patch /",
+        "patch /:id",
+      ]);
+    });
+
+    it("leaves the same route on the users collection as it is today", async () => {
+      const { owner: account } = await alignedCredentials();
+      const token = await login(account.email);
+      for (const [label, headers] of [
+        ["a cookie session", { cookie: `payload-token=${token}` }],
+        ["a JWT in a header", { authorization: `JWT ${token}` }],
+      ] as const) {
+        const answer = await call("users/refresh-token", {
+          method: "POST",
+          headers,
+        });
+        expect([label, answer.status]).toEqual([label, 200]);
+        const body = (await answer.json()) as {
+          user: { id: number };
+          refreshedToken: string;
+        };
+        expect(body.user.id).toBe(account.id);
+        expect(body.refreshedToken).toEqual(expect.any(String));
+      }
+      for (const [label, headers] of [
+        [
+          "an Owner REST key",
+          { authorization: `users API-Key ${ownerRestKey}` },
+        ],
+        [
+          "an automation REST key",
+          { authorization: `users API-Key ${automationRestKey}` },
+        ],
+        ["no credential", {}],
+      ] as const) {
+        const answer = await call("users/refresh-token", {
+          method: "POST",
+          headers,
+        });
+        expect([label, answer.status]).toEqual([label, 403]);
+      }
+    });
   });
 
   it("leaves an MCP key with no account of its own to read", async () => {
