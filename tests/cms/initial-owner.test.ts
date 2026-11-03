@@ -11,6 +11,7 @@ import {
   createPostgresPool,
   parsePostgresConfig,
 } from "@moya/catalog-postgres";
+import { McpAuditEvents } from "admin/admin-mcp";
 import { Users, initialUserEndpoints } from "admin/users";
 import { provisionInitialOwner } from "admin/initial-owner";
 import { assertInitialOwnerDatabaseTLS } from "admin/runtime-settings";
@@ -46,7 +47,11 @@ const config = buildConfig({
       return db;
     },
   },
-  collections: [{ ...Users, endpoints: initialUserEndpoints("production") }],
+  // Account changes are recorded in the audit ledger, so the two travel together.
+  collections: [
+    { ...Users, endpoints: initialUserEndpoints("production") },
+    McpAuditEvents,
+  ],
   graphQL: { disable: true },
 });
 beforeAll(async () => {

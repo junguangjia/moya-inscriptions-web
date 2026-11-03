@@ -55,6 +55,15 @@ let owner: TypedUser;
 let automation: TypedUser;
 const reqFor = (user: TypedUser | null) =>
   createLocalReq(user ? { user } : {}, payload);
+// Accounts and keys need an Owner browser session (amendment 2026-11-03).
+const browserReqFor = (user: TypedUser) =>
+  createLocalReq(
+    {
+      req: { headers: new Headers({ cookie: "payload-token=synthetic" }) },
+      user: { ...user, _strategy: "local-jwt" } as unknown as TypedUser,
+    },
+    payload,
+  );
 
 beforeAll(async () => {
   payload = await getPayload({ config });
@@ -71,7 +80,7 @@ beforeAll(async () => {
   });
   automation = await payload.create({
     collection: "users",
-    overrideAccess: false,
+    overrideAccess: true,
     req: await reqFor(owner),
     user: owner,
     data: {
@@ -900,7 +909,7 @@ describe.sequential("Payload PostgreSQL editorial workflow", () => {
       },
       req: await reqFor(owner),
     });
-    for (const user of [automation, null]) {
+    for (const user of [owner, automation, null]) {
       await expect(
         payload.unlock({
           collection: "users",
@@ -926,7 +935,7 @@ describe.sequential("Payload PostgreSQL editorial workflow", () => {
       payload.unlock({
         collection: "users",
         overrideAccess: false,
-        req: await reqFor(owner),
+        req: await browserReqFor(owner),
         data: {
           email: `synthetic-owner-${run}@example.invalid`,
           password: randomUUID(),

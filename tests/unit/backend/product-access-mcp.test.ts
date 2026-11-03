@@ -136,6 +136,7 @@ describe("product access and the Article MCP boundary", () => {
       [`artvenn_article_ct_${"a".repeat(43)}`, fixtureUsers.active.id],
       [`artvenn_article_ct_${"b".repeat(43)}`, fixtureUsers.second.id],
     ]);
+    const presentedForAdmission: string[] = [];
     // The handler is bound to its own listening address, known only after listen.
     const bound: { handler?: ReturnType<typeof createArticleMcpHandler> } = {};
     const port = await listen(
@@ -151,6 +152,7 @@ describe("product access and the Article MCP boundary", () => {
       authoring,
       admitsAccount,
       admit: async (presented) => {
+        presentedForAdmission.push(presented);
         const userId = tokens.get(presented);
         if (userId === undefined) throw Error("Unknown grant");
         return {
@@ -199,6 +201,17 @@ describe("product access and the Article MCP boundary", () => {
     expect(anonymous.headers.get("www-authenticate")).toContain(
       "resource_metadata=",
     );
+
+    // Issue #177's other direction: an Admin MCP key or connection token is no
+    // grant here, and never reaches the grant store.
+    for (const foreign of ["a".repeat(64), `artvenn_ct_${"a".repeat(43)}`]) {
+      const refused = await call(foreign);
+      expect(refused.status).toBe(401);
+      expect(refused.headers.get("www-authenticate")).toContain(
+        "resource_metadata=",
+      );
+    }
+    expect(presentedForAdmission).toEqual([]);
 
     // A current grant for an account that is not approved: forbidden, no challenge.
     const refused = await call(other);

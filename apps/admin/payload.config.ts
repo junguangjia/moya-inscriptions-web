@@ -22,6 +22,10 @@ import { agentConnectionAuthenticateHeader } from "./src/agent-connections/disco
 import { communityEndpoints } from "./src/community/endpoints";
 import { analyticsEndpoints } from "./src/analytics/endpoints";
 import { editorialMcp } from "./src/mcp";
+import { adminMcpDispatchPlugin } from "./src/admin-mcp/dispatch";
+import { McpAuditEvents } from "./src/admin-mcp/audit";
+import { mcpControlEndpoints } from "./src/admin-mcp/control/endpoints";
+import { McpControl } from "./src/admin-mcp/control/global";
 import { createCatalogIngestEndpoints } from "./src/media/catalog-ingest";
 import { createCatalogThumbnailEndpoint } from "./src/media/thumbnail-endpoint";
 import { createMediaCollection } from "./src/media/collection";
@@ -30,7 +34,7 @@ import { createEditorialStoragePlugin } from "./src/media/storage";
 import {
   canEditCatalog,
   catalogScopeAccess,
-  isOwner,
+  actsAsOwner,
 } from "./src/editorial/access";
 import { adminPreviewURL, editorialPreviewEndpoint } from "./src/preview";
 import {
@@ -106,6 +110,12 @@ export default buildConfig({
         analyticsStatus: {
           Component: "/src/analytics/View#AnalyticsStatusView",
           path: "/analytics/status",
+          exact: true,
+        },
+        // Admin MCP: self-gated by isHumanOwner, like every custom view it must be.
+        mcpControl: {
+          Component: "/src/admin-mcp/control/View#McpControlView",
+          path: "/mcp-control",
           exact: true,
         },
         editorialWorkflow: {
@@ -281,7 +291,7 @@ export default buildConfig({
     createMediaCollection({
       read: ({ req }) => catalogScopeAccess(req),
       canWrite: canEditCatalog,
-      canRegister: isOwner,
+      canRegister: actsAsOwner,
       localDirectory: mediaDirectory,
     }),
     EditorialIdentities,
@@ -291,7 +301,9 @@ export default buildConfig({
     Articles,
     ArticleCollections,
     EditorialArticleApprovals,
+    McpAuditEvents,
   ],
+  globals: [McpControl],
   endpoints: [
     ...editorialEndpoints,
     ...createResumableMediaEndpoints({
@@ -316,12 +328,17 @@ export default buildConfig({
     createCatalogThumbnailEndpoint(),
     ...communityEndpoints,
     ...analyticsEndpoints,
+    ...mcpControlEndpoints,
     // Empty unless the connection surface is composed at all; the gate is the
     // array, not a branch inside a handler.
     ...agentConnectionEndpoints(),
     editorialPreviewEndpoint,
   ],
-  plugins: [createEditorialStoragePlugin(), editorialMcp()],
+  plugins: [
+    createEditorialStoragePlugin(),
+    editorialMcp(),
+    adminMcpDispatchPlugin(),
+  ],
   hooks: {
     // The one header a standards-based MCP client needs before it has a token.
     //

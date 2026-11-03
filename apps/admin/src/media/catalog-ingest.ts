@@ -22,7 +22,7 @@ import {
 import {
   canEditCatalog,
   catalogScope,
-  isOwner,
+  actsAsOwner,
   requireActor,
 } from "../editorial/access";
 import { EditorialError, safeEditorialFailure } from "../editorial/errors";
@@ -1068,7 +1068,7 @@ export function createCatalogIngestEndpoints(options: {
       );
       const actorId = String(requireActor(req).id);
       // An automation actor without a Catalog scope reads no media at all.
-      if (!isOwner(req) && catalogScope(req).length === 0)
+      if (!actsAsOwner(req) && catalogScope(req).length === 0)
         fail("INGEST_FORBIDDEN", 403);
       // D9: without server reads, the SHA-256 check stays with the worker.
       if (!context.serverSha256) fail("INGEST_SERVER_HASH_DISABLED", 409);

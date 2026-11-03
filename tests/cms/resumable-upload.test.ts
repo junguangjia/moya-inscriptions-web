@@ -112,7 +112,7 @@ beforeAll(async () => {
   await payload.create({
     collection: "users",
     req,
-    overrideAccess: false,
+    overrideAccess: true,
     data: {
       email: otherEmail,
       password,

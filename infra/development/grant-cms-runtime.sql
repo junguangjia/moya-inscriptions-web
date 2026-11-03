@@ -27,14 +27,17 @@ GRANT SELECT, INSERT, UPDATE ON TABLE
   public.catalogs,
   public.editorial_approvals,
   public.editorial_article_approvals,
+  public.mcp_control,
   public.media,
   public.users
 TO :"cms_role";
 
 -- Identity claims and completed receipts are append-only in existing application code.
+-- The MCP audit ledger is append-only by this grant, with a trigger as a second net.
 GRANT SELECT, INSERT ON TABLE
   public.editorial_identities,
-  public.editorial_receipts
+  public.editorial_receipts,
+  public.mcp_audit_events
 TO :"cms_role";
 
 -- Payload updates replace array/relationship rows; maxPerDoc prunes retained versions;
@@ -131,6 +134,8 @@ GRANT USAGE ON SEQUENCE
   public.editorial_article_approvals_id_seq,
   public.editorial_identities_id_seq,
   public.editorial_receipts_id_seq,
+  public.mcp_audit_events_id_seq,
+  public.mcp_control_id_seq,
   public.media_id_seq,
   public.payload_kv_id_seq,
   public.payload_locked_documents_id_seq,

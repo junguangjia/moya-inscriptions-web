@@ -1,7 +1,7 @@
 import { workspacePageLabel } from "../workspace/routes";
 import type { CollectionConfig } from "payload";
 
-import { canEditCatalog, isAutomation, isOwner } from "./access";
+import { canEditCatalog, isAutomation, actsAsOwner } from "./access";
 import { contentFingerprint, publishedContent } from "./content";
 import { EditorialError } from "./errors";
 import { isLedgerRequest } from "./state";
@@ -29,14 +29,14 @@ export const EditorialApprovals: CollectionConfig = {
     defaultColumns: ["label", "automationUser", "status", "approvedAt"],
   },
   access: {
-    create: ({ req }) => isOwner(req),
+    create: ({ req }) => actsAsOwner(req),
     delete: () => false,
     read: ({ req }) =>
-      isOwner(req) ||
+      actsAsOwner(req) ||
       (isAutomation(req)
         ? { automationUser: { equals: req.user?.id } }
         : false),
-    update: ({ req }) => isOwner(req),
+    update: ({ req }) => actsAsOwner(req),
   },
   fields: [
     {
@@ -113,7 +113,7 @@ export const EditorialApprovals: CollectionConfig = {
     beforeOperation: [
       async ({ args, operation, req }) => {
         if (operation === "update") {
-          if (!isOwner(req))
+          if (!actsAsOwner(req))
             throw new EditorialError("APPROVAL_OWNER_ONLY", 403);
           if (!("id" in args) || !args.id)
             throw new EditorialError("SINGLE_RECORD_REQUIRED", 400);
@@ -124,7 +124,8 @@ export const EditorialApprovals: CollectionConfig = {
     ],
     beforeValidate: [
       async ({ data, operation, originalDoc, req }) => {
-        if (!isOwner(req)) throw new EditorialError("APPROVAL_OWNER_ONLY", 403);
+        if (!actsAsOwner(req))
+          throw new EditorialError("APPROVAL_OWNER_ONLY", 403);
         if (!data) throw new EditorialError("APPROVAL_INVALID", 400);
         if (operation === "update") {
           if (data.status !== "revoked")
@@ -144,9 +145,11 @@ export const EditorialApprovals: CollectionConfig = {
           collection: "users",
           id: automationUserID,
           depth: 0,
+          // After the gate; passed to canEditCatalog below, so scope is needed.
+          select: { role: true, scopeCatalogIds: true },
           req,
           user: req.user,
-          overrideAccess: false,
+          overrideAccess: true,
         });
         if (account.role !== "automation")
           throw new EditorialError("APPROVAL_ACCOUNT_INVALID", 400);
@@ -216,7 +219,7 @@ export const EditorialReceipts: CollectionConfig = {
     create: ({ req }) => isLedgerRequest(req),
     delete: () => false,
     read: ({ req }) =>
-      isOwner(req) ||
+      actsAsOwner(req) ||
       (isAutomation(req) ? { actor: { equals: req.user?.id } } : false),
     update: () => false,
   },

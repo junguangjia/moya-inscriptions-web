@@ -45,7 +45,7 @@ beforeAll(async () => {
   );
   const automation = await payload.create({
     collection: "users",
-    overrideAccess: false,
+    overrideAccess: true,
     req: ownerReq,
     data: {
       email: `media-automation-${suffix}@example.invalid`,
@@ -60,7 +60,7 @@ beforeAll(async () => {
   );
   const outsider = await payload.create({
     collection: "users",
-    overrideAccess: false,
+    overrideAccess: true,
     req: ownerReq,
     data: {
       email: `media-outside-${suffix}@example.invalid`,

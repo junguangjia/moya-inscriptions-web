@@ -550,12 +550,40 @@ loopback3003 and the separate HTTPS cookie host `article-auth.example.invalid`.
 Nginx overwrites Host and trusted HTTPS forwarding headers and clears Forwarded.
 Backend exposes only exact `/mcp/article-authoring` and its protected-resource
 metadata, plus the existing authenticated human consent/approval routes. Generic
-Admin Agent/OAuth remains Development-only. The issuer does not share its
-private signing JWKS or SQL credential with Backend/Web. Backend has App and
-separate Article-control credentials; issuer has only its own SQL credential.
-Role-only `*_DATABASE_TARGET` metadata cannot contain passwords. Public-read,
-CMS, App/resource, Article-control and Article-issuer must remain five distinct
-roles on one database, with verified TLS for remote PostgreSQL.
+Admin Agent/OAuth remains Development-only; the Admin's key-only `/api/mcp` is
+described below. The issuer does not share its private signing JWKS or SQL
+credential with Backend/Web. Backend has App and separate Article-control
+credentials; issuer has only its own SQL credential. Role-only
+`*_DATABASE_TARGET` metadata cannot contain passwords. Public-read, CMS,
+App/resource, Article-control and Article-issuer must remain five distinct roles
+on one database, with verified TLS for remote PostgreSQL.
+
+The Admin's MCP key path is `/api/mcp`
+([record](../../docs/development/admin-mcp-completion-v1.md)). Nginx gives it
+`location = /api/mcp` with the whole-path zone `yoyi_mcp` at 10 r/s, burst 40,
+answering 429, and a 4 MiB body limit. These are starting values to confirm in
+the isolated environment. A key bound to `ai_operator` reaches the native
+handler, POST only and stateless JSON; a present `Origin` must equal the origin
+of `CMS_PUBLIC_URL`. Automation keys reach the MCP plugin as before. The door
+adds no server setting.
+
+The key migration gives every existing key an expiry 30 days after it runs, so
+renew an automation key in the Admin before that date. A key bound to the Owner
+answers 401 `KEY_OWNER_BOUND` from that deployment on; rebind the work to an
+automation or `ai_operator` key. An expired key answers 401 `KEY_EXPIRED`, a
+forged or disabled key the plain 401. A renewal is capped at 30 days.
+
+The Owner's control page is `/admin/mcp-control` (pause, threshold, the four
+sensitive switches) and the audit list is `/admin/collections/mcp-audit-events`.
+Both need an Owner browser session. Its migrations add `mcp_control` and
+`mcp_audit_events`, so re-apply `infra/development/grant-cms-runtime.sql` after
+migrating: without those grants the door answers 503 and every tool answers
+`AUDIT_UNAVAILABLE`. Pause takes effect on the next request and needs no
+restart. It does not cover Owner or automation REST keys on `/api/editorial/*`.
+
+Client settings stay on the client machine and never on this host:
+`ARTVENN_MCP_URL`, the public `/api/mcp` URL, and `ARTVENN_MCP_KEY`, sent as a
+bearer token. Issuing the key and placing it are separate Owner approvals.
 
 Prepare the dedicated private RSA signing JWKS outside Git and approved client
 registry through the existing parser. The signing file must be nonsymlink,

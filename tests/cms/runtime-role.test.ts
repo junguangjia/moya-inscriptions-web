@@ -12,6 +12,7 @@ import config from "admin/config";
 import { catalogIdSchema } from "@moya/contracts/schemas";
 import { runCommunityMigrations } from "@moya/community-postgres";
 import { fileURLToPath } from "node:url";
+import { readMcpControl, writeAuditEvent } from "admin/admin-mcp";
 import { saveDraft, approveBatch, publishApproved } from "admin/editorial";
 import { assertSyntheticTestDatabaseUrl } from "../integration/postgres/synthetic-test-database.js";
 
@@ -164,7 +165,49 @@ describe
         fresh.query("SELECT id FROM public.catalogs LIMIT 1"),
       ).rejects.toMatchObject({ code: "42501" });
       await applyCms(roles[0]!);
+      // The MCP key door stamps last use with this statement, as the runtime role.
+      await expect(
+        fresh.query(
+          "UPDATE public.payload_mcp_api_keys SET last_used_at = now() WHERE id = 0",
+        ),
+      ).resolves.toMatchObject({ rowCount: 0 });
       const expected = await acl(roles[0]!);
+      // The two new tables, exactly: the ledger is append-only by this grant, and
+      // the sequences give USAGE alone, so a role cannot move them with setval.
+      expect(
+        expected.filter(({ table_name }) => table_name.startsWith("mcp_")),
+      ).toEqual([
+        { table_name: "mcp_audit_events", privilege_type: "INSERT" },
+        { table_name: "mcp_audit_events", privilege_type: "SELECT" },
+        { table_name: "mcp_control", privilege_type: "INSERT" },
+        { table_name: "mcp_control", privilege_type: "SELECT" },
+        { table_name: "mcp_control", privilege_type: "UPDATE" },
+      ]);
+      for (const sequence of ["mcp_audit_events_id_seq", "mcp_control_id_seq"])
+        expect(
+          (
+            await setupPool().query(
+              "SELECT has_sequence_privilege($1, $2, 'USAGE') AS usage, has_sequence_privilege($1, $2, 'UPDATE') AS change",
+              [roles[0]!, `public.${sequence}`],
+            )
+          ).rows[0],
+        ).toEqual({ usage: true, change: false });
+      // The second net stands whatever the grant says, for the table owner too.
+      expect(
+        (
+          await setupPool().query(
+            `SELECT tgenabled, pg_get_triggerdef(oid) AS definition FROM pg_trigger
+             WHERE tgrelid = 'public.mcp_audit_events'::regclass AND NOT tgisinternal`,
+          )
+        ).rows,
+      ).toEqual([
+        {
+          tgenabled: "O",
+          definition: expect.stringContaining(
+            "BEFORE DELETE OR UPDATE ON public.mcp_audit_events FOR EACH ROW EXECUTE FUNCTION mcp_audit_events_refuse_change()",
+          ) as string,
+        },
+      ]);
       await applyCms(roles[0]!);
       expect(await acl(roles[0]!)).toEqual(expected);
       await applyCms(roles[1]!);
@@ -372,7 +415,7 @@ describe
         const catalogId = catalogIdSchema.parse(`synthetic-${role}`);
         const automation = await payload.create({
           collection: "users",
-          overrideAccess: false,
+          overrideAccess: true,
           req: await request(owner),
           user: owner,
           data: {
@@ -382,6 +425,30 @@ describe
             scopeCatalogIds: [catalogId],
           },
         });
+        // The two named sequences: without them the first audit insert fails and
+        // every tool answers AUDIT_UNAVAILABLE. Creating the account above already
+        // wrote a ledger row through this role; the global's first save needs its own.
+        await writeAuditEvent(payload, {
+          callId: randomUUID(),
+          phase: "finish",
+          class: "read",
+          ok: true,
+          code: "OK",
+        });
+        const control = await payload.updateGlobal({
+          slug: "mcp-control",
+          overrideAccess: true,
+          data: { threshold: 20 },
+        });
+        expect(control.threshold).toBe(20);
+        expect((await readMcpControl(payload)).pause).toBe(false);
+        expect(
+          (
+            await pool.query(
+              "SELECT count(*) FROM public.mcp_audit_events WHERE op = 'users.change'",
+            )
+          ).rows[0].count,
+        ).not.toBe("0");
         const content = {
           catalogId,
           sourceId: `source-${role}`,
@@ -492,6 +559,12 @@ describe
           "DELETE FROM public.users WHERE false",
           "DELETE FROM public.editorial_identities WHERE false",
           "DELETE FROM public.editorial_receipts WHERE false",
+          "UPDATE public.mcp_audit_events SET code=code WHERE false",
+          "DELETE FROM public.mcp_audit_events WHERE false",
+          "TRUNCATE public.mcp_audit_events",
+          "DELETE FROM public.mcp_control WHERE false",
+          "SELECT setval('public.mcp_audit_events_id_seq',1)",
+          "SELECT setval('public.mcp_control_id_seq',1)",
           "DELETE FROM public.catalog_delivery_intents WHERE false",
           "DELETE FROM public.catalog_delivery_receipts WHERE false",
           "UPDATE public.catalog_delivery_receipts SET operation=operation WHERE false",
