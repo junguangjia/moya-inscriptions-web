@@ -470,6 +470,11 @@ export const relayServerAuthorCommunity = async (
   const prefix = "/api/community/";
   if (!incoming.pathname.startsWith(prefix)) return fail(404);
   const suffix = incoming.pathname.slice(prefix.length);
+  const commentJson =
+    suffix === "me/comments" ||
+    /^discussion\/(?:catalog|work|article)\/[^/]+(?:\/replies\/[^/]+)?$/u.test(
+      suffix,
+    );
   const reporting = /^(?:reports|decisions|reporting-inbox)(?:\/|$)/u.test(
     suffix,
   );
@@ -656,7 +661,7 @@ export const relayServerAuthorCommunity = async (
       headers: {
         ...headers,
         "content-type": type,
-        ...(type === "application/json"
+        ...(commentJson && type === "application/json"
           ? { vary: `Cookie, ${COMMENT_IMAGE_CAPABILITY_HEADER}` }
           : {}),
         ...(reportEvidence && type !== "application/json"

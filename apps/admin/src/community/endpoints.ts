@@ -704,18 +704,23 @@ const endpoint = (name: string, operation: CommunityOperation): Endpoint => ({
         throw new CommunityOperatorError("NOT_FOUND", 404);
       const input = await readJson(req);
       const result = await operation(req, input);
+      const commentJson = name === "read-comments" || name === "read-comment";
       return Response.json(
         {
           ok: true,
-          result: commentImagePayloadFor(
-            req.headers?.get(COMMENT_IMAGE_CAPABILITY_HEADER),
-            result,
-          ),
+          result: commentJson
+            ? commentImagePayloadFor(
+                req.headers?.get(COMMENT_IMAGE_CAPABILITY_HEADER),
+                result,
+              )
+            : result,
         },
         {
           headers: {
             "Cache-Control": "no-store",
-            Vary: `Cookie, ${COMMENT_IMAGE_CAPABILITY_HEADER}`,
+            ...(commentJson
+              ? { Vary: `Cookie, ${COMMENT_IMAGE_CAPABILITY_HEADER}` }
+              : {}),
           },
         },
       );

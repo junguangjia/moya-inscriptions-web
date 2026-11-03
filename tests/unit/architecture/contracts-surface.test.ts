@@ -249,6 +249,7 @@ describe("contracts package surface", () => {
       [
         ".",
         "./analytics",
+        "./comment-images-protocol",
         "./internal/catalog-import",
         "./internal/community-operator",
         "./internal/editorial",

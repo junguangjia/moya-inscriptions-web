@@ -79,6 +79,22 @@ const invoke = async (
 };
 
 describe("Admin community moderation endpoint boundary", () => {
+  it("keeps unrelated Owner JSON outside comment representation negotiation", async () => {
+    const { call } = recorder();
+    const endpoint = createCommunityEndpoints(call).find(
+      (candidate) => candidate.path === "/community-moderation/read-summary",
+    )!;
+    const req = request({});
+    req.headers = new Headers({ "x-yoyi-comment-images": "1" });
+    const response = await endpoint.handler(req);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("vary")).toBeNull();
+    expect(await response.json()).toEqual({
+      ok: true,
+      result: { echoed: true },
+    });
+  });
+
   it("requests canonical Backend JSON before adapting it for a legacy Owner page", async () => {
     const operatorCredential = "EXPLICIT_SYNTHETIC_PLACEHOLDER";
     vi.stubEnv(
