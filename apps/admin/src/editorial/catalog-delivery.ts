@@ -45,7 +45,9 @@ import {
 import { EditorialError, validationError } from "./errors";
 import {
   editorialTransaction,
+  isMissingRecord,
   lockEditorialKey,
+  noteSupersededIntents,
   withEditorialTransaction,
 } from "./transaction";
 import { validateCatalogMedia } from "../media/validation";
@@ -223,8 +225,10 @@ const latestDraft = async (req: PayloadRequest, id: number) => {
       req,
       user: req.user,
     });
-  } catch {
-    throw new EditorialError("RECORD_UNAVAILABLE", 404);
+  } catch (error) {
+    if (isMissingRecord(error))
+      throw new EditorialError("RECORD_UNAVAILABLE", 404);
+    throw error;
   }
 };
 
@@ -558,14 +562,19 @@ export const invalidateCatalogDelivery = async (
   reason: "DRAFT_CHANGED" | "WITHDRAWN" | "PUBLISHED",
 ) => {
   const db = await editorialTransaction(req);
-  await db.execute(sql`
+  const { rows } = await db.execute(sql`
     UPDATE catalog_delivery_intents SET state = ${reason === "WITHDRAWN" ? "withdrawn" : "superseded"},
       state_version = state_version + 1, ended_at = now(), end_reason = ${reason}, updated_at = now()
     WHERE catalog_document_id = ${documentID}
       AND id <> ${catalogDeliveryPublishProof(req)?.intentId ?? "00000000-0000-0000-0000-000000000000"}::uuid
       AND (state IN ('prepared', 'release_requested')
         OR (${reason === "WITHDRAWN" || reason === "PUBLISHED"} AND state = 'released'))
+    RETURNING id
   `);
+  noteSupersededIntents(
+    req,
+    rows.map(({ id }) => String(id)),
+  );
 };
 
 /** Editorial originals are published by the release path, or when every one

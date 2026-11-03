@@ -579,9 +579,16 @@ Both need an Owner browser session. Its migrations add `mcp_control` and
 `mcp_audit_events`, so re-apply `infra/development/grant-cms-runtime.sql` after
 migrating: without those grants the door answers 503 and every tool answers
 `AUDIT_UNAVAILABLE`, and the Owner's own account and key edits, a password
-change and a key renewal included, answer 503 `AUDIT_UNAVAILABLE` and roll back.
-Sign-in is not affected. Pause takes effect on the next request and needs no
-restart. It does not cover Owner or automation REST keys on `/api/editorial/*`.
+change included, answer 503 `AUDIT_UNAVAILABLE` and roll back. A one-click key
+renewal rolls back too, and answers 409 `RENEW_FAILED`. Sign-in is not affected.
+Pause takes effect on the next request and needs no restart. It does not cover
+Owner or automation REST keys on `/api/editorial/*`.
+
+Every editorial write asks PostgreSQL whether its commit took effect, so the CMS
+runtime role needs EXECUTE on `pg_current_xact_id()` and `pg_xact_status(xid8)`.
+PostgreSQL grants both to PUBLIC, and the CMS tests prove it on 16.15.
+Production is unread, so a release check reads `has_function_privilege` for each
+as that role; without them every editorial write fails.
 
 Client settings stay on the client machine and never on this host:
 `ARTVENN_MCP_URL`, the public `/api/mcp` URL, and `ARTVENN_MCP_KEY`, sent as a

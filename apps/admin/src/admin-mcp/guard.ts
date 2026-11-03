@@ -154,7 +154,7 @@ const pluginOutcomeOf =
           ? reply.code
           : ok
             ? "OK"
-            : "REJECTED",
+            : "OUTCOME_UNKNOWN",
       responseBytes: Buffer.byteLength(text),
       ...(tool.startsWith("editorial_") &&
       ok &&

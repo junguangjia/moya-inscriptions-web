@@ -1156,6 +1156,42 @@ Fixes, also improving live `editorial_*`:
   (dist/collections/operations/create.js:37,46) and test over REST. Check the
   same gap at media/collection.ts:173.
 
+Recorded when built in S2, tests in tests/cms/editorial-hardening.test.ts and,
+for the class checks and codes on a production compile with a page loaded first,
+tests/cms/admin-mcp-browser-checks.mjs:
+
+- The xid is read first, before the work, because a read failing inside the work
+  makes Payload roll back and forget the session (payload
+  dist/utilities/killTransaction.js), and commitTransaction then returns
+  quietly. Asked afterwards, that transaction answers `aborted`. The cost is two
+  statements per transaction, and an xid even for a read-only one.
+- The runtime role runs both functions on PostgreSQL 16.15
+  (tests/cms/runtime-role.test.ts), so the receipt read-back of section 9 is not
+  needed.
+- Every Local API write of the editorial operations now runs inside
+  `withEditorialTransaction`, including approve-batch, approve-article-batch and
+  restore-draft, which had relied on Payload's own commit. Those three write no
+  receipt, so a retry after OUTCOME_UNKNOWN repeats them: a second approval of
+  the same revisions, or a second restored draft that answers REVISION_CONFLICT.
+  Native Admin and REST writes keep Payload's own commit, unchanged.
+- Refusals with no receipt: the codes listed in `RETRYABLE_REFUSALS`
+  (editorial/transaction.ts) and any status of 500 or above. RECORD_UNAVAILABLE,
+  REFERENCE_NOT_FOUND and REFERENCE_NOT_PUBLISHED join the list because they
+  depend on state that can change; a read that failed for another reason no
+  longer reads as RECORD_UNAVAILABLE at all. `lockEditorialKey` answers BUSY
+  only for a lock timeout, a deadlock or a cancelled statement.
+- A failure writing a rejected receipt leaves the original rejection as the
+  answer, because the rejection is known and the retry meets it again.
+- `editorial_*` name Payload's own refusals (RECORD_UNAVAILABLE, FORBIDDEN,
+  CONTENT_INVALID), because calling a known refusal unknown would invite a retry
+  that cannot help. REST keeps its 500 `OPERATION_FAILED` for an unclassified
+  failure: errors.ts is shared with the upload routes and the Owner UI parses
+  it.
+- ALREADY_PUBLISHED means the latest version is published and its fingerprint
+  equals the approved one, so it also answers when the Owner published that
+  content by hand. It writes no receipt, because the document can be withdrawn
+  later.
+
 New ops:
 
 - catalog.publish, catalog.withdraw, catalog.restore, `article.*`,
@@ -1554,9 +1590,11 @@ UPDATE on mcp_runs, mcp_run_targets and control tables, `USAGE` on
 `mcp_audit_events_id_seq` and the mcp_control id sequence, and extend
 tests/cms/runtime-role.test.ts. Without the sequences the first audit insert
 fails and every op answers AUDIT_UNAVAILABLE. Triggers raising on UPDATE, DELETE
-and TRUNCATE are the second net. The seeded row means the runtime's INSERT on
-`mcp_control` and USAGE on its sequence are no longer used; the singleton index
-refuses a second row whatever the grant says.
+and TRUNCATE are the second net. With the seeded row in place the runtime's
+INSERT on `mcp_control` and USAGE on its sequence go unused, but they are not
+dead: if the row is deleted, an Owner save of the global recreates it through
+that grant, with the values on the form. The singleton index refuses a second
+row whatever the grant says.
 
 ## 14. Prompt injection
 
@@ -1581,11 +1619,12 @@ controls are limits it cannot talk past:
 Least privilege by key: profile `read` for sessions that bulk-read untrusted
 content, recommended and not forced. Data marking: `untrusted[]` lists JSON
 pointers, with a test that no user-authored field escapes it, including
-analytics `searchQuery`, titles and paths. Unicode tag characters, bidi controls
-and zero-width characters are stripped from returned text only, never from
-stored data, in `toolResult`, which sets `meta.stripped`. Variation selectors
-stay, because rare Chinese glyph variants use them. Tool descriptions and codes
-never interpolate content.
+analytics `searchQuery`, titles and paths. Unicode tag characters, bidi
+controls, zero-width characters, the soft hyphen, the deprecated format controls
+(U+206A-206F) and interlinear annotation anchors (U+FFF9-FFFB) are stripped from
+returned text only, never from stored data, in `toolResult`, which sets
+`meta.stripped`. Variation selectors stay, because rare Chinese glyph variants
+use them. Tool descriptions and codes never interpolate content.
 
 Remaining outbound channels: reason, forward text, thread text, draft text.
 Bounded by existing limits and recorded, not filtered. There is no content-based
@@ -1740,6 +1779,18 @@ Also:
 
 Accepted limits, recorded and not fixed:
 
+- A rejected receipt written before S2 keeps answering its key with its old
+  code, transient ones included, because a key's receipt cannot be replaced. A
+  new key gets past it. Whether Production holds any such row was not checked.
+- A replayed draft save does not report `supersededIntents`: the migration list
+  has no column for them, so a client that lost the answer reads the intent
+  instead.
+- A receipt from before the `article` column replays an Article create as id 0
+  and an empty articleId, as it did. The same key on an Article publish takes
+  the id from the command and reads the public id.
+- `articleCollection` on a receipt has no writer yet. S2 proves the column, the
+  foreign key and the read; replay of a collection save arrives with
+  `collection.*`.
 - An automation REST key can hold a document lock on a key or account row:
   `payload-locked-documents` lets any logged-in user write. The Owner's save of
   that row then answers 423 for up to 5 minutes, and the lock can be repeated.
@@ -1755,10 +1806,13 @@ Accepted limits, recorded and not fixed:
   `-32602` as a tool error before `withGuard` runs, so the refused call writes
   no audit row. The native path takes the same call with no arguments. A
   plugin-path test pins both.
-- A proxy forwarding a browser's `Authorization` header to the Admin would lock
-  the Owner out of reserved surfaces, because `isHumanOwner` refuses on any such
-  header, as designed. No template in this repository does this. A release check
-  reads the live ingress.
+- A layer in front of the Admin that adds an `Authorization` header to a
+  browser's requests would lock the Owner out of reserved surfaces, because
+  `isHumanOwner` refuses on any such header, as designed. Basic Auth is the
+  likely case, because a browser then sends the header on every request. The
+  repository's template injects nothing, and passes on a client's own header,
+  which REST keys and header JWTs on `/api/*` rely on. A release check reads the
+  live ingress for anything in front that adds one.
 - `POST /api/payload-mcp-api-keys/refresh-token` was open at the base commit
   too, so a key row whose id matched a REST credential's or saved Owner JWT's
   account could have been read before this slice deploys. Production ids were

@@ -11,9 +11,12 @@ import { createHash } from "node:crypto";
 import type { CollectionConfig, PayloadRequest } from "payload";
 
 import { isAutomation, actsAsOwner } from "../editorial/access";
-import { relationshipID } from "../editorial/collections";
+import {
+  refuseApprovalDuplicate,
+  relationshipID,
+} from "../editorial/collections";
 import { EditorialError } from "../editorial/errors";
-import { lockEditorialKey } from "../editorial/transaction";
+import { isMissingRecord, lockEditorialKey } from "../editorial/transaction";
 
 const contentKeys = [
   "presentation",
@@ -78,13 +81,16 @@ export const editableArticle = async (
       req,
       user: req.user,
     });
-  } catch {
-    throw new EditorialError("RECORD_UNAVAILABLE", 404);
+  } catch (error) {
+    if (isMissingRecord(error))
+      throw new EditorialError("RECORD_UNAVAILABLE", 404);
+    throw error;
   }
 };
 
 export const EditorialArticleApprovals: CollectionConfig = {
   slug: "editorial-article-approvals",
+  disableDuplicate: true,
   labels: {
     singular: workspacePageLabel(
       "/admin/collections/editorial-article-approvals",
@@ -181,6 +187,7 @@ export const EditorialArticleApprovals: CollectionConfig = {
   hooks: {
     beforeOperation: [
       async ({ args, operation, req }) => {
+        if (operation === "create") refuseApprovalDuplicate(args);
         if (operation === "update") {
           if (!actsAsOwner(req))
             throw new EditorialError("APPROVAL_OWNER_ONLY", 403);

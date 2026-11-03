@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { request as httpRequest } from "node:http";
 import path from "node:path";
 
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -935,6 +936,45 @@ describe("one spelling of the URL", () => {
         { authorization: bearerHeader(forgedConnectionToken) },
       ],
     ] as const;
+
+  it("answers a dot-segment path as the same URL, over a raw socket that sends it as written", async () => {
+    const { hostname, port } = new URL(endpoint);
+    const body = JSON.stringify(LIST);
+    for (const path of ["/api/./mcp", "/api/x/../mcp"]) {
+      const answer = await new Promise<{ status: number; text: string }>(
+        (resolve, reject) => {
+          const request = httpRequest(
+            {
+              hostname,
+              port,
+              path,
+              method: "POST",
+              headers: {
+                accept: STREAMABLE_ACCEPT,
+                "content-type": "application/json",
+                "content-length": Buffer.byteLength(body),
+                ...bearer("ai-full"),
+              },
+            },
+            (response) => {
+              const chunks: Buffer[] = [];
+              response.on("data", (chunk: Buffer) => chunks.push(chunk));
+              response.on("end", () =>
+                resolve({
+                  status: response.statusCode ?? 0,
+                  text: Buffer.concat(chunks).toString(),
+                }),
+              );
+            },
+          );
+          request.on("error", reject);
+          request.end(body);
+        },
+      );
+      expect([path, answer.status]).toEqual([path, 200]);
+      expect(answer.text).toContain("admin_whoami");
+    }
+  });
 
   it("answers 404 on every other spelling, for every credential, on both paths", async () => {
     secrets["forged-spelling"] = randomBytes(32).toString("hex");

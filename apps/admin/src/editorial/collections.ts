@@ -15,8 +15,20 @@ export const relationshipID = (value: unknown): number | string | undefined => {
   return undefined;
 };
 
+/**
+ * disableDuplicate guards only the Local API. REST `POST /:id/duplicate` goes
+ * straight to the create operation with this argument (payload
+ * dist/collections/endpoints/duplicate.js), and an approval binds exact revisions
+ * the Owner chose, so a copy of one is never a thing to make.
+ */
+export const refuseApprovalDuplicate = (args: object) => {
+  if ("duplicateFromID" in args && args.duplicateFromID)
+    throw new EditorialError("APPROVAL_DUPLICATE_DISABLED", 403);
+};
+
 export const EditorialApprovals: CollectionConfig = {
   slug: "editorial-approvals",
+  disableDuplicate: true,
   labels: {
     singular: workspacePageLabel("/admin/collections/editorial-approvals"),
     plural: workspacePageLabel("/admin/collections/editorial-approvals"),
@@ -112,6 +124,7 @@ export const EditorialApprovals: CollectionConfig = {
   hooks: {
     beforeOperation: [
       async ({ args, operation, req }) => {
+        if (operation === "create") refuseApprovalDuplicate(args);
         if (operation === "update") {
           if (!actsAsOwner(req))
             throw new EditorialError("APPROVAL_OWNER_ONLY", 403);
@@ -256,6 +269,18 @@ export const EditorialReceipts: CollectionConfig = {
       type: "relationship",
       relationTo: "catalogs",
       label: "资料",
+    },
+    {
+      name: "article",
+      type: "relationship",
+      relationTo: "articles",
+      label: "文章",
+    },
+    {
+      name: "articleCollection",
+      type: "relationship",
+      relationTo: "article-collections",
+      label: "专题合集",
     },
     { name: "errorCode", type: "text", label: "错误代码" },
     {

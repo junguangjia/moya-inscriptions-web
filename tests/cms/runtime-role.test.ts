@@ -484,10 +484,53 @@ describe
           contributors: [],
           media: [],
         };
+        // Commit truth, as this role: the two functions it asks PostgreSQL with.
+        const statusOf = async (end: "COMMIT" | "ROLLBACK") => {
+          const client = await pool.connect();
+          let xid: string;
+          try {
+            await client.query("BEGIN");
+            xid = (
+              await client.query<{ xid: string }>(
+                "SELECT pg_current_xact_id()::text AS xid",
+              )
+            ).rows[0]!.xid;
+            await client.query(end);
+          } finally {
+            client.release();
+          }
+          return (
+            await pool.query("SELECT pg_xact_status($1::xid8) AS status", [xid])
+          ).rows[0].status as unknown;
+        };
+        expect(await statusOf("COMMIT")).toBe("committed");
+        expect(await statusOf("ROLLBACK")).toBe("aborted");
+        // And through the real write: a failed COMMIT reads as aborted, not as a
+        // refused status read, because this same role then saves with no error.
+        const refuseCommit = `refuse_commit_${suffix}`;
+        await setupPool().query(`
+          CREATE FUNCTION public.${refuseCommit}() RETURNS trigger LANGUAGE plpgsql
+            AS $$ BEGIN RAISE EXCEPTION 'synthetic commit failure'; END $$;
+          CREATE CONSTRAINT TRIGGER ${refuseCommit} AFTER INSERT ON public.editorial_receipts
+            DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.${refuseCommit}()`);
+        const saveKey = randomUUID();
+        try {
+          await expect(
+            saveDraft(await request(automation), {
+              idempotencyKey: saveKey,
+              content,
+            }),
+          ).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+        } finally {
+          await setupPool().query(`
+            DROP TRIGGER ${refuseCommit} ON public.editorial_receipts;
+            DROP FUNCTION public.${refuseCommit}()`);
+        }
         const first = await saveDraft(await request(automation), {
-          idempotencyKey: randomUUID(),
+          idempotencyKey: saveKey,
           content,
         });
+        expect(first.replayed).toBe(false);
         const publicPool = runtimePool(roles[2]!).pool;
         const publicAdapter = new PostgresCatalogQueryAdapter(publicPool);
         expect(await publicAdapter.getById(catalogId)).toBeNull();
