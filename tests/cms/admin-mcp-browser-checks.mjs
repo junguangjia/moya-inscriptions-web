@@ -10,8 +10,10 @@ import { expect } from "@playwright/test";
  * only place a Next production compile, its minified error classes and its folded
  * Development branches can be seen: "Reserved surface by any key or Authorization
  * header", "Admin control page and audit list", the door's named refusals, both
- * MCP paths, "Pause on" and "artvenn_*". tests/cms/admin-mcp-*.test.ts hold the
- * same rows in depth; this holds them where they ship.
+ * MCP paths, "Pause on" and "artvenn_*", and the code half of "Document open by the
+ * Owner" and "Approval duplicate". tests/cms/admin-mcp-*.test.ts and
+ * editorial-hardening.test.ts hold the same rows in depth; this holds them where
+ * they ship.
  *
  * It reports through intermediate stage names only, because the harness compares
  * its list of completed stages exactly and owns that list.
@@ -452,6 +454,160 @@ export const verifyAdminMcpSurfaces = async ({
   assert.equal(rightPassword.status, 401);
   assert.equal(wrongPassword.status, 401);
   assert.deepEqual(await rightPassword.json(), await wrongPassword.json());
+
+  setStage("admin-mcp-editorial-answers");
+  // Still page first. The editorial path tells Payload's own refusals apart by
+  // class and answers its codes on a native route too, so section 10's answers are
+  // held here, where only a production compile can break them.
+  const catalogId = `mcp-browser-${run}`;
+  const restKey = { authorization: `users API-Key ${automationRestKey}` };
+  const editorial = async (operation, body) => {
+    const response = await call(
+      "POST",
+      `editorial/${operation}`,
+      restKey,
+      body,
+    );
+    return [response.status, await response.json()];
+  };
+  const refusedWith = (status, code) => [
+    status,
+    { ok: false, error: { code, fields: [] } },
+  ];
+  const content = {
+    catalogId,
+    sourceId: `source-${run}`,
+    kind: "calligraphy",
+    title: "Synthetic record",
+    summary: "Synthetic summary",
+    dynasty: { state: "UNSUPPLIED" },
+    dateText: { state: "UNSUPPLIED" },
+    province: { state: "UNSUPPLIED" },
+    prefecture: { state: "UNSUPPLIED" },
+    county: { state: "UNSUPPLIED" },
+    currentLocation: { state: "UNSUPPLIED" },
+    currentCustodian: { state: "UNSUPPLIED" },
+    description: { state: "UNSUPPLIED" },
+    scriptStyle: { state: "UNSUPPLIED" },
+    transcription: { state: "VALUE", value: "合成" },
+    historicalContext: { state: "UNSUPPLIED" },
+    scholarlyResearch: { state: "UNSUPPLIED" },
+    aliases: [],
+    provenance: [],
+    sourceCitations: [],
+    contributors: [],
+    media: [],
+  };
+  const [createdStatus, created] = await editorial("save-draft", {
+    idempotencyKey: `${run}:create`,
+    content,
+  });
+  assert.equal(createdStatus, 200);
+  const { id: documentId, revision } = created.result;
+  const editorKey = await makeKey(automation, {
+    "payload-mcp-tool": {
+      editorialRead: true,
+      editorialSaveDraft: true,
+      editorialPublishApproved: true,
+    },
+  });
+  const editor = await clientFor(editorKey.secret);
+  try {
+    const tool = async (name, args) =>
+      replyOf(await editor.callTool({ name, arguments: args }));
+    const edit = {
+      id: documentId,
+      expectedRevision: revision,
+      idempotencyKey: `${run}:edit`,
+      content: { ...content, title: "Edited after the lock" },
+    };
+    const { doc: lock } = await asOwner("POST", "payload-locked-documents", {
+      document: { relationTo: "catalogs", value: documentId },
+      user: { relationTo: "users", value: access.ownerId },
+    });
+    assert.deepEqual(
+      await editorial("save-draft", edit),
+      refusedWith(423, "DOCUMENT_LOCKED"),
+    );
+    assert.deepEqual(await tool("editorial_save_draft", edit), {
+      ok: false,
+      code: "DOCUMENT_LOCKED",
+    });
+    await asOwner("DELETE", `payload-locked-documents/${lock.id}`);
+    // The same key: neither refusal above left a receipt behind.
+    assert.equal(
+      (await tool("editorial_save_draft", edit)).revision,
+      revision + 1,
+    );
+    const nothing = 2_000_000_000;
+    assert.deepEqual(
+      await editorial("read-draft", { id: nothing }),
+      refusedWith(404, "RECORD_UNAVAILABLE"),
+    );
+    assert.deepEqual(await tool("editorial_read", { id: nothing }), {
+      ok: false,
+      code: "RECORD_UNAVAILABLE",
+    });
+    assert.deepEqual(
+      await tool("editorial_publish_approved", {
+        approvalId: nothing,
+        id: documentId,
+        idempotencyKey: `${run}:no-approval`,
+      }),
+      { ok: false, code: "RECORD_UNAVAILABLE" },
+    );
+    // Above the integer column: the database refuses it, and that is still a miss.
+    const impossible = 3_000_000_000;
+    assert.deepEqual(
+      await editorial("read-draft", { id: impossible }),
+      refusedWith(404, "RECORD_UNAVAILABLE"),
+    );
+    assert.deepEqual(await tool("editorial_read", { id: impossible }), {
+      ok: false,
+      code: "RECORD_UNAVAILABLE",
+    });
+    assert.deepEqual(
+      await tool("editorial_publish_approved", {
+        approvalId: impossible,
+        id: documentId,
+        idempotencyKey: `${run}:impossible-approval`,
+      }),
+      { ok: false, code: "RECORD_UNAVAILABLE" },
+    );
+    // A new key creating what exists is not a field refusal, and it stands.
+    const existing = {
+      idempotencyKey: `${run}:existing`,
+      content,
+    };
+    assert.deepEqual(await tool("editorial_save_draft", existing), {
+      ok: false,
+      code: "IDENTITY_ALREADY_BOUND",
+    });
+    assert.deepEqual(await tool("editorial_save_draft", existing), {
+      ok: false,
+      code: "IDENTITY_ALREADY_BOUND",
+      replayed: true,
+    });
+  } finally {
+    await editor.close();
+  }
+  const { result: approved } = await asOwner(
+    "POST",
+    "editorial/approve-batch",
+    {
+      automationUserId: automation.id,
+      items: [{ id: documentId, revision: revision + 1 }],
+    },
+  );
+  const copied = await page.request.post(
+    `${origin}/api/editorial-approvals/${approved.approvalId}/duplicate`,
+    { data: {} },
+  );
+  assert.equal(copied.status(), 403);
+  assert.equal(
+    (await copied.json()).errors[0].message,
+    "APPROVAL_DUPLICATE_DISABLED",
+  );
 
   setStage("admin-mcp-control-page-gate");
   for (const options of [{}, { extraHTTPHeaders: bearer(aiKey.secret) }]) {

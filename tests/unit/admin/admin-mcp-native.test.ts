@@ -132,6 +132,13 @@ describe("tool result", () => {
       ["invisible plus", "\u2064"],
       ["Mongolian vowel separator", "\u180E"],
       ["byte order mark", "\uFEFF"],
+      ["soft hyphen", "\u00AD"],
+      ["inhibit symmetric swapping", "\u206A"],
+      ["activate Arabic form shaping", "\u206C"],
+      ["nominal digit shapes", "\u206F"],
+      ["interlinear annotation anchor", "\uFFF9"],
+      ["interlinear annotation separator", "\uFFFA"],
+      ["interlinear annotation terminator", "\uFFFB"],
     ] as const) {
       const result = toolResult(
         scope(300),
@@ -546,6 +553,22 @@ describe("the guard", () => {
       Promise.resolve(reply(JSON.stringify({ id: 58 }))),
     )({}, other.req, undefined);
     expect(rowsOf(other.create)[0]).not.toHaveProperty("targetId");
+  });
+
+  it("records a failure with no usable code as unknown, never as a rejection", async () => {
+    for (const text of [
+      JSON.stringify({ ok: false }),
+      JSON.stringify({ ok: false, code: "not a code" }),
+    ]) {
+      const { req, create } = request();
+      await pluginTool("editorial_save_draft", () =>
+        Promise.resolve(reply(text)),
+      )({}, req, undefined);
+      expect(rowsOf(create)[1]).toMatchObject({
+        ok: false,
+        code: "OUTCOME_UNKNOWN",
+      });
+    }
   });
 
   it("leaves a caller's dedupe key out of the row unless it reads as an id", async () => {
@@ -1098,6 +1121,24 @@ describe("dispatch", () => {
           expect(plugin).not.toHaveBeenCalled();
         },
       );
+    },
+  );
+
+  it.each(["/api/./mcp", "/api/x/../mcp", "/x/../api/./mcp"])(
+    "treats the dot segments in %s as the same URL, because they resolve to it",
+    async (pathname) => {
+      const plugin = vi.fn(() => Promise.resolve(fromPlugin));
+      const anonymous = request(null, [], "POST", pathname);
+      await expect(adminMcpDispatch(plugin)(anonymous.req)).resolves.toBe(
+        fromPlugin,
+      );
+      const { req } = request(
+        "Bearer abc",
+        [keyFor("ai_operator")],
+        "GET",
+        pathname,
+      );
+      expect((await adminMcpDispatch(plugin)(req)).status).toBe(405);
     },
   );
 

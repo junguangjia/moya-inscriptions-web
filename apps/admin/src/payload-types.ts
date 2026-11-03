@@ -505,6 +505,8 @@ export interface EditorialReceipt {
   operation: "save-draft" | "publish-approved";
   status: "completed" | "rejected";
   catalog?: (number | null) | Catalog;
+  article?: (number | null) | Article;
+  articleCollection?: (number | null) | ArticleCollection;
   revision?: number | null;
   fingerprint?: string | null;
   errorCode?: string | null;
@@ -1163,6 +1165,8 @@ export interface EditorialReceiptsSelect<T extends boolean = true> {
   operation?: T;
   status?: T;
   catalog?: T;
+  article?: T;
+  articleCollection?: T;
   revision?: T;
   fingerprint?: T;
   errorCode?: T;

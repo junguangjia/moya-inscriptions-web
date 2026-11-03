@@ -6,7 +6,11 @@ import {
   editorialSaveDraftSchema,
   EDITORIAL_FIELD_NAMES,
 } from "@moya/contracts/internal/editorial";
-import { restoreVersionOperation, type PayloadRequest } from "payload";
+import {
+  restoreVersionOperation,
+  ValidationError,
+  type PayloadRequest,
+} from "payload";
 import type { EditorialReceipt } from "../payload-types";
 
 import { isAutomation, actsAsOwner, requireActor } from "./access";
@@ -20,7 +24,14 @@ import {
 } from "./content";
 import { EditorialError, validationError } from "./errors";
 import { withApprovedPublish, withLedgerWrite } from "./state";
-import { lockEditorialKey, withEditorialTransaction } from "./transaction";
+import {
+  collectingSupersededIntents,
+  isMissingRecord,
+  lockEditorialKey,
+  ReplayedEditorialError,
+  withEditorialTransaction,
+  writesRejectedReceipt,
+} from "./transaction";
 
 const parse = <T>(
   schema: {
@@ -49,10 +60,24 @@ const editableDocument = async (req: PayloadRequest, id: number | string) => {
       req,
       user: req.user,
     });
-  } catch {
-    throw new EditorialError("RECORD_UNAVAILABLE", 404);
+  } catch (error) {
+    if (isMissingRecord(error))
+      throw new EditorialError("RECORD_UNAVAILABLE", 404);
+    throw error;
   }
 };
+
+/**
+ * A create that reaches an existing record. The record's own identity bindings let
+ * it through claimEditorialIdentities, then a unique index refuses it, and Payload
+ * words that as a field refusal although the content is fine. A Catalog cannot be
+ * hard-deleted, so the same command meets this again: it keeps a rejected receipt.
+ */
+const isIdentityTaken = (error: unknown): boolean =>
+  error instanceof ValidationError &&
+  error.data.errors.some(
+    ({ path }) => path === "catalogId" || path === "sourceId",
+  );
 
 const numericID = (value: unknown): number => {
   const id =
@@ -73,6 +98,8 @@ const documentResult = (document: { id: unknown; revision?: unknown }) => ({
 
 type MutationResult = ReturnType<typeof documentResult> & {
   replayed?: boolean;
+  /** Omitted when none, and on a replay: a receipt does not keep them. */
+  supersededIntents?: readonly string[];
 };
 type ReceiptOperation = "save-draft" | "publish-approved";
 
@@ -95,12 +122,10 @@ const replay = (
 ): MutationResult => {
   if (receipt.requestFingerprint !== fingerprint)
     throw new EditorialError("IDEMPOTENCY_CONFLICT", 409);
-  if (receipt.status !== "completed") {
-    throw new EditorialError(
+  if (receipt.status !== "completed")
+    throw new ReplayedEditorialError(
       String(receipt.errorCode ?? "OPERATION_REJECTED"),
-      409,
     );
-  }
   return {
     id: numericID(relationshipID(receipt.catalog)),
     revision: Number(receipt.revision),
@@ -147,11 +172,9 @@ const idempotentMutation = async (
   } catch (error) {
     // A failed Payload write rolls back its whole transaction. Persist only a
     // sanitized rejection in a fresh transaction; never append after rollback.
-    if (
-      !req.transactionID &&
-      error instanceof EditorialError &&
-      error.code !== "IDEMPOTENCY_CONFLICT"
-    ) {
+    // The rejection is the answer whether or not its receipt lands: with no
+    // receipt, a retry meets it again.
+    if (!req.transactionID && writesRejectedReceipt(error)) {
       await withEditorialTransaction(req, async () => {
         await lockEditorialKey(req, `receipt:${deduplicationKey}`);
         if (await receiptFor(req, deduplicationKey)) return;
@@ -171,7 +194,7 @@ const idempotentMutation = async (
             },
           }),
         );
-      });
+      }).catch(() => undefined);
     }
     throw error;
   }
@@ -212,35 +235,50 @@ export const saveDraft = async (req: PayloadRequest, input: unknown) => {
         ) {
           throw new EditorialError("REVISION_CONFLICT", 409);
         }
-        const document = await req.payload.create({
+        try {
+          const document = await req.payload.create({
+            collection: "catalogs",
+            data: {
+              ...payloadContentData(parsed.content),
+              _status: "draft",
+              revision: 0,
+            },
+            draft: true,
+            depth: 0,
+            req,
+            user: req.user,
+            overrideAccess: false,
+          });
+          return documentResult(document);
+        } catch (error) {
+          if (isIdentityTaken(error))
+            throw new EditorialError("IDENTITY_ALREADY_BOUND", 409, [
+              "catalogId",
+              "sourceId",
+            ]);
+          throw error;
+        }
+      }
+      const { id, expectedRevision } = parsed;
+      if (expectedRevision === undefined)
+        throw new EditorialError("REVISION_REQUIRED", 409);
+      const { saved, superseded } = await collectingSupersededIntents(req, () =>
+        req.payload.update({
           collection: "catalogs",
-          data: {
-            ...payloadContentData(parsed.content),
-            _status: "draft",
-            revision: 0,
-          },
+          id,
+          data: { ...patch, revision: expectedRevision, _status: "draft" },
           draft: true,
           depth: 0,
+          overrideAccess: false,
+          overrideLock: false,
           req,
           user: req.user,
-          overrideAccess: false,
-        });
-        return documentResult(document);
-      }
-      if (parsed.expectedRevision === undefined)
-        throw new EditorialError("REVISION_REQUIRED", 409);
-      const document = await req.payload.update({
-        collection: "catalogs",
-        id: parsed.id,
-        data: { ...patch, revision: parsed.expectedRevision, _status: "draft" },
-        draft: true,
-        depth: 0,
-        overrideAccess: false,
-        overrideLock: false,
-        req,
-        user: req.user,
-      });
-      return documentResult(document);
+        }),
+      );
+      return {
+        ...documentResult(saved),
+        ...(superseded.length > 0 ? { supersededIntents: superseded } : {}),
+      };
     },
   );
 };
@@ -248,22 +286,24 @@ export const saveDraft = async (req: PayloadRequest, input: unknown) => {
 export const approveBatch = async (req: PayloadRequest, input: unknown) => {
   if (!actsAsOwner(req)) throw new EditorialError("APPROVAL_OWNER_ONLY", 403);
   const parsed = parse(editorialApproveBatchSchema, input);
-  const approval = await req.payload.create({
-    collection: "editorial-approvals",
-    depth: 0,
-    req,
-    user: req.user,
-    overrideAccess: false,
-    data: {
-      label: parsed.label ?? "Approved editorial batch",
-      automationUser: numericID(parsed.automationUserId),
-      status: "active",
-      items: parsed.items.map(({ id, revision }) => ({
-        catalog: numericID(id),
-        revision,
-      })),
-    },
-  });
+  const approval = await withEditorialTransaction(req, () =>
+    req.payload.create({
+      collection: "editorial-approvals",
+      depth: 0,
+      req,
+      user: req.user,
+      overrideAccess: false,
+      data: {
+        label: parsed.label ?? "Approved editorial batch",
+        automationUser: numericID(parsed.automationUserId),
+        status: "active",
+        items: parsed.items.map(({ id, revision }) => ({
+          catalog: numericID(id),
+          revision,
+        })),
+      },
+    }),
+  );
   return {
     approvalId: approval.id,
     itemCount: parsed.items.length,
@@ -316,6 +356,13 @@ export const publishApproved = async (req: PayloadRequest, input: unknown) => {
         latest.revision !== item.revision ||
         contentFingerprint(latest) !== item.fingerprint
       ) {
+        // Publishing moves the revision and keeps the content, so a retry under
+        // a new key after a success finds exactly what it approved already live.
+        if (
+          latest._status === "published" &&
+          contentFingerprint(latest) === item.fingerprint
+        )
+          throw new EditorialError("ALREADY_PUBLISHED", 409);
         throw new EditorialError("APPROVED_REVISION_CHANGED", 409);
       }
       const content = publishedContent(latest);
@@ -349,14 +396,16 @@ export const restoreDraft = async (req: PayloadRequest, input: unknown) => {
   try {
     // Payload 3.88's Local API wrapper drops options.draft. The public exported
     // operation is also used by its native REST handler and forwards it intact.
-    const document = await restoreVersionOperation({
-      collection: req.payload.collections.catalogs,
-      id: String(parsed.versionId),
-      draft: true,
-      depth: 0,
-      req,
-      overrideAccess: false,
-    });
+    const document = await withEditorialTransaction(req, () =>
+      restoreVersionOperation({
+        collection: req.payload.collections.catalogs,
+        id: String(parsed.versionId),
+        draft: true,
+        depth: 0,
+        req,
+        overrideAccess: false,
+      }),
+    );
     return documentResult(document);
   } finally {
     if (originalExpected === undefined) delete req.query.expectedRevision;

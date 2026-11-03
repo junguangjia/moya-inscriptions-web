@@ -5,6 +5,7 @@ import {
 import type { AdminMcpToolProfile } from "@moya/contracts/internal/admin-mcp";
 import { mcpPlugin } from "@payloadcms/plugin-mcp";
 import type { MCPPluginConfig } from "@payloadcms/plugin-mcp";
+import { Forbidden, ValidationError } from "payload";
 import type {
   CollectionConfig,
   Field,
@@ -25,11 +26,28 @@ import {
   publishApproved,
   isHumanOwner,
 } from "./editorial";
+import {
+  isMissingRecord,
+  ReplayedEditorialError,
+} from "./editorial/transaction";
 
 const id = z.union([z.string().min(1).max(128), z.number().int().positive()]);
 const safeReply = (result: unknown) => ({
   content: [{ type: "text" as const, text: JSON.stringify(result) }],
 });
+/**
+ * Payload's refusals carry a sentence, so they are named here. Anything else with
+ * no code is not a known refusal: it may have failed after the write, so it never
+ * reads as one.
+ */
+const failureCode = (error: unknown): string => {
+  if (error instanceof Forbidden) return "FORBIDDEN";
+  if (isMissingRecord(error)) return "RECORD_UNAVAILABLE";
+  if (error instanceof ValidationError) return "CONTENT_INVALID";
+  return error instanceof Error && /^[A-Z_]{3,64}$/.test(error.message)
+    ? error.message
+    : "OUTCOME_UNKNOWN";
+};
 const guarded =
   (
     operation: (
@@ -41,11 +59,11 @@ const guarded =
     try {
       return safeReply(await operation(args, req));
     } catch (error) {
-      const code =
-        error instanceof Error && /^[A-Z_]{3,64}$/.test(error.message)
-          ? error.message
-          : "EDITORIAL_OPERATION_REJECTED";
-      return safeReply({ ok: false, code });
+      return safeReply({
+        ok: false,
+        code: failureCode(error),
+        ...(error instanceof ReplayedEditorialError ? { replayed: true } : {}),
+      });
     }
   };
 const safeDraft = (document: object) => {
@@ -282,6 +300,8 @@ export const editorialMcp = () => {
             id: doc.id,
             operation: doc.operation,
             catalog: doc.catalog,
+            article: doc.article,
+            articleCollection: doc.articleCollection,
             revision: doc.revision,
             outcome: doc.status,
           })),

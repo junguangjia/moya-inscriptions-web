@@ -24,6 +24,8 @@ const requestShapeFailures = [];
 let clientErrorCount = 0;
 let expectedWithdrawalConflict = false;
 let withdrawalConflictCount = 0;
+let expectedUnconfirmedApprove = false;
+let unconfirmedApproveCount = 0;
 let nativeWithdrawalCode;
 let mediaCheck;
 let mediaCaptionKinds;
@@ -97,6 +99,14 @@ try {
       new URL(response.url()).searchParams.get("draft") === "false"
     ) {
       withdrawalConflictCount += 1;
+      return;
+    }
+    if (
+      expectedUnconfirmedApprove &&
+      response.status() === 503 &&
+      url.pathname === "/api/editorial/approve-batch"
+    ) {
+      unconfirmedApproveCount += 1;
       return;
     }
     if (response.status() >= 400)
@@ -273,6 +283,30 @@ try {
     .getByRole("checkbox", { name: `选择 ${draftTitle}`, exact: true })
     .check();
   await page.getByLabel("执行账号").selectOption(String(account.id));
+  // The route's answer when a commit could not be confirmed. A real one needs a lost
+  // status read, so it is stubbed here; the page saying so is what this holds.
+  expectedUnconfirmedApprove = true;
+  await page.route("**/api/editorial/approve-batch", (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: false,
+        error: { code: "OUTCOME_UNKNOWN", fields: [] },
+      }),
+    }),
+  );
+  await page.getByRole("button", { name: "核对并批准…", exact: true }).click();
+  await page.getByRole("button", { name: "确认批准", exact: true }).click();
+  await page
+    .getByRole("alert")
+    .filter({ hasText: "操作结果未确认" })
+    .filter({ hasText: "资料批准" })
+    .waitFor();
+  assert.equal(await page.getByText("操作未完成").count(), 0);
+  await page.unroute("**/api/editorial/approve-batch");
+  expectedUnconfirmedApprove = false;
+  assert.equal(unconfirmedApproveCount, 1);
   const approvalResponse = page.waitForResponse(
     (response) =>
       new URL(response.url()).pathname === "/api/editorial/approve-batch",

@@ -155,12 +155,13 @@ const withRepeat = (
 };
 
 /**
- * Unicode tag characters, bidi controls and zero-width characters: text a model
+ * Unicode tag characters, bidi controls, zero-width characters, the soft hyphen,
+ * the deprecated format controls and interlinear annotation anchors: text a model
  * reads and a person does not. Variation selectors stay, because rare Chinese
  * glyph variants use them.
  */
 const INVISIBLE =
-  /[\u{E0000}-\u{E007F}\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069\u180E\u200B-\u200D\u2060-\u2064\uFEFF]/gu;
+  /[\u{E0000}-\u{E007F}\u00AD\u061C\u200E\u200F\u202A-\u202E\u2066-\u206F\u180E\u200B-\u200D\u2060-\u2064\uFEFF\uFFF9-\uFFFB]/gu;
 
 /**
  * From returned text only, never from stored data. On the serialized form, which

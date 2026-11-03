@@ -12,6 +12,11 @@ import process from "node:process";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+  editorialApproveBatchSchema,
+  editorialRestoreDraftSchema,
+} from "@moya/contracts/internal/editorial";
+
 type Manifest = {
   version: number;
   batchId: string;
@@ -94,6 +99,90 @@ afterEach(async () => {
       .splice(0)
       .map((directory) => rm(directory, { recursive: true, force: true })),
   );
+});
+
+/** The doc's text with its wrapping gone, since a line break can fall anywhere. */
+const docText = async (path: string) =>
+  (await readFile(new URL(path, import.meta.url), "utf8")).replace(/\s+/gu, "");
+
+describe("what the operations doc tells a client", () => {
+  it("is what this client does with a locked document: rejected on the receipt, retried under the same key on a rerun", async () => {
+    const context = await fixture();
+    const keys: unknown[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+      keys.push(
+        (JSON.parse(String(init?.body)) as { idempotencyKey: unknown })
+          .idempotencyKey,
+      );
+      return keys.length === 1
+        ? new Response(
+            JSON.stringify({
+              ok: false,
+              error: { code: "DOCUMENT_LOCKED", fields: [] },
+            }),
+            { status: 423 },
+          )
+        : new Response(
+            JSON.stringify({ ok: true, result: { id: 7, revision: 2 } }),
+          );
+    });
+    const transport = createTransport(
+      {
+        baseURL: "https://cms.example.invalid",
+        apiKey: ["synthetic", "locked", "batch"].join("-"),
+      },
+      fetchImpl,
+    );
+    expect(await runBatch({ ...context, transport })).toMatchObject({
+      succeeded: 0,
+      failed: 1,
+    });
+    // One attempt only: a retryable failure would have been tried again here.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const receipt = await readFile(context.receiptFile, "utf8");
+    expect(receipt).toContain('"code":"REQUEST_REJECTED"');
+    expect(receipt).toContain('"retryable":false');
+    expect(await runBatch({ ...context, transport })).toMatchObject({
+      succeeded: 1,
+      failed: 0,
+    });
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).toBe(keys[0]);
+    expect(await docText("../../docs/cms/operations.md")).toContain(
+      "`batch.mjs`把`DOCUMENT_LOCKED`记为`REQUEST_REJECTED`、`retryable:false`；用同一receipt重跑时，会用同一key重试它。",
+    );
+  });
+
+  it("is that approve-batch and restore-draft take no key, and the limit that leaves is recorded", async () => {
+    const approve = {
+      automationUserId: 1,
+      items: [{ id: 1, revision: 1 }],
+    };
+    const restore = { versionId: 1, expectedRevision: 1 };
+    const idempotencyKey = "synthetic-key";
+    expect(editorialApproveBatchSchema.safeParse(approve).success).toBe(true);
+    expect(
+      editorialApproveBatchSchema.safeParse({ ...approve, idempotencyKey })
+        .success,
+    ).toBe(false);
+    expect(editorialRestoreDraftSchema.safeParse(restore).success).toBe(true);
+    expect(
+      editorialRestoreDraftSchema.safeParse({ ...restore, idempotencyKey })
+        .success,
+    ).toBe(false);
+    expect(await docText("../../docs/cms/operations.md")).toContain(
+      "`approve-batch`、`approve-article-batch`和`restore-draft`没有`idempotencyKey`",
+    );
+    const design = await docText(
+      "../../docs/development/admin-mcp-completion-v1.md",
+    );
+    expect(design.slice(design.indexOf("Acceptedlimits,recorded"))).toContain(
+      "AretryafterOUTCOME_UNKNOWNonapprove-batchcanleaveasecondactiveapproval",
+    );
+    expect(design).toContain(
+      "sorevokingthatoneleavesthefirstactive,andautomationcanstillpublishwithit",
+    );
+  });
 });
 
 describe("deterministic editorial batch", () => {

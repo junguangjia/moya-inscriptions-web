@@ -15,6 +15,7 @@ import * as migration_20261103_143652_ai_operator_role from "./20261103_143652_a
 import * as migration_20261103_150451_mcp_key_lifecycle from "./20261103_150451_mcp_key_lifecycle";
 import * as migration_20261103_153046_mcp_control from "./20261103_153046_mcp_control";
 import * as migration_20261103_153057_mcp_audit_events from "./20261103_153057_mcp_audit_events";
+import * as migration_20261103_184050_editorial_receipts_document_refs from "./20261103_184050_editorial_receipts_document_refs";
 
 export const migrations = [
   {
@@ -101,5 +102,10 @@ export const migrations = [
     up: migration_20261103_153057_mcp_audit_events.up,
     down: migration_20261103_153057_mcp_audit_events.down,
     name: "20261103_153057_mcp_audit_events",
+  },
+  {
+    up: migration_20261103_184050_editorial_receipts_document_refs.up,
+    down: migration_20261103_184050_editorial_receipts_document_refs.down,
+    name: "20261103_184050_editorial_receipts_document_refs",
   },
 ];

@@ -94,10 +94,45 @@ tool_timeout_sec = 30
 Bearer 冲突。具体目标需核实代理配置；保留现有入口保护，把 CMS
 Bearer 透传至 CMS，必要的上游身份验证使用已批准的兼容通道。不得取消 CMS 鉴权、开放原始管理端口或改用新网络平台来绕过冲突。
 
-透传只限 MCP 调用。入口不得把浏览器请求上的 `Authorization`
-转发给 Admin：只要带着这个请求头，已登录的 Owner 就不再算 Owner 浏览器会话，账号、密钥、审计和
-`/admin/mcp-control`
-都会拒绝他，等于把 Owner 锁在这些受保护页面之外。仓库内的 Nginx 模板不会这样转发；具体目标在发布时只读核实。
+仓库内的 Nginx 模板不注入
+`Authorization`，客户端自己发送的这个请求头照常透传：REST
+key 和放在请求头里的 JWT 在 `/api/*`
+上都依赖它，所以不能把透传限制在 MCP 调用上。发布时只读核实入口之前没有任何一层替浏览器加上这个请求头，例如 Basic 身份验证：只要带着它，已登录的 Owner 就不再算 Owner 浏览器会话，账号、密钥、审计和
+`/admin/mcp-control` 都会拒绝他，等于把 Owner 锁在这些受保护页面之外。
+
+`editorial_*` 与 `/api/editorial/*` 的写入回答规则：
+
+- `OUTCOME_UNKNOWN`（REST
+  503）：提交没有得到确认，写入可能生效也可能没有。用同一 `idempotencyKey`
+  重试是安全的：已提交的回放原结果，未提交的重新执行。服务端在提交后用
+  `pg_xact_status` 另开连接核实，只有 `committed` 才算成功。
+- `approve-batch`、`approve-article-batch` 和 `restore-draft` 没有
+  `idempotencyKey`，上一条的重试规则不适用。结果未确认时先刷新并核对批准列表，再决定是否重做：批准重做可能多出一条 active 批准，撤销页面报告的那条不影响另一条，自动化仍可凭它发布；恢复重做时，如果第一次已提交，回答
+  `REVISION_CONFLICT`。
+- 下列拒绝不写回执，同一 key 在情况变化后可以成功：`CONCURRENT_OPERATION_BUSY`、`DOCUMENT_LOCKED`（REST
+  423，文档被 Owner 打开）、`CATALOG_OUT_OF_SCOPE`（Owner 可以放宽账号范围）、`CATALOG_DELIVERY_PREPARATION_REQUIRED`、`RECORD_UNAVAILABLE`、`REFERENCE_NOT_FOUND`、
+  `REFERENCE_NOT_PUBLISHED`、`ALREADY_PUBLISHED`，以及所有 5xx。
+- `batch.mjs` 把 `DOCUMENT_LOCKED` 记为
+  `REQUEST_REJECTED`、`retryable: false`；用同一 receipt 重跑时，会用同一 key 重试它。
+- 其余拒绝写入永久回执，同一 key 回放同一代码，并带 `replayed: true`（REST 在
+  `error.replayed`）。本规则之前写入的回执（包括上面这些代码）无法替换，仍按原样回放；换一个新 key 即可。
+- `ALREADY_PUBLISHED`：用新 key 重试一次已成功的发布，批准的内容已经上线。草稿之后又改过，则仍是
+  `APPROVED_REVISION_CHANGED`。
+- `IDENTITY_ALREADY_BOUND`（REST 409）：用新 key 创建的记录已经存在，`catalogId`
+  或 `sourceId` 已被占用。内容本身没有问题，不要为此修改内容；要改这条记录，带
+  `id` 和 `expectedRevision`
+  保存。记录不能硬删，同一命令会再次遇到这条拒绝，所以它写永久回执。
+- 保存草稿如果使已准备的交付意图失效，结果带
+  `supersededIntents`（意图 id 列表）。没有失效的意图时不带此字段；回执不保存它，回放时也不带。
+- `editorial_*` 上没有代码的失败回答 `OUTCOME_UNKNOWN`，不再回答
+  `EDITORIAL_OPERATION_REJECTED`；Payload的明确拒绝分别回答
+  `RECORD_UNAVAILABLE`、`FORBIDDEN`、`CONTENT_INVALID`。REST 上没有代码的失败仍是 500
+  `OPERATION_FAILED`。
+- integer 列放不下的 id（如 `3000000000`、`"12.5"`）不可能对应任何记录，同样回答
+  `RECORD_UNAVAILABLE`，REST `read-draft` 回答 404，不写回执。
+- 批准批次不能复制：`POST /api/editorial-approvals/:id/duplicate` 和
+  `POST /api/editorial-article-approvals/:id/duplicate` 回答 403
+  `APPROVAL_DUPLICATE_DISABLED`。
 
 程序准备受保护清单后运行 `scripts/editorial/batch.mjs`：默认 dry-run；执行时增加
 `--execute --config <PROTECTED_CONFIG> --receipt <PROTECTED_RECEIPT>`。每项稳定 replay

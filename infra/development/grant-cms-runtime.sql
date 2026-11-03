@@ -148,4 +148,5 @@ TO :"cms_role";
 
 -- No application-defined SQL function is called by the CMS runtime.
 -- Existing editorial transaction fencing calls pg_catalog.pg_advisory_xact_lock
--- and pg_catalog.hashtextextended, supplied by PostgreSQL itself.
+-- and pg_catalog.hashtextextended, and commit truth calls pg_catalog.pg_current_xact_id
+-- and pg_catalog.pg_xact_status, supplied by PostgreSQL itself.

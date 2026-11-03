@@ -56,6 +56,15 @@ const response = (result: unknown) => ({
   ok: true,
   json: async () => ({ ok: true, result }),
 });
+// What the route answers when the commit could not be confirmed.
+const unconfirmed = () => ({
+  ok: false,
+  status: 503,
+  json: async () => ({
+    ok: false,
+    error: { code: "OUTCOME_UNKNOWN", fields: [] },
+  }),
+});
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -96,6 +105,67 @@ describe("Owner editorial task presentation", () => {
     expect(
       JSON.parse((call as unknown as [string, RequestInit])[1].body as string),
     ).toEqual({ automationUserId: 11, items: [{ id: 7, revision: 4 }] });
+  });
+
+  it("says an unconfirmed approve is unconfirmed, asks for a look at the list, and does not repeat it", async () => {
+    const fetch = vi.fn(async (url: string) =>
+      url.endsWith("owner-drafts") ? response(page) : unconfirmed(),
+    );
+    vi.stubGlobal("fetch", fetch);
+    render(createElement(OwnerWorkflowClient));
+    await screen.findByText("Synthetic catalog");
+    fireEvent.click(screen.getByLabelText("选择 Synthetic catalog"));
+    fireEvent.change(screen.getByLabelText("执行账号"), {
+      target: { value: "11" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "核对并批准…" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认批准" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("操作结果未确认");
+    expect(alert.textContent).toContain("请先刷新");
+    expect(alert.textContent).toContain("资料批准");
+    expect(alert.textContent).not.toContain("操作未完成");
+    expect(screen.queryByText(/已批准批次/)).toBeNull();
+    expect(
+      fetch.mock.calls.filter(([url]) => url.endsWith("approve-batch")),
+    ).toHaveLength(1);
+  });
+
+  it("says the same of an unconfirmed restore", async () => {
+    const fetch = vi.fn(async (url: string) =>
+      url.endsWith("owner-drafts")
+        ? response(page)
+        : url.endsWith("owner-history")
+          ? response({
+              id: 7,
+              currentRevision: 4,
+              page: 1,
+              totalPages: 1,
+              docs: [
+                {
+                  id: 21,
+                  revision: 2,
+                  title: "Earlier synthetic",
+                  status: "draft",
+                  createdAt: "2026-10-23T12:00:00Z",
+                },
+              ],
+            })
+          : unconfirmed(),
+    );
+    vi.stubGlobal("fetch", fetch);
+    render(createElement(OwnerWorkflowClient));
+    await screen.findByText("Synthetic catalog");
+    fireEvent.click(screen.getByRole("tab", { name: "版本恢复" }));
+    fireEvent.click(screen.getByRole("button", { name: "查看历史" }));
+    await screen.findByLabelText("历史版本");
+    fireEvent.change(screen.getByLabelText("历史版本"), {
+      target: { value: "21" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "恢复为新草稿" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("操作结果未确认");
+    expect(alert.textContent).not.toContain("操作未完成");
   });
 
   it("opens history as a peer task and restores with the observed current revision", async () => {
