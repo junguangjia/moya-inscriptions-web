@@ -23,6 +23,7 @@ import type { AdminMcpKey } from "../door";
 import {
   CODE_GUIDE,
   failedEnvelope,
+  holdsInvisible,
   inputInvalidEnvelope,
   issuesOfError,
   okEnvelope,
@@ -229,6 +230,24 @@ const settledOutcome = async (
   return { ...row, state: "failed", code: settlement.code };
 };
 
+/** The row a public identity names, for an answer and an audit row that did not read one. */
+const namedRow = async (
+  { req }: AdminOpContext,
+  target: ReturnType<NonNullable<AdminOpEntry["target"]>> | undefined,
+) => {
+  if (target?.id === undefined || !Object.hasOwn(CMS_FAMILIES, target.type))
+    return undefined;
+  try {
+    return await rowIdOf(
+      req,
+      CMS_FAMILIES[target.type as AdminCmsRecordType],
+      target.id,
+    );
+  } catch {
+    return undefined;
+  }
+};
+
 /** Each target's one operation. Nothing thrown here is lost and none is a success. */
 const runTarget = async (
   entry: AdminOpEntry,
@@ -271,18 +290,19 @@ const runTarget = async (
     );
   } catch (error) {
     const failure = targetFailureOf(error);
+    const named = id ?? (await namedRow(context, target));
     if (failure.state === "already_applied")
       return settledOutcome(
         entry,
         raw,
         undefined,
         context,
-        { index, id },
+        { index, id: named },
         "already_applied",
       );
     return {
       index,
-      id,
+      id: named,
       ...failure,
       ...(failure.code === "DOCUMENT_LOCKED"
         ? await lockBlockOf(entry, raw, context, target, id)
@@ -291,6 +311,7 @@ const runTarget = async (
   }
 };
 
+/** Whether the row landed: a ledger that stopped must not watch more writes go by. */
 const auditTarget = async (
   { req, key }: AdminOpContext,
   call: AdminExecuteInput,
@@ -313,8 +334,10 @@ const auditTarget = async (
       ...(target?.type ? { targetType: target.type } : {}),
       ...(id === undefined ? {} : { targetId: String(id) }),
     });
+    return true;
   } catch {
     req.payload.logger.error({ category: "ADMIN_MCP_AUDIT_WRITE_FAILED" });
+    return false;
   }
 };
 
@@ -369,8 +392,13 @@ const RETRY_AFTER_MS = 2_000;
 // `remaining`, the pointers of an op and the sentence on sending targets again.
 const CAP_MARGIN_BYTES = 300;
 
-const RESEND =
-  " next leaves out input and targets to stay small: send the same ones again.";
+const RESEND = " next leaves out input and targets: send the same ones again.";
+
+const CONTINUED =
+  "An earlier call of this batch left a target incomplete, and this answer covers only the targets from startAt on. Repeat the whole call with the same requestId and no startAt to see every target.";
+
+const LEDGER_STOPPED =
+  "The audit ledger could not record a target, so the batch stopped there. The targets named in data did run and the rest did not. Retry shortly with next.";
 
 const bytesOf = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 
@@ -389,7 +417,11 @@ const nextCall = (
     args: {
       requestId: call.requestId,
       op: call.op,
-      ...(bytesOf(body) <= NEXT_ARGS_MAX_BYTES ? body : {}),
+      // Returned text loses what the strip takes, so a body it would change goes unsent
+      // and is never replayed as different text.
+      ...(bytesOf(body) <= NEXT_ARGS_MAX_BYTES && !holdsInvisible(body)
+        ? body
+        : {}),
       ...(startAt > 0 ? { startAt } : {}),
       ...(startAt > 0 && incomplete ? { priorIncomplete: true } : {}),
     },
@@ -417,12 +449,20 @@ export const executeContinuation = (
     : undefined;
 };
 
+type Stopped = "budget" | "paused" | "ledger";
+
+const STOPPED_CODE = {
+  budget: "IN_PROGRESS",
+  paused: "MCP_PAUSED",
+  ledger: "AUDIT_UNAVAILABLE",
+} as const;
+
 /** The whole answer of a call, from what each target it reached did. */
 const answerOf = (
   call: AdminExecuteInput,
   outcomes: readonly TargetOutcome[],
   reached: number,
-  stopped: "budget" | "paused" | undefined,
+  stopped: Stopped | undefined,
 ): AdminMcpEnvelope => {
   const total = call.targets?.length ?? 1;
   const data = dataOf(outcomes);
@@ -430,18 +470,21 @@ const answerOf = (
     call.priorIncomplete === true ||
     outcomes.some(({ state }) => !COMPLETE.has(state));
   const progress = {
-    done: reached,
+    // This call's own: from a startAt it cannot know what the targets before it did.
+    done: outcomes.length,
     total,
     ...(reached < total ? { remaining: total - reached } : {}),
   };
   const fields = { data, ...progress };
   const refused = [...(data.conflict ?? []), ...(data.failed ?? [])];
   const single = total === 1 ? outcomes[0] : undefined;
-  if (stopped !== undefined)
-    return failedEnvelope(stopped === "paused" ? "MCP_PAUSED" : "IN_PROGRESS", {
+  if (stopped !== undefined) {
+    const answer = failedEnvelope(STOPPED_CODE[stopped], {
       ...fields,
       next: nextCall(call, reached, incomplete),
     });
+    return stopped === "ledger" ? { ...answer, hint: LEDGER_STOPPED } : answer;
+  }
   if (data.unknown !== undefined)
     return failedEnvelope("OUTCOME_UNKNOWN", {
       ...fields,
@@ -455,7 +498,7 @@ const answerOf = (
         row.lock !== undefined ||
         CODE_GUIDE[envelopeCodeOf(row.code)].retryable,
     );
-    return failedEnvelope(
+    const answer = failedEnvelope(
       single === undefined ? "PARTIAL" : envelopeCodeOf(single.code),
       {
         ...fields,
@@ -464,8 +507,12 @@ const answerOf = (
           : { next: nextCall(call, 0, false, afterMsOf(retry)) }),
       },
     );
+    return call.priorIncomplete === true
+      ? { ...answer, hint: CONTINUED }
+      : answer;
   }
-  if (call.priorIncomplete === true) return failedEnvelope("PARTIAL", fields);
+  if (call.priorIncomplete === true)
+    return { ...failedEnvelope("PARTIAL", fields), hint: CONTINUED };
   if (data.queued !== undefined) {
     const queued = failedEnvelope("QUEUED", {
       ...fields,
@@ -534,7 +581,16 @@ const withResults = (
   };
 };
 
-export const executeEnvelope = async (
+/**
+ * The Admin's pool holds 5 connections and the Owner's screens use the same ones. One
+ * call holds one at a time, but a target can stall on it for a lock wait or the
+ * Backend's readiness read, so calls at once are what could starve the Owner. Past
+ * this share a call is refused at once and never waits: a queue would hold its request.
+ */
+const EXECUTE_POOL_SHARE = 2;
+let inFlight = 0;
+
+const runCall = async (
   rawInput: unknown,
   { key, req }: { readonly key: AdminMcpKey; readonly req: PayloadRequest },
 ): Promise<AdminMcpEnvelope> => {
@@ -579,7 +635,9 @@ export const executeEnvelope = async (
 
   const outcomes: TargetOutcome[] = [];
   let reached = startAt;
-  let stopped: "budget" | "paused" | undefined;
+  let stopped: Stopped | undefined;
+  // Past a start row that named no target, this call's own target row names it.
+  const startNamedIt = executeReferences(rawInput).targetId !== undefined;
   while (reached < total) {
     if (reached > startAt) {
       if (performance.now() - started >= EXECUTE_BUDGET_MS) {
@@ -606,16 +664,22 @@ export const executeEnvelope = async (
     };
     const outcome = await runTarget(entry, command, reached, context);
     outcomes.push(outcome);
-    if (total > 1) {
+    reached += 1;
+    if (total > 1 || (!startNamedIt && outcome.id !== undefined)) {
       let target: ReturnType<NonNullable<AdminOpEntry["target"]>> | undefined;
       try {
         target = entry.target?.(command);
       } catch {
         target = undefined;
       }
-      await auditTarget(context, call, target, outcome);
+      if (
+        !(await auditTarget(context, call, target, outcome)) &&
+        reached < total
+      ) {
+        stopped = "ledger";
+        break;
+      }
     }
-    reached += 1;
   }
 
   const answer = withResults(
@@ -645,4 +709,17 @@ export const executeEnvelope = async (
       ...(answer.code === "PARTIAL" ? { partial: true as const } : {}),
     },
   };
+};
+
+export const executeEnvelope = async (
+  rawInput: unknown,
+  context: { readonly key: AdminMcpKey; readonly req: PayloadRequest },
+): Promise<AdminMcpEnvelope> => {
+  if (inFlight >= EXECUTE_POOL_SHARE) return failedEnvelope("EXECUTE_BUSY");
+  inFlight += 1;
+  try {
+    return await runCall(rawInput, context);
+  } finally {
+    inFlight -= 1;
+  }
 };

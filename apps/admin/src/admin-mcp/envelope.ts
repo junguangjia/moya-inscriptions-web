@@ -48,6 +48,10 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     hint: "Another operation holds this target. Retry shortly with the same requestId.",
     retryable: true,
   },
+  EXECUTE_BUSY: {
+    hint: "Too many writes are running at once on this Admin, so nothing of this call ran. Retry shortly with the same requestId.",
+    retryable: true,
+  },
   OUTCOME_UNKNOWN: {
     hint: "The write may or may not have committed. Retrying with the same requestId is safe.",
     retryable: true,
@@ -157,7 +161,7 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     retryable: false,
   },
   REMOVAL_NOT_ALLOWED: {
-    hint: "This save removes media or provenance entries; the target names which field. Nothing was saved. If you mean to, send allowRemoving:true on the same requestId.",
+    hint: "This save removes entries, or a stored link you could not read; the target names which. Nothing was saved. If you mean to, send allowRemoving:true on the same requestId.",
     retryable: false,
   },
   PATCH_NO_MATCH: {
@@ -433,6 +437,10 @@ const withoutInvisible = (envelope: AdminMcpEnvelope): AdminMcpEnvelope => {
   const stripped = JSON.parse(clean) as AdminMcpEnvelope;
   return { ...stripped, meta: { ...stripped.meta, stripped: true } };
 };
+
+/** Whether the strip would change this. By search: the g flag keeps a test's place. */
+export const holdsInvisible = (value: unknown): boolean =>
+  JSON.stringify(value).search(INVISIBLE) >= 0;
 
 const bytesOf = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 

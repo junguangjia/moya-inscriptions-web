@@ -11,7 +11,10 @@ import { CONTROL_SLUG, SWITCH_LABELS } from "./global";
 
 const EXPIRING_WITHIN_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** Section 21's p95 budgets, by the tools that exist. Each slice adds its own. */
+/**
+ * Section 21's p95 budgets, by the tools that exist. Each slice adds its own. Each is
+ * for one target: a batch takes per target, so its calls get a row with no budget.
+ */
 const TOOL_BUDGET_MS: Readonly<Record<string, number>> = {
   admin_whoami: 100,
   admin_execute: 800,
@@ -22,12 +25,12 @@ const auditFigures = async (
 ): Promise<AdminMcpControlPage["figures"]> => {
   const { drizzle } = payload.db as unknown as Pick<PostgresAdapter, "drizzle">;
   const { rows: timings } = await drizzle.execute(sql`
-    SELECT tool, count(*) AS calls,
+    SELECT tool, coalesce(count, 1) > 1 AS batch, count(*) AS calls,
       percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95_ms
     FROM mcp_audit_events
     WHERE phase = 'finish' AND tool IS NOT NULL
       AND at > now() - interval '7 days'
-    GROUP BY tool ORDER BY tool`);
+    GROUP BY tool, batch ORDER BY tool, batch`);
   const { rows: irreversible } = await drizzle.execute(sql`
     SELECT coalesce(sum(coalesce(count, 1)), 0) AS targets
     FROM mcp_audit_events
@@ -47,10 +50,12 @@ const auditFigures = async (
     irreversibleTargets: Number(irreversible[0]?.targets ?? 0),
     outcomeUnknown: Number(unknown[0]?.calls ?? 0),
     timings: timings.map((row) => ({
-      tool: String(row.tool),
+      tool:
+        row.batch === true ? `${String(row.tool)} (batch)` : String(row.tool),
       calls: Number(row.calls),
       p95Ms: Math.round(Number(row.p95_ms)),
-      budgetMs: TOOL_BUDGET_MS[String(row.tool)] ?? null,
+      budgetMs:
+        row.batch === true ? null : (TOOL_BUDGET_MS[String(row.tool)] ?? null),
     })),
   };
 };

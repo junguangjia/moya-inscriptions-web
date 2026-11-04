@@ -173,7 +173,12 @@ const beforeOperation: CollectionBeforeOperationHook = async ({
 
   if (input.id === undefined)
     throw new EditorialError("SINGLE_RECORD_REQUIRED", 400);
-  await lockEditorialKey(req, `document:${String(input.id)}`);
+  // The row, by the cast Payload's own query makes: two spellings of an id share a key.
+  const row = Number(input.id);
+  await lockEditorialKey(
+    req,
+    `document:${Number.isNaN(row) ? String(input.id) : row}`,
+  );
   const expectedRevision = revisionNumber(data.revision);
   const publishing = data._status === "published";
   if (publishing && !actsAsOwner(req) && !isApprovedPublishRequest(req)) {

@@ -7,67 +7,18 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import {
-  createCatalogPublicationAuthority,
-  createCatalogPublishedRenditions,
-  createCatalogReadiness,
-  createCatalogRenderBacklog,
-  currentCatalogRecipePolicy,
-  readCatalogSourceSnapshot,
-} from "@moya/backend-production/internal/catalog-delivery";
-import { LocalCatalogSourceReader } from "@moya/backend-production/internal/catalog-source";
-import {
-  createPublicationWorkers,
-  parsePublicationConfig,
-} from "@moya/backend-production/internal/publication";
-import {
-  createCatalogRenderer,
-  createCatalogSync,
-} from "@moya/backend-production/internal/publishing-catalog";
-import { createPublishingJobHandlers } from "@moya/backend-production/internal/publishing-job-handlers";
-import { FilesystemPublishingMediaStore } from "@moya/backend-production/internal/publishing-media-store";
-import {
-  createSandboxRunner,
-  defaultSandboxAppDist,
-} from "@moya/backend-production/internal/publishing-sandbox";
-import { PublishingWorker } from "@moya/backend-production/internal/publishing-worker";
-import {
-  handleOperatorRequest,
-  type OperatorRouteDependencies,
-} from "@moya/backend-runtime/internal/community-operator";
-import {
-  createPostgresPool,
-  parsePostgresConfig,
-} from "@moya/catalog-postgres";
-import {
-  PostgresMediaPublicationAdapter,
-  PostgresWorkPublishingAdapter,
-  runCommunityMigrations,
-} from "@moya/community-postgres";
-import { adminMcpEnvelopeSchema } from "@moya/contracts/internal/admin-mcp";
+import type { OperatorRouteDependencies } from "@moya/backend-runtime/internal/community-operator";
+import type { createPostgresPool } from "@moya/catalog-postgres";
 import type {
   AdminExecuteData,
   AdminMcpEnvelope,
 } from "@moya/contracts/internal/admin-mcp";
-import { sql, type PostgresAdapter } from "@payloadcms/db-postgres";
-import {
-  createLocalReq,
-  getPayload,
-  type Payload,
-  type TypedUser,
-} from "payload";
-import sharp from "sharp";
+import type { PostgresAdapter } from "@payloadcms/db-postgres";
+import type { Payload, TypedUser } from "payload";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { saveDraft } from "admin/editorial";
-import { selectedMediaSnapshot } from "admin/media-snapshot";
-
 import { assertSyntheticTestDatabaseUrl } from "../integration/postgres/synthetic-test-database.js";
-import {
-  connectClient,
-  serveRoutes,
-  syntheticCatalogDraft,
-} from "./admin-mcp-wire.js";
+import type { serveRoutes } from "./admin-mcp-wire.js";
 
 /*
  * Matrix rows "Prepare, request-release", "Release delivery" and "Publish record with
@@ -97,6 +48,29 @@ const run = randomUUID();
 const catalogId = `delivery-e2e-${run}`;
 const mediaId = `delivery-e2e-media-${run}`;
 
+// Loaded only when the file runs, so a skipped one costs either CMS step nothing.
+const loadModules = async () => ({
+  ...(await import("@moya/backend-production/internal/catalog-delivery")),
+  ...(await import("@moya/backend-production/internal/catalog-source")),
+  ...(await import("@moya/backend-production/internal/publication")),
+  ...(await import("@moya/backend-production/internal/publishing-catalog")),
+  ...(await import("@moya/backend-production/internal/publishing-job-handlers")),
+  ...(await import("@moya/backend-production/internal/publishing-media-store")),
+  ...(await import("@moya/backend-production/internal/publishing-sandbox")),
+  ...(await import("@moya/backend-production/internal/publishing-worker")),
+  ...(await import("@moya/backend-runtime/internal/community-operator")),
+  ...(await import("@moya/catalog-postgres")),
+  ...(await import("@moya/community-postgres")),
+  ...(await import("@moya/contracts/internal/admin-mcp")),
+  ...(await import("@payloadcms/db-postgres")),
+  ...(await import("payload")),
+  sharp: (await import("sharp")).default,
+  ...(await import("admin/editorial")),
+  ...(await import("admin/media-snapshot")),
+  ...(await import("./admin-mcp-wire.js")),
+});
+let modules: Awaited<ReturnType<typeof loadModules>>;
+
 type Answer = AdminMcpEnvelope & { data: AdminExecuteData };
 type Intent = {
   intentId: string;
@@ -118,6 +92,20 @@ describe.skipIf(!enabled)(
     let base: string;
 
     beforeAll(async () => {
+      modules = await loadModules();
+      const {
+        connectClient,
+        createCatalogPublishedRenditions,
+        createCatalogReadiness,
+        createCatalogRenderBacklog,
+        createPostgresPool,
+        currentCatalogRecipePolicy,
+        getPayload,
+        handleOperatorRequest,
+        parsePostgresConfig,
+        runCommunityMigrations,
+        serveRoutes,
+      } = modules;
       const appUrl = process.env.ADMIN_MCP_DELIVERY_E2E_APP_DATABASE_URL;
       if (
         process.env.CMS_ENVIRONMENT !== "synthetic" ||
@@ -221,19 +209,43 @@ describe.skipIf(!enabled)(
         name: "admin_execute",
         arguments: { requestId: randomUUID(), op, input },
       });
-      return adminMcpEnvelopeSchema.parse(result.structuredContent) as Answer;
+      return modules.adminMcpEnvelopeSchema.parse(
+        result.structuredContent,
+      ) as Answer;
     };
     const read = async (op: string, input: Record<string, unknown>) => {
       const result = await client.callTool({
         name: "admin_read",
         arguments: { op, input },
       });
-      return adminMcpEnvelopeSchema.parse(result.structuredContent);
+      return modules.adminMcpEnvelopeSchema.parse(result.structuredContent);
     };
     const intentOf = (answer: Answer) =>
       answer.data.results![0] as unknown as Intent;
 
     it("prepares, renders, requests, copies and releases, and only the release answers ok:true", async () => {
+      const {
+        createCatalogPublicationAuthority,
+        createCatalogRenderer,
+        createCatalogSync,
+        createLocalReq,
+        createPublicationWorkers,
+        createPublishingJobHandlers,
+        createSandboxRunner,
+        defaultSandboxAppDist,
+        FilesystemPublishingMediaStore,
+        LocalCatalogSourceReader,
+        parsePublicationConfig,
+        PostgresMediaPublicationAdapter,
+        PostgresWorkPublishingAdapter,
+        PublishingWorker,
+        readCatalogSourceSnapshot,
+        saveDraft,
+        selectedMediaSnapshot,
+        sharp,
+        sql,
+        syntheticCatalogDraft,
+      } = modules;
       const req = () => createLocalReq({ user: owner }, payload);
       const bytes = await sharp({
         create: {

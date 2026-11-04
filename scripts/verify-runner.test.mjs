@@ -285,8 +285,8 @@ describe("affected workspace command boundaries", () => {
       /requires an explicit test database/u,
     );
     const plan = verificationPlan("postgres", ["--profile", "complete"], env);
-    assert.equal(plan.profile, "web-complete");
-    assert.equal(plan.ceilingMs, 300000);
+    assert.equal(plan.profile, "postgres-complete");
+    assert.equal(plan.ceilingMs, 900000);
     const commands = verificationCommands(plan, env);
     assert.deepEqual(
       commands.slice(1).map((command) => command.slice(1)),

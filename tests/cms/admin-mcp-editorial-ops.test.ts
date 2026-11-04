@@ -25,7 +25,12 @@ import {
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { approveBatch, restoreDraft, saveDraft } from "admin/editorial";
+import {
+  approveBatch,
+  publishApproved,
+  restoreDraft,
+  saveDraft,
+} from "admin/editorial";
 import { saveArticleDraft } from "admin/editorial-content";
 import { selectedMediaSnapshot } from "admin/media-snapshot";
 
@@ -220,11 +225,14 @@ const unlock = (id: number) =>
 const withCommitFailureOn = async <T>(
   table: string,
   work: () => Promise<T>,
+  sqlState = "P0001",
 ): Promise<T> => {
   const db = adapter().drizzle;
-  await db.execute(sql`
+  await db.execute(
+    sql.raw(`
     CREATE OR REPLACE FUNCTION ops_refuse_commit() RETURNS trigger
-    LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic commit failure'; END $$`);
+    LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic commit failure' USING ERRCODE = '${sqlState}'; END $$`),
+  );
   await db.execute(
     sql.raw(`
     CREATE CONSTRAINT TRIGGER ops_refuse_commit
@@ -954,6 +962,103 @@ describe("catalog.publish", () => {
     expect((await draftOf(live.id))._status).toBe("draft");
     expect(await answered(true)).toMatchObject({ ok: true });
     expect((await draftOf(live.id))._status).toBe("published");
+  });
+});
+
+describe("a record the Owner published ahead of its images", () => {
+  const ownerPublishes = async (draft: { id: number; revision: number }) => {
+    const owned = await payload.update({
+      collection: "catalogs",
+      id: draft.id,
+      data: { revision: draft.revision, _status: "published" },
+      draft: false,
+      req: await reqFor(owner),
+      user: owner,
+      overrideAccess: false,
+      overrideLock: false,
+    });
+    expect(owned._status).toBe("published");
+    return Number(owned.revision);
+  };
+  const answering = (complete: boolean, args: Record<string, unknown>) =>
+    withOperator(
+      { catalogPublishedRenditions: renditionsAnswering(complete) },
+      () => call(args),
+    );
+
+  it("does not read as published on catalog.publish until the images are proved, switch on or off", async () => {
+    const draft = await seedDraftWithMedia();
+    const args = {
+      requestId: requestId(),
+      op: "catalog.publish",
+      input: { id: draft.id, expected: draft.expected },
+    };
+    vi.stubEnv("CMS_CATALOG_DIRECT_PUBLISH", "on");
+    try {
+      const revision = await ownerPublishes(draft);
+      const refused = {
+        ok: false,
+        code: "CATALOG_DELIVERY_PREPARATION_REQUIRED",
+      };
+      expect(await call(args)).toMatchObject(refused);
+      expect(await answering(false, args)).toMatchObject(refused);
+      vi.stubEnv("CMS_CATALOG_DIRECT_PUBLISH", "");
+      expect(await answering(false, args)).toMatchObject(refused);
+      // The same requestId, as the refusal's hint says, once they are ready.
+      const ready = await answering(true, args);
+      expect(ready).toMatchObject({ ok: true });
+      expect(ready.data.already_applied).toEqual([draft.id]);
+      expect((await draftOf(draft.id)).revision).toBe(revision);
+    } finally {
+      vi.stubEnv("CMS_CATALOG_DIRECT_PUBLISH", "");
+    }
+  });
+
+  it("does not on editorial.publish-approved either, and the Owner's own answers stay as they are", async () => {
+    const draft = await seedDraftWithMedia();
+    scoped.push(draft.catalogId);
+    await payload.update({
+      collection: "users",
+      id: automation.id,
+      overrideAccess: true,
+      data: { scopeCatalogIds: scoped } as never,
+    });
+    const { approvalId } = await approveBatch(await reqFor(owner), {
+      automationUserId: automation.id,
+      items: [{ id: draft.id, revision: draft.revision }],
+    });
+    const args = {
+      requestId: requestId(),
+      op: "editorial.publish-approved",
+      input: { approvalId, id: draft.id },
+    };
+    vi.stubEnv("CMS_CATALOG_DIRECT_PUBLISH", "on");
+    try {
+      await ownerPublishes(draft);
+      expect(await call(args)).toMatchObject({
+        ok: false,
+        code: "CATALOG_DELIVERY_PREPARATION_REQUIRED",
+      });
+      // The Owner's route meets what is live and says so, ready or not, switch on or off.
+      const ownerRoute = async (key: string) =>
+        publishApproved(await reqFor(owner), {
+          id: draft.id,
+          approvalId,
+          idempotencyKey: `${run}:owner-approved:${key}:${draft.id}`,
+        });
+      await expect(ownerRoute("on")).rejects.toMatchObject({
+        code: "ALREADY_PUBLISHED",
+      });
+      vi.stubEnv("CMS_CATALOG_DIRECT_PUBLISH", "");
+      await expect(ownerRoute("off")).rejects.toMatchObject({
+        code: "ALREADY_PUBLISHED",
+      });
+      const ready = await answering(true, args);
+      expect(ready).toMatchObject({ ok: true });
+      expect(ready.data.already_applied).toEqual([draft.id]);
+    } finally {
+      vi.stubEnv("CMS_CATALOG_DIRECT_PUBLISH", "");
+    }
   });
 });
 
@@ -1986,17 +2091,35 @@ describe("media metadata", () => {
       filesize: media.filesize,
       width: media.width,
       height: media.height,
-      alt: "Synthetic",
+      alt: media.alt,
+      rights: media.rights,
+      orderConfidence: media.orderConfidence,
     };
     const replay = await execute("media.register_existing", registration);
     expect(replay).toMatchObject({ ok: true });
     expect(replay.data.already_applied).toEqual([media.id]);
-    expect(
-      await execute("media.register_existing", {
-        ...registration,
-        sha256: "d".repeat(64),
-      }),
-    ).toMatchObject({ ok: false, code: "OPERATION_REFUSED" });
+    // Only the identical row is a replay: nothing in its answer shows the rest.
+    const withoutRights = Object.fromEntries(
+      Object.entries(registration).filter(([name]) => name !== "rights"),
+    );
+    for (const different of [
+      { ...registration, sha256: "d".repeat(64) },
+      { ...registration, alt: "Another alt" },
+      { ...registration, rights: "Other rights" },
+      { ...registration, orderConfidence: "LOW" },
+      { ...registration, width: 1_000 },
+      { ...registration, height: 2_000 },
+      { ...registration, filesize: 999 },
+      { ...registration, mimeType: "image/jpeg" },
+      withoutRights,
+    ]) {
+      const refused = await execute("media.register_existing", different);
+      expect(refused, JSON.stringify(different)).toMatchObject({
+        ok: false,
+        code: "OPERATION_REFUSED",
+      });
+      expect(refused.data.failed?.[0]?.code).toBe("MEDIA_IDENTITY_EXISTS");
+    }
     const newId = `ops-new-media-${run}`;
     expect(
       await execute("media.register_existing", {
@@ -2010,6 +2133,175 @@ describe("media metadata", () => {
       limit: 0,
     });
     expect(totalDocs).toBe(0);
+  });
+});
+
+describe("a bad reference is a refusal, and what is truly unknown stays unknown", () => {
+  // In the integer column's range, and no row of any table here reaches it.
+  const missing = 2_147_483_000;
+  const named = { ok: false, code: "REFERENCE_NOT_FOUND" };
+
+  it("answers REFERENCE_NOT_FOUND with no retry on offer, and a batch goes on", async () => {
+    const collection = await seedCollection();
+    const saveOn = (content: Record<string, unknown>) => ({
+      id: collection.id,
+      expected: { revision: collection.revision },
+      content,
+    });
+    for (const content of [
+      { coverCatalog: missing },
+      { members: [{ kind: "article", article: missing }] },
+    ]) {
+      const answer = await execute("collection.save", saveOn(content));
+      expect(answer).toMatchObject(named);
+      expect(answer.retryable).toBeUndefined();
+      expect(answer.next).toBeUndefined();
+      expect(answer.data.unknown).toBeUndefined();
+    }
+    const article = await seedArticle();
+    expect(
+      await execute("editorial.save-article-draft", {
+        id: article.id,
+        expectedRevision: article.revision,
+        content: { coverCatalog: missing },
+      }),
+    ).toMatchObject(named);
+
+    const batch = await call({
+      requestId: requestId(),
+      op: "collection.save",
+      targets: [
+        saveOn({ members: [{ kind: "article", article: missing }] }),
+        saveOn({ title: "Renamed in a batch" }),
+      ],
+    });
+    expect(batch.code).toBe("PARTIAL");
+    expect(batch.data.failed).toEqual([
+      { index: 0, id: collection.id, code: "REFERENCE_NOT_FOUND" },
+    ]);
+    expect(batch.data.applied).toEqual([collection.id]);
+  });
+
+  it("keeps OUTCOME_UNKNOWN when that SQLSTATE comes from the COMMIT, which it cannot confirm", async () => {
+    const draft = await seedDraft();
+    const id = requestId();
+    const input = {
+      id: draft.id,
+      expected: draft.expected,
+    };
+    const unknown = await withCommitFailureOn(
+      "editorial_receipts",
+      () => call({ requestId: id, op: "catalog.publish", input }),
+      "23503",
+    );
+    expect(unknown).toMatchObject({
+      ok: false,
+      code: "OUTCOME_UNKNOWN",
+      retryable: true,
+    });
+    expect((await liveOf(draft.id))._status).toBe("draft");
+    const retried = await call({
+      requestId: id,
+      op: "catalog.publish",
+      input,
+    });
+    expect(retried).toMatchObject({ ok: true });
+    expect(retried.data.applied).toEqual([draft.id]);
+  });
+});
+
+describe("the ledger names a target named by its public identity", () => {
+  const targetRows = async (id: string) =>
+    (await rowsOf(sql`
+      SELECT tool, phase, ok, code, target_type, target_id
+      FROM mcp_audit_events WHERE request_id = ${id} ORDER BY id`)) as {
+      tool: string | null;
+      target_id: string | null;
+    }[];
+
+  it("records the row of one write however the caller spelled it, refused or not", async () => {
+    const draft = await seedDraft();
+    const published = requestId();
+    expect(
+      await call({
+        requestId: published,
+        op: "catalog.publish",
+        input: { id: draft.catalogId, expected: draft.expected },
+      }),
+    ).toMatchObject({ ok: true });
+    const rows = await targetRows(published);
+    expect(rows).toHaveLength(3);
+    expect(rows.find(({ tool }) => tool === null)).toMatchObject({
+      phase: "finish",
+      ok: true,
+      code: "OK",
+      target_type: "catalog",
+      target_id: String(draft.id),
+    });
+
+    const other = await seedDraft();
+    const refused = requestId();
+    const conflict = await call({
+      requestId: refused,
+      op: "catalog.publish",
+      input: { id: other.catalogId, expected: { revision: 99 } },
+    });
+    expect(conflict.data.conflict?.[0]).toMatchObject({ id: other.id });
+    expect(
+      (await targetRows(refused)).find(({ tool }) => tool === null),
+    ).toMatchObject({
+      ok: false,
+      code: "REVISION_CONFLICT",
+      target_id: String(other.id),
+    });
+
+    const held = await seedDraft();
+    const lock = await lockFor("catalogs", held.id);
+    const read = await get({ type: "catalog", id: held.id });
+    const { input: offered } = (
+      read.actions as {
+        args: { op?: string; input?: Record<string, unknown> };
+      }[]
+    ).find(({ args }) => args.op === "document.lock_takeover")!.args;
+    const takeover = requestId();
+    expect(
+      await call({
+        requestId: takeover,
+        op: "document.lock_takeover",
+        input: { ...offered, id: held.catalogId, reason: "Synthetic takeover" },
+      }),
+    ).toMatchObject({ ok: true });
+    expect(
+      (await targetRows(takeover)).find(({ tool }) => tool === null),
+    ).toMatchObject({ ok: true, target_id: String(held.id) });
+    await unlock(lock.id);
+  });
+
+  it("adds no row when the start row already named it, and resolves a target already in place", async () => {
+    const draft = await seedDraft();
+    const direct = requestId();
+    await call({
+      requestId: direct,
+      op: "catalog.publish",
+      input: { id: draft.id, expected: draft.expected },
+    });
+    expect(await targetRows(direct)).toHaveLength(2);
+
+    const unpublished = [await seedDraft(), await seedDraft()];
+    const batch = requestId();
+    const answer = await call({
+      requestId: batch,
+      op: "catalog.withdraw",
+      input: { expected: { revision: 1 } },
+      targets: unpublished.map(({ catalogId }) => ({ id: catalogId })),
+    });
+    const rows = unpublished.map(({ id }) => id);
+    expect(answer.data.already_applied).toEqual(rows);
+    expect(
+      (await targetRows(batch))
+        .filter(({ tool }) => tool === null)
+        .map(({ target_id }) => target_id),
+    ).toEqual(rows.map(String));
   });
 });
 
@@ -2160,6 +2452,14 @@ describe("a document lock", () => {
     await refused({ lockId: lock.id + 1_000_000 });
     await refused({ holderUserId: automation.id });
     await refused({ lastEditedAt: "2020-01-01T00:00:00.000Z" });
+    // The earliest year PostgreSQL holds still compares, and the one it cannot is named.
+    await refused({ lastEditedAt: "0001-01-01T00:00:00.000Z" });
+    const impossible = await execute("document.lock_takeover", {
+      ...input,
+      expected: { ...expected, lastEditedAt: "0000-01-01T00:00:00.000Z" },
+    });
+    expect(impossible).toMatchObject({ ok: false, code: "INPUT_INVALID" });
+    expect(impossible.next).toBeUndefined();
     // Its holder still typing moves it: what the Admin's form state does every 10 s.
     await rowsOf(sql`
       UPDATE payload_locked_documents SET updated_at = updated_at + interval '1 second'

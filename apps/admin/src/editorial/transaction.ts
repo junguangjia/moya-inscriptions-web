@@ -120,6 +120,14 @@ export const isMissingRecord = (error: unknown): boolean =>
   error instanceof Forbidden ||
   IMPOSSIBLE_ID_SQLSTATES.has(sqlState(error));
 
+/**
+ * foreign_key_violation on a statement of the write: it stops there, and its whole
+ * transaction rolls back, so nothing committed. One raised by the COMMIT itself never
+ * reaches here: assertCommitted reads that as unknown.
+ */
+export const isMissingReference = (error: unknown): boolean =>
+  sqlState(error) === "23503";
+
 /** Answered from a stored rejected receipt, not from a new attempt. */
 export class ReplayedEditorialError extends EditorialError {
   readonly replayed = true;

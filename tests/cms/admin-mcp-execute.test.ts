@@ -21,7 +21,7 @@ import {
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { EXECUTE_BUDGET_MS } from "admin/admin-mcp";
+import { EXECUTE_BUDGET_MS, executeEnvelope } from "admin/admin-mcp";
 import { approveBatch, saveDraft } from "admin/editorial";
 import { saveArticleDraft } from "admin/editorial-content";
 import { selectedMediaSnapshot } from "admin/media-snapshot";
@@ -230,6 +230,31 @@ const afterFirstCommit = async <T>(
     return await work();
   } finally {
     spy.mockRestore();
+  }
+};
+
+/** The ledger refuses this request's per-target rows, and only those. */
+const withTargetRowsRefused = async <T>(
+  id: string,
+  work: () => Promise<T>,
+): Promise<T> => {
+  const db = adapter().drizzle;
+  await db.execute(sql`
+    CREATE OR REPLACE FUNCTION execute_refuse_audit() RETURNS trigger
+    LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic ledger failure'; END $$`);
+  await db.execute(
+    sql.raw(`
+    CREATE TRIGGER execute_refuse_audit BEFORE INSERT ON mcp_audit_events
+    FOR EACH ROW WHEN (NEW.tool IS NULL AND NEW.request_id = '${id}')
+    EXECUTE FUNCTION execute_refuse_audit()`),
+  );
+  try {
+    return await work();
+  } finally {
+    await db.execute(
+      sql`DROP TRIGGER execute_refuse_audit ON mcp_audit_events`,
+    );
+    await db.execute(sql`DROP FUNCTION execute_refuse_audit()`);
   }
 };
 
@@ -686,6 +711,30 @@ describe("one save", () => {
 });
 
 describe("two calls at once, and an answer nobody read", () => {
+  it("keeps two spellings of one record on one key: one save lands, the other meets its revision", async () => {
+    const draft = await seedDraft();
+    const answers = await Promise.all([
+      call({
+        requestId: requestId(),
+        op: "editorial.save-draft",
+        input: editOf(draft, { title: "First writer" }),
+      }),
+      call({
+        requestId: requestId(),
+        op: "editorial.save-draft",
+        input: {
+          ...editOf(draft, { summary: "Second writer" }),
+          id: `+${draft.id}`,
+        },
+      }),
+    ]);
+    expect(answers.map(({ code }) => code).sort()).toEqual([
+      "OK",
+      "REVISION_CONFLICT",
+    ]);
+    expect((await draftOf(draft.id)).revision).toBe(draft.revision + 1);
+  });
+
   it("lets one of two identical calls run, and the other replays it", async () => {
     const draft = await seedDraft();
     const args = {
@@ -757,6 +806,142 @@ describe("two calls at once, and an answer nobody read", () => {
     });
     expect(retried).toMatchObject({ ok: true, meta: { replayed: true } });
     expect((await draftOf(draft.id)).revision).toBe(draft.revision + 1);
+  });
+});
+
+describe("more calls at once than the Admin's share", () => {
+  /** Saves on these records wait on their document key until this lets go of it. */
+  const holdingKeys = async (ids: readonly number[]) => {
+    const connection = await adapter().pool.connect();
+    await connection.query("BEGIN");
+    for (const id of ids)
+      await connection.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        [`moya-editorial:document:${id}`],
+      );
+    return async () => {
+      await connection.query("ROLLBACK");
+      connection.release();
+    };
+  };
+  const stalled = (count: number) =>
+    vi.waitFor(
+      async () => {
+        const [row] = (await rowsOf(sql`
+          SELECT count(*)::int AS waiting FROM pg_locks
+          WHERE locktype = 'advisory' AND NOT granted`)) as {
+          waiting: number;
+        }[];
+        expect(row!.waiting).toBeGreaterThanOrEqual(count);
+      },
+      { timeout: 4_000, interval: 10 },
+    );
+  const save = (
+    draft: Awaited<ReturnType<typeof seedDraft>>,
+    id = requestId(),
+  ) => ({
+    requestId: id,
+    op: "editorial.save-draft",
+    input: editOf(draft, { title: "Within the share" }),
+  });
+
+  it("refuses a third at once, runs nothing of it, and the same requestId works after", async () => {
+    const [first, second, third] = [
+      await seedDraft(),
+      await seedDraft(),
+      await seedDraft(),
+    ];
+    const release = await holdingKeys([first.id, second.id]);
+    const running = [call(save(first)), call(save(second))];
+    const id = requestId();
+    try {
+      await stalled(2);
+      const asked = performance.now();
+      const refused = await call(save(third, id));
+      expect(performance.now() - asked).toBeLessThan(2_000);
+      expect(refused).toMatchObject({
+        ok: false,
+        code: "EXECUTE_BUSY",
+        retryable: true,
+      });
+      expect(await draftOf(third.id)).toMatchObject({
+        revision: third.revision,
+      });
+      expect((await auditRowsFor(id)).at(-1)).toMatchObject({
+        phase: "finish",
+        ok: false,
+        code: "EXECUTE_BUSY",
+      });
+    } finally {
+      await release();
+    }
+    for (const answer of await Promise.all(running))
+      expect(answer.ok).toBe(true);
+    const after = await call(save(third, id));
+    expect(after.ok).toBe(true);
+    expect(after.data.applied).toEqual([third.id]);
+  });
+
+  it("holds a slot while a call whose client left still runs, and not after", async () => {
+    const [first, second, third] = [
+      await seedDraft(),
+      await seedDraft(),
+      await seedDraft(),
+    ];
+    const release = await holdingKeys([first.id, second.id]);
+    const gone = save(first);
+    const hangUp = new AbortController();
+    const sent = fetch(server.endpoint, {
+      method: "POST",
+      signal: hangUp.signal,
+      headers: {
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+        authorization: ["Bearer", operateSecret].join(" "),
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "admin_execute", arguments: gone },
+      }),
+    }).catch((error: unknown) => error);
+    const running = call(save(second));
+    try {
+      await stalled(2);
+      hangUp.abort();
+      expect(await sent).toBeInstanceOf(Error);
+      expect((await call(save(third))).code).toBe("EXECUTE_BUSY");
+    } finally {
+      await release();
+    }
+    expect((await running).ok).toBe(true);
+    await vi.waitFor(
+      async () =>
+        expect(
+          (await auditRowsFor(gone.requestId)).map(({ phase }) => phase),
+        ).toContain("finish"),
+      { timeout: 5_000, interval: 20 },
+    );
+    expect((await call(save(third))).ok).toBe(true);
+  });
+
+  it("gives its slot back when a call fails or throws", async () => {
+    const draft = await seedDraft();
+    for (let attempt = 0; attempt < 3; attempt += 1)
+      expect((await withCommitFailure(() => call(save(draft)))).code).toBe(
+        "OUTCOME_UNKNOWN",
+      );
+    const throwing = {
+      get op(): string {
+        throw new Error("synthetic failure");
+      },
+    };
+    for (let attempt = 0; attempt < 3; attempt += 1)
+      await expect(
+        executeEnvelope(throwing, { key: {} as never, req: {} as never }),
+      ).rejects.toThrow("synthetic failure");
+    expect((await call(save(draft))).ok).toBe(true);
   });
 });
 
@@ -1006,15 +1191,64 @@ describe("a batch", () => {
     expect(first.next?.args).not.toHaveProperty("priorIncomplete");
     expect((await draftOf(drafts[1]!.id)).revision).toBe(drafts[1]!.revision);
     const rest = await follow(first.next);
-    expect(rest).toMatchObject({ ok: true, done: 3, total: 3 });
+    expect(rest).toMatchObject({ ok: true, done: 2, total: 3 });
     expect(rest.data.applied).toEqual([drafts[1]!.id, drafts[2]!.id]);
     for (const draft of drafts)
       expect((await draftOf(draft.id)).revision).toBe(draft.revision + 1);
   });
 
+  it("counts only its own targets when a caller sets startAt itself, and says so", async () => {
+    const drafts = [await seedDraft(), await seedDraft()];
+    const answer = await call({
+      requestId: requestId(),
+      op: "editorial.save-draft",
+      targets: drafts.map((draft) => editOf(draft, { title: "From one on" })),
+      startAt: 1,
+    });
+    expect(answer).toMatchObject({ ok: true, done: 1, total: 2 });
+    expect(answer.data.applied).toEqual([drafts[1]!.id]);
+    expect((await draftOf(drafts[0]!.id)).revision).toBe(drafts[0]!.revision);
+    const { tools } = await client.listTools();
+    const { inputSchema } = tools.find(({ name }) => name === "admin_execute")!;
+    expect(inputSchema.properties?.startAt).toMatchObject({
+      description: expect.stringContaining("this call's own count") as string,
+    });
+  });
+
+  it("stops at the next target when the ledger cannot record one, says what ran, and goes on", async () => {
+    const drafts = [await seedDraft(), await seedDraft(), await seedDraft()];
+    const id = requestId();
+    const args = {
+      requestId: id,
+      op: "editorial.save-draft",
+      targets: drafts.map((draft) => editOf(draft, { title: "Unrecorded" })),
+    };
+    const stopped = await withTargetRowsRefused(id, () => call(args));
+    expect(stopped).toMatchObject({
+      ok: false,
+      code: "AUDIT_UNAVAILABLE",
+      retryable: true,
+      done: 1,
+      total: 3,
+      remaining: 2,
+    });
+    expect(stopped.hint).toMatch(/named in data did run/u);
+    expect(stopped.data.applied).toEqual([drafts[0]!.id]);
+    expect(stopped.next?.args).toMatchObject({ requestId: id, startAt: 1 });
+    expect((await draftOf(drafts[1]!.id)).revision).toBe(drafts[1]!.revision);
+    const rest = await follow(stopped.next);
+    expect(rest.ok).toBe(true);
+    expect(rest.data.applied).toEqual([drafts[1]!.id, drafts[2]!.id]);
+  });
+
   it("never reads ok:true at the end of a batch whose earlier call left a target undone", async () => {
     const stale = await seedDraft();
     const good = await seedDraft();
+    const id = requestId();
+    const targets = [
+      { ...editOf(stale, { title: "Stale" }), expectedRevision: 44 },
+      editOf(good, { title: "Fine" }),
+    ];
     const real = performance.now.bind(performance);
     let offset = 0;
     const clock = vi
@@ -1026,15 +1260,7 @@ describe("a batch", () => {
         () => {
           offset = EXECUTE_BUDGET_MS + 1;
         },
-        () =>
-          call({
-            requestId: requestId(),
-            op: "editorial.save-draft",
-            targets: [
-              { ...editOf(stale, { title: "Stale" }), expectedRevision: 44 },
-              editOf(good, { title: "Fine" }),
-            ],
-          }),
+        () => call({ requestId: id, op: "editorial.save-draft", targets }),
       );
     } finally {
       clock.mockRestore();
@@ -1052,6 +1278,26 @@ describe("a batch", () => {
       meta: { partial: true },
     });
     expect(rest.data.applied).toEqual([good.id]);
+    // It names no failed target, so it says how to see them, and that works.
+    expect(rest.data.conflict).toBeUndefined();
+    expect(rest.hint).toMatch(/same requestId and no startAt to see every/u);
+    const whole = await call({
+      requestId: id,
+      op: "editorial.save-draft",
+      targets,
+    });
+    expect(whole.data.conflict?.[0]?.id).toBe(stale.id);
+    expect(whole.data.already_applied).toEqual([good.id]);
+    // A refusal of its own in that last call leaves the same to say.
+    const refused = await call({
+      requestId: requestId(),
+      op: "editorial.save-draft",
+      targets,
+      startAt: 0,
+      priorIncomplete: true,
+    });
+    expect(refused.code).toBe("PARTIAL");
+    expect(refused.hint).toMatch(/same requestId and no startAt to see every/u);
   });
 
   it("stops at the next target when the Owner pauses mid-batch, and goes on after", async () => {
@@ -1228,6 +1474,23 @@ describe("a save that binds a new identity", () => {
     ).toMatchObject({ ok: false, code: "PREVIEW_REQUIRED" });
   });
 
+  it("refuses more provenance than a record holds by name, before the query that would fail on it", async () => {
+    const draft = await seedDraft();
+    const answer = await call({
+      requestId: requestId(),
+      op: "editorial.save-draft",
+      input: editOf(draft, {
+        provenance: Array.from({ length: 70_000 }, (_, index) => ({
+          sourceId: `s-${index}`,
+        })),
+      }),
+    });
+    expect(answer).toMatchObject({ ok: false, code: "CONTENT_INVALID" });
+    expect(answer.next).toBeUndefined();
+    expect(answer.data.failed?.[0]?.fields).toEqual(["provenance"]);
+    expect((await draftOf(draft.id)).revision).toBe(draft.revision);
+  });
+
   it("runs the rest of a batch, and names the one that needs a preview", async () => {
     const plain = await seedDraft();
     const binding = await seedDraft();
@@ -1302,6 +1565,125 @@ describe("a save that removes entries", () => {
     expect((await draftOf(draft.id)).media).toEqual([]);
   });
 
+  /** Built here, so no file holds a link that reads as carrying a credential. */
+  const withheldLink = () =>
+    `https://example.invalid/source?${["to", "ken"].join("")}=${randomUUID()}`;
+
+  it("asks before clearing a link the caller could not read, and names it without its value", async () => {
+    const provenanceLink = withheldLink();
+    const citationLink = withheldLink();
+    const sourceId = `execute-link-${randomUUID()}`;
+    const draft = await seedDraft({
+      provenance: [{ sourceId, sourceUrl: provenanceLink }],
+      sourceCitations: [
+        { label: "Plain", url: "https://example.invalid/plain" },
+        { label: "Held", url: citationLink },
+      ],
+    });
+    const id = requestId();
+    const input = editOf(draft, {
+      provenance: [{ sourceId, sourceNote: "Only a note" }],
+      sourceCitations: [{ label: "Plain" }, { label: "Held" }],
+    });
+    const refused = await call({
+      requestId: id,
+      op: "editorial.save-draft",
+      input,
+    });
+    expect(refused).toMatchObject({ ok: false, code: "REMOVAL_NOT_ALLOWED" });
+    const places = ["provenance.0.sourceUrl", "sourceCitations.1.url"];
+    expect(refused.data.failed?.[0]?.fields).toEqual(places);
+    const kept = await draftOf(draft.id);
+    expect(kept.provenance?.[0]?.sourceUrl).toBe(provenanceLink);
+    expect(kept.sourceCitations?.[1]?.url).toBe(citationLink);
+    expect(kept.revision).toBe(draft.revision);
+
+    const allowed = await call({
+      requestId: id,
+      op: "editorial.save-draft",
+      input: { ...input, allowRemoving: true },
+    });
+    expect(allowed.ok).toBe(true);
+    expect(allowed.data.results?.[0]).toMatchObject({
+      removedItems: { links: places },
+    });
+    for (const answer of [refused, allowed]) {
+      expect(JSON.stringify(answer)).not.toContain(provenanceLink);
+      expect(JSON.stringify(answer)).not.toContain(citationLink);
+    }
+    const cleared = await draftOf(draft.id);
+    expect(cleared.provenance?.[0]?.sourceUrl ?? null).toBeNull();
+    expect(cleared.sourceCitations?.[1]?.url ?? null).toBeNull();
+  });
+
+  it("does not ask when the field is left out, or the link is sent again, or it could be read", async () => {
+    const link = withheldLink();
+    const draft = await seedDraft({
+      sourceCitations: [
+        { label: "Plain", url: "https://example.invalid/plain" },
+        { label: "Held", url: link },
+      ],
+    });
+    const omitted = await call({
+      requestId: requestId(),
+      op: "editorial.save-draft",
+      input: editOf(draft, { title: "Links untouched" }),
+    });
+    expect(omitted.ok).toBe(true);
+    const resent = await call({
+      requestId: requestId(),
+      op: "editorial.save-draft",
+      input: {
+        ...editOf(draft, {
+          sourceCitations: [{ label: "Plain" }, { label: "Held", url: link }],
+        }),
+        expectedRevision: draft.revision + 1,
+      },
+    });
+    expect(resent.ok).toBe(true);
+    expect(resent.data.results?.[0]).not.toHaveProperty("removedItems");
+    expect((await draftOf(draft.id)).sourceCitations?.[1]?.url).toBe(link);
+  });
+
+  it("asks the same of an Article's citation", async () => {
+    const link = withheldLink();
+    const article = await saveArticleDraft(await reqFor(owner), {
+      idempotencyKey: `${run}:article:${randomUUID()}`,
+      content: {
+        presentation: "news",
+        title: "Held citation",
+        summary: "Synthetic",
+        section: "田野观察",
+        byline: "由艺编辑室",
+        sections: [{ body: "第一段。" }],
+        citations: [{ text: "原引用", url: link }],
+      },
+    });
+    const id = requestId();
+    const input = {
+      id: article.id,
+      expectedRevision: article.revision,
+      content: { citations: [{ text: "原引用" }] },
+    };
+    const refused = await call({
+      requestId: id,
+      op: "editorial.save-article-draft",
+      input,
+    });
+    expect(refused).toMatchObject({ ok: false, code: "REMOVAL_NOT_ALLOWED" });
+    expect(refused.data.failed?.[0]?.fields).toEqual(["citations.0.url"]);
+    const allowed = await call({
+      requestId: id,
+      op: "editorial.save-article-draft",
+      input: { ...input, allowRemoving: true },
+    });
+    expect(allowed.ok).toBe(true);
+    expect(allowed.data.results?.[0]).toMatchObject({
+      removedItems: { links: ["citations.0.url"] },
+    });
+    expect(JSON.stringify(allowed)).not.toContain(link);
+  });
+
   it("keeps a kept entry out of what it calls removed, and reads a stale save as a conflict", async () => {
     const draft = await seedDraftWithMedia();
     const kept = await call({
@@ -1360,6 +1742,50 @@ describe("a document the Owner has open", () => {
     });
     const after = await follow(locked.next);
     expect(after.ok).toBe(true);
+  });
+
+  it("never offers altered text: a body the strip would change goes unsent, and what is stored keeps it", async () => {
+    const draft = await seedDraft();
+    const other = await seedDraft();
+    const lockOf = (id: number) =>
+      payload.create({
+        collection: "payload-locked-documents",
+        overrideAccess: true,
+        data: {
+          document: { relationTo: "catalogs", value: id },
+          user: { relationTo: "users", value: owner.id },
+        } as never,
+      });
+    const lock = await lockOf(draft.id);
+    const text = "甲\u200b乙\u200d丙\u00ad丁";
+    const id = requestId();
+    const input = editOf(draft, { summary: text });
+    const op = "editorial.save-draft";
+    const locked = await call({ requestId: id, op, input });
+    expect(locked.code).toBe("DOCUMENT_LOCKED");
+    expect(locked.next?.args).toEqual({ requestId: id, op });
+    expect(locked.hint).toMatch(/send the same ones again/u);
+
+    const batchId = requestId();
+    const batch = await call({
+      requestId: batchId,
+      op,
+      targets: [editOf(other, { title: "Clean" }), input],
+    });
+    expect(batch.code).toBe("PARTIAL");
+    expect(batch.next?.args).toEqual({ requestId: batchId, op });
+
+    await payload.delete({
+      collection: "payload-locked-documents",
+      id: lock.id,
+      overrideAccess: true,
+    });
+    // Followed to the letter it is refused by name, and nothing runs.
+    expect((await follow(locked.next)).code).toBe("INPUT_INVALID");
+    expect((await draftOf(draft.id)).revision).toBe(draft.revision);
+    const same = await call({ requestId: id, op, input });
+    expect(same.ok).toBe(true);
+    expect((await draftOf(draft.id)).summary).toBe(text);
   });
 });
 
@@ -1486,6 +1912,92 @@ describe("approvals under an AI key", () => {
     });
     expect(again).toMatchObject({ ok: true });
     expect(again.data.already_applied).toEqual([draft.id]);
+  });
+
+  it("says what a Catalog is now on a replay of its approved publish since withdrawn", async () => {
+    const draft = await seedScopedDraft();
+    const { approvalId } = await approveBatch(await reqFor(owner), {
+      automationUserId: automation.id,
+      items: [{ id: draft.id, revision: draft.revision }],
+    });
+    const id = requestId();
+    const input = { approvalId, id: draft.id };
+    const op = "editorial.publish-approved";
+    const first = await call({ requestId: id, op, input });
+    expect(first.data.results?.[0]).toMatchObject({
+      id: draft.id,
+      status: "published",
+      noRereadNeeded: true,
+    });
+    await call({
+      requestId: requestId(),
+      op: "catalog.withdraw",
+      input: {
+        id: draft.id,
+        expected: { revision: first.data.results?.[0]?.revision },
+      },
+    });
+    const replay = await call({ requestId: id, op, input });
+    expect(replay).toMatchObject({ ok: true, meta: { replayed: true } });
+    expect(replay.data.already_applied).toEqual([draft.id]);
+    expect(replay.data.results?.[0]).toMatchObject({
+      catalogId: draft.catalogId,
+      status: "draft",
+      warnings: ["moved_since_save"],
+    });
+    expect(replay.untrusted).toContain("/data/results/*/title");
+  });
+
+  it("says what an Article is now on a replay of its approved publish since withdrawn", async () => {
+    const article = await saveArticleDraft(await reqFor(owner), {
+      idempotencyKey: `${run}:article:${randomUUID()}`,
+      content: {
+        presentation: "news",
+        title: "Approved article",
+        summary: "Synthetic",
+        section: "田野观察",
+        byline: "由艺编辑室",
+        sections: [{ body: "第一段。" }],
+        citations: [],
+      },
+    });
+    const approved = await call({
+      requestId: requestId(),
+      op: "editorial.approve-article-batch",
+      input: {
+        automationUserId: automation.id,
+        items: [{ id: article.id, revision: article.revision }],
+      },
+    });
+    const { approvalId } = approved.data.results![0] as unknown as {
+      approvalId: number;
+    };
+    const id = requestId();
+    const input = { approvalId, id: article.id };
+    const op = "editorial.publish-approved-article";
+    const first = await call({ requestId: id, op, input });
+    expect(first.data.results?.[0]).toMatchObject({
+      articleId: article.articleId,
+      status: "published",
+      noRereadNeeded: true,
+    });
+    await call({
+      requestId: requestId(),
+      op: "article.withdraw",
+      input: {
+        id: article.id,
+        expected: { revision: first.data.results?.[0]?.revision },
+      },
+    });
+    const replay = await call({ requestId: id, op, input });
+    expect(replay).toMatchObject({ ok: true, meta: { replayed: true } });
+    expect(replay.data.already_applied).toEqual([article.id]);
+    expect(replay.data.results?.[0]).toMatchObject({
+      title: "Approved article",
+      status: "draft",
+      warnings: ["moved_since_save"],
+    });
+    expect(replay.untrusted).toContain("/data/results/*/title");
   });
 
   it("keeps the Owner's REST route as it was, with no key and a second batch on repeat", async () => {
@@ -1658,6 +2170,99 @@ describe("an Article save", () => {
     expect(replay).toMatchObject({ ok: true, meta: { replayed: true } });
     expect(replay.data.already_applied).toEqual([saved.id]);
   });
+
+  const seedWithRows = async () =>
+    saveArticleDraft(await reqFor(owner), {
+      idempotencyKey: `${run}:article:${randomUUID()}`,
+      content: {
+        presentation: "news",
+        title: "Before",
+        summary: "Synthetic",
+        section: "田野观察",
+        byline: "由艺编辑室",
+        sections: [{ body: "第一段原文。" }, { body: "第二段原文。" }],
+        citations: [{ text: "原引用一" }, { text: "原引用二" }],
+      },
+    });
+  const storedArticle = (id: number) =>
+    payload.findByID({ collection: "articles", id, draft: true, depth: 0 });
+
+  it("refuses a value of the wrong kind and what the server sets, before any effect", async () => {
+    const saved = await seedWithRows();
+    const before = await storedArticle(saved.id);
+    for (const content of [
+      { sections: "第二段全文" },
+      { sections: 3 },
+      { sections: { body: "x" } },
+      { sections: ["第二段全文"] },
+      { sections: null },
+      { citations: "见《金石录》" },
+      { citations: ["见《金石录》"] },
+      { citations: null },
+      { citations: [{ text: "x", link: "https://example.invalid/" }] },
+      { title: { a: 1 } },
+      { titel: "错字段" },
+      { firstPublishedAt: "2000-01-01T00:00:00.000Z" },
+      { publishedAt: "2000-01-01T00:00:00.000Z" },
+      { _status: "published" },
+      { articleId: "synthetic-other" },
+      { revision: 9 },
+    ]) {
+      const answer = await call({
+        requestId: requestId(),
+        op: "editorial.save-article-draft",
+        input: {
+          id: saved.id,
+          expectedRevision: saved.revision,
+          content,
+        },
+      });
+      expect(answer, JSON.stringify(content)).toMatchObject({
+        ok: false,
+        code: "INPUT_INVALID",
+      });
+    }
+    const after = await storedArticle(saved.id);
+    expect(after.revision).toBe(before.revision);
+    expect(after.sections).toEqual(before.sections);
+    expect(after.citations).toEqual(before.citations);
+    expect(after.firstPublishedAt ?? null).toBeNull();
+  });
+
+  it("takes rows as they read, and allowRemoving as its input says", async () => {
+    const saved = await seedWithRows();
+    const stored = await storedArticle(saved.id);
+    const answer = await call({
+      requestId: requestId(),
+      op: "editorial.save-article-draft",
+      input: {
+        id: saved.id,
+        expectedRevision: saved.revision,
+        content: {
+          sections: stored.sections,
+          citations: stored.citations,
+          subtitle: null,
+        },
+      },
+    });
+    expect(answer).toMatchObject({ ok: true });
+    let revision = Number(answer.data.results?.[0]?.revision);
+    for (const allowRemoving of [true, false]) {
+      const flagged = await call({
+        requestId: requestId(),
+        op: "editorial.save-article-draft",
+        input: {
+          id: saved.id,
+          expectedRevision: revision,
+          allowRemoving,
+          content: { title: `Flag ${allowRemoving}` },
+        },
+      });
+      expect(flagged).toMatchObject({ ok: true });
+      revision = Number(flagged.data.results?.[0]?.revision);
+    }
+    expect((await storedArticle(saved.id)).title).toBe("Flag false");
+  });
 });
 
 describe("accepted never reads as done", () => {
@@ -1707,6 +2312,52 @@ describe("accepted never reads as done", () => {
       ok: true,
       data: { intentId, state: "prepared", readiness: "NOT_CONFIGURED" },
     });
+  });
+
+  it("says an expired intent expired on a read, with no write, and a command then records it", async () => {
+    const draft = await seedDraftWithMedia();
+    const prepared = await call({
+      requestId: requestId(),
+      op: "editorial.prepare-catalog-delivery",
+      input: {
+        id: draft.id,
+        expectedRevision: draft.revision,
+        expectedFingerprint: draft.fingerprint,
+      },
+    });
+    const { intentId, stateVersion } = prepared.data
+      .results![0]! as unknown as { intentId: string; stateVersion: number };
+    await rowsOf(sql`
+      UPDATE catalog_delivery_intents SET expires_at = now() - interval '1 minute'
+      WHERE id = ${intentId}::uuid`);
+    const stored = () =>
+      rowsOf(sql`
+        SELECT state, state_version::int AS version
+        FROM catalog_delivery_intents WHERE id = ${intentId}::uuid`);
+    const read = await readClient.callTool({
+      name: "admin_read",
+      arguments: {
+        op: "editorial.read-catalog-delivery",
+        input: { intentId },
+      },
+    });
+    expect(read.structuredContent).toMatchObject({
+      ok: true,
+      data: { intentId, state: "expired", publicCopyAuthorized: false },
+    });
+    expect(await stored()).toEqual([
+      { state: "prepared", version: stateVersion },
+    ]);
+    expect(
+      await call({
+        requestId: requestId(),
+        op: "editorial.cancel-catalog-delivery",
+        input: { intentId, expectedStateVersion: stateVersion },
+      }),
+    ).toMatchObject({ ok: false, code: "CATALOG_DELIVERY_EXPIRED" });
+    expect(await stored()).toEqual([
+      { state: "expired", version: stateVersion + 1 },
+    ]);
   });
 
   it("refuses a release that was never requested, and publishes nothing", async () => {

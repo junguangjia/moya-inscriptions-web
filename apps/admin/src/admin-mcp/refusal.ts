@@ -1,7 +1,7 @@
 import { adminMcpCodeSchema } from "@moya/contracts/internal/admin-mcp";
 import type { AdminMcpCode } from "@moya/contracts/internal/admin-mcp";
 
-import { isMissingRecord } from "../editorial/transaction";
+import { isMissingRecord, isMissingReference } from "../editorial/transaction";
 
 /** What an op's failure says about its one target (admin-mcp-completion-v1 section 7). */
 export type TargetFailureState =
@@ -73,6 +73,7 @@ const fieldsOf = (error: object): readonly string[] => {
 const namedCodeOf = (error: unknown): string | undefined => {
   if (!(error instanceof Error)) return undefined;
   if (FIXED_CODE.test(error.message)) return error.message;
+  if (isMissingReference(error)) return "REFERENCE_NOT_FOUND";
   const { status, data } = error as { status?: unknown; data?: object };
   if (status === 423) return "DOCUMENT_LOCKED";
   if (status === 403 || status === 404) return "NOT_FOUND";

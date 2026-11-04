@@ -1,4 +1,7 @@
-import { adminSaveEchoSchema } from "@moya/contracts/internal/admin-mcp";
+import {
+  adminArticleContentSchema,
+  adminSaveEchoSchema,
+} from "@moya/contracts/internal/admin-mcp";
 import type {
   CatalogDeliveryResult,
   OwnerDraftPage,
@@ -6,12 +9,14 @@ import type {
 import { sql, type PostgresAdapter } from "@payloadcms/db-postgres";
 import { z } from "zod";
 
+import { draftContent } from "../../editorial/content";
 import {
   editorialOperationDefinitions,
   type EditorialOperationName,
 } from "../../editorial/endpoints";
 import { approveBatchOnce, restoreDraftOnce } from "../../editorial/operations";
 import { isMissingRecord } from "../../editorial/transaction";
+import { articleContentSubset } from "../../editorial-content/approvals";
 import { approveArticleBatchOnce } from "../../editorial-content/operations";
 import { failedEnvelope, okEnvelope } from "../envelope";
 import { outlineEnvelope } from "../record-views";
@@ -30,8 +35,11 @@ import {
 import {
   classifyArticleSave,
   classifyCatalogSave,
+  echoOf,
   saveArticle,
   saveCatalogDraft,
+  type SavedAnswer,
+  type SaveSlug,
 } from "./saves";
 
 const bindsIdentity = "the save binds an identity not yet bound";
@@ -55,6 +63,39 @@ const relayedWrite =
         idempotencyKey: requestKeyOf(context),
       }),
     );
+
+/**
+ * An approved publish. A receipt holds what it wrote then, so a replay of one since
+ * withdrawn reads the record, says what it is now and never reads as live. A first
+ * answer has just committed what it says, and reads nothing per target.
+ */
+const approvedPublish =
+  (
+    route: EditorialOperationName,
+    slug: SaveSlug,
+    contentOf: (
+      document: Readonly<Record<string, unknown>>,
+    ) => Record<string, unknown>,
+  ) =>
+  async (input: unknown, context: AdminOpContext) => {
+    const saved = (await editorialOperationDefinitions[route].run(context.req, {
+      ...(input as object),
+      idempotencyKey: requestKeyOf(context),
+    })) as SavedAnswer;
+    const published = { ...saved, status: "published" as const };
+    return okEnvelope(
+      saved.replayed === true
+        ? await echoOf(
+            context,
+            slug,
+            published,
+            undefined,
+            undefined,
+            contentOf,
+          )
+        : { ...published, noRereadNeeded: true },
+    );
+  };
 
 /** A read has no target to report on, so its refusal is the whole answer. */
 const relayedRead =
@@ -263,7 +304,9 @@ const rows: Readonly<Record<EditorialOperationName, AdminOpEntry>> = {
     "receipt",
     {
       input: inputWithoutKey("publish-approved"),
-      run: relayedWrite("publish-approved"),
+      output: { ai: adminSaveEchoSchema },
+      run: approvedPublish("publish-approved", "catalogs", draftContent),
+      untrusted: SAVE_POINTERS,
       ...onCatalog,
       example: { approvalId: 3, id: 7 },
     },
@@ -361,7 +404,9 @@ const rows: Readonly<Record<EditorialOperationName, AdminOpEntry>> = {
     {
       risesWhen: bindsIdentity,
       classify: classifyArticleSave,
-      input: saveInput("save-article-draft"),
+      input: saveInput("save-article-draft").extend({
+        content: adminArticleContentSchema,
+      }),
       output: { ai: adminSaveEchoSchema },
       run: saveArticle,
       untrusted: ARTICLE_SAVE_POINTERS,
@@ -396,8 +441,13 @@ const rows: Readonly<Record<EditorialOperationName, AdminOpEntry>> = {
     "receipt",
     {
       input: inputWithoutKey("publish-approved-article"),
-      run: relayedWrite("publish-approved-article"),
-      untrusted: ["/data/results/*/articleId"],
+      output: { ai: adminSaveEchoSchema },
+      run: approvedPublish(
+        "publish-approved-article",
+        "articles",
+        articleContentSubset,
+      ),
+      untrusted: ARTICLE_SAVE_POINTERS,
       ...onArticle,
       example: { approvalId: 3, id: 7 },
     },

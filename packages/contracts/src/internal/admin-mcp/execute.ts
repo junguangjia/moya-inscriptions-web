@@ -27,7 +27,14 @@ const adminExecuteShape = {
   /** Each merges over `input`. A second call with the same requestId replays. */
   targets: z.array(sentObject).min(1).optional(),
   /** Targets before this index are not run again: their ids stay bound by index. */
-  startAt: z.number().int().nonnegative().optional(),
+  startAt: z
+    .number()
+    .int()
+    .nonnegative()
+    .describe(
+      "Run from this target on. The answer covers only these: done is this call's own count.",
+    )
+    .optional(),
   /** Set by `next`: an earlier call of this batch left a target incomplete. */
   priorIncomplete: z.literal(true).optional(),
 };
@@ -99,6 +106,8 @@ export const adminSaveEchoSchema = z.strictObject({
     .strictObject({
       media: z.array(z.string()).optional(),
       provenance: z.array(z.string()).optional(),
+      /** Stored links the caller was shown as WITHHELD, by place and never by value. */
+      links: z.array(z.string()).optional(),
     })
     .optional(),
   supersededIntents: z.array(z.string()).optional(),

@@ -674,6 +674,7 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
           "type": "string",
         },
         "startAt": {
+          "description": "Run from this target on. The answer covers only these: done is this call's own count.",
           "maximum": 9007199254740991,
           "minimum": 0,
           "type": "integer",
@@ -1394,6 +1395,7 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
           "type": "string",
         },
         "startAt": {
+          "description": "Run from this target on. The answer covers only these: done is this call's own count.",
           "maximum": 9007199254740991,
           "minimum": 0,
           "type": "integer",

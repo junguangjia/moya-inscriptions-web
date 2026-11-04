@@ -196,6 +196,7 @@ export type {
 export {
   ADMIN_PATCH_TEXT_FIELDS,
   adminApprovalRevokeInputSchema,
+  adminArticleContentSchema,
   adminCollectionSaveInputSchema,
   adminExpectedSchema,
   adminLockReleaseEchoSchema,

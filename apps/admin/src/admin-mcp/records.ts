@@ -666,6 +666,25 @@ const isWithheldLink = (fieldName: string, key: string, value: unknown) =>
   typeof value === "string" &&
   linkCarriesCredential(value);
 
+/**
+ * The stored links a caller was shown as WITHHELD that `content` would not keep, by
+ * place and never by value. It cannot send one back, so naming a row without it clears
+ * it; a field left out keeps its rows, and a link sent again by value stays.
+ */
+export const clearedWithheldLinks = (
+  before: Readonly<Record<string, unknown>>,
+  content: Readonly<Record<string, unknown>>,
+): readonly string[] =>
+  Object.entries(LINK_KEY_OF).flatMap(([field, key]) => {
+    if (!Object.hasOwn(content, field)) return [];
+    const sent = new Set(arrayItems(content[field]).map((item) => item[key]));
+    return arrayItems(before[field]).flatMap((item, index) =>
+      isWithheldLink(field, key, item[key]) && !sent.has(item[key])
+        ? [`${field}.${index}.${key}`]
+        : [],
+    );
+  });
+
 const boundedItem = (
   fieldName: string,
   index: number,

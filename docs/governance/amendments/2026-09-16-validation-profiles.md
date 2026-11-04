@@ -2,6 +2,9 @@
 
 - Status: Active; recorded from the Owner's 2026-09-16 instruction "ArtVenn —
   validation policy remediation and complete acceptance".
+- Amended by the Owner on 2026-11-04: CMS complete and the PostgreSQL stage are
+  900 seconds and the hosted `test` and `cms` jobs 45 minutes. Each only stops a
+  hung run.
 - Scope: time limits for functional validation entry points, their CI wrappers
   and the publication-cycle boundary of the core-credential check.
 - Preserved: credential protection, independent review, required CI, task

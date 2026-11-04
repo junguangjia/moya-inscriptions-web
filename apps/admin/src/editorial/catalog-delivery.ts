@@ -397,7 +397,14 @@ export const readCatalogDelivery = async (
   requireStandaloneTransaction(req);
   const parsed = parse(readCatalogDeliverySchema, input);
   return withEditorialTransaction(req, async () => {
-    const row = await lockedIntent(req, parsed.intentId);
+    // A read writes nothing: it says what time has decided, and the next command
+    // records it.
+    const stored = await intentByID(req, parsed.intentId);
+    const row: IntentRow =
+      ["prepared", "release_requested"].includes(stored.state) &&
+      new Date(stored.expires_at).getTime() <= Date.now()
+        ? { ...stored, state: "expired" }
+        : stored;
     const result = resultFor(row, false);
     if (
       row.recipe_manifest_sha256 &&

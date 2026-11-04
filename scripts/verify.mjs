@@ -232,7 +232,7 @@ export const WEB_VERIFICATION_PROFILES = Object.freeze({
   // suite), for a further supported PostgreSQL major's test database.
   postgres: Object.freeze({
     quick: VALIDATION_PROFILES.webQuick,
-    complete: VALIDATION_PROFILES.webComplete,
+    complete: VALIDATION_PROFILES.postgresComplete,
   }),
   build: Object.freeze({
     quick: VALIDATION_PROFILES.webQuick,

@@ -19,6 +19,7 @@ import {
   actsAsOwner,
   requireActor,
 } from "./access";
+import { assertCatalogDeliveryPublication } from "./catalog-delivery";
 import { relationshipID } from "./collections";
 import {
   contentFingerprint,
@@ -472,8 +473,13 @@ export const publishApproved = async (req: PayloadRequest, input: unknown) => {
         if (
           latest._status === "published" &&
           contentFingerprint(latest) === item.fingerprint
-        )
+        ) {
+          // Live says nothing of its images: the Owner's switch publishes ahead of them,
+          // and an AI key's answer speaks for them. The Owner's and automation's do not.
+          if (isAiOperator(req))
+            await assertCatalogDeliveryPublication(draftContent(latest), req);
           throw new EditorialError("ALREADY_PUBLISHED", 409);
+        }
         throw new EditorialError("APPROVED_REVISION_CHANGED", 409);
       }
       const content = publishedContent(latest);

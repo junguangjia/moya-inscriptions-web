@@ -1075,8 +1075,8 @@ tests/unit/backend/admin-mcp-locate.test.ts:
 - `editorial.read-draft` answers the outline for a key, because the whole draft
   would not fit a text result. `editorial.owner-drafts` and `owner-history`
   relay their small rows, and a missing row on `owner-history` answers
-  `NOT_FOUND`, as `read-draft` does. The delivery reads stay unbuilt: they call
-  the Backend on the Owner's token, and S5 owes them the AI one.
+  `NOT_FOUND`, as `read-draft` does. The delivery reads were left for S5, which
+  built them on the Owner's token (section 2).
 - `admin_get` on a Catalog says `deepZoom: "not_available"` until the master
   routes arrive, so a missing master state never reads as no master.
 - Reading the lock row needs no change to `defaultAccess`: it admits any user,
@@ -1186,14 +1186,19 @@ Recorded when built in S5, tests in tests/cms/admin-mcp-execute.test.ts:
   for size: rows go in while they fit, `meta.truncated` is set and `next`
   replays from the first one left out. A group too long to fit falls to the text
   cap, which goes on from the last row it kept.
-- `next` repeats `input` and `targets` only up to 1,500 bytes. Past that it
-  leaves them out and the hint says to send the same ones again; followed to the
-  letter it answers INPUT_INVALID and runs nothing.
+- `next` repeats `input` and `targets` only up to 1,500 bytes, and never a body
+  holding a character the strip of section 14 takes out of returned text, since
+  following it would write other text. Otherwise it leaves them out and the hint
+  says to send the same ones again; followed to the letter it answers
+  INPUT_INVALID and runs nothing.
 - `priorIncomplete` is not in this section's argument list. A call that goes on
   from `startAt` knows nothing of the targets before it, so `next` carries this
   flag when one of them did not complete, and the last call answers PARTIAL,
-  never `ok:true`. A caller that sets `startAt` itself gets an answer about the
-  targets from there on.
+  never `ok:true`, and its hint says to repeat the whole call with no `startAt`
+  to see every target. A caller that sets `startAt` itself gets an answer about
+  the targets from there on. `done` is always the call's own count, followed
+  `next` or not: the server cannot tell them apart, and `startAt`'s field text
+  says so.
 - `results` of a replay has no `changedFields`, because the receipt does not
   keep them. Reading the echo after the commit can fail, and that never reads as
   a failed save: the target stays `applied`, with `warnings: ["echo_unread"]`.
@@ -1201,7 +1206,19 @@ Recorded when built in S5, tests in tests/cms/admin-mcp-execute.test.ts:
   requestId and index and an op's `input` leaves it out, so sending one answers
   INPUT_INVALID. `allowRemoving` is on the two save ops' `input` and stays out
   of the fingerprint, and REMOVAL_NOT_ALLOWED writes no receipt, so the same
-  requestId can then say it.
+  requestId can then say it. A stored link the caller was shown as WITHHELD
+  (`provenance[].sourceUrl`, `sourceCitations[].url`, an Article's
+  `citations[].url`) cannot be sent back, so a save of its field without it asks
+  the same, and `removedItems.links` then names its place and never its value.
+- `editorial.save-article-draft` takes `adminArticleContentSchema`, so a value
+  of the wrong kind, an array of text, an unknown key and what the server sets
+  (`firstPublishedAt`, `publishedAt`) answer INPUT_INVALID before any effect.
+  The route keeps its loose schema.
+- SQLSTATE 23503 on a statement answers REFERENCE_NOT_FOUND: the transaction
+  rolled back, so nothing committed. The same state from the COMMIT itself stays
+  OUTCOME_UNKNOWN, as any commit that cannot be confirmed does. More than 1,000
+  sent provenance rows answer CONTENT_INVALID before the classify query, and a
+  `lastEditedAt` in year 0000 fails validation.
 - The class of a Catalog save reads the record's own `catalogId` and `sourceId`
   and the provenance it would end with. A changed `catalogId` therefore stays
   IDENTITY_IMMUTABLE, and one another record holds stays IDENTITY_ALREADY_BOUND.
@@ -1216,7 +1233,17 @@ Recorded when built in S5, tests in tests/cms/admin-mcp-execute.test.ts:
   name answers UNKNOWN_OP with near names.
 - Per target beside the call's start and finish, a batch writes one finish row
   with op, requestId, target, ok and code. It has no `tool`, so the p95 per tool
-  still counts calls, and no start, so it never reads as an unknown call.
+  still counts calls, and no start, so it never reads as an unknown call. A
+  single target gets the same row when the start row could not name it, because
+  the caller sent a public identity, and the row id is resolved on a refusal and
+  on an effect already in place too. If a row cannot be written, the batch stops
+  at the next target with AUDIT_UNAVAILABLE and `next`, and the hint says what
+  ran; the start row of a call that crashes still names nothing.
+- At most 2 calls of `admin_execute` run at once per Admin process
+  (`EXECUTE_POOL_SHARE`), so a client cannot stall the five connections the
+  Owner uses. A third answers EXECUTE_BUSY at once, retryable, and runs nothing.
+  A slot stands for work really running, so a call whose client left holds it
+  until it ends.
 - The same requestId on another op of the same family answers
   IDEMPOTENCY_CONFLICT. Across families it does not: Article receipts, Catalog
   receipts and delivery receipts are looked up separately, and with no run table
@@ -1337,8 +1364,10 @@ and `files_*` tools. docs/cms/operations.md:66 (prompts must not be switched off
 to get past failures) is reworded for this one tool. L2 runs with this template;
 without it the write tasks measure a prompt.
 
-Budget: 10 s per call, checked before each target, so worst case about 25 s plus
-auth and audit.
+Budget: 10 s per call, checked before each target. A target that starts at 9.9 s
+can wait 5 s on its receipt key, 5 s on its document key and up to 15 s on the
+Backend's readiness read in the publish hook, so worst case about 35 s plus auth
+and audit. That stays under Nginx's 60 s and the clients' 60 s floor.
 
 Retry: same requestId with same fingerprint replays with `meta.replayed`;
 different arguments give IDEMPOTENCY_CONFLICT. A timeout or lost answer is
@@ -1481,7 +1510,11 @@ tests/cms/admin-mcp-browser-checks.mjs:
 - ALREADY_PUBLISHED means the latest version is published and its fingerprint
   equals the approved one, so it also answers when the Owner published that
   content by hand. It writes no receipt, because the document can be withdrawn
-  later.
+  later. Under an AI key it also needs the images proved complete, because the
+  Owner's switch publishes ahead of them: otherwise it answers
+  CATALOG_DELIVERY_PREPARATION_REQUIRED, and the same requestId reads
+  `already_applied` once they are ready. The Owner's and automation's answers
+  stay as they were.
 
 New ops:
 
@@ -1500,7 +1533,8 @@ New ops:
 - #343 tools: editorial.prepare-catalog-delivery, read-catalog-delivery,
   request-catalog-release, release-catalog-delivery, cancel-catalog-delivery,
   catalog-delivery-capabilities, catalog-render-backlog. #343 keeps the Admin
-  buttons and retires the switch.
+  buttons and retires the switch. Reading an intent past its time says `expired`
+  and writes nothing; a command records it.
 - `catalog.patch_text {catalogId, field, edits:[{oldText,newText,occurrence?}], expected:{revision,fingerprint}, requestId}`:
   all-or-nothing, raw match with no t2s or Unicode normalization, through the
   existing saveDraft path, inside revision CAS. Any zero or multiple match fails
@@ -1555,9 +1589,15 @@ Recorded when built in S5, tests in tests/cms/admin-mcp-editorial-ops.test.ts:
   selected.
 - `approval.revoke` takes a `type`, because Catalog and Article approvals are
   numbered apart. A repeat answers `already_applied`.
+- A replay of `editorial.publish-approved` or `publish-approved-article` reads
+  the record and says the status it has now, with `moved_since_save` once it has
+  moved, so one since withdrawn never reads as live. A first answer has just
+  committed what it says and reads nothing per target, which keeps C3 within its
+  statements, so it carries no title.
 - `media.register_existing` answers PREVIEW_REQUIRED for a new id. Directly it
-  only replays a row that exists with the same object key and sha256, and
-  refuses anything else as MEDIA_IDENTITY_EXISTS.
+  only replays an identical row, every field compared and an omitted one
+  included, and refuses anything else as MEDIA_IDENTITY_EXISTS. A retry after an
+  alt edit is refused too.
 - `list.receipts` filters on every receipt operation, not only the first two.
 
 Draft preview, structured. `admin_get view=preview` calls `previewCatalogDetail`
@@ -2061,7 +2101,8 @@ CMS:
 4. mcp_audit_events with the payload_locked_documents_rels column and trigger.
 5. editorial_receipts `article` and `articleCollection` relationships.
 6. enum_editorial_receipts_operation additions (publish-direct, withdraw,
-   restore-draft, patch-text, duplicate, article and collection operations).
+   restore-draft, patch-text, duplicate, approve-batch, approve-article-batch,
+   article and collection operations).
 7. mcp_runs, mcp_run_targets.
 
 Community:
@@ -3098,6 +3139,10 @@ Numbers stay in the private evidence of each run, not here.
 - A cold overview cannot meet 800 ms while Umami's part takes longer than that
   and the tool waits up to 1.5 s for it. The two numbers come from this document
   and cannot both hold at this scale. The canonical part alone is well inside.
+- Production's Umami held 40,146 events on 2026-11-04, read once with the
+  Owner's approval, about 1/25 of the 1,000,020 assumed here, so the cold misses
+  above are expected to be far smaller live. That is an estimate until measured
+  after release.
 - The time is in PostgreSQL, not in Umami's CPU limit: Umami's own routes took
   the same time at 0.5 and at 18 CPUs. `/stats` is most of it, because it runs
   two queries in turn, each with the per-event LATERAL, and it grows with the
@@ -3163,6 +3208,8 @@ Numbers stay in the private evidence of each run, not here.
   names its record from the seed with no read. The paths of C2 and C3 spend
   their fixtures, so L1 does not repeat them, and L0's single sample of C3 is
   the only number on a batch.
+- The control page compares the 800 ms budget on calls of one target only, and
+  shows batches on a row of their own with no budget.
 - What the first L1 said, with every budget left as it is: all three write
   classes are far within 800 ms, on the machine and with the limits described
   above. A publish here has no images, because a record with images needs a real

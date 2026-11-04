@@ -12,6 +12,7 @@ import { saveDraft } from "../../editorial/operations";
 import { isMissingRecord } from "../../editorial/transaction";
 import { articleContentSubset } from "../../editorial-content/approvals";
 import { saveArticleDraft } from "../../editorial-content/operations";
+import { clearedWithheldLinks } from "../records";
 import { requestKeyOf, type AdminOpContext } from "./define";
 
 /**
@@ -89,6 +90,9 @@ const sourceIdsOf = (value: unknown): readonly string[] =>
       )
     : [];
 
+// Far past any record, and far under PostgreSQL's 65,535 parameters a statement holds.
+const CLASSIFY_MAX_PROVENANCE = 1_000;
+
 const mediaIdsOf = (value: unknown): readonly string[] =>
   Array.isArray(value)
     ? value.flatMap((item: { mediaId?: unknown }) =>
@@ -107,6 +111,11 @@ export const classifyCatalogSave = async (
 ): Promise<AdminOpClass> => {
   const { id, content } = raw as SaveCommand;
   if (id === undefined) return "irreversible";
+  if (
+    Array.isArray(content.provenance) &&
+    content.provenance.length > CLASSIFY_MAX_PROVENANCE
+  )
+    throw new EditorialError("CONTENT_INVALID", 400, ["provenance"]);
   const before = await beforeOf(context, "catalogs", id);
   if (before === undefined) return "reversible";
   const identities = [
@@ -145,10 +154,33 @@ export const removedBy = (
   const provenance = Object.hasOwn(content, "provenance")
     ? gone(sourceIdsOf(before.provenance), sourceIdsOf(content.provenance))
     : [];
+  const links = clearedWithheldLinks(before, content);
   return {
     ...(media.length > 0 ? { media } : {}),
     ...(provenance.length > 0 ? { provenance } : {}),
+    ...(links.length > 0 ? { links: [...links] } : {}),
   };
+};
+
+/**
+ * What this save would remove, asked for by name. The revision check at the save
+ * decides: a record that moved answers that, and a replay whose revision moved long
+ * ago never reads as a removal.
+ */
+const allowedRemoval = (
+  before: SaveDocument | undefined,
+  { expectedRevision, content }: SaveCommand,
+  allowRemoving: boolean | undefined,
+): NonNullable<AdminSaveEcho["removedItems"]> => {
+  const removed =
+    before !== undefined && before.revision === expectedRevision
+      ? removedBy(before, content)
+      : {};
+  const { links, ...entries } = removed;
+  const names = [...Object.keys(entries), ...(links ?? [])];
+  if (names.length > 0 && allowRemoving !== true)
+    throw new EditorialError("REMOVAL_NOT_ALLOWED", 409, names);
+  return removed;
 };
 
 /**
@@ -229,15 +261,7 @@ export const saveCatalogDraft = async (
     command.id === undefined
       ? undefined
       : await beforeOf(context, "catalogs", command.id);
-  // The revision check at the save decides: a record that moved answers that, and a
-  // replay whose revision moved long ago never reads as a removal.
-  const removed =
-    before !== undefined && before.revision === command.expectedRevision
-      ? removedBy(before, command.content)
-      : {};
-  const names = Object.keys(removed);
-  if (names.length > 0 && allowRemoving !== true)
-    throw new EditorialError("REMOVAL_NOT_ALLOWED", 409, names);
+  const removed = allowedRemoval(before, command, allowRemoving);
   const saved = await saveDraft(context.req, {
     ...command,
     idempotencyKey: requestKeyOf(context),
@@ -248,11 +272,14 @@ export const saveCatalogDraft = async (
 };
 
 export const saveArticle = async (raw: unknown, context: AdminOpContext) => {
-  const { id } = raw as SaveCommand;
+  const { allowRemoving, ...command } = raw as SaveCommand;
   const before =
-    id === undefined ? undefined : await beforeOf(context, "articles", id);
+    command.id === undefined
+      ? undefined
+      : await beforeOf(context, "articles", command.id);
+  const removed = allowedRemoval(before, command, allowRemoving);
   const saved = await saveArticleDraft(context.req, {
-    ...(raw as SaveCommand),
+    ...command,
     idempotencyKey: requestKeyOf(context),
   });
   return okEnvelope(
@@ -261,7 +288,7 @@ export const saveArticle = async (raw: unknown, context: AdminOpContext) => {
       "articles",
       saved,
       before,
-      undefined,
+      removed,
       articleContentSubset,
     ),
   );

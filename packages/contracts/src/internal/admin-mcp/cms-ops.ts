@@ -125,6 +125,44 @@ export const adminCollectionSaveInputSchema = z.strictObject({
     }),
 });
 
+const articleText = z.string().refine(isWellFormedEditorialText).nullable();
+
+/**
+ * What a key may send of an Article: the fields its fingerprint covers, each of its
+ * own kind, so a wrong one never reads as an emptied list. Nothing the server sets is
+ * here. Field lengths and what must exist stay with the collection's own validation.
+ */
+export const adminArticleContentSchema = z
+  .strictObject({
+    presentation: articleText,
+    title: articleText,
+    subtitle: articleText,
+    summary: articleText,
+    section: articleText,
+    issue: articleText,
+    byline: articleText,
+    coverCatalog: rowId.nullable(),
+    coverAlt: articleText,
+    intro: articleText,
+    sections: z.array(
+      z
+        .strictObject({
+          id: articleText,
+          heading: articleText,
+          body: articleText,
+          imageCatalog: rowId.nullable(),
+          imageCaption: articleText,
+        })
+        .partial(),
+    ),
+    citations: z.array(
+      z
+        .strictObject({ id: articleText, text: articleText, url: articleText })
+        .partial(),
+    ),
+  })
+  .partial();
+
 /** A media row's other fields are permanent, so alt is all there is to edit. */
 export const adminMediaUpdateInputSchema = z.strictObject({
   id: recordId,
@@ -166,7 +204,8 @@ export const adminLockTakeoverInputSchema = z.strictObject({
   expected: z.strictObject({
     lockId: positiveInteger,
     holderUserId: positiveInteger,
-    lastEditedAt: z.iso.datetime(),
+    // Year 0000 passes the format and no PostgreSQL timestamp can hold it.
+    lastEditedAt: z.iso.datetime().refine((value) => !value.startsWith("0000")),
   }),
   reason: wellFormed(500).min(1),
 });

@@ -16,6 +16,7 @@ import type {
 import { sql, type PostgresAdapter } from "@payloadcms/db-postgres";
 import type { PayloadRequest } from "payload";
 
+import { assertCatalogDeliveryPublication } from "../../editorial/catalog-delivery";
 import { relationshipID } from "../../editorial/collections";
 import {
   draftContent,
@@ -210,8 +211,12 @@ export const publishRecord =
           (fingerprint === undefined
             ? latest.revision === revision
             : fingerprint === spec.family.fingerprint(latest))
-        )
+        ) {
+          // Live says nothing of its images: the Owner's switch publishes ahead of them.
+          if (type === "catalog")
+            await assertCatalogDeliveryPublication(draftContent(latest), req);
           throw new EditorialError("ALREADY_PUBLISHED", 409);
+        }
         assertExpected(spec, latest, parsed.expected);
         return written(spec, req, "published", () =>
           req.payload.update({
@@ -488,12 +493,29 @@ export const updateMediaMetadata = async (
   });
 };
 
+// Strict, an omitted one included, as catalog-ingest.ts matchesIntent compares: alt and
+// rights are what a caller means to have recorded, and no answer here shows them.
+const REGISTERED_FIELDS = [
+  "catalogId",
+  "objectKey",
+  "sha256",
+  "mimeType",
+  "filesize",
+  "width",
+  "height",
+  "alt",
+  "rights",
+  "orderConfidence",
+] as const;
+
 const registeredRow = async (req: PayloadRequest, mediaId: string) => {
   const [row] = await findDocuments(req, CMS_FAMILIES.media, {
     where: { mediaId: { equals: mediaId } },
     limit: 1,
     draft: false,
-    select: { mediaId: true, catalogId: true, objectKey: true, sha256: true },
+    select: Object.fromEntries(
+      ["mediaId", ...REGISTERED_FIELDS].map((name) => [name, true]),
+    ),
   });
   return row;
 };
@@ -507,22 +529,19 @@ export const classifyMediaRegistration = async (
     ? "irreversible"
     : "reversible";
 
-/** Only a row that is there comes here: the same bytes replay, others are refused. */
+/** Only a row that is there comes here: the identical row replays, others are refused. */
 export const answerMediaRegistration = async (
   raw: unknown,
   { req }: AdminOpContext,
 ) => {
-  const { mediaId, catalogId, objectKey, sha256 } =
-    adminMediaRegisterInputSchema.parse(raw);
-  const row = await registeredRow(req, mediaId);
+  const input = adminMediaRegisterInputSchema.parse(raw);
+  const row = await registeredRow(req, input.mediaId);
   if (
     row === undefined ||
-    row.catalogId !== catalogId ||
-    row.objectKey !== objectKey ||
-    row.sha256 !== sha256
+    REGISTERED_FIELDS.some((name) => (row[name] ?? undefined) !== input[name])
   )
     throw new EditorialError("MEDIA_IDENTITY_EXISTS", 409);
-  return okEnvelope({ id: row.id, mediaId, replayed: true });
+  return okEnvelope({ id: row.id, mediaId: input.mediaId, replayed: true });
 };
 
 const APPROVAL_COLLECTIONS = {
