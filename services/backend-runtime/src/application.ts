@@ -71,6 +71,7 @@ import type {
 } from "@moya/api";
 import type { ArticleAuthoringGrant } from "@moya/contracts";
 import type { CatalogRecipePolicy } from "@moya/contracts/internal/editorial";
+import type { AnalyticsInsightsReader } from "@moya/contracts/internal/admin-mcp";
 import type { NodeEnvironment } from "./config.js";
 import type { ArticleDelegationRuntime } from "./community/article-delegation-handler.js";
 import type { DevelopmentCatalogRenditions } from "./community/development-catalog-rendition-handler.js";
@@ -94,6 +95,7 @@ export interface BackendApplicationOptions {
   readonly analytics?: {
     readonly port: AnalyticsPort;
     readonly policy: AnalyticsPolicy;
+    readonly insights?: AnalyticsInsightsReader;
     readonly source?: AuthRequestSource;
   };
   /**
@@ -522,6 +524,7 @@ export const createBackendApplication = (
                 ? {}
                 : { sessions: community.sessionService }),
               operatorCredential: options.communityOperatorCredential ?? "",
+              insights: options.analytics.insights,
             },
           }),
       healthReadinessCheck:

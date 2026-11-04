@@ -209,6 +209,27 @@ reports `not_available`.
 | ------------ | ---------- | --------------- | ---------- | ---------------- | ---------- | ------ | ----- |
 | `run.cancel` | reversible | `admin_execute` | sync       | state_idempotent | none       |        | no    |
 
+## Reports on `admin_analytics` (13)
+
+Every report reads on the `base` credential and takes the same range, time zone
+and filter arguments. One that is not built reports `NOT_AVAILABLE`.
+
+| Report      | Source                                      | Built |
+| ----------- | ------------------------------------------- | ----- |
+| `status`    | canonical, config                           | yes   |
+| `overview`  | canonical, native block from Umami          | yes   |
+| `trend`     | canonical, annotations from Umami           | yes   |
+| `breakdown` | canonical; Umami for province, city, device | yes   |
+| `compare`   | canonical                                   | yes   |
+| `funnel`    | canonical; Umami for a saved funnel         | yes   |
+| `realtime`  | canonical, geography from Umami on request  | yes   |
+| `sessions`  | canonical; Umami on request or by place     | yes   |
+| `session`   | canonical, and Umami from its session id    | yes   |
+| `product`   | canonical, business tables                  | yes   |
+| `native`    | Umami                                       | yes   |
+| `reconcile` | canonical against Umami                     | yes   |
+| `traffic`   | hourly snapshot                             | no    |
+
 ## Surfaces
 
 Every route of `community/endpoints.ts` and `editorial/endpoints.ts` not listed

@@ -4,11 +4,13 @@ import type { CommunityReportingService } from "@moya/api";
 import { handleNotificationRequest } from "../community/notification-handler.js";
 import { handleAnalyticsRequest } from "../analytics/analytics-handler.js";
 import type { AnalyticsRouteDependencies } from "../analytics/analytics-handler.js";
+import { handleAnalyticsInsights } from "../analytics/insights-handler.js";
 import { handleArticleAuthoringRequest } from "../community/article-authoring-handler.js";
 import { handleArticleDelegationHttpRequest } from "../community/article-delegation-handler.js";
 import type { BackendApplicationOptions } from "../application.js";
 import type { NotificationStreams } from "../community/notification-stream.js";
 import type { NotificationService } from "@moya/api";
+import { ANALYTICS_INSIGHTS_PATH } from "@moya/contracts/internal/admin-mcp";
 import type { RequestListener, ServerResponse } from "node:http";
 
 import {
@@ -173,8 +175,25 @@ export const createRouter =
     ) {
       containRequest(
         response,
-        handleAnalyticsRequest(request, response, pathname, analytics),
+        handleAnalyticsRequest(request, response, pathname, {
+          ...analytics,
+          aiCredentials: community?.aiCredentials,
+        }),
         apiFailure,
+      );
+      return;
+    }
+    if (
+      analytics !== undefined &&
+      pathname.startsWith(`${ANALYTICS_INSIGHTS_PATH}/`)
+    ) {
+      containRequest(
+        response,
+        handleAnalyticsInsights(request, response, pathname, {
+          ...analytics,
+          aiCredentials: community?.aiCredentials,
+        }),
+        operatorFailure,
       );
       return;
     }

@@ -57,6 +57,30 @@ export {
   LINK_PARAMETER_RULES,
 } from "./locate-reference";
 export { withinBudget } from "./budget";
+export {
+  ANALYTICS_CACHE_MAX_BYTES,
+  ANALYTICS_CACHE_TTL_MS,
+  ANALYTICS_SETTLED_AFTER_MS,
+  analyticsCache,
+  analyticsTtlMs,
+  createAnalyticsCache,
+  snappedOpenEnd,
+} from "./analytics/cache";
+export {
+  createUmamiGuard,
+  UMAMI_CALL_BUDGET_MS,
+  UMAMI_OVERRUN_HOLD_MS,
+  UMAMI_POOL_SHARE,
+  UMAMI_TOOL_BUDGET_MS,
+  umamiFailureEnvelope,
+  umamiGuard,
+} from "./analytics/umami-guard";
+export type {
+  UmamiAnswer,
+  UmamiFailureAnswer,
+  UmamiGuard,
+  UmamiReadInput,
+} from "./analytics/umami-guard";
 export { CMS_FAMILIES, linkCarriesCredential } from "./records";
 export {
   findInText,

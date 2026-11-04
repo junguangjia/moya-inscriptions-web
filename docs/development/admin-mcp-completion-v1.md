@@ -2274,6 +2274,168 @@ replacing the LATERAL with one pre-aggregated scan. Both need a copy with
 EXPLAIN (ANALYZE, BUFFERS), a separate Umami release and their own record.
 Neither is part of this work, and the canonical path needs neither.
 
+Recorded when built in S4, Backend side, tests in
+tests/integration/postgres/analytics-insights.test.ts, which runs as the real
+App role on a disposable database, and
+tests/unit/backend/analytics-insights.test.ts. Plans and timings come from
+tests/integration/postgres/analytics-insights-explain.mjs and stay in the
+private evidence of each run.
+
+- `AI_OPERATOR_ROUTES` names each report as an exact row, as `catalog-master/*`
+  does, because a wildcard would pass a future route unclassified and let
+  `GET prune` through. With no wildcard left, a row's path is exact. `export`
+  and `traffic` hold their rows and answer 404 until they are built. The Owner's
+  token also reads these routes, with the same withholding.
+- The analytics handler now calls `resolveOperatorActor`, so the base token gets
+  403 on `analytics/ips` (`SENSITIVE_SWITCH_OFF`) and `analytics/status`
+  (`AI_ROUTE_FORBIDDEN`), where it got 401. The product access gate treats
+  `insights/*` as an operator boundary, so a closed beta asks for no session
+  there.
+- `COMMUNITY_OPERATOR_AI_TOKEN` is validated at startup like the base token,
+  compared with the whole environment, and joins the analytics distinctness
+  list, before any route takes it.
+- `resolveAnalyticsRange` and `resolveAnalyticsCompare` live in contracts, so
+  both read paths resolve the same words to the same instants. `last_7_days` and
+  `last_30_days` are that many finished days, `this_week` starts on Monday, a
+  date-only `to` includes that day, and a time needs an offset. A `from` with no
+  `to` runs to the present and reads as not complete.
+- A parameter a report does not read is refused, not dropped. Keys are checked
+  against a Set before any object is built, because `collectTransportQuery`
+  throws on `?constructor=`.
+- A main range before retention is refused as `out_of_retention`. A comparison
+  period before retention, or before the store's first event, answers
+  `compare.outOfRetention` with `prev` null, because that period would read as
+  zero.
+- A `targetId` naming a self-only work answers `SELF_ONLY_OWNER_REVIEW`, because
+  a count filtered to one id would be that work's count with only the title
+  gone. Totals with no per-target rows still include its events.
+- Nothing yet opens analytics to self-only works, so the Matrix row "Self-only
+  work, switch on" is not met here: the Backend withholds them whatever the
+  switch says, until a slice brings `x-ai-sensitive` and
+  `COMMUNITY_OPERATOR_AI_SENSITIVE`.
+- A breakdown or comparison counts `page_view` unless `event` says otherwise,
+  and `dimension=event` counts every event. An event with no target, such as a
+  view of home, is `unknown` in `dimension=content`.
+- `native` reads no Umami data here. The Backend fixes the instants, retention
+  and first event for the Admin's Umami call. `reconcile` gives per-day
+  canonical counts and what was forwarded; the Umami side and the explanation
+  are the Admin's.
+- Realtime goes by `received_at`, because a client's clock can be a day off.
+- Result flags that are false are left out on metrics, `compare` and `quality`,
+  as on the envelope, and a content row carries `target` with no separate `key`,
+  so the overview holds its 2 KB target with five titled rows. A long title can
+  pass it. `events`, impressions and opens are not overview metrics; `trend` and
+  `product` have them.
+- Titles are public only: a work's public revision, an Article's published
+  revision, a published Catalog. The App role reads only `article_id` of
+  `public.article_entries`, so a CMS Article's row says `state:'unresolved'` and
+  no title. An unreadable `catalog_discovery` says `title_unavailable` and
+  `CATALOG_TITLES_UNAVAILABLE`, and the rest of the answer stands.
+- No analytics index was needed. At the bench's assumed 1M events over 180 days
+  every report used `analytics_events_received`, except a range wide enough that
+  the planner chose a sequential scan, and the widest overview stayed inside the
+  800 ms budget of section 21. Whether Production's rows and machine look like
+  this is unknown.
+- Reports run on the community pool and nothing limits how many at once, so
+  several long reads at the same time can hold its connections for up to the
+  statement timeout each. Not built, because the Admin's cache and single-flight
+  sit in front.
+
+Recorded when built in S4, Umami guard, tests in
+tests/unit/admin/analytics-umami-guard.test.ts, over a real HTTP stub through
+the real upstream client.
+
+- `UMAMI_READ_ROUTES` in contracts names each route with its query and its reply
+  schema, so a route with no row cannot be called. Reply schemas keep only the
+  fields they name, and a null or a word where a count goes fails the reply, so
+  it answers `UMAMI_REPLY_INVALID` and never a number. Filters are region, city,
+  device, segment and cohort, and metric types are region, city and device, so
+  no filter can count one self-only work's path, and no route reads titles.
+- `UMAMI_WORKSPACE_PATH` in the loopback URL is Umami's own `BASE_PATH`, which
+  it serves everything under. That is not the Admin's proxy route of the same
+  name.
+- The limit of 2 counts pool connections, not calls: `/pageviews` runs two
+  queries at once, so it takes both slots. Login runs inside a slot.
+- A timed-out call keeps its slot 5 s longer, because Umami's handlers take no
+  signal and the statement runs on. A call that fails fast frees it at once.
+- Slow and down answer alike, as the Matrix says: `UMAMI_QUERY_TIMEOUT`, or the
+  last answer marked stale. `reason` tells them apart (`timed_out`,
+  `unavailable`). `retryAfterMs` is the call limit: by then the read that was
+  started has ended. A refusal from Umami (400, 401, 403, a redirect) is never
+  covered by a stale answer, and a 404 answers `NOT_FOUND`.
+- A family is one question and holds one answer, its latest. An open range's new
+  minute reads again and replaces the old answer, which until then can stand in
+  marked stale with `covers` saying which minute it stops at. A finished period
+  never stands in for another.
+- The read a caller gave up on runs on and fills the cache, unless it was still
+  queued with nobody left waiting; then it never reaches Umami.
+- The limit of 2 is per process. The design says one process or several affects
+  only the hit rate; several would also multiply this limit.
+  `infra/production/systemd/yoyi-admin.service` runs one.
+- All routes were read once from a real Umami of this repository's reviewed
+  image on PostgreSQL 16.15, and every reply parsed. That image has neither
+  `accountVisitors` nor `legacyPageviews` on `/stats`, so those stay optional
+  and a reader must not take their absence as zero.
+
+Recorded when built in S4, the tool, tests in
+tests/cms/admin-mcp-analytics.test.ts: real JSON-RPC with the official client,
+through the real door and guard, to the real Backend on a disposable community
+database, with a real HTTP stand-in for Umami. The clock is pinned, so day and
+week edges are exact.
+
+- Beyond section 19's list the tool takes `filter`'s keys (`surface`,
+  `targetType`, `targetId`, `event`, `distinctId`, `userId`, and Umami's
+  `region`, `city`, `device`, `segment`, `cohort`), `steps`, `sameTarget`,
+  `basis`, `funnelId`, `kind`, `goalId`, `step` and `umamiSessionId`. Both ids
+  are UUIDs and the two stores do not share them, so a session is started from
+  one or the other by name, never guessed. `traffic` is in the report list and
+  answers `NOT_AVAILABLE` until it is built.
+- tools/list shows each name and the short choices. Patterns and limits are in
+  the contract, checked in the handler, and a refusal names them.
+  `admin_analytics` takes 2.5 KB of the listing, and the listing is now 11.1 KB
+  of its 12 KB, with five tools to come, so a later slice takes section 5's step
+  and drops the op enum.
+- The Admin resolves a range with the shared resolver and sends the Backend the
+  instants, so a canonical answer, a Umami answer and the cache key cover one
+  period, across midnight too. Canonical answers use the same cache and single
+  flight as Umami's: `version` is the minute on an open range.
+- `sessions` and `session` with no range read from seven days ago through now,
+  because `last_7_days` holds finished days only, and someone online now would
+  read as having done nothing.
+- A cut is a smaller page read again, so `other`, shares and the cursor are
+  computed for the rows that stay, and no field holds a value from before the
+  cut. `meta.truncated` and `remaining` say so. `data.next` becomes the
+  envelope's `next` and leaves the answer, so there is one way on. An overview
+  with more rows than its page goes on in `breakdown`, which holds the rest.
+  `product`'s positions cannot page, so they travel as columns: every surface at
+  every position fits.
+- Umami's rows count unique visitors and one visitor can be in two places, so
+  rows can pass the whole. Shares divide `total` while the rows fit inside it
+  (`shareBasis: total`), and the rows' sum otherwise (`place_rows`). `unknown`
+  is the difference, and null when it cannot be known: past the total, at the
+  500-row cap (`ROWS_CAPPED_AT_500`, which holds no next), or with `total`
+  unread.
+- Native `prev` is null on a partial period, because Umami's comparison is the
+  preceding hours and not the same hours of yesterday, and past retention, where
+  it reads zeros. `lowBase` on all three goes by visits, not by the rate.
+- An overview with a filter reads no Umami part and says so: site-wide places
+  beside one surface's numbers would read as that surface's.
+- `attribution` gives totals and `collected:false` for its sources. Umami's own
+  lists there would read as no source at all.
+- A range past retention on Umami's path is refused as canonical's is. `native`
+  answers `outOfRetention:true` with no Umami read.
+- `targetType` may narrow alone, so "the top work" is one call; `targetId` still
+  needs its type.
+- Overview's 2 KB target is not met: about 2.9 KB as a whole answer with five
+  titled rows, `next`, pointers and Umami's block. Its canonical part stays near
+  the target and a test holds the whole under 3 KB.
+- `untrusted` holds patterns with `*` for an index, so it stays a few pointers
+  whatever the row count. It also marks what Umami returns from a browser or a
+  definition: paths, names, notes, device, browser, language and place.
+- An own `__proto__` never reaches a tool: the SDK's request schema drops it
+  first, so it cannot be refused by name and cannot be read either. A test pins
+  that.
+
 ## 20. Byte channel
 
 Open in both directions. Bytes cannot travel in tool results: 128 MiB is about
@@ -2573,3 +2735,74 @@ private evidence of each run, not here.
   bars of known width: which widths each view keeps, and that each answer stays
   within 512 KiB and reports its size. Its thumbnail copies the thumb recipe's
   size and quality; the worker's renderer is not run.
+
+Recorded when built in S4, the analytics half, in tests/cms/admin-mcp-bench/.
+Numbers stay in the private evidence of each run, not here.
+
+- `node tests/cms/admin-mcp-bench/umami-stack.mjs up --dir <private directory> --image <tag> --migrations <prisma migrations>`
+  starts a task-owned Umami and its postgres:16.15-alpine, loopback only, with
+  the limits of `yoyi-umami-standalone.service` (0.5 CPU, 768 MiB).
+  `run.mjs analytics --output <private directory> --umami <its manifest>` then
+  makes its own database, seeds the canonical store, and runs the Admin's
+  production build, the real Backend's routes as the App role, and the driver.
+  `umami-stack.mjs down` removes both containers with their data.
+- The image must be built from `infra/production/umami` with
+  `scripts/analytics/build-umami-image.mjs`, target `standalone`. An older
+  reviewed image without `visitor-device.patch` has no per-event LATERAL, which
+  is the slow path this bench is for, and would read fast for the wrong reason.
+  Target `runtime` does not build today: its Node 22 builder cannot bundle
+  `node:sqlite` in two of the suites its own stage runs.
+- Bootstrap and `seed-synthetic-umami.mjs` run first, through the real
+  collector. The million events go straight into the tables, in time order, with
+  the indexes dropped and rebuilt from their own definitions, because at 0.5 CPU
+  the collector would take hours. One generator feeds both stores, shaped as the
+  worker forwards each event, so `event_data` is about 7 rows an event. `up`
+  posts one such event through the collector, compares the row it wrote with the
+  row the seed writes for the same event, and fails on any difference.
+- The oracle adds up the generated events as they are generated, plus the rows
+  the collector wrote, read with plain SQL. The most viewed work is self-only,
+  the third is deleted, and the first four events are the 23:59 and 00:01 edges
+  of A1. Umami alone holds the repository seed's 20 events, so on a finished day
+  the two stores differ by exactly those, and `reconcile` is graded on that.
+  Every report also runs once against the real Umami.
+- Reference paths A1 to A4 are graded here on real Umami and in
+  tests/cms/admin-mcp-analytics.test.ts on a stand-in with a pinned clock. They
+  are not in L0's `l0.scale.ts`, because CI has no Umami.
+- Cold means the Admin's cache cannot answer: each sample asks for a period no
+  other sample asked for, of the same length, so the databases' own caches stay
+  warm. A cold start is reported apart: the Umami stack restarted first, which
+  empties its connections and shared buffers but not the Docker VM's page cache,
+  and the canonical database is not restarted. A sample whose Umami part did not
+  answer never counts as within budget, however fast it came back.
+- The machine is not Production's: an Apple Silicon laptop under Docker, Umami
+  limited as its unit is, PostgreSQL at the image's defaults and not limited.
+  None of this says anything about TencentDB until L4.
+- What the first L1 at target scale said, with every budget left as it is. A1 to
+  A4 and `reconcile` give the known answers on a real Umami. Within budget: both
+  cached classes, and a canonical breakdown. A Umami breakdown of 7 days is
+  within its budget at p95.
+- Over budget: a cold overview of 7 days, narrowly. A cold overview of 30 days
+  or more stops at the 1.5 s soft budget with Umami's part named `timed_out`,
+  every time, and the same question asked again after the read has finished has
+  it from the cache. A Umami breakdown of 30 days. A Umami breakdown of 170 days
+  is over the 3775 ms ceiling of its row: it answers at the 8 s tool limit with
+  `total` unread. The first overview after a cold start stops at the soft
+  budget, and the first breakdown is near or over its budget.
+- A cold overview cannot meet 800 ms while Umami's part takes longer than that
+  and the tool waits up to 1.5 s for it. The two numbers come from this document
+  and cannot both hold at this scale. The canonical part alone is well inside.
+- The time is in PostgreSQL, not in Umami's CPU limit: Umami's own routes took
+  the same time at 0.5 and at 18 CPUs. `/stats` is most of it, because it runs
+  two queries in turn, each with the per-event LATERAL, and it grows with the
+  events in the range. `/metrics` is several times faster.
+- Section 19's index was tried on the synthetic copy. Beside the existing index
+  the planner does not choose it. With the existing one dropped there is no
+  measurable gain, and adding `website_id` to its INCLUDE, for an index-only
+  scan, gains about a tenth. So the index does not meet these budgets at this
+  scale, and the other option there, one pre-aggregated scan instead of the
+  LATERAL, is the one left to try, with its own Umami release and record.
+  Neither was changed here.
+- A read given up on holds its slot, so wide reads in a row can make the next
+  Umami read wait or answer `UMAMI_QUERY_TIMEOUT`, which happened once to the
+  first call after a run of them. That is the guard working: the pool's last
+  connection stays free for ingestion.

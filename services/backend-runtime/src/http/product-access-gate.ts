@@ -85,6 +85,8 @@ const openAuthOperations: ReadonlySet<string> = new Set([
 ]);
 /** The Owner's operator boundary answers only to its own credential. */
 const operatorPrefix = "/internal/community/";
+/** So do the AI operator's analytics reads, behind the same route table. */
+const analyticsInsightsPrefix = "/internal/analytics/insights/";
 /** A body that may still be streaming when the answer is written. */
 const transferPrefix = "/v1/community/publishing/uploads/";
 
@@ -113,7 +115,11 @@ export const productRouteAuthority = (
       ))
   )
     return "boundary";
-  if (pathname.startsWith(operatorPrefix) || delegatedPaths.has(pathname))
+  if (
+    pathname.startsWith(operatorPrefix) ||
+    pathname.startsWith(analyticsInsightsPrefix) ||
+    delegatedPaths.has(pathname)
+  )
     return "boundary";
   return "session";
 };

@@ -4,10 +4,16 @@ import {
   analyticsIpObservationsSchema,
   analyticsStatusSchema,
 } from "@moya/contracts/analytics";
+import { AI_OPERATOR_LABEL } from "@moya/contracts/internal/admin-mcp";
+import type { AnalyticsInsightsReader } from "@moya/contracts/internal/admin-mcp";
 import type { AnalyticsService, CommunitySessionService } from "@moya/api";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AuthRequestSource } from "../community/auth-request-source.js";
-import { isAuthorizedOperator } from "../community/operator-handler.js";
+import {
+  aiOperatorRefusal,
+  resolveOperatorActor,
+} from "../community/operator-handler.js";
+import type { OperatorAiCredentials } from "../community/operator-handler.js";
 import { readBearerToken } from "../community/session-credential.js";
 import { readJsonBody } from "../http/json-body.js";
 import { sendJson } from "../http/json-response.js";
@@ -17,6 +23,10 @@ export interface AnalyticsRouteDependencies {
   readonly source?: AuthRequestSource;
   readonly sessions?: Pick<CommunitySessionService, "identify">;
   readonly operatorCredential: string;
+  /** Absent or empty: that AI credential is accepted nowhere. */
+  readonly aiCredentials?: OperatorAiCredentials | undefined;
+  /** Canonical reads behind internal/analytics/insights/*. */
+  readonly insights?: AnalyticsInsightsReader | undefined;
 }
 const noStore = { "cache-control": "private, no-store" };
 export const handleAnalyticsRequest = async (
@@ -26,9 +36,21 @@ export const handleAnalyticsRequest = async (
   dependencies: AnalyticsRouteDependencies,
 ): Promise<void> => {
   if (pathname.startsWith("/internal/")) {
-    if (!isAuthorizedOperator(request, dependencies.operatorCredential)) {
+    const actor = resolveOperatorActor(
+      request,
+      dependencies.operatorCredential,
+      dependencies.aiCredentials,
+    );
+    if (actor === null) {
       sendJson(response, 401, { error: { code: "UNAUTHENTICATED" } }, noStore);
       return;
+    }
+    if (actor.label === AI_OPERATOR_LABEL) {
+      const refusal = aiOperatorRefusal(request, pathname, actor.credential);
+      if (refusal !== null) {
+        sendJson(response, 403, { error: { code: refusal } }, noStore);
+        return;
+      }
     }
     if (request.method !== "GET") {
       sendJson(

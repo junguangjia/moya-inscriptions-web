@@ -100,6 +100,70 @@ export const createUmamiUpstream = (
 
 export const umamiUpstream = createUmamiUpstream();
 
+/**
+ * Field projections for every reader of Umami's replies. Native replies carry team
+ * invitation codes, share capabilities and, on /api/me, the bearer itself.
+ */
+export const pick = (value: unknown, keys: readonly string[]) =>
+  Object.fromEntries(
+    keys.flatMap((key) =>
+      value && typeof value === "object" && key in value
+        ? [[key, (value as Record<string, unknown>)[key]]]
+        : [],
+    ),
+  );
+export const publicTeam = (value: unknown) =>
+  pick(value, ["id", "name", "logoUrl"]);
+export const publicWebsite = (value: unknown) =>
+  pick(value, [
+    "id",
+    "name",
+    "domain",
+    "createdAt",
+    "resetAt",
+    "deletedAt",
+    "userId",
+    "teamId",
+  ]);
+export const publicPage = (
+  value: unknown,
+  project: (row: unknown) => unknown,
+) => {
+  if (Array.isArray(value)) return value.map(project);
+  const page = pick(value, ["count", "page", "pageSize", "orderBy", "search"]);
+  return {
+    ...page,
+    data:
+      value &&
+      typeof value === "object" &&
+      "data" in value &&
+      Array.isArray(value.data)
+        ? value.data.map(project)
+        : [],
+  };
+};
+/** Native /api/me returns its server auth context, bearer included: never stream it out. */
+export const publicIdentity = (value: unknown) => {
+  const context = value as {
+    user?: Record<string, unknown>;
+    authType?: unknown;
+  };
+  const user = Object.fromEntries(
+    ["id", "username", "role", "isAdmin"].flatMap((key) => {
+      const field = context.user?.[key];
+      return typeof field === "string" || typeof field === "boolean"
+        ? [[key, field]]
+        : [];
+    }),
+  );
+  return {
+    user,
+    ...(typeof context.authType === "string"
+      ? { authType: context.authType }
+      : {}),
+  };
+};
+
 /** Enter the configured website in its real team scope, never an empty personal list. */
 export async function resolveAnalyticsWorkspacePath(
   reader: Pick<typeof umamiUpstream, "request"> = umamiUpstream,
