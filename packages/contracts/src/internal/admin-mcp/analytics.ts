@@ -955,6 +955,7 @@ export const analyticsProductSchema = z.strictObject({
       position: z.union([z.number().int().min(0).max(9), z.literal("10+")]),
       impressions: count,
       opens: count,
+      /** Opens per impression, counted in events, so it can pass 100. */
       openRate: z.number().nullable(),
     }),
   ),
@@ -993,6 +994,7 @@ export const analyticsProductSchema = z.strictObject({
         target: targetSchema,
         impressions: count,
         opens: count,
+        /** Opens per impression, counted in events, so it can pass 100. */
         openRate: z.number().nullable(),
       }),
     ),

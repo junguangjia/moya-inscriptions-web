@@ -545,7 +545,11 @@ const serviceFor = (
       ),
       // Time in the queue counts: past this the caller has READ_TIMED_OUT, no number.
       waitMs: canonical.callMs + 500,
-      load: (wanted) => readInShare(report, params, wanted, canonical),
+      // One short facts statement that every Umami-path report needs first, so no turn.
+      load: (wanted) =>
+        report === "native"
+          ? fetchInsight(report, params, AbortSignal.timeout(canonical.callMs))
+          : readInShare(report, params, wanted, canonical),
     });
     if (answer.status === "late")
       throw new AnalyticsReadFailure(failedEnvelope("READ_TIMED_OUT"));

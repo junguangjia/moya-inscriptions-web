@@ -316,6 +316,51 @@ describe("Umami route allowlist", () => {
     );
   });
 
+  it("keeps Umami's previous period whole on compare=prev, and moves nothing else", async () => {
+    const stub = await startStub(answerStats);
+    const guard = guardFor(stub, { now: () => NOW });
+    const sent = async (
+      range: typeof settled,
+      query: { readonly compare?: "prev" | "yoy" },
+    ) => {
+      const answer = await guard.forTool().read("stats", { range, query });
+      const { searchParams } = stub.hits.at(-1)!.url;
+      return {
+        answer,
+        startAt: Number(searchParams.get("startAt")),
+        endAt: Number(searchParams.get("endAt")),
+      };
+    };
+    const start = settled.start.getTime();
+    const end = settled.end.getTime();
+
+    const prev = await sent(settled, { compare: "prev" });
+    expect([prev.startAt, prev.endAt]).toEqual([start - 1, end - 1]);
+    // Umami's own sum: the length in whole minutes, cut short, off both ends.
+    const taken = Math.trunc((prev.endAt - prev.startAt) / 60_000) * 60_000;
+    expect(prev.startAt - taken).toBe(start - (end - start) - 1);
+    expect(prev.endAt - taken).toBe(start - 1);
+    expect(prev.answer).toMatchObject({
+      status: "fresh",
+      covers: {
+        start: settled.start.toISOString(),
+        end: settled.end.toISOString(),
+      },
+    });
+
+    const yoy = await sent(settled, { compare: "yoy" });
+    expect([yoy.startAt, yoy.endAt]).toEqual([start, end - 1]);
+    const plain = await sent(settled, {});
+    expect([plain.startAt, plain.endAt]).toEqual([start, end - 1]);
+    const open = await sent(
+      { start: settled.start, end: new Date(NOW), complete: false },
+      { compare: "prev" },
+    );
+    expect(open.startAt).toBe(start);
+    expect(open.endAt).toBe(Date.parse("2026-11-04T04:30:00.000Z"));
+    expect(stub.hits).toHaveLength(4);
+  });
+
   it("fills a path id from the query and keeps it out of the query string", async () => {
     const stub = await startStub((_url, response) =>
       json(response, {
@@ -1261,7 +1306,7 @@ describe("canonical reads' share of the community pool", () => {
     );
     vi.stubEnv("OPERATOR_AI_BASE_TOKEN", viewerToken);
     const deps = {
-      guard: createUmamiGuard({ environment: {} }),
+      guard: guardFor(stub),
       cache: createAnalyticsCache(),
       now: Date.now,
       canonical: {
@@ -1271,6 +1316,7 @@ describe("canonical reads' share of the community pool", () => {
     };
     return {
       stub,
+      deps,
       // Each day is a different question, so neither the cache nor single flight joins them.
       read: (day: string) =>
         analyticsEnvelope(
@@ -1309,5 +1355,58 @@ describe("canonical reads' share of the community pool", () => {
     );
     expect(await read("04")).toMatchObject({ code: "ANALYTICS_UNAVAILABLE" });
     expect(stub.hits).toHaveLength(CANONICAL_POOL_SHARE + 1);
+  });
+
+  it("answers a native report while both slots are held, because its facts read takes no turn", async () => {
+    const { stub, deps, read } = await start({ callMs: 1_000, holdMs: 1_000 });
+    stub.setRespond((url, response) => {
+      if (url.pathname.endsWith("/native"))
+        json(response, {
+          report: "native",
+          source: "canonical",
+          asOf: new Date(NOW).toISOString(),
+          range: {
+            start: "2026-03-02T16:00:00.000Z",
+            end: "2026-03-03T16:00:00.000Z",
+            tz: "Asia/Shanghai",
+            complete: true,
+            dataFrom: null,
+          },
+          startMs: Date.parse("2026-03-02T16:00:00.000Z"),
+          endMs: Date.parse("2026-03-03T16:00:00.000Z"),
+          retention: { days: 180, from: "2025-09-12T04:00:00.000Z" },
+          outOfRetention: false,
+          notes: [],
+        });
+      else if (url.pathname.endsWith("/sessions/weekly"))
+        json(
+          response,
+          Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0)),
+        );
+    });
+    const holders = [read("01"), read("02")];
+    const held = () =>
+      stub.hits.filter(({ url }) => url.pathname.endsWith("/compare")).length;
+    await vi.waitFor(() => expect(held()).toBe(CANONICAL_POOL_SHARE));
+    const native = await analyticsEnvelope(
+      {
+        report: "native",
+        kind: "weekly",
+        from: "2026-03-03",
+        to: "2026-03-03",
+      },
+      deps,
+    );
+    expect(native).toMatchObject({
+      ok: true,
+      data: { report: "native", kind: "weekly", outOfRetention: false },
+    });
+    // It answered inside theirs: both reads are still waiting on the Backend.
+    const both = Promise.all(holders);
+    expect(await Promise.race([both, "waiting"])).toBe("waiting");
+    expect((await both).map(({ code }) => code)).toEqual([
+      "READ_TIMED_OUT",
+      "READ_TIMED_OUT",
+    ]);
   });
 });

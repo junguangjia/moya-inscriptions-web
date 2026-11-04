@@ -258,6 +258,19 @@ const eventBasis = (
 const eventFilter = (event: string): readonly string[] | undefined =>
   event === "any" ? undefined : [event];
 
+/** A client records each open and dwell on detail, so another surface's 0 is no measure. */
+const offDetailNote = (
+  surface: string | undefined,
+  events: readonly string[] | undefined,
+): string[] =>
+  surface !== undefined &&
+  surface !== "detail" &&
+  (events === undefined ||
+    events.includes("content_open") ||
+    events.includes("content_dwell"))
+    ? ["OPENS_AND_DWELL_RECORDED_ON_DETAIL"]
+    : [];
+
 const accountOf = (
   accounts: ReadonlyMap<string, AccountRow>,
   id: string | null,
@@ -492,7 +505,7 @@ export class PostgresAnalyticsInsights implements AnalyticsInsightsReader {
         title: string | null;
         handle: string | null;
       }>(
-        `SELECT a.id, a.status, r.title, u.handle
+        `SELECT a.id, CASE WHEN a.reporting_hidden THEN 'hidden' ELSE a.status END AS status, r.title, u.handle
         FROM community.article_documents a
         LEFT JOIN community.article_revisions r ON r.article_id = a.id AND r.version = a.published_version AND NOT a.reporting_hidden
         LEFT JOIN community.public_users u ON u.id = a.owner_id
@@ -1008,7 +1021,13 @@ export class PostgresAnalyticsInsights implements AnalyticsInsightsReader {
         offset,
         notes,
       );
-      const frame = this.frame(range, facts, now, [...notes], hasMore);
+      const frame = this.frame(
+        range,
+        facts,
+        now,
+        [...offDetailNote(query.surface, eventFilter(event)), ...notes],
+        hasMore,
+      );
       return {
         report: "breakdown",
         ...frame,
@@ -1074,7 +1093,16 @@ export class PostgresAnalyticsInsights implements AnalyticsInsightsReader {
           )
         ).rows[0]!;
         return {
-          ...this.frame(range, facts, now, this.compareNotes(compare), false),
+          ...this.frame(
+            range,
+            facts,
+            now,
+            [
+              ...offDetailNote(query.surface, filter.events),
+              ...this.compareNotes(compare),
+            ],
+            false,
+          ),
           ...shared,
           total: {
             v: Number(total.v),
@@ -1166,7 +1194,11 @@ export class PostgresAnalyticsInsights implements AnalyticsInsightsReader {
           range,
           facts,
           now,
-          [...this.compareNotes(compare), ...notes],
+          [
+            ...offDetailNote(query.surface, filter.events),
+            ...this.compareNotes(compare),
+            ...notes,
+          ],
           ranked.hasMore,
         ),
         ...shared,
@@ -1272,7 +1304,13 @@ export class PostgresAnalyticsInsights implements AnalyticsInsightsReader {
         .map((step) => `SAME_TARGET_STEP_HAS_NO_TARGET:${step}`);
       return {
         report: "funnel",
-        ...this.frame(range, facts, now, notes, false),
+        ...this.frame(
+          range,
+          facts,
+          now,
+          [...offDetailNote(query.surface, steps.slice(0, 1)), ...notes],
+          false,
+        ),
         excluded: [],
         basis: {
           unit,

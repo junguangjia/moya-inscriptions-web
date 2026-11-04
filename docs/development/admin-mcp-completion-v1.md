@@ -2330,7 +2330,12 @@ private evidence of each run.
   before the range, stays under detail with a null rate and
   `DETAIL_OPENS_HAD_NO_IMPRESSION`. A surface filter applies after that, so it
   keeps the opens. `topContent` and dwell stay where they were recorded, so a
-  filter other than detail adds `OPENS_AND_DWELL_RECORDED_ON_DETAIL`.
+  filter other than detail adds `OPENS_AND_DWELL_RECORDED_ON_DETAIL`. `funnel`
+  adds that note when its first step is an open or a dwell, and `breakdown` and
+  `compare` when they count opens, dwell or every event, because their 0 under
+  such a filter is where a client records them, not that nobody opened anything.
+  `openRate` is opens per impression, counted in events, and can pass 100,
+  because a second tap on one listing is another open and no new impression.
 - `finals` are always site-wide, because the business tables have no surface, so
   a surface filter adds `FINALS_NOT_BY_SURFACE`.
 - A funnel takes a surface on its first step only and says so,
@@ -2363,12 +2368,14 @@ private evidence of each run.
   pass it. `events`, impressions and opens are not overview metrics; `trend` and
   `product` have them.
 - Titles are public only: a work's public revision, an Article's published
-  revision, a published Catalog. A withdrawn Article has none, because the store
-  clears its `published_version`, and neither does one a report hid from the
-  public. The App role reads only `article_id` of `public.article_entries`, so a
-  CMS Article's row says `state:'unresolved'` and no title. An unreadable
-  `catalog_discovery` says `title_unavailable` and `CATALOG_TITLES_UNAVAILABLE`,
-  and the rest of the answer stands.
+  revision, a published Catalog. A work a report hid, or one removed or trashed,
+  keeps that title, because its row names that state. A withdrawn Article has
+  none, because the store clears its `published_version`, and neither does one a
+  report hid from the public, whose row says `state:'hidden'`. The App role
+  reads only `article_id` of `public.article_entries`, so a CMS Article's row
+  says `state:'unresolved'` and no title. An unreadable `catalog_discovery` says
+  `title_unavailable` and `CATALOG_TITLES_UNAVAILABLE`, and the rest of the
+  answer stands.
 - No analytics index was needed. At the bench's assumed 1M events over 180 days
   every report used `analytics_events_received`, except a range wide enough that
   the planner chose a sequential scan, and the widest overview stayed inside the
@@ -2380,12 +2387,15 @@ private evidence of each run.
   process runs at most 2 canonical reads at once (`CANONICAL_POOL_SHARE`), and
   the rest wait in turn inside the call's own budget. A read that waits past it
   answers `READ_TIMED_OUT`, never a number, and if nobody still waits it never
-  starts. The Admin's 10 s abort does not end the Backend's read, and `product`
-  runs seven statements at up to 3 s each, so a read given up on keeps its slot
-  11 s longer. There is no limit on the Backend's side and pool sizes are
-  unchanged. The numbers behind this, on a real pool of 5 at 1M events on a
-  laptop: 5 reads at once add little, 10 at once add about 1 s to every
-  community route, and a burst of 40 made connections time out.
+  starts. `native` alone takes no turn, because it is one short facts statement
+  that every Umami-path report needs first, and a wait behind a wide read would
+  spend the tool's budget and read as Umami's timeout. The Admin's 10 s abort
+  does not end the Backend's read, and `product` runs seven statements at up to
+  3 s each, so a read given up on keeps its slot 11 s longer. There is no limit
+  on the Backend's side and pool sizes are unchanged. The numbers behind this,
+  on a real pool of 5 at 1M events on a laptop: 5 reads at once add little, 10
+  at once add about 1 s to every community route, and a burst of 40 made
+  connections time out.
 
 Recorded when built in S4, Umami guard, tests in
 tests/unit/admin/analytics-umami-guard.test.ts, over a real HTTP stub through
@@ -2433,6 +2443,10 @@ the real upstream client.
   two ends with both included, and a range's end is not in it. Without this, an
   event in the next day's first second counts in native's yesterday. `covers`
   keeps the range's own end. An open range still ends on its snapped minute.
+  With `compare=prev` a complete range's `startAt` is less 1 ms as well, because
+  Umami takes the previous period's length in whole minutes, cut short, and a
+  length 1 ms short of whole would move that period a minute late; stored rows
+  are whole seconds, so none falls in that 1 ms.
 
 Recorded when built in S4, the tool, tests in
 tests/cms/admin-mcp-analytics.test.ts: real JSON-RPC with the official client,

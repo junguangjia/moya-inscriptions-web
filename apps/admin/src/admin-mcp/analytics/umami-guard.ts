@@ -280,7 +280,14 @@ export const createUmamiGuard = ({
       ...(range === undefined
         ? []
         : [
-            ["startAt", String(startAt)],
+            // Umami takes prev's length in whole minutes, cut short, so both ends move by 1 ms
+            // to keep it whole. Stored rows are whole seconds, so none sits in that 1 ms.
+            [
+              "startAt",
+              String(
+                !open && query.compare === "prev" ? startAt! - 1 : startAt,
+              ),
+            ],
             // Umami reads between two ends, both included. A complete range's end is not.
             ["endAt", String(open ? endAt : endAt! - 1)],
           ]),

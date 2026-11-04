@@ -406,6 +406,28 @@ for (const name of ["like", "like", "favorite", "follow"])
     at: cst(`${product}09:07:00`),
   });
 
+// Tapped again after Back, on a day of its own: one impression and three opens.
+const retapDay = "2026-01-29T";
+const retapper = visitor();
+event({
+  visitor: retapper,
+  name: "content_impression",
+  surface: "search",
+  type: "work",
+  id: works.first.id,
+  at: cst(`${retapDay}09:00:00`),
+  data: { position: 8 },
+});
+for (const second of ["10", "20", "30"])
+  event({
+    visitor: retapper,
+    name: "content_open",
+    type: "work",
+    id: works.first.id,
+    at: cst(`${retapDay}09:01:${second}`),
+    data: { position: 8 },
+  });
+
 // Dwell: one read split by two tab switches, and the same session on another work.
 const dwellDay = "2026-01-28T";
 const splitReader = visitor();
@@ -1168,6 +1190,42 @@ describe("funnel", () => {
     });
     expect(targeted.notes).toEqual([]);
   });
+
+  it("says a first step that is an open or a dwell is recorded on detail, with its count as it is", async () => {
+    const off = "OPENS_AND_DWELL_RECORDED_ON_DETAIL";
+    for (const [first, seen] of [
+      ["content_open", 4],
+      ["content_dwell", 5],
+    ] as const) {
+      const steps = `${first},like`;
+      const browse = await ok("funnel", {
+        ...productDay,
+        steps,
+        surface: "browse",
+      });
+      expect(counts(browse), first).toEqual([0, 0]);
+      expect(browse.notes, first).toEqual([off]);
+      expect(browse.basis.surfaceAppliesTo, first).toBe("first_step");
+      const detail = await ok("funnel", {
+        ...productDay,
+        steps,
+        surface: "detail",
+      });
+      expect(counts(detail), first).toEqual([seen, 0]);
+      expect(detail.notes, first).toEqual([]);
+      const whole = await ok("funnel", { ...productDay, steps });
+      expect(counts(whole), first).toEqual([seen, 0]);
+      expect(whole.notes, first).toEqual([]);
+    }
+    // A listing's own step reads what it was asked; a later open changes nothing.
+    const listing = await ok("funnel", {
+      ...productDay,
+      steps: "content_impression,content_open",
+      surface: "browse",
+    });
+    expect(counts(listing)).toEqual([7, 3]);
+    expect(listing.notes).toEqual([]);
+  });
 });
 
 describe("realtime", () => {
@@ -1468,6 +1526,101 @@ describe("product", () => {
       p90Ms: 5_000,
     });
   });
+
+  it("counts openRate in events, so a second tap takes it past 100", async () => {
+    const body = await ok("product", {
+      from: "2026-01-29",
+      to: "2026-01-29",
+    });
+    expect(body.byPosition).toEqual([
+      {
+        surface: "search",
+        position: 8,
+        impressions: 1,
+        opens: 3,
+        openRate: 300,
+      },
+    ]);
+    expect(body.topContent.rows).toHaveLength(1);
+    expect(body.topContent.rows[0]).toMatchObject({
+      impressions: 1,
+      opens: 3,
+      openRate: 300,
+    });
+  });
+
+  describe("a listing's filter on what a client records on detail", () => {
+    const off = "OPENS_AND_DWELL_RECORDED_ON_DETAIL";
+    const opens = { ...day, dimension: "content", event: "content_open" };
+
+    it("breakdown says so, with its counts as they are", async () => {
+      const browse = await ok("breakdown", { ...opens, surface: "browse" });
+      expect(browse).toMatchObject({ total: 0, rows: [] });
+      expect(browse.notes).toEqual([off]);
+      const dwell = await ok("breakdown", {
+        ...opens,
+        event: "content_dwell",
+        surface: "home",
+      });
+      expect(dwell).toMatchObject({ total: 0, rows: [] });
+      expect(dwell.notes).toEqual([off]);
+      // Every event: the impressions are real, and the opens' absence is explained.
+      const events = await ok("breakdown", {
+        ...day,
+        dimension: "event",
+        surface: "browse",
+      });
+      expect(events.total).toBe(7);
+      expect(events.rows.map((row: Json) => row.key)).toEqual([
+        "content_impression",
+      ]);
+      expect(events.notes).toEqual([off]);
+
+      const detail = await ok("breakdown", { ...opens, surface: "detail" });
+      expect(detail.total).toBe(4);
+      expect(detail.notes).not.toContain(off);
+      const whole = await ok("breakdown", opens);
+      expect(whole.total).toBe(4);
+      expect(whole.notes).not.toContain(off);
+      const pageViews = await ok("breakdown", {
+        ...day,
+        dimension: "content",
+        surface: "browse",
+      });
+      expect(pageViews.event).toBe("page_view");
+      expect(pageViews.notes).not.toContain(off);
+    });
+
+    it("compare says so on both its answers, with its counts as they are", async () => {
+      const browse = await ok("compare", { ...opens, surface: "browse" });
+      expect(browse.compare).not.toHaveProperty("outOfRetention");
+      expect(browse.total.v).toBe(0);
+      expect(browse.notes).toEqual([off]);
+      const detail = await ok("compare", { ...opens, surface: "detail" });
+      expect(detail.total.v).toBe(4);
+      expect(detail.notes).not.toContain(off);
+      const pageViews = await ok("compare", {
+        ...day,
+        dimension: "content",
+        surface: "browse",
+      });
+      expect(pageViews.event).toBe("page_view");
+      expect(pageViews.notes).not.toContain(off);
+
+      // A year back is past retention, and that answer reads its own total.
+      const year = { ...opens, compare: "year" };
+      const old = await ok("compare", { ...year, surface: "browse" });
+      expect(old.compare.outOfRetention).toBe(true);
+      expect(old.total).toMatchObject({ v: 0, prev: null });
+      expect(old.notes).toEqual(
+        expect.arrayContaining(["COMPARE_OUT_OF_RETENTION", off]),
+      );
+      const oldDetail = await ok("compare", { ...year, surface: "detail" });
+      expect(oldDetail.compare.outOfRetention).toBe(true);
+      expect(oldDetail.total.v).toBe(4);
+      expect(oldDetail.notes).toEqual(["COMPARE_OUT_OF_RETENTION"]);
+    });
+  });
 });
 
 describe("reconcile and native", () => {
@@ -1692,6 +1845,31 @@ describe("a self-only work", () => {
     expect(JSON.stringify(body)).not.toContain(withdrawnTitle);
   });
 
+  it("keeps a hidden or removed work's title, because its row names that state", async () => {
+    for (const state of ["hidden", "removed"]) {
+      await setup.query(
+        "UPDATE community.works SET operator_state=$2, version=version+1 WHERE id=$1",
+        [works.third.id, state],
+      );
+      try {
+        const body = await ok("breakdown", {
+          range: "last_7_days",
+          dimension: "content",
+          limit: "100",
+        });
+        expect(
+          body.rows.find((row: Json) => row.target.id === works.third.id)
+            .target,
+        ).toMatchObject({ title: works.third.name, state });
+      } finally {
+        await setup.query(
+          "UPDATE community.works SET operator_state='visible', version=version+1 WHERE id=$1",
+          [works.third.id],
+        );
+      }
+    }
+  });
+
   it("gives no title for an Article a report hid from the public", async () => {
     const read = () =>
       ok("breakdown", {
@@ -1708,7 +1886,11 @@ describe("a self-only work", () => {
       const target = body.rows.find(
         (row: Json) => row.target.id === articleId,
       ).target;
-      expect(target.title).toBeNull();
+      expect(target).toMatchObject({
+        title: null,
+        authorHandle,
+        state: "hidden",
+      });
       expect(JSON.stringify(body)).not.toContain("合成文章");
     } finally {
       await setup.query(
@@ -1718,9 +1900,8 @@ describe("a self-only work", () => {
     }
     const restored = await read();
     expect(
-      restored.rows.find((row: Json) => row.target.id === articleId).target
-        .title,
-    ).toBe("合成文章");
+      restored.rows.find((row: Json) => row.target.id === articleId).target,
+    ).toMatchObject({ title: "合成文章", state: "published" });
   });
 });
 
