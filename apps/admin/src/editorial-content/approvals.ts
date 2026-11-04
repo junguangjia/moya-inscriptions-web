@@ -53,10 +53,12 @@ const canonical = (value: unknown): unknown => {
   return value ?? null;
 };
 
-/** Order-preserving digest of the Article's editorial content only. */
-export const articleContentFingerprint = (document: object): string => {
+/** The Article's editorial content only, with row ids and populated rows left out. */
+export const articleContentSubset = (
+  document: object,
+): Record<string, unknown> => {
   const record = document as Record<string, unknown>;
-  const subset = Object.fromEntries(
+  return Object.fromEntries(
     contentKeys.map((key) => [
       key,
       key === "coverCatalog"
@@ -64,8 +66,13 @@ export const articleContentFingerprint = (document: object): string => {
         : canonical(record[key]),
     ]),
   );
-  return createHash("sha256").update(JSON.stringify(subset)).digest("hex");
 };
+
+/** Order-preserving digest of that content. */
+export const articleContentFingerprint = (document: object): string =>
+  createHash("sha256")
+    .update(JSON.stringify(articleContentSubset(document)))
+    .digest("hex");
 
 export const editableArticle = async (
   req: PayloadRequest,

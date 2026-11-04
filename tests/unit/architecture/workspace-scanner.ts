@@ -1285,13 +1285,13 @@ export const isAuthorizedCmsServerFile = (
     relative === "src/agent-admin/mcp-tools.ts" ||
     // admin-mcp-completion-v1: the server-side MCP path, named one by one like
     // the connection boundary below.
-    /^src\/admin-mcp\/(?:actions-for|audit|budget|capabilities|dispatch|door|envelope|guard|index|locate|locate-reference|native|record-views|records|registry|surfaces|text-window)\.ts$/.test(
+    /^src\/admin-mcp\/(?:actions-for|audit|budget|capabilities|dispatch|door|envelope|guard|index|locate|locate-reference|native|record-views|records|refusal|registry|surfaces|text-window)\.ts$/.test(
       relative,
     ) ||
-    /^src\/admin-mcp\/ops\/(?:cms|community|define|editorial|list|list-sources|scripts)\.ts$/.test(
+    /^src\/admin-mcp\/ops\/(?:cms|cms-writes|community|define|editorial|list|list-sources|locks|patch-text|saves|scripts)\.ts$/.test(
       relative,
     ) ||
-    /^src\/admin-mcp\/tools\/(?:actions|analytics|find|get|index|read|view-media|whoami)\.ts$/.test(
+    /^src\/admin-mcp\/tools\/(?:actions|analytics|execute|find|get|index|read|view-media|whoami)\.ts$/.test(
       relative,
     ) ||
     /^src\/admin-mcp\/analytics\/(?:cache|service|umami-guard)\.ts$/.test(

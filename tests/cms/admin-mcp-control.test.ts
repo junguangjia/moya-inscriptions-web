@@ -1066,6 +1066,24 @@ describe("the control page", () => {
     expect(page.figures?.irreversibleTargets).toEqual(expect.any(Number));
   });
 
+  it("compares a tool's budget on its one-target calls, and calls no batch slow", async () => {
+    const timing = async (tool: string) =>
+      (
+        await readControlPage(await ownerSessionRequest())
+      ).figures?.timings.find((row) => row.tool === tool);
+    const before = await timing("admin_execute");
+    const batchesBefore = await timing("admin_execute (batch)");
+    await db().execute(sql`
+      INSERT INTO mcp_audit_events (at, call_id, phase, class, tool, op, count, ok, code, duration_ms)
+      SELECT now(), gen_random_uuid(), 'finish', 'reversible', 'admin_execute', 'editorial.save-draft', 30, true, 'OK', 5000
+      FROM generate_series(1, 3)`);
+    expect((await timing("admin_execute"))?.calls).toBe(before?.calls);
+    expect(await timing("admin_execute (batch)")).toMatchObject({
+      calls: (batchesBefore?.calls ?? 0) + 3,
+      budgetMs: null,
+    });
+  });
+
   it("never lets keys long expired push out one about to lapse, and lists soonest first", async () => {
     await db().execute(sql`
       INSERT INTO payload_mcp_api_keys (user_id, label, enable_a_p_i_key, expires_at, updated_at, created_at)

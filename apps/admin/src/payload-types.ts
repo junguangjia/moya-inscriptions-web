@@ -502,7 +502,25 @@ export interface EditorialReceipt {
   deduplicationKey: string;
   requestFingerprint: string;
   actor: number | User;
-  operation: "save-draft" | "publish-approved";
+  operation:
+    | "save-draft"
+    | "publish-approved"
+    | "approve-batch"
+    | "approve-article-batch"
+    | "publish-direct"
+    | "withdraw"
+    | "restore-draft"
+    | "patch-text"
+    | "duplicate"
+    | "article-publish"
+    | "article-withdraw"
+    | "article-restore"
+    | "article-duplicate"
+    | "collection-save"
+    | "collection-publish"
+    | "collection-withdraw"
+    | "collection-restore"
+    | "collection-duplicate";
   status: "completed" | "rejected";
   catalog?: (number | null) | Catalog;
   article?: (number | null) | Article;

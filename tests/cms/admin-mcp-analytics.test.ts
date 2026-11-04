@@ -1107,6 +1107,18 @@ describe("time", () => {
     expect(data.notes).toContain("NATIVE_COMPARE_NOT_ALIGNED");
   });
 
+  it("says Umami's comparison moved on a finished range of no whole minutes", async () => {
+    const period = { report: "overview", from: "2026-03-10T00:00:00Z" };
+    const whole = await ok({ ...period, to: "2026-03-10T10:00:00Z" });
+    expect(whole.data.range.complete).toBe(true);
+    expect(whole.data.native.status).toBe("fresh");
+    expect(whole.data.notes).not.toContain("NATIVE_COMPARE_NOT_ALIGNED");
+    const cut = await ok({ ...period, to: "2026-03-10T10:00:30Z" });
+    expect(cut.data.range.complete).toBe(true);
+    expect(cut.data.native.status).toBe("fresh");
+    expect(cut.data.notes).toContain("NATIVE_COMPARE_NOT_ALIGNED");
+  });
+
   it("answers a year's comparison beyond retention as outOfRetention, never a zero", async () => {
     const { data } = await ok({
       report: "overview",

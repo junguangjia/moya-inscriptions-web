@@ -179,6 +179,49 @@ export type {
   AdminViewMediaData,
   AdminViewMediaInput,
 } from "./locate.js";
+export {
+  ADMIN_EXECUTE_MAX_TARGETS,
+  adminExecuteDataSchema,
+  adminExecuteInputSchema,
+  adminExecuteListedShape,
+  adminExecuteRowSchema,
+  adminSaveEchoSchema,
+} from "./execute.js";
+export type {
+  AdminExecuteData,
+  AdminExecuteInput,
+  AdminExecuteRow,
+  AdminSaveEcho,
+} from "./execute.js";
+export {
+  ADMIN_PATCH_TEXT_FIELDS,
+  adminApprovalRevokeInputSchema,
+  adminArticleContentSchema,
+  adminCollectionSaveInputSchema,
+  adminExpectedSchema,
+  adminLockReleaseEchoSchema,
+  adminLockReleaseInputSchema,
+  adminLockTakeoverEchoSchema,
+  adminLockTakeoverInputSchema,
+  adminMediaRegisterInputSchema,
+  adminMediaUpdateInputSchema,
+  adminPatchEchoSchema,
+  adminPatchTextInputSchema,
+  adminPublicationInputSchema,
+  adminRestoreInputSchema,
+} from "./cms-ops.js";
+export type {
+  AdminApprovalRevokeInput,
+  AdminCollectionSaveInput,
+  AdminLockTakeoverEcho,
+  AdminLockTakeoverInput,
+  AdminMediaRegisterInput,
+  AdminMediaUpdateInput,
+  AdminPatchEcho,
+  AdminPatchTextInput,
+  AdminPublicationInput,
+  AdminRestoreInput,
+} from "./cms-ops.js";
 export { ADMIN_OP_TOOLS } from "./op-meta.js";
 export type {
   AdminMcpSensitiveCategory,

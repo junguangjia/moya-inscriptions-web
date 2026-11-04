@@ -120,6 +120,14 @@ export const isMissingRecord = (error: unknown): boolean =>
   error instanceof Forbidden ||
   IMPOSSIBLE_ID_SQLSTATES.has(sqlState(error));
 
+/**
+ * foreign_key_violation on a statement of the write: it stops there, and its whole
+ * transaction rolls back, so nothing committed. One raised by the COMMIT itself never
+ * reaches here: assertCommitted reads that as unknown.
+ */
+export const isMissingReference = (error: unknown): boolean =>
+  sqlState(error) === "23503";
+
 /** Answered from a stored rejected receipt, not from a new attempt. */
 export class ReplayedEditorialError extends EditorialError {
   readonly replayed = true;
@@ -132,9 +140,10 @@ export class ReplayedEditorialError extends EditorialError {
 // Refusals the same command can get past once something else changes: the key,
 // the Owner's open document, the account's scope, the images, the record or what
 // it references. Payload refusals, which are not EditorialError, write no receipt
-// either.
+// either. An effect found already in place holds only until the record moves again.
 const RETRYABLE_REFUSALS: ReadonlySet<string> = new Set([
   "ALREADY_PUBLISHED",
+  "ALREADY_WITHDRAWN",
   "CATALOG_DELIVERY_PREPARATION_REQUIRED",
   "CATALOG_OUT_OF_SCOPE",
   "CONCURRENT_OPERATION_BUSY",

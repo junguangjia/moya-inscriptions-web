@@ -224,6 +224,60 @@ export const catalogSpec = (index: number): CatalogSpec => {
   };
 };
 
+// What C2 and C3 write to, past the target scale so no read path meets a changed row.
+// Each holds a transcription, so C1's count stays true whichever runs first.
+const FIRST_FIXTURE = BENCH_SCALE.catalogs + 1;
+const C2_TITLE = "泰山经石峪";
+const C2_NEW_TITLE = "泰山经石峪金刚经";
+const C3_FIRST = FIRST_FIXTURE + 3;
+const C3_COUNT = 30;
+const C3_MISSING_FIELD = "title";
+
+/** How many records the seed holds beyond BENCH_SCALE.catalogs. */
+export const BENCH_FIXTURE_RECORDS = 3 + C3_COUNT;
+
+const fixtureSpec = (
+  index: number,
+  status: "draft" | "published",
+  title: string,
+  rich = false,
+): CatalogSpec => ({
+  index,
+  catalogId: catalogIdOf(index),
+  sourceId: sourceIdOf(index),
+  ...(rich
+    ? {
+        provenanceSourceId: `bench-provenance-${String(index).padStart(5, "0")}`,
+      }
+    : {}),
+  status,
+  dynasty: { state: "VALUE", value: "南北朝" },
+  province: { state: "VALUE", value: "山东" },
+  versions: [
+    {
+      revision: 1,
+      status,
+      title,
+      transcription: { state: "VALUE", value: textOf(index, 120) },
+    },
+  ],
+  mediaCount: rich ? 1 : 0,
+  aliases: rich ? [`${title}别称`] : [],
+});
+
+/**
+ * C2: the draft to edit, its near-twin, and a published record with the same title.
+ * C3: thirty drafts with no images, so a publish has no delivery to wait for.
+ */
+const fixtureSpecs = (): readonly CatalogSpec[] => [
+  fixtureSpec(FIRST_FIXTURE, "draft", C2_TITLE, true),
+  fixtureSpec(FIRST_FIXTURE + 1, "draft", `${C2_TITLE}（拓片）`),
+  fixtureSpec(FIRST_FIXTURE + 2, "published", C2_TITLE),
+  ...Array.from({ length: C3_COUNT }, (_, at) =>
+    fixtureSpec(C3_FIRST + at, "draft", `合成待发布第${at + 1}条`),
+  ),
+];
+
 const hex = (text: string, size = 32) =>
   createHash("sha256").update(text).digest("hex").slice(0, size);
 
@@ -236,11 +290,14 @@ const AT = "2026-10-01T00:00:00.000Z";
 const atOf = (index: number, revision: number) =>
   new Date(Date.parse(AT) - index * 60_000 + revision * 1_000).toISOString();
 
+export const kindOf = (index: number) =>
+  index % 2 === 0 ? "inscription" : "calligraphy";
+
 const contentColumns = (spec: CatalogSpec, version: CatalogVersion) => ({
   revision: version.revision,
   catalog_id: spec.catalogId,
   source_id: spec.sourceId,
-  kind: spec.index % 2 === 0 ? "inscription" : "calligraphy",
+  kind: kindOf(spec.index),
   title: version.title,
   summary: `${version.title}的合成摘要`,
   ...statefulColumns("dynasty", spec.dynasty),
@@ -287,7 +344,10 @@ const liveVersionOf = (spec: CatalogSpec): CatalogVersion =>
     : spec.versions.at(-1)!;
 
 const seedCatalogs = async (db: BenchDb, count: number, ownerId: number) => {
-  const specs = Array.from({ length: count }, (_, at) => catalogSpec(at + 1));
+  const specs = [
+    ...Array.from({ length: count }, (_, at) => catalogSpec(at + 1)),
+    ...fixtureSpecs(),
+  ];
   const CHUNK = 500;
   let versionId = 0;
   for (let start = 0; start < specs.length; start += CHUNK) {
@@ -553,23 +613,30 @@ const seedCollections = async (db: BenchDb, count: number) => {
   await moveSequence(db, "_article_collections_v");
 };
 
+/** A document someone has open now: the row a keystroke in the Admin writes. */
+export const holdLock = async (
+  db: BenchDb,
+  catalogId: number,
+  userId: number,
+) => {
+  const { rows } = await db.query(
+    `INSERT INTO payload_locked_documents DEFAULT VALUES RETURNING id`,
+  );
+  const parent = rows[0]!.id;
+  await db.query(
+    `INSERT INTO payload_locked_documents_rels ("order", parent_id, path, catalogs_id, users_id)
+     VALUES (NULL, $1, 'document', $2, NULL), (NULL, $1, 'user', NULL, $3)`,
+    [parent, catalogId, userId],
+  );
+};
+
 /** A few documents the Owner has open, so the lock read is not of an empty table. */
 const seedLocks = async (
   db: BenchDb,
   catalogIds: readonly number[],
   ownerId: number,
 ) => {
-  for (const catalogId of catalogIds) {
-    const { rows } = await db.query(
-      `INSERT INTO payload_locked_documents DEFAULT VALUES RETURNING id`,
-    );
-    const parent = rows[0]!.id;
-    await db.query(
-      `INSERT INTO payload_locked_documents_rels ("order", parent_id, path, catalogs_id, users_id)
-       VALUES (NULL, $1, 'document', $2, NULL), (NULL, $1, 'user', NULL, $3)`,
-      [parent, catalogId, ownerId],
-    );
-  }
+  for (const catalogId of catalogIds) await holdLock(db, catalogId, ownerId);
 };
 
 export interface BenchOracle {
@@ -591,6 +658,22 @@ export interface BenchOracle {
       }
     >
   >;
+  readonly c2: {
+    readonly id: number;
+    readonly title: string;
+    readonly newTitle: string;
+    readonly nearTwinId: number;
+    readonly publishedTwinId: number;
+  };
+  readonly c3: {
+    /** Row ids, in the order the prompt lists them. */
+    readonly targets: readonly number[];
+    readonly locked: number;
+    readonly missingField: { readonly id: number; readonly field: string };
+    readonly alreadyPublished: number;
+    /** What this path alone publishes. */
+    readonly publishes: readonly number[];
+  };
   readonly longTextIds: readonly number[];
   readonly statusCounts: Readonly<Record<RecordStatus, number>>;
 }
@@ -632,10 +715,33 @@ export const oracleOf = (specs: readonly CatalogSpec[]): BenchOracle => {
     };
   };
   const list = [...groups.values()];
+  const targets = Array.from({ length: C3_COUNT }, (_, at) => C3_FIRST + at);
+  // Spread through the list, so a failure has targets after it to reach.
+  const [locked, missing, alreadyPublished] = [
+    targets[6]!,
+    targets[13]!,
+    targets[21]!,
+  ];
   return {
     c1: {
       total: list.reduce((sum, { count }) => sum + count, 0),
       groups: list,
+    },
+    c2: {
+      id: FIRST_FIXTURE,
+      title: C2_TITLE,
+      newTitle: C2_NEW_TITLE,
+      nearTwinId: FIRST_FIXTURE + 1,
+      publishedTwinId: FIRST_FIXTURE + 2,
+    },
+    c3: {
+      targets,
+      locked,
+      missingField: { id: missing, field: C3_MISSING_FIELD },
+      alreadyPublished,
+      publishes: targets.filter(
+        (id) => id !== locked && id !== missing && id !== alreadyPublished,
+      ),
     },
     c4: {
       draft: named("draft"),
@@ -661,7 +767,15 @@ export const seedCms = async (
   await seedArticles(db, BENCH_SCALE.articles);
   await seedCollections(db, BENCH_SCALE.collections);
   await seedLocks(db, [11, 12, 13], ownerId);
-  return oracleOf(specs);
+  const oracle = oracleOf(specs);
+  // A draft may have no title. Publishing asks for one, so this one cannot publish.
+  const { id, field } = oracle.c3.missingField;
+  await db.query(`UPDATE catalogs SET ${field} = NULL WHERE id = $1`, [id]);
+  await db.query(
+    `UPDATE _catalogs_v SET version_${field} = NULL WHERE parent_id = $1`,
+    [id],
+  );
+  return oracle;
 };
 
 /**

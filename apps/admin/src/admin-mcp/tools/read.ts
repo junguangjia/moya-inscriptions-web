@@ -1,14 +1,9 @@
-import {
-  adminReadInputSchema,
-  adminUnknownOpDataSchema,
-} from "@moya/contracts/internal/admin-mcp";
+import { adminUnknownOpDataSchema } from "@moya/contracts/internal/admin-mcp";
 import type {
   AdminMcpEnvelope,
   AdminMcpNext,
-  AdminOpName,
   AdminReadInput,
 } from "@moya/contracts/internal/admin-mcp";
-import { z } from "zod";
 
 import { controlFor } from "../control/state";
 import type { AdminMcpKey } from "../door";
@@ -22,7 +17,6 @@ import {
   adminOpMeta,
   isAdminOpName,
   nearestOps,
-  opsOnTool,
   opUnavailable,
 } from "../registry";
 import type { AdminOpEntry } from "../registry";
@@ -32,11 +26,6 @@ export const READ_TOOL_NAME = "admin_read";
 
 export const READ_DESCRIPTION = `Read a queue or page by op. Rows are compact; long text is only ever state, length and hash. {op:"list.catalogs",input:{filter:{missing:["transcription"]}}}. Count in SQL with no rows: {op:"list.catalogs",view:"count",groupBy:"dynasty",input:{filter:{missing:["transcription"]}}}. Project with fields:[...], continue with next. admin_actions gives each op's filter.`;
 
-/** The names a client sees. At runtime a wrong name answers UNKNOWN_OP with near ones. */
-export const readListedInput = adminReadInputSchema.extend({
-  op: z.enum(opsOnTool("admin_read") as [AdminOpName, ...AdminOpName[]]),
-});
-
 const LIST_SOURCE_ARGS = [
   "cursor",
   "pageSize",
@@ -45,12 +34,12 @@ const LIST_SOURCE_ARGS = [
   "groupBy",
 ] as const;
 
-const unknownOp = (name: string): AdminMcpEnvelope =>
+export const unknownOpEnvelope = (name: string): AdminMcpEnvelope =>
   failedEnvelope("UNKNOWN_OP", {
     data: adminUnknownOpDataSchema.parse({ nearest: nearestOps(name) }),
   });
 
-const refusalOf = async (entry: AdminOpEntry, req: PayloadRequest) => {
+export const opRefusalOf = async (entry: AdminOpEntry, req: PayloadRequest) => {
   const unavailable = opUnavailable(entry, await controlFor(req));
   if (unavailable === undefined) return undefined;
   return failedEnvelope(
@@ -78,11 +67,11 @@ export const readEnvelope = async (
   { key, req }: { readonly key: AdminMcpKey; readonly req: PayloadRequest },
 ): Promise<AdminMcpEnvelope> => {
   const read = rawInput as AdminReadInput;
-  if (!isAdminOpName(read.op)) return unknownOp(read.op);
+  if (!isAdminOpName(read.op)) return unknownOpEnvelope(read.op);
   const entry: AdminOpEntry = adminOpMeta[read.op];
   // Class decides the tool: a write named here is not a read of any kind.
-  if (entry.tool !== READ_TOOL_NAME) return unknownOp(read.op);
-  const refusal = await refusalOf(entry, req);
+  if (entry.tool !== READ_TOOL_NAME) return unknownOpEnvelope(read.op);
+  const refusal = await opRefusalOf(entry, req);
   if (refusal !== undefined) return refusal;
   // Only a list source reads these, and quietly dropping one reads as honouring it.
   if (entry.paging !== "keyset") {

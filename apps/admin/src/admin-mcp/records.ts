@@ -65,13 +65,32 @@ const withoutUndefined = (record: Record<string, unknown>) =>
 
 const canonicalHash = (value: unknown) => textHash(JSON.stringify(value));
 
+const COLLECTION_FIELDS = [
+  "title",
+  "subtitle",
+  "summary",
+  "category",
+  "issue",
+  "coverCatalog",
+] as const;
+
 /** Editorial fields only, in a fixed order, with row ids left out. */
 const collectionFingerprint = (doc: RecordDocument): string =>
   canonicalHash(
-    ["title", "subtitle", "summary", "category", "issue", "coverCatalog"]
-      .map((name) => doc[name] ?? null)
-      .concat([arrayItems(doc.members)]),
+    COLLECTION_FIELDS.map((name) => doc[name] ?? null).concat([
+      arrayItems(doc.members),
+    ]),
   );
+
+/** The same fields by name, so two versions compare field by field. */
+export const collectionContent = (
+  doc: RecordDocument,
+): Record<string, unknown> => ({
+  ...Object.fromEntries(
+    COLLECTION_FIELDS.map((name) => [name, doc[name] ?? null]),
+  ),
+  members: arrayItems(doc.members),
+});
 
 const ownFields = (item: unknown): Record<string, unknown> =>
   Object.fromEntries(
@@ -418,8 +437,36 @@ export const locksOf = async (
   req: PayloadRequest,
   family: CmsFamily,
   ids: readonly unknown[],
+): Promise<ReadonlyMap<unknown, AdminLock>> =>
+  family.versioned ? heldLocksOf(req, family, ids) : new Map();
+
+/** Whether a lock row still holds, as Payload's own check reads it. */
+export const lockIsLive = (
+  req: PayloadRequest,
+  family: CmsFamily,
+  { updatedAt }: { readonly updatedAt: string },
+) =>
+  Date.now() - Date.parse(updatedAt) <= lockDurationSeconds(req, family) * 1000;
+
+export const lockExpiryOf = (
+  req: PayloadRequest,
+  family: CmsFamily,
+  { updatedAt }: { readonly updatedAt: string },
+) =>
+  new Date(
+    Date.parse(updatedAt) + lockDurationSeconds(req, family) * 1000,
+  ).toISOString();
+
+/**
+ * The same for any family: a media row has no lock in a read's facts, but can hold one.
+ * Newest first, as Payload's own check reads them: two tabs can leave two rows.
+ */
+export const heldLocksOf = async (
+  req: PayloadRequest,
+  family: CmsFamily,
+  ids: readonly unknown[],
 ): Promise<ReadonlyMap<unknown, AdminLock>> => {
-  if (!family.versioned || ids.length === 0) return new Map();
+  if (ids.length === 0) return new Map();
   const { docs } = await req.payload.find({
     collection: "payload-locked-documents",
     where: {
@@ -428,36 +475,32 @@ export const locksOf = async (
         { "document.value": { in: ids as never } },
       ],
     },
+    sort: "-updatedAt",
     depth: 0,
-    limit: ids.length,
+    limit: 0,
     pagination: false,
     overrideAccess: false,
     req,
     user: req.user,
   });
-  const durationMs = lockDurationSeconds(req, family) * 1000;
-  const live = docs.filter(
-    ({ updatedAt }) => Date.now() - Date.parse(updatedAt) <= durationMs,
-  );
+  const live = docs.filter((row) => lockIsLive(req, family, row));
   const kinds = await accountKindsOf(req, [
     ...new Set(live.map(({ user }) => user?.value)),
   ]);
-  return new Map(
-    live.map((row) => {
-      const by = kinds.get(row.user?.value);
-      return [
-        row.document?.value,
-        {
-          held: true,
-          ...(by === undefined ? {} : { by }),
-          lastEditedAt: row.updatedAt,
-          expiresAt: new Date(
-            Date.parse(row.updatedAt) + durationMs,
-          ).toISOString(),
-        },
-      ] as const;
-    }),
-  );
+  const locks = new Map<unknown, AdminLock>();
+  for (const row of live) {
+    if (locks.has(row.document?.value)) continue;
+    const by = kinds.get(row.user?.value);
+    locks.set(row.document?.value, {
+      held: true,
+      ...(by === undefined ? {} : { by }),
+      lockId: row.id,
+      holderUserId: row.user?.value as number,
+      lastEditedAt: row.updatedAt,
+      expiresAt: lockExpiryOf(req, family, row),
+    });
+  }
+  return locks;
 };
 
 export const lockOf = (
@@ -622,6 +665,25 @@ const isWithheldLink = (fieldName: string, key: string, value: unknown) =>
   LINK_KEY_OF[fieldName] === key &&
   typeof value === "string" &&
   linkCarriesCredential(value);
+
+/**
+ * The stored links a caller was shown as WITHHELD that `content` would not keep, by
+ * place and never by value. It cannot send one back, so naming a row without it clears
+ * it; a field left out keeps its rows, and a link sent again by value stays.
+ */
+export const clearedWithheldLinks = (
+  before: Readonly<Record<string, unknown>>,
+  content: Readonly<Record<string, unknown>>,
+): readonly string[] =>
+  Object.entries(LINK_KEY_OF).flatMap(([field, key]) => {
+    if (!Object.hasOwn(content, field)) return [];
+    const sent = new Set(arrayItems(content[field]).map((item) => item[key]));
+    return arrayItems(before[field]).flatMap((item, index) =>
+      isWithheldLink(field, key, item[key]) && !sent.has(item[key])
+        ? [`${field}.${index}.${key}`]
+        : [],
+    );
+  });
 
 const boundedItem = (
   fieldName: string,

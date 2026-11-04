@@ -1,6 +1,7 @@
 import type {
   AdminActionSkeleton,
   AdminCmsRecordType,
+  AdminLock,
   AdminMcpSensitiveCategory,
   AdminOpName,
   AdminRecordState,
@@ -21,7 +22,7 @@ export interface RecordFacts {
   readonly state?: AdminRecordState;
   readonly revision?: number | null;
   readonly fingerprint?: string | null;
-  readonly locked?: boolean;
+  readonly lock?: AdminLock | undefined;
   readonly catalogId?: string;
   readonly mediaId?: string;
 }
@@ -45,13 +46,25 @@ const expectedOf = ({ revision, fingerprint }: RecordFacts) => ({
   ...(fingerprint ? { fingerprint } : {}),
 });
 
-const whenLocked = (facts: RecordFacts): readonly Skeleton[] =>
-  facts.locked
+/** Only an AI holder's lock is offered back: another account's refuses by name. */
+const whenLocked = ({ type, id, lock }: RecordFacts): readonly Skeleton[] =>
+  lock?.held
     ? [
         {
           op: "document.lock_takeover",
-          input: { type: facts.type, id: facts.id },
+          input: {
+            type,
+            id,
+            expected: {
+              lockId: lock.lockId,
+              holderUserId: lock.holderUserId,
+              lastEditedAt: lock.lastEditedAt,
+            },
+          },
         },
+        ...(lock.by === "ai"
+          ? [{ op: "document.lock_release" as const, input: { type, id } }]
+          : []),
       ]
     : [];
 
@@ -147,7 +160,11 @@ const SKELETONS: Readonly<
         ]),
     {
       op: "media.update_metadata",
-      input: { id: facts.id, alt: "" },
+      input: {
+        id: facts.id,
+        alt: "",
+        expected: { fingerprint: facts.fingerprint },
+      },
     },
   ],
 };

@@ -2651,7 +2651,8 @@ describe("explicit validation profiles and nested deadlines", () => {
     assert.equal(VALIDATION_PROFILES.webComplete.totalMs, 300000);
     assert.equal(VALIDATION_PROFILES.ciTestMilestone.name, "ci-test-milestone");
     assert.equal(VALIDATION_PROFILES.ciTestMilestone.totalMs, 900000);
-    assert.equal(VALIDATION_PROFILES.cmsComplete.totalMs, 300000);
+    assert.equal(VALIDATION_PROFILES.cmsComplete.totalMs, 900000);
+    assert.equal(VALIDATION_PROFILES.postgresComplete.totalMs, 900000);
     assert.equal(VALIDATION_PROFILES.browserSmokeWarm.totalMs, 120000);
     assert.equal(VALIDATION_PROFILES.browserSmokeCold.totalMs, 300000);
     assert.equal(VALIDATION_PROFILES.appleFull.totalMs, 600000);
@@ -2947,7 +2948,7 @@ describe("explicit validation profiles and nested deadlines", () => {
     for (const name of ["cms", "cms-browser"]) {
       const check = cms.find((item) => item.name === name);
       assert.equal(check.profile, "cms-complete");
-      assert.equal(check.totalMs, 300000);
+      assert.equal(check.totalMs, 900000);
       assert.deepEqual(check.commands[0].slice(-4), [
         "--profile",
         "complete",
@@ -2977,7 +2978,7 @@ describe("explicit validation profiles and nested deadlines", () => {
     assert.doesNotMatch(joined(shared), /verify-apple/u);
     const sharedBudget = taskValidationBudget(shared);
     assert.equal(sharedBudget.totalMs, 900000);
-    assert.match(sharedBudget.note, /sum to 1620000 ms; .*capped at 900000/u);
+    assert.match(sharedBudget.note, /sum to 2820000 ms; .*capped at 900000/u);
     // The feedback label belongs to `--mode feedback` only: no default plan,
     // check or note may carry it.
     for (const budget of [appleBudget, webBudget, sharedBudget])
@@ -3164,7 +3165,7 @@ describe("explicit validation profiles and nested deadlines", () => {
     // The unflagged CMS run is an ordinary quick check, never "feedback".
     assert.equal(CMS_PROFILES.quick.name, "cms-quick");
     assert.equal(cmsBudget("quick").profile, "cms-quick");
-    assert.equal(CMS_PROFILES.complete.totalMs, 300000);
+    assert.equal(CMS_PROFILES.complete.totalMs, 900000);
     assert.deepEqual(cmsOptions([]), { profile: "quick", remainingMs: null });
     assert.deepEqual(cmsOptions(["--profile", "complete"]), {
       profile: "complete",
@@ -3172,8 +3173,8 @@ describe("explicit validation profiles and nested deadlines", () => {
     });
     assert.throws(() => cmsOptions(["--unknown"]));
     const complete = cmsBudget("complete");
-    assert.equal(complete.ceilingMs, 300000);
-    assert.equal(complete.sessionBudgetMs, 300000 - CMS_FINALIZATION_MS);
+    assert.equal(complete.ceilingMs, 900000);
+    assert.equal(complete.sessionBudgetMs, 900000 - CMS_FINALIZATION_MS);
     assert.equal(complete.viable, true);
     assert.equal(
       cmsBudget("quick").sessionBudgetMs,
@@ -3184,7 +3185,7 @@ describe("explicit validation profiles and nested deadlines", () => {
     assert.equal(bounded.ceilingMs, 90000);
     assert.equal(bounded.sessionBudgetMs, 90000 - CMS_FINALIZATION_MS);
     assert.equal(cmsBudget("complete", 59999).viable, false);
-    assert.equal(cmsBudget("complete", 999999).ceilingMs, 300000);
+    assert.equal(cmsBudget("complete", 999999).ceilingMs, 900000);
     assert.throws(
       () =>
         resolveCmsBudget(["--profile", "complete", "--remaining-ms", "5000"]),
@@ -3227,7 +3228,7 @@ describe("explicit validation profiles and nested deadlines", () => {
         .map((l) => JSON.parse(l));
       assert.deepEqual(lines[0], {
         profile: "cms-complete",
-        totalMs: 300000,
+        totalMs: 900000,
         ceilingMs: 5000,
         ceilingSource: "parent-remaining",
         minimumMs: 60000,

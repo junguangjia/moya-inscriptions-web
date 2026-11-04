@@ -1075,8 +1075,8 @@ tests/unit/backend/admin-mcp-locate.test.ts:
 - `editorial.read-draft` answers the outline for a key, because the whole draft
   would not fit a text result. `editorial.owner-drafts` and `owner-history`
   relay their small rows, and a missing row on `owner-history` answers
-  `NOT_FOUND`, as `read-draft` does. The delivery reads stay unbuilt: they call
-  the Backend on the Owner's token, and S5 owes them the AI one.
+  `NOT_FOUND`, as `read-draft` does. The delivery reads were left for S5, which
+  built them on the Owner's token (section 2).
 - `admin_get` on a Catalog says `deepZoom: "not_available"` until the master
   routes arrive, so a missing master state never reads as no master.
 - Reading the lock row needs no change to `defaultAccess`: it admits any user,
@@ -1174,6 +1174,89 @@ removedItems, and says no re-read is needed unless warnings are present. The
 echoed title exposes a wrong-record write at once. A save that removes media or
 provenance entries needs `allowRemoving`; omitted arrays already stay untouched
 (editorial/operations.ts:190-196).
+
+Recorded when built in S5, tests in tests/cms/admin-mcp-execute.test.ts:
+
+- `data` holds the groups `applied`, `already_applied`, `queued`, `conflict`,
+  `failed` and `unknown`, with an empty group left out. `applied` and
+  `already_applied` are bare ids; a target that did not complete has a row with
+  its index, a safe id and its code. An id leaves only when it is a positive
+  integer or a uuid, so a caller's odd string is never echoed. `results` holds
+  what each completed target's op answered, in order. It is the only thing cut
+  for size: rows go in while they fit, `meta.truncated` is set and `next`
+  replays from the first one left out. A group too long to fit falls to the text
+  cap, which goes on from the last row it kept.
+- `next` repeats `input` and `targets` only up to 1,500 bytes, and never a body
+  holding a character the strip of section 14 takes out of returned text, since
+  following it would write other text. Otherwise it leaves them out and the hint
+  says to send the same ones again; followed to the letter it answers
+  INPUT_INVALID and runs nothing.
+- `priorIncomplete` is not in this section's argument list. A call that goes on
+  from `startAt` knows nothing of the targets before it, so `next` carries this
+  flag when one of them did not complete, and the last call answers PARTIAL,
+  never `ok:true`, and its hint says to repeat the whole call with no `startAt`
+  to see every target. A caller that sets `startAt` itself gets an answer about
+  the targets from there on. `done` is always the call's own count, followed
+  `next` or not: the server cannot tell them apart, and `startAt`'s field text
+  says so.
+- `results` of a replay has no `changedFields`, because the receipt does not
+  keep them. Reading the echo after the commit can fail, and that never reads as
+  a failed save: the target stays `applied`, with `warnings: ["echo_unread"]`.
+- A client never sends the route's `idempotencyKey`: it is derived from
+  requestId and index and an op's `input` leaves it out, so sending one answers
+  INPUT_INVALID. `allowRemoving` is on the two save ops' `input` and stays out
+  of the fingerprint, and REMOVAL_NOT_ALLOWED writes no receipt, so the same
+  requestId can then say it. A stored link the caller was shown as WITHHELD
+  (`provenance[].sourceUrl`, `sourceCitations[].url`, an Article's
+  `citations[].url`) cannot be sent back, so a save of its field without it asks
+  the same, and `removedItems.links` then names its place and never its value.
+- `editorial.save-article-draft` takes `adminArticleContentSchema`, so a value
+  of the wrong kind, an array of text, an unknown key and what the server sets
+  (`firstPublishedAt`, `publishedAt`) answer INPUT_INVALID before any effect.
+  The route keeps its loose schema.
+- SQLSTATE 23503 on a statement answers REFERENCE_NOT_FOUND: the transaction
+  rolled back, so nothing committed. The same state from the COMMIT itself stays
+  OUTCOME_UNKNOWN, as any commit that cannot be confirmed does. More than 1,000
+  sent provenance rows answer CONTENT_INVALID before the classify query, and a
+  `lastEditedAt` in year 0000 fails validation.
+- The class of a Catalog save reads the record's own `catalogId` and `sourceId`
+  and the provenance it would end with. A changed `catalogId` therefore stays
+  IDENTITY_IMMUTABLE, and one another record holds stays IDENTITY_ALREADY_BOUND.
+- `editorial.approve-batch`, `editorial.approve-article-batch` and
+  `editorial.restore-draft` run under a receipt here, which section 17 asked
+  for. The REST routes are unchanged and take no key. An approval's receipt has
+  no column for the batch and the amendment lists none, so its `fingerprint`
+  holds `approval:<id>`, and a replay reads what that batch says now.
+- The enum on `op` is dropped from `admin_read` and `admin_execute`: with
+  `admin_execute` listed, tools/list came to 4,660 estimated tokens against the
+  budget of 4,000, and to 4,188 with the enum on `admin_read` alone. A wrong
+  name answers UNKNOWN_OP with near names.
+- Per target beside the call's start and finish, a batch writes one finish row
+  with op, requestId, target, ok and code. It has no `tool`, so the p95 per tool
+  still counts calls, and no start, so it never reads as an unknown call. A
+  single target gets the same row when the start row could not name it, because
+  the caller sent a public identity, and the row id is resolved on a refusal and
+  on an effect already in place too. If a row cannot be written, the batch stops
+  at the next target with AUDIT_UNAVAILABLE and `next`, and the hint says what
+  ran; the start row of a call that crashes still names nothing.
+- At most 2 calls of `admin_execute` run at once per Admin process
+  (`EXECUTE_POOL_SHARE`), so a client cannot stall the five connections the
+  Owner uses. A third answers EXECUTE_BUSY at once, retryable, and runs nothing.
+  A slot stands for work really running, so a call whose client left holds it
+  until it ends.
+- The same requestId on another op of the same family answers
+  IDEMPOTENCY_CONFLICT. Across families it does not: Article receipts, Catalog
+  receipts and delivery receipts are looked up separately, and with no run table
+  nothing joins them. Each op then runs once, so nothing repeats and nothing is
+  lost. Only the warning that the id was reused is missing. `catalog.*`,
+  `article.publish`, `article.withdraw`, `article.restore` and `collection.*`
+  all use the Catalog family's keys; the two `editorial.*` Article routes keep
+  theirs.
+- An op that finds its effect already in place answers `already_applied` and
+  writes nothing and no receipt: ALREADY_PUBLISHED, ALREADY_WITHDRAWN,
+  ALREADY_REVOKED, ALREADY_SET. An async op is still asked for its settlement on
+  that path, so a repeat of `catalog.withdraw` under a new requestId reads
+  QUEUED as the first call did, never `ok:true`.
 
 ## 8. Preview and run engine
 
@@ -1281,8 +1364,10 @@ and `files_*` tools. docs/cms/operations.md:66 (prompts must not be switched off
 to get past failures) is reworded for this one tool. L2 runs with this template;
 without it the write tasks measure a prompt.
 
-Budget: 10 s per call, checked before each target, so worst case about 25 s plus
-auth and audit.
+Budget: 10 s per call, checked before each target. A target that starts at 9.9 s
+can wait 5 s on its receipt key, 5 s on its document key and up to 15 s on the
+Backend's readiness read in the publish hook, so worst case about 35 s plus auth
+and audit. That stays under Nginx's 60 s and the clients' 60 s floor.
 
 Retry: same requestId with same fingerprint replays with `meta.replayed`;
 different arguments give IDEMPOTENCY_CONFLICT. A timeout or lost answer is
@@ -1340,6 +1425,18 @@ withdrawal comes from the worker's Catalog reconcile
 Settlement reads `catalog-delivery/published-renditions` for the record's media.
 Whether that route answers "no longer live" exactly is unknown until S5; until
 proven the op stays `ok:false, QUEUED, state:worker_sync`, never `ok:true`.
+
+Read in S5: it does not. `createCatalogPublishedRenditions`
+(services/backend-production/src/publishing/catalog-delivery-intents.ts) answers
+`complete` for a whole set, so `false` means one rendition of the set has left,
+or the set never finished, or the recipes changed, as well as none of it being
+live. So `catalog.withdraw` on a record that holds media stays QUEUED, with
+`state:worker_sync`, a fixed hint that repeating cannot change the answer, no
+`retryable`, and `next` reading the record instead of repeating the write.
+Proving it needs a Backend read outside this slice. A record with no media in
+its live row or any kept version answers `ok:true`, since there is nothing to
+prove, unless the record has reached `maxPerDoc` versions, when an older one
+that held media may be gone and it stays QUEUED.
 
 ## 10. Editorial completion
 
@@ -1413,7 +1510,11 @@ tests/cms/admin-mcp-browser-checks.mjs:
 - ALREADY_PUBLISHED means the latest version is published and its fingerprint
   equals the approved one, so it also answers when the Owner published that
   content by hand. It writes no receipt, because the document can be withdrawn
-  later.
+  later. Under an AI key it also needs the images proved complete, because the
+  Owner's switch publishes ahead of them: otherwise it answers
+  CATALOG_DELIVERY_PREPARATION_REQUIRED, and the same requestId reads
+  `already_applied` once they are ready. The Owner's and automation's answers
+  stay as they were.
 
 New ops:
 
@@ -1432,7 +1533,8 @@ New ops:
 - #343 tools: editorial.prepare-catalog-delivery, read-catalog-delivery,
   request-catalog-release, release-catalog-delivery, cancel-catalog-delivery,
   catalog-delivery-capabilities, catalog-render-backlog. #343 keeps the Admin
-  buttons and retires the switch.
+  buttons and retires the switch. Reading an intent past its time says `expired`
+  and writes nothing; a command records it.
 - `catalog.patch_text {catalogId, field, edits:[{oldText,newText,occurrence?}], expected:{revision,fingerprint}, requestId}`:
   all-or-nothing, raw match with no t2s or Unicode normalization, through the
   existing saveDraft path, inside revision CAS. Any zero or multiple match fails
@@ -1445,6 +1547,58 @@ New ops:
   built on `scripts/editorial/batch.mjs`, reads files and calls `admin_preview`
   and `admin_execute` itself, so text skips model tokens and preview and
   threshold still apply. It goes in chunks under the 4m body limit.
+
+Recorded when built in S5, tests in tests/cms/admin-mcp-editorial-ops.test.ts:
+
+- `catalog.publish`, `catalog.withdraw` and `catalog.restore`, with their
+  Article and Collection twins, take `{id, expected:{revision, fingerprint?}}`,
+  plus `versionId` on a restore, and run in
+  apps/admin/src/admin-mcp/ops/cms-writes.ts on `receiptedCommand`. A missing
+  fingerprint leaves the revision alone to decide. An Article and a Collection
+  have no worker work, so they complete at once.
+- A publish first asks whether the latest version is already published with the
+  content the caller read, since publishing moves the revision and keeps the
+  content. With no fingerprint it can only compare the revision, so a repeat at
+  the old revision answers REVISION_CONFLICT.
+- `withdraw` reads the live row before the revision: a record the public no
+  longer reads has nothing left to withdraw at any revision.
+- A restore has no lock check in Payload
+  (dist/collections/operations/restoreVersion.js), so `restoreVersionAsDraft`
+  makes one for an AI key and answers DOCUMENT_LOCKED. The Owner's button stays
+  as it was. `catalog.restore` also refuses a version of another record as
+  NOT_FOUND and names the images and sources a restore drops in `removedItems`.
+  It needs no `allowRemoving`: the Owner's restore asks nothing either, and the
+  version is the content asked for.
+- `catalog.patch_text` takes `catalogId` as a row id or the public identity. Its
+  fields are the Catalog's text and stateful fields, not array rows. Edits read
+  the text as it was, so their order changes nothing, and two that reach the
+  same text answer PATCH_OVERLAP. A failed patch names the edits as `edits.N`
+  and never their text. Ranges count code points in the new text, like
+  `admin_get`'s windows, and the first 20 carry 20 code points either side so an
+  answer of 50 edits still fits. A replay gives no hashes or ranges, because a
+  receipt keeps neither.
+- `admin_find` reads no long text, so its `catalog.patch_text` skeleton has no
+  fingerprint. Sending it unchanged answers INPUT_INVALID on
+  `expected.fingerprint`; `admin_get`, needed anyway to know the text, gives a
+  whole one.
+- `media.update_metadata` edits `alt`, the one field not immutable. It has no
+  receipt: the row itself says whether the change happened, so a repeat answers
+  `already_applied`, and the same requestId with another alt gets no
+  IDEMPOTENCY_CONFLICT. Its answer carries `warnings:["catalog_alt_kept"]`,
+  because a Catalog holds its own copy of an image's alt from when it was
+  selected.
+- `approval.revoke` takes a `type`, because Catalog and Article approvals are
+  numbered apart. A repeat answers `already_applied`.
+- A replay of `editorial.publish-approved` or `publish-approved-article` reads
+  the record and says the status it has now, with `moved_since_save` once it has
+  moved, so one since withdrawn never reads as live. A first answer has just
+  committed what it says and reads nothing per target, which keeps C3 within its
+  statements, so it carries no title.
+- `media.register_existing` answers PREVIEW_REQUIRED for a new id. Directly it
+  only replays an identical row, every field compared and an omitted one
+  included, and refuses anything else as MEDIA_IDENTITY_EXISTS. A retry after an
+  alt edit is refused too.
+- `list.receipts` filters on every receipt operation, not only the first two.
 
 Draft preview, structured. `admin_get view=preview` calls `previewCatalogDetail`
 directly (apps/admin/src/preview/index.ts:64) and returns the same projection
@@ -1532,6 +1686,73 @@ tab shows the takeover modal. A browser test records what happens to form state
 changed since the last autosave, and the op doc states the result; this design
 does not claim it is kept. Whether the lock collection's defaultAccess admits
 `ai_operator` (payload dist/locked-documents/config.js:43-47) is checked in S5.
+
+Recorded when built in S5, tests in tests/cms/admin-mcp-editorial-ops.test.ts
+and, for a real Owner tab on a production compile, `verifyLockTakeover` in
+tests/cms/admin-mcp-browser-checks.mjs:
+
+- defaultAccess admits `ai_operator`: it asks only for a logged-in user, and the
+  op runs with overrideAccess false.
+- The lock block on `admin_get`, `admin_find` and DOCUMENT_LOCKED now carries
+  `lockId` and `holderUserId`, because `expected` needs them. Two tabs can leave
+  two rows, so it reads the newest, as Payload's own check does.
+- The op takes the editorial key a save holds from before its lock check. A save
+  either finished first, and the answer has the revision it left, or it meets
+  the new holder and answers 423. The Admin touches a held row with no editorial
+  key, so `lastEditedAt` is compared under the row's own lock. A row that moved
+  answers LOCK_CHANGED, and none live answers LOCK_NOT_HELD, which says a save
+  goes through.
+- It has no receipt. A repeat reads the row: held by this account answers
+  `already_applied` with the fresh revision and fingerprint and moves nothing,
+  so a retry after OUTCOME_UNKNOWN is safe. The same requestId with other
+  arguments gets no IDEMPOTENCY_CONFLICT.
+- The audit is the call's own start and finish rows, or the batch's row per
+  target, with op, target and key. Section 13 lets no argument reach a row, so
+  the required `reason` is checked and stored nowhere, and the row does not say
+  whose lock it was.
+- Form state, as the browser test records it. A tab learns of a takeover only
+  from its next form state, so the modal comes with its next keystroke, and
+  until then the typed text stays. "View read-only" reloads the form from the
+  stored record, and the typed text is gone. It reached no version. "Back to
+  dashboard" was not tried.
+- With no keystroke between the takeover and the AI's save there is no row left
+  to show a modal. The tab's autosave then answers 409 by revision and never
+  overwrites the save, and typing on takes a new lock for the Owner and is
+  refused the same way until a reload. The Owner's locked modal takes it back
+  after a reload. After `document.lock_release` with no save, the Owner's next
+  keystroke carries on with no modal and saves.
+- Payload deletes the row on every successful save, autosave included
+  (dist/utilities/checkDocumentLockStatus.js), and only the tab's next keystroke
+  makes a new one. So `lock.held:false` does not mean no tab is open: it means
+  no tab has typed since its last autosave. A save then goes through, and that
+  tab's next autosave answers 409 as above.
+
+Delivery, recorded when built in S5. The three reads, cancel and the three steps
+run through the route's own operation:
+
+- Prepare and request-release answer QUEUED with a fixed hint naming the next
+  step, because following `next` alone would read `prepared` forever: rendering
+  is asked for by the sync, and public copies only after request-release. A
+  replay says what the intent is now: `released` is `ok:true`, an ended one is
+  CATALOG_DELIVERY_INACTIVE or CATALOG_DELIVERY_EXPIRED. It never reads QUEUED
+  with nothing queued.
+- With no Backend, prepare keeps its private intent, as the Owner's route does,
+  and answers CATALOG_DELIVERY_NOT_CONFIGURED, because no worker will ever
+  render it.
+- A release on a record someone holds answers DOCUMENT_LOCKED with that record's
+  lock block, through `lockedRecord` on the op, since its target is the intent.
+- tests/cms/admin-mcp-delivery-render.test.ts runs the whole path under an AI
+  key with nothing stood in for, except that the public store is the Development
+  filesystem provider: the real Backend readiness over a real App database, one
+  narrowed worker sync, the real sandbox render and the real publication worker.
+  It is opt-in, like catalog-ingest-render, and not in CI:
+  `ADMIN_MCP_DELIVERY_E2E=1`, `ADMIN_MCP_DELIVERY_E2E_APP_DATABASE_URL`, Docker
+  and the sandbox image. CI's tests use a stand-in Backend through the real
+  operator route.
+- The Backend reads stay on the Owner's operator token, as section 2 says of
+  catalog-delivery-backend.ts. They are metadata only, and the Backend sees them
+  as `owner`, so its side has no `ai-admin` trace of them; the Admin's ledger
+  does.
 
 Catalog duplicate.
 `catalog.duplicate {from:{id,revision,fingerprint}, identity:{catalogId,sourceId,kind}, carry?, drop?, overrides?, requestId}`
@@ -1880,7 +2101,8 @@ CMS:
 4. mcp_audit_events with the payload_locked_documents_rels column and trigger.
 5. editorial_receipts `article` and `articleCollection` relationships.
 6. enum_editorial_receipts_operation additions (publish-direct, withdraw,
-   restore-draft, patch-text, duplicate, article and collection operations).
+   restore-draft, patch-text, duplicate, approve-batch, approve-article-batch,
+   article and collection operations).
 7. mcp_runs, mcp_run_targets.
 
 Community:
@@ -2047,6 +2269,18 @@ Accepted limits, recorded and not fixed:
   answer asks for a look at the record's version history instead, because a
   restore is not on that list. An approve op for AI keys needs a requestId, or
   it meets the Matrix row "Lost answer or timeout".
+- `catalog.withdraw` on a record that holds media never answers `ok:true` until
+  a Backend read can prove its renditions have left (section 9). Whether they
+  have left stays with the worker's next pass, and nothing here reports it.
+- DOCUMENT_LOCKED from `editorial.restore-draft` and `approval.revoke` has no
+  lock block: the first names a version and the second a record that is not one
+  of the four families. `catalog.restore` has one.
+- `lock.held:false` does not prove no tab is open, because Payload deletes the
+  row on each save (section 10). The Matrix row "Document open by the Owner"
+  therefore holds from a keystroke to its autosave. A save outside that window
+  is caught by the tab's 409, not by a lock.
+- `document.lock_takeover`'s `reason` is stored nowhere, by section 13's rule on
+  arguments, and no row says whose lock was taken.
 - A replayed draft save does not report `supersededIntents`: the migration list
   has no column for them, so a client that lost the answer reads the intent
   instead.
@@ -2446,7 +2680,9 @@ the real upstream client.
   With `compare=prev` a complete range's `startAt` is less 1 ms as well, because
   Umami takes the previous period's length in whole minutes, cut short, and a
   length 1 ms short of whole would move that period a minute late; stored rows
-  are whole seconds, so none falls in that 1 ms.
+  are whole seconds, so none falls in that 1 ms. A finished range of no whole
+  minutes still moves it, by under a minute, so its answer carries
+  `NATIVE_COMPARE_NOT_ALIGNED`.
 
 Recorded when built in S4, the tool, tests in
 tests/cms/admin-mcp-analytics.test.ts: real JSON-RPC with the official client,
@@ -2903,6 +3139,9 @@ Numbers stay in the private evidence of each run, not here.
 - A cold overview cannot meet 800 ms while Umami's part takes longer than that
   and the tool waits up to 1.5 s for it. The two numbers come from this document
   and cannot both hold at this scale. The canonical part alone is well inside.
+- Production holds far fewer events than the 1,000,020 assumed here. The reading
+  is in the private evidence, and the cold misses recorded there are expected to
+  be far smaller live, which stays an estimate until measured after release.
 - The time is in PostgreSQL, not in Umami's CPU limit: Umami's own routes took
   the same time at 0.5 and at 18 CPUs. `/stats` is most of it, because it runs
   two queries in turn, each with the per-event LATERAL, and it grows with the
@@ -2918,3 +3157,60 @@ Numbers stay in the private evidence of each run, not here.
   Umami read wait or answer `UMAMI_QUERY_TIMEOUT`, which happened once to the
   first call after a run of them. That is the guard working: the pool's last
   connection stays free for ingestion.
+
+Recorded when built in S5, the write half, in tests/cms/admin-mcp-bench/.
+Numbers stay in the private evidence of each run, not here.
+
+- C2 and C3 are in `l0.scale.ts`. Their 33 records sit past the target scale,
+  from row id 5001, so no read path meets a row they moved. Each holds a
+  transcription, so C1's oracle stays true whichever runs first. Both grade
+  plain SQL from before and after, against an oracle from the generated rows.
+- C2 is three calls: `admin_find` on the title, `admin_get`, then
+  `editorial.save-draft`. The client takes the one draft with exactly that title
+  and the whole latest row, with the rows under it, may differ in
+  `version_title` alone, beside id, time, revision and last editor. The public
+  row, both twins and the id, revision, title and state of every other version
+  stay as they were.
+- `admin_find` gained one thing for C2. The phrase is in about a sixth of this
+  seed's records, about 570 of them live. Drafts came after the published branch
+  and ranked by `updatedAt`, so no page up to `skip` 200 reached the draft. So
+  the `catalogs_draft` branch first reads a title given whole, and a hit whose
+  title is exactly the query comes first wherever a branch read it. It is one
+  more statement on a fuzzy find. It still gives candidates, never a unique
+  identity, and a t2s or s2t form of the title is not a whole title.
+- That still leaves a limit: a query that is only part of a title, on words more
+  than about 200 published records contain, cannot page to a draft. It says so
+  where paging stops, and it is unchanged.
+- C3 is two calls: `list.approvals`, then `editorial.publish-approved` with the
+  30 targets. The prompt gives no approval id, and the approval pins each
+  revision, so no read per target is needed. Approvals are the Owner's real
+  `approveBatch`, for 29 of them. An approval refuses a record that cannot
+  publish, so the record with no title can only be in the batch through a row
+  written by hand, standing for an approval made before a rule was tightened.
+  Left out of a real batch, that record answers RECORD_NOT_APPROVED.
+- The grader asks the answer itself: the published set in `applied`, the record
+  published before in `already_applied`, DOCUMENT_LOCKED with its lock block,
+  and CONTENT_INVALID naming `title`. A repeat of the same requestId changes no
+  row. A rejected receipt keeps a code and no field names, so that repeat says
+  CONTENT_INVALID without `title`.
+- The no-scan rule does not hold on two statements, and both are reported on
+  their path's row, never hidden. C2's phrase reads `catalog_search_documents`
+  sequentially, because a sixth of the rows match; a phrase few rows hold is
+  asserted to use the index. Every publish, the Owner's too, has
+  `services/catalog-postgres` read one record for its search document through
+  the `catalog_entries` view, which filters after reading every live record, and
+  C3 shows `catalogs` and `catalogs_aliases`. It is outside this task's paths.
+  L0 names that statement and asserts no other one scans.
+- L1 has three write classes, run last so no read meets a moved record:
+  `single_write_save`, `single_write_save_90k` at 30 samples, below Gate A's 200
+  because only eight records hold that text, and `single_write_publish`. Each
+  names its record from the seed with no read. The paths of C2 and C3 spend
+  their fixtures, so L1 does not repeat them, and L0's single sample of C3 is
+  the only number on a batch.
+- The control page compares the 800 ms budget on calls of one target only, and
+  shows batches on a row of their own with no budget.
+- What the first L1 said, with every budget left as it is: all three write
+  classes are far within 800 ms, on the machine and with the limits described
+  above. A publish here has no images, because a record with images needs a real
+  Backend's readiness answer. That read is not in these numbers. Nothing here
+  says anything about TencentDB until L4.

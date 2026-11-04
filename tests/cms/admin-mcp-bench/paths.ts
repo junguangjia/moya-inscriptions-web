@@ -4,12 +4,15 @@ import {
   adminReadCountDataSchema,
 } from "@moya/contracts/internal/admin-mcp";
 
+import type { AdminExecuteData } from "@moya/contracts/internal/admin-mcp";
+
 import type { AnalyticsOracle } from "./analytics-seed.ts";
 import type { BenchOracle } from "./seed.ts";
 
 // Each task's reference path, as a client with no model would replay it, and its
 // grader against the seed's oracle (admin-mcp-completion-v1 section 21). L0 replays
-// these in CI and L1 times them. Each slice adds its tasks here.
+// these in CI and L1 times the reads; a write's path spends its fixture, so L1 times
+// its class instead. Each slice adds its tasks here.
 
 /** Section 21's Gate A, in ms, proposals to calibrate at first measurement. */
 export const GATE_A_P95_MS = {
@@ -20,6 +23,8 @@ export const GATE_A_P95_MS = {
   aggregate: 500,
   fuzzy_locate: 800,
   media_view: 800,
+  single_write: 800,
+  batch_write_per_target: 150,
   analytics_cached: 100,
   analytics_canonical_cold: 800,
   analytics_umami_cold: 2000,
@@ -111,6 +116,163 @@ export const gradeC4 = (
     failures.push(`get state ${String(record.state)}`);
   if (record.deepZoom !== "not_available")
     failures.push(`deepZoom ${String(record.deepZoom)}`);
+  return failures;
+};
+
+/** C2: 「把草稿《泰山经石峪》的题名改成“泰山经石峪金刚经”，其他字段不动。」 */
+export const c2FindCall = (title: string): ToolCall => ({
+  name: "admin_find",
+  arguments: { query: title, type: "catalog" },
+});
+
+/**
+ * The prompt names a draft by its whole title, so a client takes the one draft that
+ * has exactly that title: never the near-twin, never the published one. Undefined when
+ * the answer holds no such one, or two.
+ */
+export const c2Candidate = (found: unknown, title: string) => {
+  const { items } = adminFindDataSchema.parse(found);
+  const matching = items.filter(
+    (item) => item.title === title && item.state === "draft",
+  );
+  return matching.length === 1 ? matching[0] : undefined;
+};
+
+export const c2SaveCall = (
+  requestId: string,
+  got: { readonly id: number; readonly revision: number | null },
+  disambiguators: Readonly<Record<string, unknown>>,
+  newTitle: string,
+): ToolCall => ({
+  name: "admin_execute",
+  arguments: {
+    requestId,
+    op: "editorial.save-draft",
+    input: {
+      id: got.id,
+      expectedRevision: got.revision,
+      content: {
+        catalogId: disambiguators.catalogId,
+        sourceId: disambiguators.sourceId,
+        kind: disambiguators.kind,
+        title: newTitle,
+      },
+    },
+  },
+});
+
+/** What a save moves on a row whatever it edits: not the content. */
+const C2_BOOKKEEPING: ReadonlySet<string> = new Set([
+  "id",
+  "created_at",
+  "updated_at",
+  "version_updated_at",
+  "version_revision",
+  "version_last_edited_by_id",
+]);
+
+/** Row diff of the latest version, from plain SQL before and after. */
+export const gradeC2 = (
+  before: Readonly<Record<string, unknown>>,
+  after: Readonly<Record<string, unknown>>,
+  oracle: BenchOracle["c2"],
+): readonly string[] => {
+  const failures: string[] = [];
+  const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])]
+    .filter(
+      (name) =>
+        !C2_BOOKKEEPING.has(name) &&
+        JSON.stringify(before[name]) !== JSON.stringify(after[name]),
+    )
+    .sort();
+  if (JSON.stringify(changed) !== JSON.stringify(["version_title"]))
+    failures.push(`changed ${changed.join(",")}, expected version_title`);
+  if (before.version_title !== oracle.title)
+    failures.push(`title before: ${String(before.version_title)}`);
+  if (after.version_title !== oracle.newTitle)
+    failures.push(`title after: ${String(after.version_title)}`);
+  if (after.version_revision !== Number(before.version_revision) + 1)
+    failures.push(`revision ${String(after.version_revision)}`);
+  return failures;
+};
+
+/** C3: 「发布下面这 30 条已批准的草稿（附 id）。发完告诉我实际发布了几条，没发成的是哪几条、为什么。」 */
+export const C3_APPROVALS_CALL: ToolCall = {
+  name: "admin_read",
+  arguments: {
+    op: "list.approvals",
+    fields: ["itemCount"],
+    input: { filter: { status: "active" } },
+  },
+};
+
+export const c3PublishCall = (
+  requestId: string,
+  approvalId: number,
+  targets: readonly number[],
+): ToolCall => ({
+  name: "admin_execute",
+  arguments: {
+    requestId,
+    op: "editorial.publish-approved",
+    input: { approvalId },
+    targets: targets.map((id) => ({ id })),
+  },
+});
+
+const sameIds = (
+  actual: readonly unknown[] | undefined,
+  expected: readonly number[],
+) => {
+  const ordered = (ids: readonly number[]) =>
+    JSON.stringify([...ids].sort((a, b) => a - b));
+  return ordered((actual ?? []).map(Number)) === ordered(expected);
+};
+
+/**
+ * What the answer itself says, because the task is to tell how many went out and which
+ * did not and why. The final state is graded apart, on the rows.
+ */
+export const gradeC3 = (
+  envelope: {
+    readonly ok: boolean;
+    readonly code: string;
+    readonly data?: unknown;
+  },
+  oracle: BenchOracle["c3"],
+  fresh = true,
+): readonly string[] => {
+  const failures: string[] = [];
+  const data = (envelope.data ?? {}) as AdminExecuteData;
+  if (envelope.ok || envelope.code !== "PARTIAL")
+    failures.push(`answer ${String(envelope.ok)} ${envelope.code}`);
+  const applied = fresh ? oracle.publishes : [];
+  const already = fresh
+    ? [oracle.alreadyPublished]
+    : [...oracle.publishes, oracle.alreadyPublished];
+  if (!sameIds(data.applied, applied)) failures.push("applied set");
+  if (!sameIds(data.already_applied, already)) failures.push("already set");
+  const conflict = data.conflict ?? [];
+  if (
+    conflict.length !== 1 ||
+    conflict[0]!.id !== oracle.locked ||
+    conflict[0]!.code !== "DOCUMENT_LOCKED" ||
+    conflict[0]!.lock?.held !== true ||
+    conflict[0]!.lock?.by !== "owner"
+  )
+    failures.push(`conflict ${JSON.stringify(conflict)}`);
+  const failed = data.failed ?? [];
+  if (
+    failed.length !== 1 ||
+    failed[0]!.id !== oracle.missingField.id ||
+    failed[0]!.code !== "CONTENT_INVALID"
+  )
+    failures.push(`failed ${JSON.stringify(failed)}`);
+  // A receipt keeps a code and no field names, so only the first answer can say which.
+  if (fresh && failed[0]?.fields?.[0] !== oracle.missingField.field)
+    failures.push(`failed fields ${JSON.stringify(failed[0]?.fields)}`);
+  if (data.unknown !== undefined || data.queued !== undefined)
+    failures.push("a target reads unknown or queued");
   return failures;
 };
 

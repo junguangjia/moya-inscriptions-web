@@ -64,7 +64,7 @@ const callTool = async (
   const refusal = tool.imageResult ? imageToolResult : toolResult;
   try {
     const guarded = await guardCall(
-      { req, tool: name, klass: tool.klass },
+      { req, tool: name, klass: tool.klass, ...tool.references?.(args) },
       async () => {
         const parsed = tool.input.safeParse(args ?? {});
         if (!parsed.success)

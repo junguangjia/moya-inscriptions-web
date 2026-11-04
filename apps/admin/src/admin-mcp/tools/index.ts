@@ -3,6 +3,7 @@ import {
   ADMIN_MCP_TOOL_PROFILES,
   adminActionsInputSchema,
   adminAnalyticsInputSchema,
+  adminExecuteInputSchema,
   adminFindInputSchema,
   adminGetInputSchema,
   adminReadInputSchema,
@@ -35,6 +36,14 @@ import {
   ANALYTICS_TOOL_NAME,
   analyticsListedInput,
 } from "./analytics";
+import {
+  EXECUTE_DESCRIPTION,
+  EXECUTE_TOOL_NAME,
+  executeContinuation,
+  executeEnvelope,
+  executeListedInput,
+  executeReferences,
+} from "./execute";
 import { FIND_DESCRIPTION, FIND_TOOL_NAME, findContinuation } from "./find";
 import {
   GET_DESCRIPTION,
@@ -47,7 +56,6 @@ import {
   READ_TOOL_NAME,
   readContinuation,
   readEnvelope,
-  readListedInput,
 } from "./read";
 import {
   VIEW_MEDIA_DESCRIPTION,
@@ -90,6 +98,14 @@ export interface AdminMcpTool {
       readonly req: PayloadRequest;
     },
   ): Promise<AdminMcpEnvelope | AdminMcpImageAnswer>;
+  /** Safe references for the audit rows of a write, from the unchecked arguments. */
+  references?(args: unknown): {
+    readonly op?: string;
+    readonly requestId?: string;
+    readonly count?: number;
+    readonly targetType?: string;
+    readonly targetId?: string;
+  };
   /** How a result cut at the size cap continues, from the records it kept. */
   continuation?(
     input: unknown,
@@ -99,6 +115,14 @@ export interface AdminMcpTool {
 
 const READ_ANNOTATIONS: AdminMcpAnnotations = {
   readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+
+/** Reversible, and the same requestId replays. */
+const EXECUTE_ANNOTATIONS: AdminMcpAnnotations = {
+  readOnlyHint: false,
   destructiveHint: false,
   idempotentHint: true,
   openWorldHint: false,
@@ -150,7 +174,6 @@ export const ADMIN_MCP_TOOLS: readonly AdminMcpTool[] = [
     klass: "read",
     profiles: ADMIN_MCP_TOOL_PROFILES,
     input: adminReadInputSchema,
-    listedInput: readListedInput,
     run: (input, { key, req }) => readEnvelope(input, { key, req }),
     continuation: readContinuation,
   },
@@ -184,6 +207,18 @@ export const ADMIN_MCP_TOOLS: readonly AdminMcpTool[] = [
     input: adminViewMediaInputSchema,
     imageResult: true,
     run: (input, { req }) => viewMediaAnswer(req, input as AdminViewMediaInput),
+  },
+  {
+    name: EXECUTE_TOOL_NAME,
+    description: EXECUTE_DESCRIPTION,
+    annotations: EXECUTE_ANNOTATIONS,
+    klass: "reversible",
+    profiles: ["operate", "full"],
+    input: adminExecuteInputSchema,
+    listedInput: executeListedInput,
+    references: executeReferences,
+    run: (input, { key, req }) => executeEnvelope(input, { key, req }),
+    continuation: executeContinuation,
   },
 ];
 

@@ -20,6 +20,8 @@ export interface GuardCall {
   readonly req: PayloadRequest;
   readonly tool: string;
   readonly klass: McpAuditEvent["class"];
+  readonly op?: string;
+  readonly count?: number;
   readonly targetType?: string;
   readonly targetId?: string;
   readonly requestId?: string;

@@ -30,6 +30,7 @@ export type { AdminMcpTool } from "./tools";
 export { whoamiPluginTool } from "./tools/whoami";
 export { findContinuation } from "./tools/find";
 export { readContinuation } from "./tools/read";
+export { EXECUTE_TOOL_NAME, executeEnvelope } from "./tools/execute";
 export {
   ACTIONS_TOOL_NAME,
   actionDetail,
@@ -56,7 +57,7 @@ export {
   LINK_PARAMETER_EXCLUSIONS,
   LINK_PARAMETER_RULES,
 } from "./locate-reference";
-export { withinBudget } from "./budget";
+export { EXECUTE_BUDGET_MS, withinBudget } from "./budget";
 export {
   ANALYTICS_CACHE_MAX_BYTES,
   ANALYTICS_CACHE_TTL_MS,

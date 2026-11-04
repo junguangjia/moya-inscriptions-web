@@ -14,8 +14,20 @@ export interface AdminOpContext {
   readonly key: AdminMcpKey;
   /** The admin_read call this runs under: paging, view, projection, grouping. */
   readonly read?: Partial<AdminReadInput>;
+  /** On admin_execute: this target's idempotency key, from requestId and index. */
+  readonly requestKey?: string;
 }
 
+/** A write runs with one: a target with none would have no replay to fall back on. */
+export const requestKeyOf = ({ requestKey }: AdminOpContext): string => {
+  if (requestKey === undefined) throw new Error("WRITE_WITHOUT_REQUEST_KEY");
+  return requestKey;
+};
+
+/**
+ * A read's `run` gets its parsed input. A write's gets what was sent, already checked
+ * against `input`: a save reads which keys were sent, and parsing fills in the rest.
+ */
 export type AdminOpEntry = AdminOpMeta<
   unknown,
   AdminMcpEnvelope,
@@ -85,11 +97,21 @@ export const irreversibleOp = (
   ...facts,
 });
 
+/** The target of an op that names its record in one field of its input. */
+export const onField =
+  (type: string, field: string) =>
+  (input: unknown): { readonly type: string; readonly id?: string } => {
+    const value = (input as Record<string, unknown>)[field];
+    return {
+      type,
+      ...(value === undefined ? {} : { id: String(value) }),
+    };
+  };
+
 /** Synthetic values for examples, built here so no file holds a long literal. */
 const syntheticHex = (digit: string) => `${"0".repeat(31)}${digit}`;
 export const example = {
   requestId: "00000000-0000-4000-8000-000000000001",
-  idempotencyKey: "example.key-1",
   user: `user-${syntheticHex("1")}`,
   otherUser: `user-${syntheticHex("2")}`,
   work: `work-${syntheticHex("3")}`,

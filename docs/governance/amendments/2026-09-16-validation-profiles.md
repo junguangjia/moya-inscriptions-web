@@ -2,6 +2,9 @@
 
 - Status: Active; recorded from the Owner's 2026-09-16 instruction "ArtVenn —
   validation policy remediation and complete acceptance".
+- Amended by the Owner on 2026-11-04: CMS complete and the PostgreSQL stage are
+  900 seconds and the hosted `test` and `cms` jobs 45 minutes. Each only stops a
+  hung run.
 - Scope: time limits for functional validation entry points, their CI wrappers
   and the publication-cycle boundary of the core-credential check.
 - Preserved: credential protection, independent review, required CI, task
@@ -52,7 +55,7 @@ remains in Git history.
 | APPLE FULL                    | 600 s total incl. preparation, native build/tests, teardown, Simulator cleanup and result processing; preparation ≤ 120 s inside it; ≈60 s pooled reserve for teardown, cleanup and evidence instead of several tiny independent caps. |
 | APPLE HOSTED CONTAINMENT      | Validation step 12 min; existing job limit 20 min. Containment only, not extra native allowance.                                                                                                                                       |
 | WEB COMPLETE CHECKS           | Existing CI test milestone 300 s; complete lint/typecheck/build may each use an explicit 300 s profile when selected.                                                                                                                  |
-| CMS COMPLETE CHECKS           | Integration and native Admin browser validation may each use an explicit 300 s profile; disposable-target safeguards stay.                                                                                                             |
+| CMS COMPLETE CHECKS           | Integration and native Admin browser validation may each use an explicit 900 s profile; disposable-target safeguards stay.                                                                                                             |
 | LOCAL FULL COMBINED PLAN      | ≤ 900 s when selected checks genuinely require a serial combination; children receive remaining time, never renewed allowances.                                                                                                        |
 | BROWSER SMOKE                 | Warm prepared feedback path 120 s; cold complete smoke ≤ 300 s incl. server startup, checks and cleanup.                                                                                                                               |
 | FULL CROSS-BROWSER REGRESSION | Explicitly selected, never a daily default; current 18-minute suite policy unchanged.                                                                                                                                                  |

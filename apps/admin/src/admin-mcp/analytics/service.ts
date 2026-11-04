@@ -717,7 +717,12 @@ const serviceFor = (
           ...quality,
           legacyShare: percentOf(value.legacyPageviews, value.pageviews),
         };
-      if (!range!.complete) notes.push("NATIVE_COMPARE_NOT_ALIGNED");
+      // A length of no whole minutes: Umami takes its period cut short, so it moves.
+      if (
+        !range!.complete ||
+        (range!.end.getTime() - range!.start.getTime()) % 60_000 !== 0
+      )
+        notes.push("NATIVE_COMPARE_NOT_ALIGNED");
       return {
         ...nestedBlockOf(stats, range!),
         metrics: {

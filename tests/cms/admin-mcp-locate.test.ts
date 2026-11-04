@@ -300,7 +300,7 @@ describe("tools/list and the size budgets, over the wire", () => {
     );
     for (const tool of tools) {
       expect(tool.annotations).toEqual({
-        readOnlyHint: true,
+        readOnlyHint: tool.name !== "admin_execute",
         destructiveHint: false,
         idempotentHint: true,
         openWorldHint: false,
@@ -312,14 +312,23 @@ describe("tools/list and the size budgets, over the wire", () => {
     }
   });
 
-  it("names every read op on admin_read, so a valid name costs no round trip", async () => {
+  it("takes op as a plain string, with near names for a wrong one", async () => {
     const { tools } = await clients.read!.listTools();
     const read = tools.find(({ name }) => name === "admin_read")!;
     const op = (
       read.inputSchema.properties as Record<string, { enum?: string[] }>
     ).op!;
-    expect(op.enum).toContain("list.catalogs");
-    expect(op.enum).not.toContain("catalog.publish");
+    expect(op.enum).toBeUndefined();
+    const { envelope } = asEnvelope(
+      await clients.read!.callTool({
+        name: "admin_read",
+        arguments: { op: "list.catalog" },
+      }),
+    );
+    expect(envelope).toMatchObject({ ok: false, code: "UNKNOWN_OP" });
+    expect((envelope.data as { nearest: string[] }).nearest).toContain(
+      "list.catalogs",
+    );
   });
 
   it("keeps the admin_actions index within budget, and shows what is built", async () => {
@@ -1256,6 +1265,15 @@ describe("admin_find: id, link, sourceId", () => {
     );
     for (const action of item.actions!) {
       expect(listed).toContain(action.tool);
+      // A write's requestId and what it changes are the caller's to add.
+      if (action.tool === "admin_execute") {
+        expect(action.args.input).toMatchObject(
+          action.args.op === "catalog.patch_text"
+            ? { catalogId: catalogRow }
+            : { id: catalogRow },
+        );
+        continue;
+      }
       const answer = await call(action.tool, action.args);
       expect({ action, ok: answer.ok }).toEqual({ action, ok: true });
     }
