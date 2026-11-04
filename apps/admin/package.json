@@ -68,6 +68,7 @@
     "./runtime-settings": "./src/runtime-settings.ts",
     "./migration-guard": "./src/migration/guard.ts",
     "./local-media-read": "./src/media/local-read.ts",
+    "./community-backend": "./src/community/backend.ts",
     "./community-endpoints": "./src/community/endpoints.ts",
     "./community-bulk-actions": "./src/community/bulk-actions.tsx",
     "./community-comment-image-body": "./src/community/comment-image-body.tsx",

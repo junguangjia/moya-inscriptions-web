@@ -107,6 +107,63 @@ export default tseslint.config(
     },
   },
   {
+    // Admin MCP never reaches the Backend as the Owner, or AI bytes would miss the
+    // route table and token revocation. apps/admin/src/editorial/catalog-delivery-backend.ts
+    // stays on the Owner token for metadata and readiness, so it is not listed.
+    files: ["apps/admin/src/admin-mcp/**/*.{ts,tsx,mts,cts}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            "@moya/api",
+            "@moya/backend-runtime",
+            "@moya/contracts/json-schema",
+            "@moya/contracts/schemas",
+            "@moya/public-api",
+            "node-pg-migrate",
+            "pg",
+            "server-only",
+          ],
+          patterns: [
+            {
+              group: [
+                "@moya/backend-runtime/*",
+                "@moya/api/*",
+                "@moya/public-api/*",
+                "**/data/**",
+                "**/database/**",
+                "**/infra/**",
+                "**/services/**",
+                "**/*.csv",
+                "**/*.json",
+                "**/*.pdf",
+                "**/*.tsv",
+                "**/*.xls",
+                "**/*.xlsx",
+              ],
+              message:
+                "Frontend code cannot access Reader ports, runtime contracts, data files, or server infrastructure.",
+            },
+            {
+              group: ["**/community/backend", "**/community/endpoints"],
+              importNames: [
+                "callCommunityOperator",
+                "communityEndpoints",
+                "createCommunityEndpoints",
+                "openCatalogOperatorThumbnail",
+                "openCommunityOperatorEvidence",
+                "openCommunityOperatorMedia",
+              ],
+              message:
+                "Admin MCP uses the AI credentials: these carry the Owner's token.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ["apps/web/lib/public-api/**/*.{ts,tsx,mts,cts}"],
     rules: {
       "no-restricted-imports": [

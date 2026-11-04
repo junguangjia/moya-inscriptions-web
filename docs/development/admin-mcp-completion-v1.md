@@ -405,6 +405,33 @@ Audit attribution: Payload rows record the AI user (lastEditedBy, approvedBy,
 receipt actor, intent actor_id); Backend rows record `ai-admin`; the MCP ledger
 links both through requestId and key id.
 
+Recorded when built in S3, tests in
+tests/unit/backend/operator-ai-base-credential.test.ts and
+tests/unit/backend/operator-ai-label.test.ts:
+
+- The table is `AI_OPERATOR_ROUTES` in
+  packages/contracts/src/internal/admin-mcp/ai-routes.ts. It refuses with 403
+  `AI_ROUTE_FORBIDDEN`, `AI_RUN_REQUIRED` for an irreversible row without its
+  header, and `SENSITIVE_SWITCH_OFF` for a sensitive row.
+- The map's `catalog-master/*` is written out as exact rows, because `erase` has
+  a different class and a wildcard would pass a future route unclassified. This
+  design fixes only `attach`; the others take their op name in kebab case, and
+  the slice that builds them may rename them in the table.
+- `ai/settlement` passes on the base credential only with `type=item`, once. The
+  other subjects stay refused until S6 lists them for the community credential.
+- The raw IP route is `/internal/community/analytics/ips`. The router gives it
+  to analytics-handler.ts before the operator handler, and that handler still
+  takes only the Owner's token, so the base token gets 401 there until S4 builds
+  `insights/*` and calls `resolveOperatorActor` in it. The sensitive row already
+  refuses in `aiOperatorRefusal`, because `COMMUNITY_OPERATOR_AI_SENSITIVE` does
+  not exist yet.
+- Distinctness at startup compares the value with the whole environment, not a
+  list, so a later token cannot be missed. The analytics list names it too.
+- Not built, because no base route reaches them yet: the service factory per
+  label, which S6 needs, and `callAiBase`, which comes with its first JSON
+  route. The literal `"owner"` sites already take the resolved actor, proven by
+  a test that widens the table.
+
 ## 3. Door and native transport
 
 One URL, two paths. A small local Payload plugin, listed after `editorialMcp()`
@@ -759,6 +786,41 @@ through the companion, never as text.
 
 `editorial_*` keep their field names; additions only.
 
+Recorded when built in S3, tests in
+tests/unit/backend/admin-mcp-registry.test.ts and the `admin_actions` block of
+tests/cms/admin-mcp-native.test.ts:
+
+- The envelope's generated JSON Schema is 2.2 KB. Repeated on 11 tools it passes
+  the 4,000-token budget alone, so tools/list advertises the much smaller
+  `ADMIN_MCP_RESULT_SCHEMA` (`ok`, `code`, `next` and the four required names)
+  and names no dialect. `adminMcpEnvelopeSchema` still checks every answer on
+  the way out, and the official client validates each result against what was
+  advertised.
+- Budgets in tokens are estimated as UTF-8 bytes / 3, which reads dense JSON a
+  little high on purpose. The whole `admin_actions` index is 5.1 KB, about 1,700
+  tokens by this measure, and the text cap binds it first.
+- `admin_actions` removes what a client does not act on from a schema: the draft
+  name, `additionalProperties:false` (its description says inputs are strict),
+  the pattern of a `format`, and safe-integer bounds. Past 4 KB repeated parts
+  move to `$defs`, which `editorial.save-draft` needs. A detail that still would
+  not fit drops its result schema and says `outputOmitted`, as
+  `community.read-article-submission` does. Its input schema always fits, by
+  test.
+- A cut result reports the records it dropped in `remaining`, unless the op
+  already uses that field for its own targets. With no way on, because not one
+  record fits, it carries a fixed hint and no `next`, so a client cannot repeat
+  the same call forever.
+- `catalog.duplicate`, `article.duplicate` and `collection.duplicate` are
+  classed irreversible outright, because a duplicate always binds a new
+  identity. The ops whose class rises with the input are `editorial.save-draft`,
+  `editorial.save-article-draft`, `collection.save`, `media.register_existing`
+  and `community.set-report-metadata`.
+- `analytics.ips` joins the op list, on `admin_sensitive_read`: raw IP records
+  are not a report on `admin_analytics`.
+- An op with no implementation yet keeps its row and class, and `admin_actions`
+  files it under `not_available`. Ops on a tool no key has yet leave the index
+  and answer `tool_not_listed` in a detail.
+
 ## 6. Locate
 
 Principle: one call resolves a human reference to a stable ref and says whether
@@ -816,8 +878,8 @@ Result:
   kind, dynasty, province, sourceId and media count for Catalogs; handle and
   account state for users. Many stele works share similar names, so title alone
   is weak.
-- `match.kind` is identity, raw, t2s or trigram. A t2s or trigram hit never
-  yields `uniqueIdentity:true`; only identity fields can.
+- `match.kind` is identity, raw, t2s, s2t or trigram. A t2s, s2t or trigram hit
+  never yields `uniqueIdentity:true`; only identity fields can.
 - `actions` and `adminPath` appear only when `resolution.status=exact`, and
   always from `admin_get`. Candidates carry only an `admin_get` action. This
   enforces the rule from artvenn_users_find through the tool's shape: use
@@ -928,6 +990,155 @@ Whether that is readable is unknown; S3 measures it with a real rubbing.
 inscription passage can be read without a shell. Tool rule: AI saves a
 transcription only from a readable or supplied source and otherwise reports that
 it cannot. It never invents original text.
+
+Recorded when built in S3, tests in tests/cms/admin-mcp-locate.test.ts and
+tests/unit/backend/admin-mcp-locate.test.ts:
+
+- `admin_find` takes `{query, type?, limit?, skip?}`. Source names in
+  `meta.sources` are `catalogs`, `articles`, `collections`, `media` on the exact
+  step, `catalogs_published`, `catalogs_draft` and the same three on the fuzzy
+  step, and `users`, `works`, `comments`, `threads`, `reports` as
+  `not_available` until S6. An `article-` id is on both sides, because
+  `community.article_documents` uses the same shape: a hit in the CMS settles
+  it, a miss names `article_documents`.
+- A source is named only when its family was really read. A UUID or a 64-hex
+  query reads `catalogs` by the text as typed, because a catalogId or sourceId
+  is exact and can hold those shapes. It reads `media` by a 64-hex in lower
+  case, as the column stores it, and by a UUID as typed and in lower case. An
+  exact hit on a plain id stops before the fuzzy step, so it names `catalogs`
+  and `media` alone.
+- With nothing read and nothing withheld, the answer is `none`, `meta.partial`
+  and a fixed hint saying nothing was looked up. That covers a scheme link or
+  `?query` that names nothing this tool reads, a known link with an unreadable
+  id, and a type that rules out the only family the reference names.
+- `/editorial-preview/<id>` names a Catalog's row, and a known link keeps its
+  meaning with parts after the id or with no scheme. A value named twice is one
+  reference. Text starting `/` or `#`, or with a host-like first part, is legal
+  as a sourceId and as words, so it is a link only when it names something a
+  link can; otherwise it goes on to the identity and text steps. A known link
+  with a host and no scheme that a Catalog holds, as typed, as its own identity
+  names that Catalog; with no such holder it reads as a link. A link with a
+  scheme, or a known one starting `/` or `#`, pays for no such lookup, so a
+  sourceId of that shape is found through `/catalog/<percent-encoded>`.
+- Whitespace separates words on every branch that matches words: all must be in
+  the record, in any of the searched fields. The trigram step is a close
+  spelling of the whole text and says so. A word repeated counts once, and more
+  than 32 different words are refused as `INPUT_INVALID` by the code
+  `more_than_32_words`, never searched on some of them, because each word costs
+  a condition and a scan of every row read. `%`, `_` and `\` in the words mean
+  themselves, escaped for Payload's `contains`, which is `ILIKE` around the
+  value as it stands.
+- A NUL in `query` or in `admin_view_media`'s `mediaId` is refused as
+  `INPUT_INVALID`, because PostgreSQL text cannot hold one, and a NUL decoded
+  from a link leaves that part of it unread.
+- Unique means one identity hit from one reference. A link naming two records,
+  or a bare number that is a row in two families, answers candidates. `type`
+  narrows a number to one family.
+- A search pages with `skip` as far as 200 candidates, reading one row past the
+  page on each branch, so a source holding more is seen to hold more. Past 200
+  the answer says so with `meta.truncated` and a fixed hint, and the query needs
+  narrowing.
+- `admin_read` pages a list source by its last row, and a cursor past the
+  integer range names no row, so it is refused as `invalid_cursor`.
+  `editorial.owner-drafts` and `list.review_page` number their own pages, and a
+  row there runs near 1 KB, so a default page of 20 is often cut: `next` starts
+  a page right after the rows kept, at the largest `pageSize` that divides that
+  offset, up to the rows kept or the default of 20. These two answer `totalDocs`
+  with no page number or page count, because on a cut page those would be a
+  second way on that skips rows. A page that fits sets `next` the same way when
+  more follow, so the size grows back after a cut and a walk never sinks to one
+  row a call. The last page sets none. `editorial.owner-history` takes no page
+  size, so a cut there has no way on and says so. An op that is no list source
+  refuses `cursor`, `pageSize`, `view`, `fields` and `groupBy` with
+  `not_for_this_op` rather than dropping them.
+- A `sourceId` bound only in a record's provenance list resolves through
+  `editorial-identities`, after the indexed lookup on the main column.
+- Trigram is its own branch, `catalogs_similar`, tried only when no branch
+  contains the words, so a close spelling never crowds out a real hit. Branches
+  run in turn: the Admin pool is five connections and the screens share it.
+- `state` on find, get and read is one word: `draft`, `published`, or
+  `draft_over_published` for a live record with a newer draft. The status filter
+  goes by the latest version, as Payload's draft read does, so the last of those
+  is a draft there. `list.catalogs` filters to drafts unless asked, and every
+  answer echoes the filter it resolved.
+- Rows page on the record's own id, newest first, so a row edited while paging
+  is neither lost nor seen twice. `next` is the one way on: a page has no second
+  cursor, because a cut keeps fewer rows than the page read. A count's groups
+  page on an offset, in an order count, value and state settle, so two groups
+  tied on the first two cannot swap across a page. A non-VALUE state keeps its
+  own group row, so unsupplied never reads as a dynasty or as zero.
+- `view:'count'` runs in the budget a search branch has: its own READ ONLY
+  transaction with `statement_timeout` 2000 ms, which a wait on a lock counts
+  towards. Past it the answer is `READ_TIMED_OUT` with no number, so a slow
+  count is never read as one, and the same call is worth repeating. That
+  transaction adds four statements, so the L0 ceiling on an aggregate is 10.
+- `editorial.read-draft` answers the outline for a key, because the whole draft
+  would not fit a text result. `editorial.owner-drafts` and `owner-history`
+  relay their small rows, and a missing row on `owner-history` answers
+  `NOT_FOUND`, as `read-draft` does. The delivery reads stay unbuilt: they call
+  the Backend on the Owner's token, and S5 owes them the AI one.
+- `admin_get` on a Catalog says `deepZoom: "not_available"` until the master
+  routes arrive, so a missing master state never reads as no master.
+- Reading the lock row needs no change to `defaultAccess`: it admits any user,
+  so S5's question about `ai_operator` is answered for reads and open for the
+  takeover.
+- `readFrom` says `version` when a diff's `to` names a past version. A diff
+  whose `to` names `published` on a record with nothing live read no version, so
+  its `revision` and `fingerprint` are null, as `view=published` says for the
+  same record.
+- `fields` on a diff refuses a name that is no field of the family, as outline,
+  full and published do, and that includes the dotted name `view=field` takes.
+  An empty `changes` therefore always means those fields did not change.
+- A `field` window on a number or a row id answers the value the outline shows,
+  as text. A fact with no value is `ABSENT`, as it is there.
+- `find.text` refuses half a surrogate pair and a NUL, by the rule the write
+  contract uses. An `id` holding a NUL answers `NOT_FOUND`, because no text
+  column can hold one (SQLSTATE 22021).
+- Stored content that no longer parses has `fingerprint: null`. With the live
+  and latest revisions apart that reads as `hasUnpublishedChanges: true`, never
+  as no change, and a preview gives the failure as an issue, `CONTENT_INVALID`
+  with the field names. The review page still parses every row it lists, so such
+  a record fails that page, as it does for the Owner.
+- The identities a skeleton copies from the record, `catalogId` and `mediaId`,
+  are marked by leaf on find, outline, full and all preview branches, and a
+  diff's `from` and `to` values are marked, because an identity shows there
+  while nothing is live. The rest of a skeleton is ours and is not labelled as
+  data. A list source's `filter` is marked too, because a skeleton's filter
+  holds a stored `catalogId`. A value echoed from a call's own `next.args` is
+  the caller's.
+- A stored link that carries a credential does not leave:
+  `provenance[].sourceUrl`, `sourceCitations[].url` and an Article's
+  `citations[].url`, when the link has userinfo, or a query parameter, a
+  `;name=value` in its path or a `name=value` in its fragment whose name has a
+  word that says secret, key, token, password, signature or session, written
+  apart or run together (`accesstoken`, `clientsecret`, `secretkey`).
+  `view=full` puts `{state:"WITHHELD"}` where the link was, a window answers
+  `fieldState:"WITHHELD"` with no text, length, hash or count, and both set
+  `meta.excluded:["credential_url"]`. Outline, diff and history carry an array
+  by count and hash only, so a changed link still shows as a change. A Catalog
+  preview says `hasUrl`; an Article preview carries the same `WITHHELD` as
+  `view=full`. Every other link stays verbatim. The name list errs towards
+  withholding, so a harmless `?key=` link is withheld too, says so, and the
+  Owner reads it in the Admin. A fragment with no value, such as `#token`, is an
+  anchor. Section 17 lists what is not read.
+- Codes added: `NOT_FOUND`, `NOT_AVAILABLE`, `MEDIA_UNAVAILABLE`,
+  `MEDIA_TOO_LARGE`, `AI_ROUTE_FORBIDDEN`, `READ_TIMED_OUT`. `meta.sources`
+  joins the envelope. `INPUT_INVALID` names the allowed keys of the object an
+  unknown key sits in, however deep.
+- `admin_view_media`: `catalog_original` requires a `region`; a full-size region
+  is allowed for a record with no thumbnail. It reads the original by the media
+  row this key can read, through the storage handler or the local directory, as
+  `GET /api/media/file/:filename` does. Regions are in stored pixels, with no
+  EXIF rotation. To fit 512 KiB it lowers quality first, then size, and the
+  answer reports the size it rendered. One original decodes at a time per
+  process. An original over 128 MiB answers `MEDIA_TOO_LARGE`, which is not
+  retryable: refused on the row's `filesize`, then on the storage answer's
+  Content-Length, both before a byte is read, and a stream with neither stops at
+  the cap. A region outside a thumbnail answers `INPUT_INVALID` `outside_image`,
+  read from the thumbnail's own size, as an original's is from the row's. Its
+  reads of the local directory carry `turbopackIgnore`, as upload-session-gc.ts
+  does; without it the build traces all of `apps/admin` into the standalone
+  output.
 
 ## 7. Reversible execution, direct
 
@@ -1282,6 +1493,22 @@ not yet run:
 7. The screenshot goes to a 0600 PNG inside the configured roots. The result is
    text plus image content bounded to 512 KiB, reporting rendered and page size,
    with no structuredContent and no outputSchema.
+
+Recorded when built in S3, for the structured view:
+
+- `previewCatalogDetail` takes where an image's URL starts, so the structured
+  view needs no `CMS_PUBLIC_URL`: it replaces each image with its media id
+  anyway.
+- A citation's link becomes `hasUrl: true`, because the Matrix allows no
+  absolute URL here. The link itself is in `view=full`. This is the one place
+  the answer differs from the page's projection, apart from text past 200 code
+  points, which travels as length, hash and head.
+- `renderAvailable:false` says `PREVIEW_ORIGIN_NOT_CONFIGURED`,
+  `PREVIEW_HOST_MISMATCH`, `PREVIEW_INCOMPLETE` or `NO_PREVIEW_PAGE`.
+- `issues` covers the publish schema and media validity. Delivery readiness is
+  not in it, because that check calls the Backend on the Owner's token. Articles
+  and collections carry no `issues`: their rules live in hooks outside this
+  view.
 
 A stale revision, a used ticket or an expired ticket makes the Web page show its
 generic unavailable text; the companion reports `RENDER_FAILED` with a hint to
@@ -1791,17 +2018,35 @@ Also:
 
 Accepted limits, recorded and not fixed:
 
+- A draft Catalog is matched on its title only, against the stored text, with no
+  normalized copy: as typed (`match.kind` `raw`), in simplified form (`t2s`) and
+  in one traditional form (`s2t`). So `龙门造像记` finds a draft titled
+  `龍門造像記`, as a candidate and never a unique identity. A simplified
+  character can have several traditional forms and the conversion gives one, so
+  `发` reaches `發` and not `髮`, and a draft's aliases are not searched. Such a
+  draft is simply not in the answer. `admin_find`'s description says so, because
+  the answer cannot: `catalogs_draft: ok` means the branch answered, not that
+  the record is absent. Published Catalogs have the normalized search document.
+  The traditional dictionaries load at the first non-ASCII free text, not at
+  startup: about 25 ms once and about 25 MB held by the process, measured on
+  opencc 1.4.1 on darwin-arm64.
 - A rejected receipt written before S2 keeps answering its key with its old
   code, transient ones included, because a key's receipt cannot be replaced. A
   new key gets past it. Whether Production holds any such row was not checked.
+- A REST refusal for a Catalog outside the account's scope leaves no application
+  row: CATALOG_OUT_OF_SCOPE writes no receipt, because the Owner can widen the
+  scope, and REST calls do not pass the MCP audit ledger. Only the HTTP access
+  log shows it. The same refusal on `editorial_*` has its audit finish row.
 - A retry after OUTCOME_UNKNOWN on approve-batch can leave a second active
   approval of the same revisions, because the route has no key, and
   approve-article-batch has the same shape. The page reports only the later id,
   so revoking that one leaves the first active, and automation can still publish
   with it. What goes live is still a revision the Owner approved; what falls
   short is the revocation. The Owner page says the result is unconfirmed and
-  asks for a look at the approval list before repeating. An approve op for AI
-  keys needs a requestId, or it meets the Matrix row "Lost answer or timeout".
+  asks for a look at the approval list before repeating. A lost restore-draft
+  answer asks for a look at the record's version history instead, because a
+  restore is not on that list. An approve op for AI keys needs a requestId, or
+  it meets the Matrix row "Lost answer or timeout".
 - A replayed draft save does not report `supersededIntents`: the migration list
   has no column for them, so a client that lost the answer reads the intent
   instead.
@@ -1838,6 +2083,13 @@ Accepted limits, recorded and not fixed:
   account could have been read before this slice deploys. Production ids were
   not checked. Whether to replace automation keys at deployment is the Owner's
   call.
+- A stored link is withheld by the names it carries, so these still leave as
+  stored: a link nested in a parameter (`?to=https%3A...%3Ftoken%3D...`), a link
+  in free text such as a citation's words, a name no rule reads (`?t=`, `?tk=`,
+  `?code=`, `?otp=`, `?sid=`), and a secret in a path segment with no name
+  (`/token/abc`). Whether Production holds any such link was not checked. Only a
+  read-only scan can answer that, and whether to run one before the AI base
+  token is placed is the Owner's call.
 
 ## 18. Reuse
 
@@ -2280,3 +2532,44 @@ How each runs:
   from audit rows on the control page.
 
 Results are published as one table per client, with failures shown.
+
+Recorded when built in S3, in tests/cms/admin-mcp-bench/. Numbers stay in the
+private evidence of each run, not here.
+
+- `node tests/cms/admin-mcp-bench/run.mjs l0 --profile complete` and
+  `... l1 --output <private directory>`. Each makes its own database beside
+  `CMS_TEST_DATABASE_URL`, marks it, refuses a server other than 16.15, and
+  drops it. The shared database is only read for its marker. L1 needs the Admin
+  production build first. CI runs L0 in the `cms` job, whose `postgres16`
+  service has the Payload schema; the `test` job's has none.
+- The seed is plain SQL and every row is a pure function of its index, so a run
+  is repeatable and costs seconds. The oracle is computed from the generated
+  rows, never through a tool. Older versions and a live row under a draft hold
+  the opposite transcription state, so a count that reads the wrong row is
+  wrong. 2.6 versions per record, 200 Articles and 40 Collections are this
+  seed's own assumptions; the design names no number for them.
+- Target scale: L1 seeds all of it except the 1M Umami events, because Umami's
+  schema comes from its image, not this repository, and no tool reads them
+  before S4, which owes that seed. L0 seeds the CMS side only, because nothing
+  in S3 reads the community tables; the slice that reads them turns them on
+  there.
+- L0's statement ceilings are measured at this scale and pinned, audit row and
+  transaction control included. The door's throttled `last_used_at` write is
+  left out, because whether a call carries it depends on the clock. The tool
+  description ceiling of 1,024 characters is this bench's own; the design asks
+  for a check and names no number. Large means at least 1,000 planner rows. The
+  scan check catches a sequential scan only: with the identity indexes gone an
+  exact locate falls to a bitmap scan on `latest`, which passes it, and only the
+  timing alarm would notice.
+- L1's clock is the driver's, POST sent to last byte over loopback, an upper
+  bound on the design's POST received to last byte. The server's own clock from
+  the audit rows stands beside it; tools/list writes no audit row. The first
+  call of each class is reported apart. Media classes take 30 samples, below the
+  200 of Gate A, because they are not this slice's latency question, and say so.
+- C4's master half reads `deepZoom: "not_available"` until the master routes
+  arrive, so C4 passes here on id and publication state only.
+- Legibility: S3 has no real rubbing, so whether `catalog_thumb` can be read on
+  one stays NOT TESTED. The bench measures the mechanism on a synthetic chart of
+  bars of known width: which widths each view keeps, and that each answer stays
+  within 512 KiB and reports its size. Its thumbnail copies the thumb recipe's
+  size and quality; the worker's renderer is not run.

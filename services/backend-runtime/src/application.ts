@@ -130,6 +130,8 @@ export interface BackendApplicationOptions {
   readonly communityAnalysisPort?: CommentAnalysisPort;
   /** The Owner's operator credential; empty leaves the internal subpath closed. */
   readonly communityOperatorCredential?: string;
+  /** The AI credential for Catalog work and analytics; empty leaves its routes closed. */
+  readonly operatorAiBaseCredential?: string;
   /** Work publishing persistence; requires the author port. */
   readonly workPublishingPort?: WorkPublishingPort;
   /** Human Article drafts and publication. */
@@ -455,6 +457,7 @@ const resolveCommunity = (
     catalogThumbnail: options.catalogThumbnail,
     catalogRenderBacklog: options.catalogRenderBacklog,
     operatorCredential: options.communityOperatorCredential ?? "",
+    aiCredentials: { base: options.operatorAiBaseCredential ?? "" },
   };
 };
 

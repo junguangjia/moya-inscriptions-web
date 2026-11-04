@@ -338,6 +338,15 @@ jobs:
         env:
           CMS_TEST_DATABASE_URL: postgresql://cms_qa@127.0.0.1:5433/cms_synthetic_test
         run: pnpm test:cms --profile complete
+      # Section 21 of docs/development/admin-mcp-completion-v1.md, on the minimum
+      # supported major only. It seeds a database of its own beside the one named
+      # here and drops it, so the browser checks below meet nothing of it. Timing
+      # is an alarm on this runner, never a gate.
+      - name: Admin MCP L0 at seeded scale on PostgreSQL 16
+        env:
+          CMS_TEST_DATABASE_URL: postgresql://cms_qa@127.0.0.1:5433/cms_synthetic_test
+          TEST_DATABASE_EXPECTED_VERSION_NUM: "160015"
+        run: node tests/cms/admin-mcp-bench/run.mjs l0 --profile complete
       - name: Prepare native Admin browser validation
         run: |
           pnpm --filter @moya/tests exec playwright install --with-deps --only-shell chromium

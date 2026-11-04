@@ -1,10 +1,15 @@
-import { adminMcpEnvelopeSchema } from "@moya/contracts/internal/admin-mcp";
+import {
+  ADMIN_MCP_TEXT_CAP_BYTES,
+  adminMcpEnvelopeSchema,
+} from "@moya/contracts/internal/admin-mcp";
 import type {
   AdminMcpCode,
   AdminMcpCodeGuide,
   AdminMcpEnvelope,
   AdminMcpIssue,
+  AdminMcpNext,
 } from "@moya/contracts/internal/admin-mcp";
+import { z } from "zod";
 
 /**
  * Fixed English, so a hint never carries user content. `retryable` says whether
@@ -95,10 +100,34 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     hint: "The Backend credential for this op is not placed. Retrying cannot help; tell the Owner.",
     retryable: false,
   },
+  NOT_FOUND: {
+    hint: "No such record, or not one this key can read. Locate it with admin_find.",
+    retryable: false,
+  },
+  NOT_AVAILABLE: {
+    hint: "This part is not built yet, so nothing was read. It is not the same as nothing being there.",
+    retryable: false,
+  },
+  MEDIA_UNAVAILABLE: {
+    hint: "The image could not be read just now. Retry shortly; if it stays, report that you could not read it.",
+    retryable: true,
+  },
+  MEDIA_TOO_LARGE: {
+    hint: "This original is larger than this tool reads, so repeating the call cannot help. Read its thumbnail, or report that you could not read the original.",
+    retryable: false,
+  },
+  AI_ROUTE_FORBIDDEN: {
+    hint: "The Backend refused this credential on this route. Retrying cannot help; tell the Owner.",
+    retryable: false,
+  },
+  READ_TIMED_OUT: {
+    hint: "This read ran out of time, so it gives no number and this is not a zero. Retry shortly, or narrow the filter.",
+    retryable: true,
+  },
 };
 
 type EnvelopeFields = Partial<
-  Pick<AdminMcpEnvelope, "issues" | "state" | "next" | "runId">
+  Pick<AdminMcpEnvelope, "data" | "issues" | "state" | "next" | "runId">
 >;
 
 export const okEnvelope = (
@@ -131,6 +160,46 @@ export const failedEnvelope = (
 export const inputInvalidEnvelope = (
   issues: readonly AdminMcpIssue[],
 ): AdminMcpEnvelope => failedEnvelope("INPUT_INVALID", { issues: [...issues] });
+
+/** The keys of the object a path reaches, through what wraps it. */
+const allowedKeysAt = (
+  schema: unknown,
+  path: readonly PropertyKey[],
+): readonly string[] | undefined => {
+  const unwrapped = (value: unknown): unknown =>
+    value instanceof z.ZodOptional ? unwrapped(value.unwrap()) : value;
+  let current = unwrapped(schema);
+  for (const part of path) {
+    if (!(current instanceof z.ZodObject)) return undefined;
+    current = unwrapped(current.shape[String(part)]);
+  }
+  return current instanceof z.ZodObject
+    ? Object.keys(current.shape)
+    : undefined;
+};
+
+/** Names the failing input by path and allowed keys, never by value. */
+export const issuesOfError = (
+  error: z.ZodError,
+  schema: unknown,
+  prefix: readonly string[] = [],
+): readonly AdminMcpIssue[] =>
+  error.issues.map((issue) => {
+    const allowedKeys =
+      issue.code === "unrecognized_keys"
+        ? allowedKeysAt(schema, issue.path)
+        : undefined;
+    return {
+      path: [
+        ...prefix,
+        ...issue.path.map((part) =>
+          typeof part === "number" ? part : String(part),
+        ),
+      ],
+      code: issue.code,
+      ...(allowedKeys === undefined ? {} : { allowedKeys: [...allowedKeys] }),
+    };
+  });
 
 // One entry per key and tool, so the map stays small. A process-memory counter
 // is enough: a client retrying unchanged is what this names.
@@ -175,16 +244,172 @@ const withoutInvisible = (envelope: AdminMcpEnvelope): AdminMcpEnvelope => {
   return { ...stripped, meta: { ...stripped.meta, stripped: true } };
 };
 
+const bytesOf = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
+
+type JsonPath = readonly string[];
+
+/** Arrays reached through objects only: an array's items are whole records. */
+const recordArrays = (value: unknown, path: JsonPath = []): JsonPath[] => {
+  if (Array.isArray(value)) return [path];
+  if (value === null || typeof value !== "object") return [];
+  return Object.entries(value).flatMap(([key, item]) =>
+    recordArrays(item, [...path, key]),
+  );
+};
+
+const at = (root: unknown, path: JsonPath): unknown =>
+  path.reduce<unknown>(
+    (value, key) => (value as Record<string, unknown>)[key],
+    root,
+  );
+
+const withRecords = (
+  root: unknown,
+  path: JsonPath,
+  records: readonly unknown[],
+): unknown => {
+  if (path.length === 0) return records;
+  const [key, ...rest] = path as [string, ...string[]];
+  const parent = root as Record<string, unknown>;
+  return { ...parent, [key]: withRecords(parent[key], rest, records) };
+};
+
+/** A pointer into a record that was cut is dropped; `*` stands for any item. */
+const pointerResolves = (
+  value: unknown,
+  [segment, ...rest]: readonly string[],
+): boolean => {
+  if (segment === undefined) return true;
+  if (value === null || typeof value !== "object") return false;
+  const items = Object.entries(value);
+  return segment === "*"
+    ? items.some(([, item]) => pointerResolves(item, rest))
+    : items.some(
+        ([key, item]) => key === segment && pointerResolves(item, rest),
+      );
+};
+
+export const CUT_WITH_NO_WAY_ON =
+  "This result was cut at the size limit and cannot continue from here. Narrow the request, or read it through the companion.";
+
+/**
+ * A text result never passes the cap, and a cut says so: whole records are dropped
+ * from the end of the largest array, the rest stays valid JSON, `meta.truncated` is
+ * set and `next` continues from what was kept. With no way on, because not one record
+ * fits, the answer carries a fixed hint instead, and a too-large answer never arrives
+ * as a quiet empty one.
+ */
+const withinCap = (
+  envelope: AdminMcpEnvelope,
+  continuation?: (kept: readonly unknown[]) => AdminMcpNext | undefined,
+): AdminMcpEnvelope => {
+  if (bytesOf(envelope) <= ADMIN_MCP_TEXT_CAP_BYTES) return envelope;
+  const {
+    data: wholeData,
+    issues: wholeIssues,
+    next: ownNext,
+    ...fields
+  } = envelope;
+
+  const finished = (
+    body: Pick<AdminMcpEnvelope, "data" | "issues">,
+    dropped: number,
+    next: AdminMcpNext | undefined,
+  ): AdminMcpEnvelope => ({
+    ...fields,
+    ...body,
+    ...(next === undefined ? { hint: CUT_WITH_NO_WAY_ON } : { next }),
+    remaining: envelope.remaining ?? dropped,
+    untrusted: envelope.untrusted.filter((pointer) =>
+      pointerResolves(body, pointer.split("/").slice(1)),
+    ),
+    meta: { ...envelope.meta, truncated: true },
+  });
+
+  let body: Pick<AdminMcpEnvelope, "data" | "issues"> = {
+    ...(wholeData === undefined ? {} : { data: wholeData }),
+    ...(wholeIssues === undefined ? {} : { issues: wholeIssues }),
+  };
+  const arrays = recordArrays(body).sort(
+    (first, second) => bytesOf(at(body, second)) - bytesOf(at(body, first)),
+  );
+  let dropped = 0;
+  for (const [index, path] of arrays.entries()) {
+    const records = at(body, path) as readonly unknown[];
+    const attempt = (count: number) => {
+      const head = records.slice(0, count);
+      return finished(
+        withRecords(body, path, head) as typeof body,
+        dropped + records.length - count,
+        // Past the largest array its records are all gone, so nothing continues.
+        index === 0 && count > 0
+          ? (continuation?.(head) ?? ownNext)
+          : undefined,
+      );
+    };
+    let keep = 0;
+    let low = 1;
+    let high = records.length;
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2);
+      if (bytesOf(attempt(middle)) <= ADMIN_MCP_TEXT_CAP_BYTES) {
+        keep = middle;
+        low = middle + 1;
+      } else high = middle - 1;
+    }
+    const candidate = attempt(keep);
+    if (bytesOf(candidate) <= ADMIN_MCP_TEXT_CAP_BYTES) return candidate;
+    body = withRecords(body, path, []) as typeof body;
+    dropped += records.length;
+  }
+  return finished({}, dropped, undefined);
+};
+
+/**
+ * admin_view_media: text plus image, with no structuredContent and, on the tool, no
+ * outputSchema. The official client throws when a tool with an outputSchema answers
+ * with no structuredContent, and Codex drops the image when structuredContent is set.
+ */
+export const imageToolResult = (
+  scope: { readonly keyId: number; readonly tool: string },
+  envelope: AdminMcpEnvelope,
+  image?: { readonly data: Buffer; readonly mimeType: string },
+) => {
+  const checked = adminMcpEnvelopeSchema.parse(
+    withRepeat(`${scope.keyId}:${scope.tool}`, withoutInvisible(envelope)),
+  );
+  return {
+    content: [
+      { type: "text" as const, text: JSON.stringify(checked) },
+      ...(image === undefined
+        ? []
+        : [
+            {
+              type: "image" as const,
+              data: image.data.toString("base64"),
+              mimeType: image.mimeType,
+            },
+          ]),
+    ],
+    ...(checked.ok ? {} : { isError: true }),
+  };
+};
+
 /**
  * The tool result of one call: the JSON in content[0].text and structuredContent,
- * validated on the way out, with isError exactly when ok is false.
+ * validated on the way out, with isError exactly when ok is false. `continuation`
+ * says how to go on from a cut result.
  */
 export const toolResult = (
   scope: { readonly keyId: number; readonly tool: string },
   envelope: AdminMcpEnvelope,
+  continuation?: (kept: readonly unknown[]) => AdminMcpNext | undefined,
 ) => {
   const checked = adminMcpEnvelopeSchema.parse(
-    withRepeat(`${scope.keyId}:${scope.tool}`, withoutInvisible(envelope)),
+    withinCap(
+      withRepeat(`${scope.keyId}:${scope.tool}`, withoutInvisible(envelope)),
+      continuation,
+    ),
   );
   return {
     content: [{ type: "text" as const, text: JSON.stringify(checked) }],

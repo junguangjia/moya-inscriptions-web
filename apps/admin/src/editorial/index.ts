@@ -10,7 +10,7 @@ export {
 } from "./access";
 export { EditorialApprovals, EditorialReceipts } from "./collections";
 export { contentFingerprint } from "./content";
-export { editorialEndpoints } from "./endpoints";
+export { editorialEndpoints, editorialOperationDefinitions } from "./endpoints";
 export { EditorialError, safeEditorialFailure } from "./errors";
 export { catalogHooks } from "./hooks";
 export {

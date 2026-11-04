@@ -115,23 +115,7 @@ export {
 } from "./api";
 
 import type { OperatorMediaCall } from "./backend";
-import type {
-  BulkModerationResult,
-  ModerationEventPage,
-  ModerationResult,
-  ModerationSummary,
-  OperatorAccountCapacity,
-  OperatorCommentDetail,
-  OperatorCommentPage,
-  OperatorPublishingJob,
-  OperatorPublishingJobPage,
-  OperatorWorkSubmission,
-  OperatorWorkSubmissionPage,
-  PublicationPolicyState,
-  UserModerationResult,
-  WorkPublishingSettings,
-  WorkSubmissionModerationResult,
-} from "@moya/contracts/internal/community-operator";
+import type { AdminOpOutput } from "@moya/contracts/internal/admin-mcp";
 import type { Endpoint, PayloadRequest } from "payload";
 
 /**
@@ -148,7 +132,10 @@ export type OperatorCall = <Result>(
   body?: unknown,
 ) => Promise<Result>;
 
-/** Community moderation is Owner-only; `automation` never moderates. */
+/**
+ * These routes are the Owner's interface, and `automation` never moderates. AI runs
+ * the same definitions through apps/admin/src/admin-mcp, on its own credential.
+ */
 const requireOwner = (req: PayloadRequest): void => {
   if (!isOwner(req))
     throw new CommunityOperatorError("COMMUNITY_OWNER_ONLY", 403);
@@ -231,322 +218,312 @@ const reportEvidenceRequestSchema = readReportRequestSchema.extend({
   evidenceId: reportIdSchema,
 });
 
-export const communityOperations = (
-  call: OperatorCall,
-): Readonly<Record<string, CommunityOperation>> => ({
-  "read-reports": async (_req, input) =>
-    checked(
-      operatorReportPageSchema,
-      await call(
-        "GET",
-        `reports${toQuery(parse(operatorReportQuerySchema, input))}`,
-      ),
-    ),
-  "read-report": async (_req, input) => {
-    const { id } = parse(readReportRequestSchema, input);
-    return checked(
-      operatorReportSchema,
-      await call("GET", `reports/${segment(id)}`),
-    );
-  },
-  "decide-report": async (_req, input) => {
-    const { id, ...command } = parse(
-      operatorReportDecisionRequestSchema.extend({ id: reportIdSchema }),
-      input,
-    );
-    return checked(
-      operatorReportSchema,
-      await call("POST", `reports/${segment(id)}/decisions`, command),
-    );
-  },
-  "review-report": async (_req, input) => {
-    const { id, ...command } = parse(
-      operatorReportReviewRequestSchema.extend({ id: reportIdSchema }),
-      input,
-    );
-    return checked(
-      operatorReportSchema,
-      await call("POST", `reports/${segment(id)}/review`, command),
-    );
-  },
-  "set-report-metadata": async (_req, input) => {
-    const { id, ...command } = parse(
-      operatorReportMetadataRequestSchema.extend({ id: reportIdSchema }),
-      input,
-    );
-    return checked(
-      operatorReportSchema,
-      await call("POST", `reports/${segment(id)}/metadata`, command),
-    );
-  },
-  "forward-report": async (_req, input) => {
-    const { id, ...command } = parse(
-      operatorReportForwardRequestSchema.extend({ id: reportIdSchema }),
-      input,
-    );
-    return checked(
-      operatorReportSchema,
-      await call("POST", `reports/${segment(id)}/forward`, command),
-    );
-  },
-  "read-feedback": async (_req, input) =>
-    checked(
-      operatorFeedbackPageSchema,
-      await call(
-        "GET",
-        `feedback${toQuery(parse(operatorFeedbackQuerySchema, input))}`,
-      ),
-    ),
-  "read-works": async (_req, input) =>
-    call("GET", `works${toQuery(parse(operatorWorksQuerySchema, input))}`),
-  "read-users": async (_req, input) =>
-    checked(
-      operatorUserPageSchema,
-      await call(
-        "GET",
-        `users${toQuery(parse(operatorUsersQuerySchema, input))}`,
-      ),
-    ),
-  "recommend-user": async (_req, input) =>
-    call(
-      "PUT",
-      "users/recommendation",
-      parse(recommendUserCommandSchema, input),
-    ),
-  "moderate-work": async (_req, input) => {
-    const { id, ...command } = parse(adminModerateWorkRequestSchema, input);
-    return call("POST", `works/${segment(id)}/moderation`, command);
-  },
-  "read-featured": async (_req, input) =>
-    call(
-      "GET",
-      `featured${toQuery(parse(operatorFeaturedQuerySchema, input))}`,
-    ),
-  "set-featured": async (_req, input) =>
-    call("PUT", "featured", parse(featuredMutationSchema, input)),
-  "set-featured-quantity": async (_req, input) =>
-    call(
-      "PUT",
-      "featured/settings",
-      parse(featuredSettingsMutationSchema, input),
-    ),
-  "delete-body": async (_req, input) => {
-    const { id, ...command } = parse(adminDeleteBodySchema, input);
-    return call("POST", `comments/${segment(id)}/delete-body`, command);
-  },
-  "remove-thread": async (_req, input) => {
-    const { id, ...command } = parse(adminRemoveThreadSchema, input);
-    return call("POST", `comments/${segment(id)}/remove-thread`, command);
-  },
+/**
+ * One operation, whichever transport carries it. `output` holds the checked answer
+ * by actor; the Owner route checks only what it has always checked. `body` names
+ * the two ways this route has always read its body more loosely than `input`.
+ */
+export interface CommunityOperationDefinition {
+  readonly input: z.ZodType;
+  readonly output: AdminOpOutput;
+  /** `optional`: no body reads as `{}`. `ignored`: the Owner route reads none. */
+  readonly body?: "optional" | "ignored";
+  readonly run: (
+    parsed: unknown,
+    call: OperatorCall,
+    req: PayloadRequest,
+  ) => Promise<unknown>;
+}
+
+const define = <Input extends z.ZodType>({
+  run,
+  ...definition
+}: Pick<CommunityOperationDefinition, "body"> & {
+  readonly input: Input;
+  readonly output?: AdminOpOutput;
+  readonly run: (
+    parsed: z.output<Input>,
+    call: OperatorCall,
+    req: PayloadRequest,
+  ) => Promise<unknown>;
+}): CommunityOperationDefinition => ({
+  output: {},
+  ...definition,
+  run: (parsed, call, req) => run(parsed as z.output<Input>, call, req),
+});
+
+const decideReportRequestSchema = operatorReportDecisionRequestSchema.extend({
+  id: reportIdSchema,
+});
+const reviewReportRequestSchema = operatorReportReviewRequestSchema.extend({
+  id: reportIdSchema,
+});
+const reportMetadataRequestSchema = operatorReportMetadataRequestSchema.extend({
+  id: reportIdSchema,
+});
+const forwardReportRequestSchema = operatorReportForwardRequestSchema.extend({
+  id: reportIdSchema,
+});
+
+export const communityOperationDefinitions = {
+  "read-reports": define({
+    input: operatorReportQuerySchema,
+    output: { owner: operatorReportPageSchema },
+    run: (query, call) => call("GET", `reports${toQuery(query)}`),
+  }),
+  "read-report": define({
+    input: readReportRequestSchema,
+    output: { owner: operatorReportSchema },
+    run: ({ id }, call) => call("GET", `reports/${segment(id)}`),
+  }),
+  "decide-report": define({
+    input: decideReportRequestSchema,
+    output: { owner: operatorReportSchema },
+    run: ({ id, ...command }, call) =>
+      call("POST", `reports/${segment(id)}/decisions`, command),
+  }),
+  "review-report": define({
+    input: reviewReportRequestSchema,
+    output: { owner: operatorReportSchema },
+    run: ({ id, ...command }, call) =>
+      call("POST", `reports/${segment(id)}/review`, command),
+  }),
+  "set-report-metadata": define({
+    input: reportMetadataRequestSchema,
+    output: { owner: operatorReportSchema },
+    run: ({ id, ...command }, call) =>
+      call("POST", `reports/${segment(id)}/metadata`, command),
+  }),
+  "forward-report": define({
+    input: forwardReportRequestSchema,
+    output: { owner: operatorReportSchema },
+    run: ({ id, ...command }, call) =>
+      call("POST", `reports/${segment(id)}/forward`, command),
+  }),
+  "read-feedback": define({
+    input: operatorFeedbackQuerySchema,
+    output: { owner: operatorFeedbackPageSchema },
+    run: (query, call) => call("GET", `feedback${toQuery(query)}`),
+  }),
+  "read-works": define({
+    input: operatorWorksQuerySchema,
+    run: (query, call) => call("GET", `works${toQuery(query)}`),
+  }),
+  "read-users": define({
+    input: operatorUsersQuerySchema,
+    output: { owner: operatorUserPageSchema },
+    run: (query, call) => call("GET", `users${toQuery(query)}`),
+  }),
+  "recommend-user": define({
+    input: recommendUserCommandSchema,
+    run: (command, call) => call("PUT", "users/recommendation", command),
+  }),
+  "moderate-work": define({
+    input: adminModerateWorkRequestSchema,
+    run: ({ id, ...command }, call) =>
+      call("POST", `works/${segment(id)}/moderation`, command),
+  }),
+  "read-featured": define({
+    input: operatorFeaturedQuerySchema,
+    run: (query, call) => call("GET", `featured${toQuery(query)}`),
+  }),
+  "set-featured": define({
+    input: featuredMutationSchema,
+    run: (command, call) => call("PUT", "featured", command),
+  }),
+  "set-featured-quantity": define({
+    input: featuredSettingsMutationSchema,
+    run: (command, call) => call("PUT", "featured/settings", command),
+  }),
+  "delete-body": define({
+    input: adminDeleteBodySchema,
+    run: ({ id, ...command }, call) =>
+      call("POST", `comments/${segment(id)}/delete-body`, command),
+  }),
+  "remove-thread": define({
+    input: adminRemoveThreadSchema,
+    run: ({ id, ...command }, call) =>
+      call("POST", `comments/${segment(id)}/remove-thread`, command),
+  }),
   // content-community-completion-v1: narrow Owner-only DM moderation. One
   // explicitly selected conversation with a stated purpose; every access is
   // audited content-free on the Backend. No listing or search of messages.
-  "read-dm-conversation": async (_req, input) =>
-    checked(
-      operatorDmConversationSchema,
-      await call(
-        "POST",
-        "messages/conversation",
-        parse(operatorDmReadRequestSchema, input),
-      ),
-    ),
-  "lookup-dm-conversation": async (_req, input) =>
-    checked(
-      operatorDmConversationSchema,
-      await call(
-        "POST",
-        "messages/lookup",
-        parse(operatorDmLookupRequestSchema, input),
-      ),
-    ),
-  "remove-dm-message": async (_req, input) => {
-    const { id, ...command } = parse(adminRemoveDmMessageRequestSchema, input);
-    return checked(
-      operatorDmMessageSchema,
-      await call("POST", `messages/${segment(id)}/remove`, command),
-    );
-  },
+  "read-dm-conversation": define({
+    input: operatorDmReadRequestSchema,
+    output: { owner: operatorDmConversationSchema },
+    run: (command, call) => call("POST", "messages/conversation", command),
+  }),
+  "lookup-dm-conversation": define({
+    input: operatorDmLookupRequestSchema,
+    output: { owner: operatorDmConversationSchema },
+    run: (command, call) => call("POST", "messages/lookup", command),
+  }),
+  "remove-dm-message": define({
+    input: adminRemoveDmMessageRequestSchema,
+    output: { owner: operatorDmMessageSchema },
+    run: ({ id, ...command }, call) =>
+      call("POST", `messages/${segment(id)}/remove`, command),
+  }),
   // content-community-completion-v1: operator-managed Threads.
-  "read-threads": async (_req, input) =>
-    checked(
-      operatorThreadPageSchema,
-      await call(
+  "read-threads": define({
+    input: operatorThreadsQuerySchema,
+    output: { owner: operatorThreadPageSchema },
+    run: (query, call) =>
+      call(
         "GET",
         `threads${toQuery({
-          ...parse(operatorThreadsQuerySchema, input),
-          includeHidden: parse(operatorThreadsQuerySchema, input).includeHidden
-            ? "true"
-            : "false",
+          ...query,
+          includeHidden: query.includeHidden ? "true" : "false",
         })}`,
       ),
-    ),
-  "create-thread": async (_req, input) =>
-    checked(
-      operatorThreadSchema,
-      await call("POST", "threads", parse(createThreadCommandSchema, input)),
-    ),
-  "update-thread": async (_req, input) => {
-    const { id, ...command } = parse(adminUpdateThreadRequestSchema, input);
-    return checked(
-      operatorThreadSchema,
-      await call("POST", `threads/${segment(id)}`, command),
-    );
-  },
-  "read-feature-catalogs": async (req, input) => {
-    const query = parse(operatorContentQuerySchema, input);
-    const result = await req.payload.find({
-      collection: "catalogs",
-      req,
-      overrideAccess: false,
-      where: {
-        and: [
-          { _status: { equals: "published" } },
-          ...(query.search ? [{ title: { contains: query.search } }] : []),
-        ],
-      },
-      draft: false,
-      depth: 0,
-      page: query.page,
-      limit: query.pageSize,
-      sort: "title",
-      select: { catalogId: true, title: true },
-    });
-    return {
-      items: result.docs.map((doc) => ({
-        id: doc.catalogId,
-        title: doc.title,
-      })),
-      total: result.totalDocs,
-      page: result.page,
-      pageSize: result.limit,
-    };
-  },
-  "read-policy": async (): Promise<PublicationPolicyState> =>
-    call("GET", "publication-policy"),
-  "set-policy": async (_req, input): Promise<PublicationPolicyState> =>
-    call(
-      "PUT",
-      "publication-policy",
-      parse(setPublicationPolicyCommandSchema, input),
-    ),
-  "read-comments": async (_req, input): Promise<OperatorCommentPage> => {
-    const query = parse(operatorCommentQuerySchema, input ?? {});
-    return call(
-      "GET",
-      `comments${toQuery({
-        moderation: query.moderation,
-        kind: query.kind,
-        catalogId: query.catalogId,
-        search: query.search,
-        order: query.order,
+  }),
+  "create-thread": define({
+    input: createThreadCommandSchema,
+    output: { owner: operatorThreadSchema },
+    run: (command, call) => call("POST", "threads", command),
+  }),
+  "update-thread": define({
+    input: adminUpdateThreadRequestSchema,
+    output: { owner: operatorThreadSchema },
+    run: ({ id, ...command }, call) =>
+      call("POST", `threads/${segment(id)}`, command),
+  }),
+  "read-feature-catalogs": define({
+    input: operatorContentQuerySchema,
+    run: async (query, _call, req) => {
+      const result = await req.payload.find({
+        collection: "catalogs",
+        req,
+        overrideAccess: false,
+        where: {
+          and: [
+            { _status: { equals: "published" } },
+            ...(query.search ? [{ title: { contains: query.search } }] : []),
+          ],
+        },
+        draft: false,
+        depth: 0,
         page: query.page,
-        pageSize: query.pageSize,
-      })}`,
-    );
-  },
-  "read-comment": async (_req, input): Promise<OperatorCommentDetail> => {
-    const { id } = parse(adminReadCommentRequestSchema, input);
-    return call("GET", `comments/${segment(id)}`);
-  },
-  "moderate-comment": async (_req, input): Promise<ModerationResult> => {
-    const { id, action, reason } = parse(
-      adminModerateCommentRequestSchema,
-      input,
-    );
-    return call("POST", `comments/${segment(id)}/moderation`, {
-      action,
-      reason,
-    });
-  },
-  "moderate-comments": async (_req, input): Promise<BulkModerationResult> => {
-    const { ids, action, reason } = parse(
-      adminBulkModerateCommentsRequestSchema,
-      input,
-    );
-    return call("POST", "comments/moderation", { action, ids, reason });
-  },
-  "moderate-user": async (_req, input): Promise<UserModerationResult> => {
-    const { id, action, reason } = parse(adminModerateUserRequestSchema, input);
-    return call("POST", `users/${segment(id)}/status`, { action, reason });
-  },
-  "read-events": async (_req, input): Promise<ModerationEventPage> => {
-    const query = parse(moderationEventQuerySchema, input ?? {});
-    return call(
-      "GET",
-      `moderation-events${toQuery({
-        subjectId: query.subjectId,
-        action: query.action,
-        page: query.page,
-        pageSize: query.pageSize,
-      })}`,
-    );
-  },
-  "read-summary": async (_req, input): Promise<ModerationSummary> => {
-    const query = parse(moderationSummaryQuerySchema, input ?? {});
-    return call("GET", `summary${toQuery({ range: query.range })}`);
-  },
+        limit: query.pageSize,
+        sort: "title",
+        select: { catalogId: true, title: true },
+      });
+      return {
+        items: result.docs.map((doc) => ({
+          id: doc.catalogId,
+          title: doc.title,
+        })),
+        total: result.totalDocs,
+        page: result.page,
+        pageSize: result.limit,
+      };
+    },
+  }),
+  "read-policy": define({
+    input: noParameters,
+    body: "ignored",
+    run: (_query, call) => call("GET", "publication-policy"),
+  }),
+  "set-policy": define({
+    input: setPublicationPolicyCommandSchema,
+    run: (command, call) => call("PUT", "publication-policy", command),
+  }),
+  "read-comments": define({
+    input: operatorCommentQuerySchema,
+    body: "optional",
+    run: (query, call) =>
+      call(
+        "GET",
+        `comments${toQuery({
+          moderation: query.moderation,
+          kind: query.kind,
+          catalogId: query.catalogId,
+          search: query.search,
+          order: query.order,
+          page: query.page,
+          pageSize: query.pageSize,
+        })}`,
+      ),
+  }),
+  "read-comment": define({
+    input: adminReadCommentRequestSchema,
+    run: ({ id }, call) => call("GET", `comments/${segment(id)}`),
+  }),
+  "moderate-comment": define({
+    input: adminModerateCommentRequestSchema,
+    run: ({ id, action, reason }, call) =>
+      call("POST", `comments/${segment(id)}/moderation`, { action, reason }),
+  }),
+  "moderate-comments": define({
+    input: adminBulkModerateCommentsRequestSchema,
+    run: ({ ids, action, reason }, call) =>
+      call("POST", "comments/moderation", { action, ids, reason }),
+  }),
+  "moderate-user": define({
+    input: adminModerateUserRequestSchema,
+    run: ({ id, action, reason }, call) =>
+      call("POST", `users/${segment(id)}/status`, { action, reason }),
+  }),
+  "read-events": define({
+    input: moderationEventQuerySchema,
+    body: "optional",
+    run: (query, call) =>
+      call(
+        "GET",
+        `moderation-events${toQuery({
+          subjectId: query.subjectId,
+          action: query.action,
+          page: query.page,
+          pageSize: query.pageSize,
+        })}`,
+      ),
+  }),
+  "read-summary": define({
+    input: moderationSummaryQuerySchema,
+    body: "optional",
+    run: (query, call) =>
+      call("GET", `summary${toQuery({ range: query.range })}`),
+  }),
   // Work publishing (Development): the independent work publication policy
   // and limits, explicit submissions, account capacity and job outcomes.
-  "read-work-publishing-settings": async (
-    _req,
-    input,
-  ): Promise<WorkPublishingSettings> => {
-    parse(noParameters, input);
-    return checked(
-      workPublishingSettingsSchema,
-      await call("GET", "publishing/settings"),
-    );
-  },
-  "set-work-publishing-settings": async (
-    _req,
-    input,
-  ): Promise<WorkPublishingSettings> =>
-    checked(
-      workPublishingSettingsSchema,
-      await call(
-        "PUT",
-        "publishing/settings",
-        parse(setWorkPublishingSettingsCommandSchema, input),
-      ),
-    ),
-  "read-article-submissions": async (_req, input) => {
-    const query = parse(articlePendingListQuerySchema, input);
-    return checked(
-      articlePendingPageSchema,
-      await call(
+  "read-work-publishing-settings": define({
+    input: noParameters,
+    output: { owner: workPublishingSettingsSchema },
+    run: (_query, call) => call("GET", "publishing/settings"),
+  }),
+  "set-work-publishing-settings": define({
+    input: setWorkPublishingSettingsCommandSchema,
+    output: { owner: workPublishingSettingsSchema },
+    run: (command, call) => call("PUT", "publishing/settings", command),
+  }),
+  "read-article-submissions": define({
+    input: articlePendingListQuerySchema,
+    output: { owner: articlePendingPageSchema },
+    run: (query, call) =>
+      call(
         "GET",
         `articles/submissions${toQuery({
           cursor: query.cursor,
           pageSize: query.pageSize,
         })}`,
       ),
-    );
-  },
-  "read-article-submission": async (_req, input) => {
-    const { id } = parse(adminReadArticleSubmissionRequestSchema, input);
-    return checked(
-      articlePendingPreviewSchema,
-      await call("GET", `articles/${segment(id)}/submission`),
-    );
-  },
-  "moderate-article-submission": async (_req, input) => {
-    const { id, ...command } = parse(
-      adminModerateArticleSubmissionRequestSchema,
-      input,
-    );
-    return checked(
-      articleModerationResultSchema,
-      await call("POST", `articles/${segment(id)}/moderation`, command),
-    );
-  },
-  "read-work-submissions": async (
-    _req,
-    input,
-  ): Promise<OperatorWorkSubmissionPage> => {
-    const query = parse(operatorWorkSubmissionQuerySchema, input);
-    return checked(
-      operatorWorkSubmissionPageSchema,
-      await call(
+  }),
+  "read-article-submission": define({
+    input: adminReadArticleSubmissionRequestSchema,
+    output: { owner: articlePendingPreviewSchema },
+    run: ({ id }, call) => call("GET", `articles/${segment(id)}/submission`),
+  }),
+  "moderate-article-submission": define({
+    input: adminModerateArticleSubmissionRequestSchema,
+    output: { owner: articleModerationResultSchema },
+    run: ({ id, ...command }, call) =>
+      call("POST", `articles/${segment(id)}/moderation`, command),
+  }),
+  "read-work-submissions": define({
+    input: operatorWorkSubmissionQuerySchema,
+    output: { owner: operatorWorkSubmissionPageSchema },
+    run: (query, call) =>
+      call(
         "GET",
         `publishing/submissions${toQuery({
           state: query.state,
@@ -554,70 +531,39 @@ export const communityOperations = (
           pageSize: query.pageSize,
         })}`,
       ),
-    );
-  },
-  "read-work-submission": async (
-    _req,
-    input,
-  ): Promise<OperatorWorkSubmission> => {
-    const { id } = parse(adminReadWorkSubmissionRequestSchema, input);
-    return checked(
-      operatorWorkSubmissionSchema,
-      await call("GET", `publishing/submissions/${segment(id)}`),
-    );
-  },
-  "moderate-work-submission": async (
-    _req,
-    input,
-  ): Promise<WorkSubmissionModerationResult> => {
-    const { id, ...command } = parse(
-      adminModerateWorkSubmissionRequestSchema,
-      input,
-    );
-    return checked(
-      workSubmissionModerationResultSchema,
-      await call(
-        "POST",
-        `publishing/submissions/${segment(id)}/moderation`,
-        command,
-      ),
-    );
-  },
-  "read-account-capacity": async (
-    _req,
-    input,
-  ): Promise<OperatorAccountCapacity> => {
-    const { accountId } = parse(adminReadAccountCapacityRequestSchema, input);
-    return checked(
-      operatorAccountCapacitySchema,
-      await call("GET", `publishing/accounts/${segment(accountId)}/capacity`),
-    );
-  },
-  "set-account-capacity": async (
-    _req,
-    input,
-  ): Promise<OperatorAccountCapacity> => {
-    const { accountId, ...command } = parse(
-      adminSetAccountCapacityClassRequestSchema,
-      input,
-    );
-    return checked(
-      operatorAccountCapacitySchema,
-      await call(
+  }),
+  "read-work-submission": define({
+    input: adminReadWorkSubmissionRequestSchema,
+    output: { owner: operatorWorkSubmissionSchema },
+    run: ({ id }, call) => call("GET", `publishing/submissions/${segment(id)}`),
+  }),
+  "moderate-work-submission": define({
+    input: adminModerateWorkSubmissionRequestSchema,
+    output: { owner: workSubmissionModerationResultSchema },
+    run: ({ id, ...command }, call) =>
+      call("POST", `publishing/submissions/${segment(id)}/moderation`, command),
+  }),
+  "read-account-capacity": define({
+    input: adminReadAccountCapacityRequestSchema,
+    output: { owner: operatorAccountCapacitySchema },
+    run: ({ accountId }, call) =>
+      call("GET", `publishing/accounts/${segment(accountId)}/capacity`),
+  }),
+  "set-account-capacity": define({
+    input: adminSetAccountCapacityClassRequestSchema,
+    output: { owner: operatorAccountCapacitySchema },
+    run: ({ accountId, ...command }, call) =>
+      call(
         "PUT",
         `publishing/accounts/${segment(accountId)}/capacity`,
         command,
       ),
-    );
-  },
-  "read-publishing-jobs": async (
-    _req,
-    input,
-  ): Promise<OperatorPublishingJobPage> => {
-    const query = parse(operatorPublishingJobQuerySchema, input);
-    return checked(
-      operatorPublishingJobPageSchema,
-      await call(
+  }),
+  "read-publishing-jobs": define({
+    input: operatorPublishingJobQuerySchema,
+    output: { owner: operatorPublishingJobPageSchema },
+    run: (query, call) =>
+      call(
         "GET",
         `publishing/jobs${toQuery({
           state: query.state,
@@ -626,35 +572,46 @@ export const communityOperations = (
           pageSize: query.pageSize,
         })}`,
       ),
-    );
-  },
-  "retry-publishing-job": async (
-    _req,
-    input,
-  ): Promise<OperatorPublishingJob> => {
-    const { id, ...command } = parse(
-      adminPublishingJobActionRequestSchema,
-      input,
-    );
-    return checked(
-      operatorPublishingJobSchema,
-      await call("POST", `publishing/jobs/${segment(id)}/retry`, command),
-    );
-  },
-  "abandon-publishing-job": async (
-    _req,
-    input,
-  ): Promise<OperatorPublishingJob> => {
-    const { id, ...command } = parse(
-      adminPublishingJobActionRequestSchema,
-      input,
-    );
-    return checked(
-      operatorPublishingJobSchema,
-      await call("POST", `publishing/jobs/${segment(id)}/abandon`, command),
-    );
-  },
-});
+  }),
+  "retry-publishing-job": define({
+    input: adminPublishingJobActionRequestSchema,
+    output: { owner: operatorPublishingJobSchema },
+    run: ({ id, ...command }, call) =>
+      call("POST", `publishing/jobs/${segment(id)}/retry`, command),
+  }),
+  "abandon-publishing-job": define({
+    input: adminPublishingJobActionRequestSchema,
+    output: { owner: operatorPublishingJobSchema },
+    run: ({ id, ...command }, call) =>
+      call("POST", `publishing/jobs/${segment(id)}/abandon`, command),
+  }),
+};
+
+export type CommunityOperationName = keyof typeof communityOperationDefinitions;
+
+export const communityOperations = (
+  call: OperatorCall,
+): Readonly<Record<string, CommunityOperation>> =>
+  Object.fromEntries(
+    Object.entries(communityOperationDefinitions).map(
+      ([name, definition]): [string, CommunityOperation] => [
+        name,
+        async (req, input) => {
+          const parsed =
+            definition.body === "ignored"
+              ? undefined
+              : parse(
+                  definition.input,
+                  definition.body === "optional" ? (input ?? {}) : input,
+                );
+          const answer = await definition.run(parsed, call, req);
+          return definition.output.owner === undefined
+            ? answer
+            : checked(definition.output.owner, answer);
+        },
+      ],
+    ),
+  );
 
 // Machine administration remains a separate Development-only boundary.
 const developmentOnlyOperations: ReadonlySet<string> = new Set(

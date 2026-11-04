@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   ADMIN_MCP_CODES,
+  ADMIN_MCP_NATIVE_TOOLS,
   ADMIN_MCP_TOOL_PROFILES,
   adminMcpEnvelopeSchema,
   type AdminMcpCodeGuide,
@@ -209,9 +210,14 @@ describe("tool result", () => {
 });
 
 describe("tool table", () => {
-  it("ships exactly admin_whoami in this slice, within the top-level lock", () => {
-    expect(ADMIN_MCP_TOOLS.map(({ name }) => name)).toEqual(["admin_whoami"]);
-    expect(ADMIN_MCP_TOOLS.length).toBeLessThanOrEqual(15);
+  it("ships the tools built so far in the design's order, within the top-level lock", () => {
+    const names = ADMIN_MCP_TOOLS.map(({ name }) => name);
+    expect(names).toEqual(
+      ADMIN_MCP_NATIVE_TOOLS.filter((name) => names.includes(name)),
+    );
+    expect(names).toContain("admin_whoami");
+    expect(names).toContain("admin_actions");
+    expect(ADMIN_MCP_NATIVE_TOOLS.length).toBeLessThanOrEqual(15);
   });
 
   it("sets all four annotations and an input schema on every listed tool", () => {
@@ -1243,6 +1249,7 @@ describe("fixed log categories", () => {
     "ADMIN_MCP_TOOL_FAILED",
     "ADMIN_MCP_CONTROL_READ_FAILED",
     "ADMIN_MCP_AUDIT_WRITE_FAILED",
+    "ADMIN_MCP_FIND_BRANCH_FAILED",
   ])("passes %s and nothing else", (category) => {
     const fields = cmsRuntimeLogFields([{ category, key: "secret-value" }]);
     expect(fields).toMatchObject({ category });

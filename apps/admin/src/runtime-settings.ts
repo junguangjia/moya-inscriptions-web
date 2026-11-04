@@ -153,6 +153,7 @@ const CMS_EVENT_CATEGORIES: ReadonlySet<unknown> = new Set([
   "ADMIN_MCP_TOOL_FAILED",
   "ADMIN_MCP_CONTROL_READ_FAILED",
   "ADMIN_MCP_AUDIT_WRITE_FAILED",
+  "ADMIN_MCP_FIND_BRANCH_FAILED",
 ]);
 
 /** Fixed diagnostics only: never forward Pino args, messages, paths or values. */

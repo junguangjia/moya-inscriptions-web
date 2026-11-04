@@ -34,7 +34,10 @@ import { handleFeedbackRequest } from "../community/feedback-handler.js";
 import { handleAuthorRequest } from "../community/author-handler.js";
 import { handleDevelopmentCatalogRendition } from "../community/development-catalog-rendition-handler.js";
 import type { DevelopmentCatalogRenditions } from "../community/development-catalog-rendition-handler.js";
-import { handleOperatorRequest } from "../community/operator-handler.js";
+import {
+  handleOperatorRequest,
+  type OperatorAiCredentials,
+} from "../community/operator-handler.js";
 import { healthHandler } from "../health/health-handler.js";
 import { sendJson } from "./json-response.js";
 import { sendApiError } from "./api-error-response.js";
@@ -131,6 +134,7 @@ export interface CommunityRouterDependencies {
    * subpath unreachable, so it is never accidentally open.
    */
   readonly operatorCredential: string;
+  readonly aiCredentials?: OperatorAiCredentials;
 }
 
 export interface RouterDependencies {
@@ -530,6 +534,7 @@ export const createRouter =
           feedbackService: community?.feedbackService,
           directMessageService: community?.directMessageService,
           operatorCredential: community?.operatorCredential ?? "",
+          aiCredentials: community?.aiCredentials,
         }),
         operatorFailure,
       );

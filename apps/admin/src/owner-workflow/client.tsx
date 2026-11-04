@@ -56,9 +56,19 @@ const errorMessage = (code: string) =>
     CONCURRENT_OPERATION_BUSY: "记录正在保存，请稍后刷新重试。",
     OUTCOME_UNKNOWN:
       "操作结果未确认，可能已经生效。请先刷新，并在“资料批准”中核对批准列表，确认后再决定是否重复操作。",
+    // No route answers this: a restore is not on that list, so it names the record's own.
+    RESTORE_OUTCOME_UNKNOWN:
+      "操作结果未确认，可能已经生效。请先刷新，并在这条记录的版本历史中核对，确认后再决定是否重复操作。",
   })[code] ?? "操作未完成。请刷新后重试；内容不会被自动覆盖。";
 
-class WorkflowFailure extends Error {}
+class WorkflowFailure extends Error {
+  readonly code: string;
+
+  constructor(code: string) {
+    super(errorMessage(code));
+    this.code = code;
+  }
+}
 
 async function call<T>(name: string, input: unknown): Promise<T> {
   const response = await fetch(`/api/editorial/${name}`, {
@@ -75,7 +85,6 @@ async function call<T>(name: string, input: unknown): Promise<T> {
     !("ok" in body) ||
     body.ok !== true
   ) {
-    let code = "OPERATION_FAILED";
     if (
       body &&
       typeof body === "object" &&
@@ -85,14 +94,27 @@ async function call<T>(name: string, input: unknown): Promise<T> {
       "code" in body.error &&
       typeof body.error.code === "string"
     ) {
-      code = body.error.code;
+      throw new WorkflowFailure(body.error.code);
     }
-    throw new WorkflowFailure(errorMessage(code));
+    throw new Error("UNNAMED_ANSWER");
   }
-  if (!response.ok || !("result" in body))
-    throw new WorkflowFailure(errorMessage("OPERATION_FAILED"));
+  if (!response.ok || !("result" in body)) throw new Error("UNNAMED_ANSWER");
   return body.result as T;
 }
+
+/**
+ * A named refusal says what happened. Anything else, a dropped connection or an
+ * answer the route did not name, says nothing about the commit, so a write cannot
+ * call it undone.
+ */
+const failureText = (error: unknown, fallback: string) =>
+  error instanceof WorkflowFailure ? error.message : errorMessage(fallback);
+const readFailure = (error: unknown) => failureText(error, "OPERATION_FAILED");
+const writeFailure = (error: unknown) => failureText(error, "OUTCOME_UNKNOWN");
+const restoreFailure = (error: unknown) =>
+  error instanceof WorkflowFailure && error.code !== "OUTCOME_UNKNOWN"
+    ? error.message
+    : errorMessage("RESTORE_OUTCOME_UNKNOWN");
 
 export const OwnerWorkflowClient = () => {
   const [data, setData] = useState<OwnerDraftPage | null>(null);
@@ -121,11 +143,7 @@ export const OwnerWorkflowClient = () => {
       setHistory(null);
       setVersionId("");
     } catch (error) {
-      setFailure(
-        error instanceof WorkflowFailure
-          ? error.message
-          : errorMessage("OPERATION_FAILED"),
-      );
+      setFailure(readFailure(error));
     } finally {
       setBusy(false);
     }
@@ -151,11 +169,7 @@ export const OwnerWorkflowClient = () => {
       );
       setSelected([]);
     } catch (error) {
-      setFailure(
-        error instanceof WorkflowFailure
-          ? error.message
-          : errorMessage("OPERATION_FAILED"),
-      );
+      setFailure(writeFailure(error));
     } finally {
       mutationLock.current = false;
       setBusy(false);
@@ -172,11 +186,7 @@ export const OwnerWorkflowClient = () => {
     try {
       setHistory(await call<OwnerHistoryPage>("owner-history", { id, page }));
     } catch (error) {
-      setFailure(
-        error instanceof WorkflowFailure
-          ? error.message
-          : errorMessage("OPERATION_FAILED"),
-      );
+      setFailure(readFailure(error));
     } finally {
       setBusy(false);
     }
@@ -200,11 +210,7 @@ export const OwnerWorkflowClient = () => {
       setVersionId("");
       await load(data?.page ?? 1);
     } catch (error) {
-      setFailure(
-        error instanceof WorkflowFailure
-          ? error.message
-          : errorMessage("OPERATION_FAILED"),
-      );
+      setFailure(restoreFailure(error));
     } finally {
       mutationLock.current = false;
       setBusy(false);

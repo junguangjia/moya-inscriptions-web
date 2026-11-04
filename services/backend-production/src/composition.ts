@@ -225,6 +225,30 @@ const parseOperatorCredential = (environment: RuntimeEnvironment): string => {
   return value;
 };
 
+/**
+ * The AI credential for Catalog work and analytics, validated like the Owner's and
+ * as optional: without it those AI routes refuse. Compared with the whole
+ * environment rather than a list, so no later token can share its value and blur
+ * who acted.
+ */
+const parseAiBaseCredential = (environment: RuntimeEnvironment): string => {
+  const value = environment.OPERATOR_AI_BASE_TOKEN;
+  if (value === undefined || value === "") return "";
+  if (value.trim() !== value || value.length < 32 || value.length > 512)
+    throw new Error(
+      "OPERATOR_AI_BASE_TOKEN must be 32 to 512 characters without surrounding whitespace",
+    );
+  if (
+    Object.entries(environment).some(
+      ([name, other]) => name !== "OPERATOR_AI_BASE_TOKEN" && other === value,
+    )
+  )
+    throw new Error(
+      "OPERATOR_AI_BASE_TOKEN: must be separate from every other credential",
+    );
+  return value;
+};
+
 /** Code-only low-level dependencies for isolated acceptance; main uses real transports. */
 export interface ProductionBackendDependencies {
   readonly publishingCosTransport?: PublishingCosTransport;
@@ -247,6 +271,7 @@ export const prepareProductionBackend = async (
     environment,
     runtimeConfig.nodeEnv,
   );
+  const operatorAiBaseCredential = parseAiBaseCredential(environment);
   if (
     runtimeConfig.nodeEnv !== "production" &&
     runtimeConfig.nodeEnv !== "development"
@@ -1025,6 +1050,7 @@ export const prepareProductionBackend = async (
             (await catalogQueryPort.getById(catalogId))?.title ?? null,
         },
         communityOperatorCredential: parseOperatorCredential(environment),
+        operatorAiBaseCredential,
       }),
     ),
     closeResources,

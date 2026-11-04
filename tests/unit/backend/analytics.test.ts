@@ -247,6 +247,17 @@ describe("analytics configuration", () => {
         "production",
       ),
     ).toThrow("ANALYTICS_RELAY_TOKEN");
+    const shared = environment();
+    for (const other of [
+      "ANALYTICS_RELAY_TOKEN",
+      "ANALYTICS_HMAC_KEY",
+    ] as const)
+      expect(() =>
+        parseAnalyticsConfiguration(
+          { ...shared, OPERATOR_AI_BASE_TOKEN: shared[other] },
+          "production",
+        ),
+      ).toThrow("must be separate");
     expect(() =>
       parseAnalyticsConfiguration(
         { ...environment(), UMAMI_ORIGIN: "https://external.example.invalid" },

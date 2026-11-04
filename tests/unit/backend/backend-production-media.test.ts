@@ -368,6 +368,46 @@ describe("non-Pilot production public media composition", () => {
     },
   );
 
+  it("composes the AI base credential into the operator boundary, on its route table only", async () => {
+    const owner = randomUUID() + randomUUID();
+    const base = randomUUID() + randomUUID();
+    const serve = async (extra: Record<string, string>) => {
+      const prepared = await prepareProductionBackend({
+        ...environment,
+        COMMUNITY_OPERATOR_TOKEN: owner,
+        ...extra,
+      });
+      const handle = await startBackendProcess({
+        closeResources: prepared.closeResources,
+        listen: { host: "127.0.0.1", port: 0 },
+        requestListener: prepared.requestListener,
+      });
+      handles.add(handle);
+      return async (route: string, token: string) => {
+        const answer = await fetch(
+          `http://${handle.address.address}:${handle.address.port}/internal/community/${route}`,
+          { headers: { authorization: `Bearer ${token}` } },
+        );
+        return (await answer.json()) as { error: { code: string } };
+      };
+    };
+    const composed = await serve({ OPERATOR_AI_BASE_TOKEN: base });
+    // Malformed on purpose: past the credential check, before any store read.
+    expect(
+      (await composed("catalog-delivery/thumbnail", base)).error.code,
+    ).toBe("INVALID_INPUT");
+    expect((await composed("reports", base)).error.code).toBe(
+      "AI_ROUTE_FORBIDDEN",
+    );
+    const absent = await serve({});
+    expect((await absent("catalog-delivery/thumbnail", base)).error.code).toBe(
+      "OPERATOR_UNAUTHORIZED",
+    );
+    expect((await absent("catalog-delivery/thumbnail", owner)).error.code).toBe(
+      "INVALID_INPUT",
+    );
+  });
+
   it("ignores the media worker keys: the Production Backend opens no sandbox", async () => {
     for (const keys of [
       {
