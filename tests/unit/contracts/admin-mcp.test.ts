@@ -220,7 +220,7 @@ describe("Admin MCP control constants", () => {
     }).toEqual({
       disclosure: { dm: false, evidence: false, rawIp: false, selfOnly: false },
       policyText:
-        "27bfab238c7e1b09009691f6c6c052c0937556943302bb65fab419516ccdc22e",
+        "3807943f25df6ed8fde802706028e658564230e37e4180b2ecf2c2e5dbeb8340",
       selfOnlyPromise:
         '{ value: "self", label: "仅自己可见", description: "只有你能看到" },',
     });
