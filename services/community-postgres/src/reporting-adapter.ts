@@ -585,9 +585,10 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
       };
     }
     if (target.type === "article") {
+      // The title the reporter saw: the document's own may be a private draft's.
       const a = (
         await db.query<{ title: string; owner_id: string }>(
-          "SELECT a.title,a.owner_id FROM community.article_documents a JOIN community.public_users u ON u.id=a.owner_id WHERE a.id=$1 AND a.published_version IS NOT NULL AND NOT a.reporting_hidden AND u.status='active' AND community.accounts_can_interact($2,a.owner_id) FOR SHARE OF a",
+          "SELECT r.title,a.owner_id FROM community.article_documents a JOIN community.article_revisions r ON r.article_id=a.id AND r.version=a.published_version JOIN community.public_users u ON u.id=a.owner_id WHERE a.id=$1 AND a.published_version IS NOT NULL AND NOT a.reporting_hidden AND u.status='active' AND community.accounts_can_interact($2,a.owner_id) FOR SHARE OF a",
           [id, actor],
         )
       ).rows[0];

@@ -14,6 +14,13 @@ export const workIsSelfOnlySql = (workId: string): string =>
   `EXISTS(SELECT 1 FROM community.works so_w
     WHERE so_w.id=${workId} AND ${isSelfOnlyWorkSql("so_w")})`;
 
+/**
+ * The same condition for a scan: one hashed set read once in the statement, where the
+ * lookup above runs once per row. For a value that is never NULL.
+ */
+export const workInSelfOnlySetSql = (workId: string): string =>
+  `${workId} IN (SELECT so_w.id FROM community.works so_w WHERE ${isSelfOnlyWorkSql("so_w")})`;
+
 /** For a comment or a reply: ids are unique across both tables. */
 export const commentIsSelfOnlySql = (commentId: string): string =>
   `EXISTS(SELECT 1 FROM community.catalog_comments so_c

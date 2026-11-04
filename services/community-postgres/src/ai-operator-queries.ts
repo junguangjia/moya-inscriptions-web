@@ -38,6 +38,7 @@ import {
   isSelfOnlyWorkSql,
   reportIsSelfOnlySql,
   revisionIsSelfOnlySql,
+  workInSelfOnlySetSql,
   workIsSelfOnlySql,
 } from "./self-only.js";
 import { userMatchRankArms } from "./user-match-rank.js";
@@ -47,8 +48,9 @@ import { userMatchRankArms } from "./user-match-rank.js";
  * enforced where the SQL runs: each branch has its own READ ONLY transaction, because
  * a timeout aborts the transaction it happens in and an abort on the Admin side would
  * not stop the statement. Branches run in turn on one pooled connection at a time and
- * hold it across nothing but their own SQL, so a slow one cannot starve the Owner or
- * the public site.
+ * hold it across nothing but their own SQL. That bounds one call: what keeps the AI
+ * from holding the pool the Owner and the public site share is Admin's limit on calls
+ * at once.
  */
 
 const BRANCH_STATEMENT_TIMEOUT = "2000ms";
@@ -317,7 +319,7 @@ const SEARCH_BRANCHES: Readonly<Record<AiFindSource, SearchBranch>> = {
         `SELECT e.id,e.kind,e.moderation,e.created_at,e.author_id,e.target_type,e.catalog_id,e.root_comment_id,
           ${snippetOf("e.text")} AS snippet
          FROM ${commentEntries}
-         WHERE NOT (e.target_type='work' AND ${workIsSelfOnlySql("e.catalog_id")}) AND ${holdsEveryWord("e.text")}
+         WHERE NOT (e.target_type='work' AND ${workInSelfOnlySetSql("e.catalog_id")}) AND ${holdsEveryWord("e.text")}
          ORDER BY e.created_at DESC,e.id DESC LIMIT $3`,
         [...args],
       )
@@ -538,20 +540,22 @@ interface CountSpec {
   readonly values: readonly unknown[];
   readonly oldest: string;
   readonly groups: Readonly<Record<string, string>>;
+  /** Decided by the query alone, so saying it says nothing about any one case. */
+  readonly leavesOutOwnerOnly?: true;
 }
 
 /** Each source's own list filter, so a count and its list cannot disagree. */
 const countSpecOf = (query: AiCountQuery): CountSpec => {
   switch (query.source) {
-    case "reports":
+    case "reports": {
+      // Grouping reads back what a row shows no more than filtering does.
+      const leavesOut =
+        operatorReportFilter.namesWithheld(query) ||
+        query.groupBy === "reason" ||
+        query.groupBy === "targetType";
       return {
-        // Grouping reads back what a row shows no more than filtering does.
         from: `FROM community.report_cases c WHERE ${operatorReportFilter.sql}${
-          operatorReportFilter.namesWithheld(query) ||
-          query.groupBy === "reason" ||
-          query.groupBy === "targetType"
-            ? ` AND NOT ${reportIsSelfOnlySql("c")}`
-            : ""
+          leavesOut ? ` AND NOT ${reportIsSelfOnlySql("c")}` : ""
         }`,
         values: operatorReportFilter.values(query),
         oldest: "c.created_at",
@@ -561,7 +565,9 @@ const countSpecOf = (query: AiCountQuery): CountSpec => {
           reason: "c.reason",
           targetType: "c.target_type",
         },
+        ...(leavesOut ? { leavesOutOwnerOnly: true as const } : {}),
       };
+    }
     case "comments":
       return {
         from: `FROM (${operatorCommentUnion}) entries ${operatorFilter}`,
@@ -738,6 +744,7 @@ export class PostgresAiOperatorReader implements AiOperatorReader {
     return aiCountResultSchema.parse({
       total: rows.reduce((sum, row) => sum + row.count, 0),
       oldestAt: oldest.length === 0 ? null : iso(new Date(Math.min(...oldest))),
+      ...(spec.leavesOutOwnerOnly ? { leavesOutOwnerOnly: true } : {}),
       ...(group === undefined
         ? {}
         : {

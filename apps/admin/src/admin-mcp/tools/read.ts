@@ -113,7 +113,9 @@ export const readContinuation = (
   if (entry.paging === "numbered") {
     // A count's groups are few and closed, and a page number means nothing to them.
     if (read.view === "count") return undefined;
-    const { page, pageSize } = entry.input!.parse(read.input ?? {}) as {
+    const { page, pageSize = NUMBERED_PAGE_SIZE } = entry.input!.parse(
+      read.input ?? {},
+    ) as {
       page?: number;
       pageSize?: number;
     };
@@ -125,7 +127,7 @@ export const readContinuation = (
           ...read.input,
           ...numberedPageAfter(
             page ?? 1,
-            pageSize ?? NUMBERED_PAGE_SIZE,
+            Math.min(pageSize, entry.pageMax ?? pageSize),
             kept.length,
           ),
         },

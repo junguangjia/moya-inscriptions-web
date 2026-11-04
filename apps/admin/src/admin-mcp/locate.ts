@@ -39,7 +39,7 @@ import {
 } from "./envelope";
 import { classifyQuery } from "./locate-reference";
 import type { ClassifiedQuery, LocateReference } from "./locate-reference";
-import { askFind } from "./ops/community-reads";
+import { askFind, fitsFindAddress } from "./ops/community-reads";
 import {
   adminPathOf,
   CMS_FAMILIES,
@@ -386,7 +386,9 @@ const exactStage = async (
         );
       if (settled || (input.type !== undefined && input.type !== type))
         continue;
-      considered += 1;
+      // One id asked of two stores is one reference; its CMS twin already counted.
+      if (reference.kind !== "community" || reference.type !== "article")
+        considered += 1;
       hits.push(...(await communityLookup(reference, sources, excluded)));
       continue;
     }
@@ -630,6 +632,9 @@ const wholeTitleHits = async (
     kind: "raw",
     ...snippetAround(text, text),
   }));
+
+const asksBackendToSearch = ({ type }: AdminFindInput): boolean =>
+  type === undefined || isSearchSource(COMMUNITY_SOURCE[type]);
 
 /** The Backend's branches, each budgeted where its SQL runs and named per branch. */
 const communitySearch = async (
@@ -905,6 +910,15 @@ export const findEnvelope = async (
     return inputInvalidEnvelope([
       { path: ["query"], code: `more_than_${QUERY_WORDS_MAX}_words` },
     ]);
+  // Named too: it would answer `failed` every time, which reads as worth repeating.
+  if (
+    textToSearch !== undefined &&
+    asksBackendToSearch(input) &&
+    !fitsFindAddress(textToSearch)
+  )
+    return inputInvalidEnvelope([
+      { path: ["query"], code: "too_long_for_community_search" },
+    ]);
   const fuzzy =
     textToSearch === undefined
       ? []
@@ -918,8 +932,13 @@ export const findEnvelope = async (
         ? only.community.match.kind
         : only.kind;
   // Unique means one identity hit from one reference: a link naming two things, one
-  // of them unanswered, has not said which it means.
-  const unique = kindOfOnly === "identity" && exact.considered === 1;
+  // of them unanswered, has not said which it means. A fuzzy hit is unique only once
+  // every source answered, because one that did not may hold the same word.
+  const unique =
+    kindOfOnly === "identity" &&
+    exact.considered === 1 &&
+    (exact.hits.length > 0 ||
+      Object.values(sources).every((status) => status === "ok"));
   const page = hits.slice(skip, reached);
   const items = await itemsOf(req, page, unique, scope);
   const data: AdminFindData = {

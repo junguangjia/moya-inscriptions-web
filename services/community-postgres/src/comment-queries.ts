@@ -1,5 +1,5 @@
 import { commentImagesSql } from "./comment-images.js";
-import { commentIsSelfOnlySql, workIsSelfOnlySql } from "./self-only.js";
+import { commentIsSelfOnlySql, workInSelfOnlySetSql } from "./self-only.js";
 /**
  * Every statement is parameterized and confined to the community namespace.
  * Root comments read newest-first and replies oldest-first; both orders are
@@ -248,7 +248,7 @@ export const operatorFilter = `
     AND NOT (
       $8::boolean
       AND entries.target_type = 'work'
-      AND ${workIsSelfOnlySql("entries.catalog_id")}
+      AND ${workInSelfOnlySetSql("entries.catalog_id")}
     )
 `;
 

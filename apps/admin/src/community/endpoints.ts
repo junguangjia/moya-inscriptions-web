@@ -1,6 +1,7 @@
 import {
   adminReadArticleSubmissionRequestSchema,
   adminModerateArticleSubmissionRequestSchema,
+  articlePendingCandidateSchema,
   articlePendingListQuerySchema,
   articlePendingMediaQuerySchema,
   articlePendingPageSchema,
@@ -219,10 +220,13 @@ export type CommunityOperation = (
   input: unknown,
 ) => Promise<unknown>;
 
+// Half a surrogate pair names no record, and `segment` could not encode it. This also
+// checks evidence ids, so it says nothing of a report's own shape.
 const reportIdSchema = operatorReportSchema.shape.id
   .min(1)
   .max(128)
-  .regex(/^\S+$/u);
+  .regex(/^\S+$/u)
+  .refine((id) => !/\p{Cs}/u.test(id));
 const readReportRequestSchema = z.strictObject({ id: reportIdSchema });
 const reportEvidenceRequestSchema = readReportRequestSchema.extend({
   evidenceId: reportIdSchema,
@@ -530,7 +534,10 @@ export const communityOperationDefinitions = {
   }),
   "read-article-submission": define({
     input: adminReadArticleSubmissionRequestSchema,
-    output: { owner: articlePendingPreviewSchema },
+    output: {
+      owner: articlePendingPreviewSchema,
+      ai: articlePendingCandidateSchema,
+    },
     run: ({ id }, call) => call("GET", `articles/${segment(id)}/submission`),
   }),
   "moderate-article-submission": define({

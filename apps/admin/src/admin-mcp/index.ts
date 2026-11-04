@@ -70,6 +70,11 @@ export {
 } from "./analytics/cache";
 export { analyticsEnvelope, CANONICAL_POOL_SHARE } from "./analytics/service";
 export {
+  communityRefusal,
+  COMMUNITY_READ_POOL_SHARE,
+  inPoolShare,
+} from "./ops/community-reads";
+export {
   createUmamiGuard,
   UMAMI_CALL_BUDGET_MS,
   UMAMI_OVERRUN_HOLD_MS,

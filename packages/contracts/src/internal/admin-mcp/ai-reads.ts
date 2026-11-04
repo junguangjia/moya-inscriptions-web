@@ -156,6 +156,8 @@ export const aiCountResultSchema = z.strictObject({
   total: z.number().int().nonnegative(),
   /** How long the longest waiter has waited, so age needs no read of a row. */
   oldestAt: countInstant,
+  /** This filter or grouping cannot count a case only the Owner reads, so says so. */
+  leavesOutOwnerOnly: z.literal(true).optional(),
   groupBy: z.string().optional(),
   groups: z
     .array(

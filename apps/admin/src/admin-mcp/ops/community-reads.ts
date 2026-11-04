@@ -24,7 +24,10 @@ import {
 import {
   communityOperationDefinitions,
   type CommunityOperationName,
+  type OperatorCall,
 } from "../../community/endpoints";
+import { createPoolSlots } from "../analytics/cache";
+import type { PoolSlots } from "../analytics/cache";
 import { failedEnvelope, inputInvalidEnvelope, okEnvelope } from "../envelope";
 import { INLINE_TEXT_CHARS } from "../records";
 import { codePointLength, textHash } from "../text-window";
@@ -43,7 +46,73 @@ import type { AdminOpContext, AdminOpEntry } from "./define";
 
 export type CommunityItem = Readonly<Record<string, unknown>>;
 
-const community = callAiOperator("community");
+/**
+ * A long read holds a connection of the Backend's App pool for its whole statement, and
+ * that pool also serves the public site, the Owner and sign-in. So one Admin process
+ * runs this many community calls at once, and the rest wait in turn.
+ */
+export const COMMUNITY_READ_POOL_SHARE = 2;
+/**
+ * Past it the read answers READ_TIMED_OUT. Short, because one answer can make several
+ * calls of up to 15 s each, and Nginx and the clients stop waiting at 60 s.
+ */
+const COMMUNITY_WAIT_MS = 5_000;
+/**
+ * Our abort does not end the Backend's read, so a read given up on keeps its slot this
+ * much longer. A judgement: a list's snapshot has no statement limit of its own.
+ */
+const COMMUNITY_OVERRUN_HOLD_MS = 15_000;
+
+export interface CommunityReadLimits {
+  readonly slots: PoolSlots;
+  readonly waitMs: number;
+  readonly holdMs: number;
+}
+
+/** A slot within the wait, or false. A turn that comes later goes straight back. */
+const slotWithin = ({ slots, waitMs }: CommunityReadLimits) =>
+  new Promise<boolean>((answer) => {
+    let late = false;
+    const timer = setTimeout(() => {
+      late = true;
+      answer(false);
+    }, waitMs);
+    void slots.acquire().then(() => {
+      if (late) slots.release();
+      else {
+        clearTimeout(timer);
+        answer(true);
+      }
+    });
+  });
+
+/**
+ * One Backend call inside the AI's share of the App pool. A slot wraps one call and
+ * nothing waits while holding one, so it cannot deadlock. A refused connection means no
+ * read is running, so only a call given up on is held past its answer.
+ */
+export const inPoolShare =
+  (backend: OperatorCall, limits: CommunityReadLimits): OperatorCall =>
+  async <Result>(...call: Parameters<OperatorCall>): Promise<Result> => {
+    if (!(await slotWithin(limits)))
+      throw new CommunityOperatorError("READ_TIMED_OUT", 503);
+    let overran = false;
+    try {
+      return await backend<Result>(...call);
+    } catch (error) {
+      overran = (error as { code?: unknown }).code === "OPERATOR_GAVE_UP";
+      throw error;
+    } finally {
+      if (overran) setTimeout(() => limits.slots.release(), limits.holdMs);
+      else limits.slots.release();
+    }
+  };
+
+const community = inPoolShare(callAiOperator("community"), {
+  slots: createPoolSlots(COMMUNITY_READ_POOL_SHARE),
+  waitMs: COMMUNITY_WAIT_MS,
+  holdMs: COMMUNITY_OVERRUN_HOLD_MS,
+});
 
 export const SELF_ONLY_CATEGORY = "self_only";
 
@@ -94,6 +163,16 @@ export const askCommunity = async (
     throw new CommunityOperatorError("OPERATOR_RESPONSE_INVALID", 502);
   return checked.data;
 };
+
+/**
+ * Node answers 431 past 16 KiB of request head, whatever the store holds, so a query
+ * longer than this is refused by name. It leaves room for the head's other lines, and
+ * about 1,300 CJK characters fit.
+ */
+const FIND_TEXT_IN_ADDRESS_MAX = 12_000;
+
+export const fitsFindAddress = (text: string): boolean =>
+  new URLSearchParams({ text }).toString().length <= FIND_TEXT_IN_ADDRESS_MAX;
 
 /** The Backend's locate route: `{text,source?,limit}`, `{type,id}` or `{handle}`. */
 export const askFind = async (
@@ -179,11 +258,17 @@ interface CommunitySource {
   readonly count?: AiCountSource;
   /** A filter this queue always starts from: the appeal queue is the report queue's. */
   readonly defaults?: Readonly<Record<string, unknown>>;
+  /** More than this at once costs the store and cannot fit one answer. */
+  readonly pageMax?: number;
 }
+
+/** The Backend builds each case whole, about 7 statements, and about 32 rows fit. */
+const REPORT_PAGE_MAX = 30;
 
 const REPORTS: CommunitySource = {
   route: "read-reports",
   withholds: true,
+  pageMax: REPORT_PAGE_MAX,
   redacted: REPORT_REDACTED,
   row: (item) =>
     isOwnerOnly(item)
@@ -380,8 +465,12 @@ const WORK_SUBMISSIONS: CommunitySource = {
   count: "work_submissions",
 };
 
+/** A row here is at most about 770 bytes, so ten fit one text result whatever they hold. */
+const ARTICLE_PAGE_MAX = 10;
+
 const ARTICLE_SUBMISSIONS: CommunitySource = {
   route: "read-article-submissions",
+  pageMax: ARTICLE_PAGE_MAX,
   row: (item) => ({
     id: item.articleId,
     title: item.title,
@@ -446,14 +535,14 @@ const EVENTS: CommunitySource = {
   fields: {},
 };
 
-/** A row here is at most about 770 bytes, so ten fit one text result whatever they hold. */
-const ARTICLE_PAGE_MAX = 10;
-
 const VIEW_ARGS = ["view", "fields", "groupBy"] as const;
 
 const ROWS_UNTRUSTED = ["/data/rows", "/data/filter"];
 
-/** `range` becomes the two instants the Backend reads; a filter's `to` is inclusive. */
+/**
+ * `range` becomes the two instants the Backend reads. A filter's `to` is inclusive and
+ * its columns hold microseconds, so the range ends on the last one.
+ */
 const resolvedFilter = (
   input: Record<string, unknown>,
   defaults: Readonly<Record<string, unknown>> | undefined,
@@ -467,7 +556,7 @@ const resolvedFilter = (
   );
   const instants = {
     from: start.toISOString(),
-    to: new Date(requestedEnd.getTime() - 1).toISOString(),
+    to: new Date(requestedEnd.getTime() - 1).toISOString().replace("Z", "999Z"),
   };
   return {
     query: { ...query, ...instants },
@@ -491,6 +580,9 @@ const withoutPaging = (query: Readonly<Record<string, unknown>>) =>
     ),
   );
 
+const OWNER_ONLY_NOT_COUNTED =
+  "Cases only the Owner reviews are not in this total, so it can be smaller than a plain count of the same queue.";
+
 const countEnvelope = async (
   source: CommunitySource,
   filter: Record<string, unknown>,
@@ -513,13 +605,17 @@ const countEnvelope = async (
   );
   if (!checked.success)
     throw new CommunityOperatorError("OPERATOR_RESPONSE_INVALID", 502);
-  return okEnvelope(
+  const { leavesOutOwnerOnly, ...counted } = checked.data;
+  const envelope = okEnvelope(
     adminReadCountDataSchema.parse({
-      ...checked.data,
+      ...counted,
       filter: { ...filter, ...echo },
     }),
     ["/data/groups", "/data/filter"],
   );
+  return leavesOutOwnerOnly === true
+    ? { ...envelope, hint: OWNER_ONLY_NOT_COUNTED }
+    : envelope;
 };
 
 const rowsEnvelope = async (
@@ -541,9 +637,10 @@ const rowsEnvelope = async (
     ]);
   const paged = source.route !== "read-article-submissions";
   const page = paged ? Number(query.page ?? 1) : 1;
-  const pageSize = paged
-    ? Number(query.pageSize ?? NUMBERED_PAGE_SIZE)
-    : Math.min(Number(query.pageSize ?? ARTICLE_PAGE_MAX), ARTICLE_PAGE_MAX);
+  const wanted = Number(
+    query.pageSize ?? (paged ? NUMBERED_PAGE_SIZE : ARTICLE_PAGE_MAX),
+  );
+  const pageSize = Math.min(wanted, source.pageMax ?? wanted);
   const answer = (await askCommunity(
     source.route,
     { ...query, ...(paged ? { page } : {}), pageSize },
@@ -584,7 +681,11 @@ const rowsEnvelope = async (
   const envelope = okEnvelope(
     adminReadRowsDataSchema.parse({
       rows,
-      filter: { ...withoutPaging(query), ...echo },
+      filter: {
+        ...withoutPaging(query),
+        ...echo,
+        ...(pageSize < wanted ? { pageSizeCappedAt: pageSize } : {}),
+      },
       ...(total === undefined ? {} : { total }),
       ...(Object.keys(about).length === 0 ? {} : { about }),
     }),
@@ -646,13 +747,13 @@ interface OneRecord {
   readonly withholds?: true;
   /** Long enough to pass the cap: the admin_get type that reads it in windows. */
   readonly windowedAs?: string;
-  /** Left out of the answer and named: an address is for the Owner's own screen. */
-  readonly withoutAddresses?: string;
+  /** Left out by the Backend and named: an address is for the Owner's own screen. */
+  readonly leftOut?: string;
 }
 
 /** One record or setting, whole when it fits. */
 const runOne =
-  ({ route, withholds, windowedAs, withoutAddresses }: OneRecord) =>
+  ({ route, withholds, windowedAs, leftOut }: OneRecord) =>
   async (input: unknown, { req }: AdminOpContext) => {
     const categories = withholds ? [SELF_ONLY_CATEGORY] : [];
     try {
@@ -662,13 +763,12 @@ const runOne =
           failedEnvelope("SELF_ONLY_OWNER_REVIEW", { data: asked }),
           categories,
         );
-      const answer = without(asked, [withoutAddresses ?? ""]);
       const redacted =
-        withoutAddresses === undefined
+        leftOut === undefined
           ? (asked as { redacted?: string[] }).redacted
-          : [withoutAddresses];
+          : [leftOut];
       const envelope = naming(
-        okEnvelope(answer, ["/data"]),
+        okEnvelope(asked, ["/data"]),
         categories,
         redacted,
       );
@@ -679,7 +779,7 @@ const runOne =
         return envelope;
       return {
         ...envelope,
-        data: boundedRecord(answer),
+        data: boundedRecord(asked),
         hint: READ_IT_THROUGH_GET,
         next: {
           tool: "admin_get",
@@ -694,10 +794,11 @@ const runOne =
 
 const source = (
   row: CommunitySource,
-  paging: "numbered" | undefined = "numbered",
+  paging: "numbered" | null = "numbered",
 ): Partial<AdminOpEntry> => ({
   run: runSource(row),
-  ...(paging === undefined ? {} : { paging }),
+  ...(paging === null ? {} : { paging }),
+  ...(row.pageMax === undefined ? {} : { pageMax: row.pageMax }),
   readArgs: VIEW_ARGS,
   untrusted: ROWS_UNTRUSTED,
 });
@@ -720,7 +821,7 @@ export const COMMUNITY_READ_FACTS: Readonly<
   "read-feature-catalogs": source(FEATURE_CATALOGS),
   "read-work-submissions": source(WORK_SUBMISSIONS),
   // Pages on the Backend's own cursor, which `next` carries as it stands.
-  "read-article-submissions": source(ARTICLE_SUBMISSIONS, undefined),
+  "read-article-submissions": source(ARTICLE_SUBMISSIONS, null),
   "read-publishing-jobs": source(JOBS),
   "read-feedback": source(FEEDBACK),
   "read-events": source(EVENTS),
@@ -742,7 +843,7 @@ export const COMMUNITY_READ_FACTS: Readonly<
   "read-article-submission": one({
     route: "read-article-submission",
     windowedAs: "article",
-    withoutAddresses: "resolvedReferences",
+    leftOut: "resolvedReferences",
   }),
   "read-summary": one({ route: "read-summary", withholds: true }),
   "read-policy": one({ route: "read-policy" }),

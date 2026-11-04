@@ -82,6 +82,8 @@ export interface AdminOpMeta<Input, Output, Context> {
    * `pageSize` of its own input. Absent: it takes neither, and a cut cannot continue.
    */
   readonly paging?: "keyset" | "numbered";
+  /** The most a page holds, whatever `pageSize` asked: the page a cut continues from. */
+  readonly pageMax?: number;
   /** On a numbered op that answers rows: which of admin_read's own arguments it reads. */
   readonly readArgs?: readonly ("view" | "fields" | "groupBy")[];
   readonly input?: z.ZodType;

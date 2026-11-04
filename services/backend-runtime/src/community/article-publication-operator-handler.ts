@@ -70,7 +70,7 @@ export const handleArticlePublicationOperatorRequest = async (
       wrongMethod();
       return true;
     }
-    reply(await service.readPending(id));
+    reply(await service.readSubmission(id));
     return true;
   }
   if (method !== "POST") {

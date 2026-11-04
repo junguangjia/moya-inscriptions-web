@@ -9,7 +9,12 @@
  */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { createServer, type Server } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 
@@ -64,7 +69,7 @@ import {
   vi,
 } from "vitest";
 
-import { adminOpMeta } from "admin/admin-mcp";
+import { adminOpMeta, readContinuation } from "admin/admin-mcp";
 import {
   CommunityOperatorError,
   openCommunityAiEvidence,
@@ -699,6 +704,51 @@ const expectHostileMarked = (envelope: Json): number => {
   return hits.length;
 };
 
+/** The real Backend, reading through this pool. */
+const backendOn = (pool: Pool): Server =>
+  createBackendServer(
+    createBackendApplication({
+      nodeEnv: "development",
+      communityIdentityPort: new PostgresCommunityIdentityAdapter(pool),
+      communityCommentPort: new PostgresCommunityCommentAdapter(pool),
+      discussionPort: new PostgresCommunityCommentAdapter(pool),
+      contentOperatorPort: new PostgresCommunityContentOperatorAdapter(pool),
+      reportingPort: new PostgresCommunityReportingAdapter(pool),
+      publishingOperatorPort: new PostgresPublishingOperatorAdapter(pool),
+      articlePublicationOperatorPort: new PostgresArticleAuthoringAdapter(pool),
+      threadPort: new PostgresThreadAdapter(pool),
+      feedbackPort: new PostgresFeedbackAdapter(pool),
+      directMessagePort: new PostgresDirectMessageAdapter(pool),
+      aiOperatorReader: new PostgresAiOperatorReader(pool),
+      communityOperatorCredential: ownerToken,
+      operatorAiBaseCredential: baseToken,
+      operatorAiCommunityCredential: communityToken,
+      catalogQueryPort: createDevelopmentCatalogFixtureQueryPort(),
+      storageUrlResolver: new UnconfiguredStorageUrlResolver(),
+    }),
+  );
+
+/** A stand-in Backend for this call only: what the door really sends it. */
+const withStubBackend = async <T>(
+  answer: (request: IncomingMessage, response: ServerResponse) => void,
+  run: () => Promise<T>,
+): Promise<T> => {
+  const stub = createServer(answer);
+  await new Promise<void>((resolve) =>
+    stub.listen(0, "127.0.0.1", () => resolve()),
+  );
+  try {
+    vi.stubEnv(
+      "COMMUNITY_OPERATOR_BASE_URL",
+      `http://127.0.0.1:${(stub.address() as AddressInfo).port}/`,
+    );
+    return await run();
+  } finally {
+    stub.closeAllConnections();
+    await new Promise((resolve) => stub.close(resolve));
+  }
+};
+
 beforeAll(async () => {
   const probe = await admin.query(guard.disposableTestTargetProbeSql);
   guard.assertDisposableTestTarget(
@@ -731,27 +781,7 @@ beforeAll(async () => {
   url.username = role;
   url.password = password;
   app = poolFor(url.toString());
-  backend = createBackendServer(
-    createBackendApplication({
-      nodeEnv: "development",
-      communityIdentityPort: new PostgresCommunityIdentityAdapter(app),
-      communityCommentPort: new PostgresCommunityCommentAdapter(app),
-      discussionPort: new PostgresCommunityCommentAdapter(app),
-      contentOperatorPort: new PostgresCommunityContentOperatorAdapter(app),
-      reportingPort: new PostgresCommunityReportingAdapter(app),
-      publishingOperatorPort: new PostgresPublishingOperatorAdapter(app),
-      articlePublicationOperatorPort: new PostgresArticleAuthoringAdapter(app),
-      threadPort: new PostgresThreadAdapter(app),
-      feedbackPort: new PostgresFeedbackAdapter(app),
-      directMessagePort: new PostgresDirectMessageAdapter(app),
-      aiOperatorReader: new PostgresAiOperatorReader(app),
-      communityOperatorCredential: ownerToken,
-      operatorAiBaseCredential: baseToken,
-      operatorAiCommunityCredential: communityToken,
-      catalogQueryPort: createDevelopmentCatalogFixtureQueryPort(),
-      storageUrlResolver: new UnconfiguredStorageUrlResolver(),
-    }),
-  );
+  backend = backendOn(app);
   const address = await startServer(backend, { host: "127.0.0.1", port: 0 });
   backendOrigin = `http://127.0.0.1:${address.port}/`;
 
@@ -1871,6 +1901,13 @@ describe("admin_find", () => {
       ],
       [`/?workId=${ids.publicWork}`, "work", ids.publicWork, "works"],
       [`/?topic=${ids.thread}`, "thread", ids.thread, "threads"],
+      [ids.pendingArticle, "article", ids.pendingArticle, "article_documents"],
+      [
+        `/?articleId=${ids.pendingArticle}`,
+        "article",
+        ids.pendingArticle,
+        "article_documents",
+      ],
     ] as const) {
       const envelope = await ok("admin_find", { query });
       const data = adminFindDataSchema.parse(envelope.data);
@@ -1892,6 +1929,72 @@ describe("admin_find", () => {
         expect(action.tool).toMatch(/^admin_(?:get|read)$/u);
         await ok(action.tool, action.args as Json);
       }
+    }
+  });
+
+  it("still leaves a link naming an Article and a work unresolved", async () => {
+    const envelope = await ok("admin_find", {
+      query: `/?articleId=${ids.pendingArticle}&workId=${ids.publicWork}`,
+    });
+    expect(adminFindDataSchema.parse(envelope.data).resolution).toEqual({
+      status: "candidates",
+      uniqueIdentity: false,
+    });
+  });
+
+  it("never calls a handle unique while a source that could hold the word did not answer", async () => {
+    const handle = `solehandle${run}`;
+    const user = opaque("user");
+    await setup.query(
+      "INSERT INTO community.public_users(id,handle,display_name) VALUES($1,$2,$3)",
+      [user, handle, `Sole ${run}`],
+    );
+    await setup.query(
+      "INSERT INTO community.threads(id,title,description,created_by) VALUES($1,$2,'x','owner')",
+      [opaque("thread"), `On ${handle}`],
+    );
+    const healthy = adminFindDataSchema.parse(
+      (await ok("admin_find", { query: handle })).data,
+    );
+    expect(healthy.resolution).toEqual({
+      status: "candidates",
+      uniqueIdentity: false,
+    });
+    expect(healthy.items.map(({ type }) => type)).toEqual(["user", "thread"]);
+    const holder = await setup.connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query(
+        "LOCK TABLE community.threads IN ACCESS EXCLUSIVE MODE",
+      );
+      const locked = await ok("admin_find", { query: handle });
+      const data = adminFindDataSchema.parse(locked.data);
+      expect(locked.meta.sources.threads).toBe("timed_out");
+      expect(locked.meta.partial).toBe(true);
+      expect(data.resolution).toEqual({
+        status: "candidates",
+        uniqueIdentity: false,
+      });
+      expect(data.items.map(({ id }) => id)).toEqual([user]);
+      expect(data.items[0]!.actions).toEqual([
+        { tool: "admin_get", args: { type: "user", id: user } },
+      ]);
+      // The way through: these ask one source, and it answered.
+      for (const args of [
+        { query: handle, type: "user" },
+        { query: `@${handle}` },
+      ]) {
+        const exact = await ok("admin_find", args);
+        expect(exact.meta.sources).toEqual({ users: "ok" });
+        expect(adminFindDataSchema.parse(exact.data).resolution).toEqual({
+          status: "exact",
+          uniqueIdentity: true,
+          ref: { type: "user", id: user },
+        });
+      }
+    } finally {
+      await holder.query("ROLLBACK");
+      holder.release();
     }
   });
 
@@ -2056,13 +2159,32 @@ describe("admin_find", () => {
     expect(exact.meta.partial).toBe(true);
   });
 
-  it("names a query too long for the Backend's address, and answers the CMS side", async () => {
-    const envelope = await ok("admin_find", {
-      query: `长 ${"碑".repeat(2_000)}`,
+  it("refuses a query too long for the Backend's address by name, and what fits still reads", async () => {
+    const query = `长 ${"碑".repeat(2_000)}`;
+    const refused = await find(query);
+    expect(refused).toMatchObject({
+      ok: false,
+      code: "INPUT_INVALID",
+      issues: [{ path: ["query"], code: "too_long_for_community_search" }],
     });
-    expect(envelope.meta.sources.users).toBe("failed");
-    expect(envelope.meta.sources.catalogs_draft).toBe("ok");
-    expect(envelope.meta.partial).toBe(true);
+    expect(refused.retryable).toBeUndefined();
+    // Asking the CMS alone needs no such address.
+    const cms = await ok("admin_find", { query, type: "catalog" });
+    expect(cms.meta.sources.catalogs_draft).toBe("ok");
+    for (const fits of [
+      `长 ${"碑".repeat(1_000)}`,
+      "a".repeat(2_048),
+      "!".repeat(2_048),
+    ]) {
+      const read = await ok("admin_find", { query: fits });
+      expect(read.meta.sources).toMatchObject({
+        users: "ok",
+        works: "ok",
+        comments: "ok",
+        threads: "ok",
+        reports: "ok",
+      });
+    }
   });
 });
 
@@ -2193,6 +2315,22 @@ describe("admin_read on a queue", () => {
         [id],
       );
     }
+    // It takes neither a page number nor a cut's numbered way on, so none can be handed out.
+    for (const op of [
+      "list.article_submissions",
+      "community.read-article-submissions",
+    ] as const)
+      expect(adminOpMeta[op].paging).toBeUndefined();
+    const first = await ok("admin_read", {
+      op: "list.article_submissions",
+      input: { pageSize: 50 },
+    });
+    expect(first.data.rows).toHaveLength(10);
+    expect(first.data.filter).toEqual({ pageSizeCappedAt: 10 });
+    expect(first.next.args.input).toEqual({
+      cursor: expect.any(String),
+      pageSize: 10,
+    });
     const seen: string[] = [];
     let args: Json | undefined = {
       op: "list.article_submissions",
@@ -2213,6 +2351,83 @@ describe("admin_read on a queue", () => {
       input: { cursor: "AAAA" },
     });
     expect(forged).toMatchObject({ ok: false, code: "INPUT_INVALID" });
+  });
+
+  it("reads at most the report page that can fit, says so in its filter, and goes on from what it read", async () => {
+    const asked: URLSearchParams[] = [];
+    const answers = await withStubBackend(
+      (request, response) => {
+        asked.push(new URL(request.url ?? "/", "http://stub").searchParams);
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({ items: [], total: 0, page: 1, pageSize: 30 }),
+        );
+      },
+      async () => [
+        await ok("admin_read", {
+          op: "list.reports",
+          input: { pageSize: 100 },
+        }),
+        await ok("admin_read", {
+          op: "list.appeals",
+          input: { pageSize: 100 },
+        }),
+        await ok("admin_read", { op: "list.reports", input: { pageSize: 30 } }),
+        await ok("admin_read", { op: "list.reports" }),
+      ],
+    );
+    expect(asked.map((params) => params.get("pageSize"))).toEqual([
+      "30",
+      "30",
+      "30",
+      "20",
+    ]);
+    expect(answers.map(({ data }) => data.filter)).toEqual([
+      { pageSizeCappedAt: 30 },
+      { status: "appealed", pageSizeCappedAt: 30 },
+      {},
+      {},
+    ]);
+    // Page 2 of an asked 100 read rows 31 to 60, so a cut there goes on from those.
+    const next = readContinuation(
+      { op: "list.reports", input: { page: 2, pageSize: 100 } },
+      Array.from({ length: 5 }, () => ({})),
+    )!.args as { input: { page: number; pageSize: number } };
+    expect((next.input.page - 1) * next.input.pageSize).toBe(35);
+  });
+
+  it("says so when a count leaves out cases only the Owner reviews, and only then", async () => {
+    const hinted = /only the Owner reviews are not in this total/u;
+    for (const [groupBy, input] of [
+      ["reason", {}],
+      ["targetType", {}],
+      ["kind", { urgent: "false" }],
+      [undefined, { targetType: "work" }],
+    ] as const)
+      expect(
+        (
+          await ok("admin_read", {
+            op: "list.reports",
+            view: "count",
+            ...(groupBy === undefined ? {} : { groupBy }),
+            input,
+          })
+        ).hint,
+      ).toMatch(hinted);
+    for (const [op, groupBy] of [
+      ["list.reports", "kind"],
+      ["list.reports", "status"],
+      ["list.reports", undefined],
+      ["list.comments", "kind"],
+    ] as const) {
+      const counted = await ok("admin_read", {
+        op,
+        view: "count",
+        ...(groupBy === undefined ? {} : { groupBy }),
+      });
+      expect(counted.hint).toBeUndefined();
+      expect(counted.data).not.toHaveProperty("leavesOutOwnerOnly");
+    }
   });
 
   it("counts in SQL, equal to its list, with how long the oldest has waited", async () => {
@@ -2363,6 +2578,26 @@ describe("admin_read on a queue", () => {
     expect(works.data.filter.range).toBe("last_30_days");
   });
 
+  it("ends a named range on the last microsecond, so a row in its last millisecond is in it", async () => {
+    const id = opaque("comment");
+    await setup.query(
+      `INSERT INTO community.catalog_comments(id,catalog_id,target_type,author_id,text,moderation,created_at)
+       VALUES($1,$2,'work',$3,$4,'visible',
+         date_trunc('day',CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai' - interval '500 microseconds')`,
+      [id, ids.publicWork, ids.twinB, `Last millisecond ${run}`],
+    );
+    const input = { authorId: ids.twinB, range: "last_7_days" };
+    const listed = await ok("admin_read", { op: "list.comments", input });
+    expect(listed.data.filter.to).toMatch(/\.999999Z$/u);
+    expect(listed.data.rows.map((row: Json) => row.id)).toEqual([id]);
+    const counted = await ok("admin_read", {
+      op: "list.comments",
+      view: "count",
+      input,
+    });
+    expect(counted.data.total).toBe(1);
+  });
+
   it("names a bad input, never as an internal error", async () => {
     for (const [args, path] of [
       [{ op: "list.works", fields: ["constructor"] }, ["fields"]],
@@ -2382,7 +2617,27 @@ describe("admin_read on a queue", () => {
         ["input", "from"],
       ],
       [
+        { op: "list.comments", input: { from: "2026-01-01T00:00:00+23:00" } },
+        ["input", "from"],
+      ],
+      [
+        { op: "list.works", input: { to: "2026-01-01T00:00:00-16:00" } },
+        ["input", "to"],
+      ],
+      [
+        {
+          op: "list.comments",
+          view: "count",
+          input: { from: "2026-01-01T00:00+23:00" },
+        },
+        ["input", "from"],
+      ],
+      [
         { op: "community.read-comment", input: { id: "nope" } },
+        ["input", "id"],
+      ],
+      [
+        { op: "community.read-report", input: { id: "\ud800" } },
         ["input", "id"],
       ],
       [{ op: "list.reports", input: { urgent: "maybe" } }, ["input", "urgent"]],
@@ -2483,6 +2738,67 @@ describe("admin_read on a queue", () => {
   });
 });
 
+describe("the AI's share of the App pool", () => {
+  it("holds at most 2 calls at the Backend, across admin_read, admin_get and admin_find, and the rest wait their turn", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    let reached = 0;
+    const held: ServerResponse[] = [];
+    const answers = await withStubBackend(
+      (_request, response) => {
+        reached += 1;
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        response.on("close", () => {
+          inFlight -= 1;
+        });
+        held.push(response);
+      },
+      async () => {
+        const running = Promise.all([
+          read({ op: "list.comments" }),
+          read({ op: "list.reports", view: "count" }),
+          read({ op: "community.read-summary", input: { range: "30d" } }),
+          get("user", ids.lishu),
+          find(`Reporter ${run}`),
+          find(ids.lishu),
+        ]);
+        await vi.waitFor(() => expect(reached).toBe(2));
+        // The door has had every call for a while, and the third waits for a slot.
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        expect(reached).toBe(2);
+        let settled = false;
+        void running.finally(() => {
+          settled = true;
+        });
+        while (!settled) {
+          const next = held.shift();
+          if (next === undefined) {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            continue;
+          }
+          next.writeHead(503, { "content-type": "application/json" });
+          next.end(
+            JSON.stringify({
+              error: { status: 503, code: "OPERATOR_UNAVAILABLE" },
+            }),
+          );
+        }
+        return running;
+      },
+    );
+    expect(peak).toBe(2);
+    expect(reached).toBeGreaterThanOrEqual(answers.length);
+    // Each named what happened to it, and none read as a number or a miss.
+    for (const answer of answers.slice(0, 4))
+      expect(answer.code, JSON.stringify(answer)).toBe("COMMUNITY_UNAVAILABLE");
+    for (const answer of answers.slice(4)) {
+      expect(answer.meta.partial).toBe(true);
+      expect(Object.values(answer.meta.sources)).toContain("failed");
+    }
+  });
+});
+
 describe("admin_get on a community record", () => {
   it("answers an outline with state, length and hash, and no long text", async () => {
     const work = await ok("admin_get", { type: "work", id: ids.publicWork });
@@ -2571,6 +2887,8 @@ describe("admin_get on a community record", () => {
     for (const [args, code] of [
       [{ type: "work", id: 7 }, "NOT_FOUND"],
       [{ type: "report", id: "report-a\u0000b" }, "NOT_FOUND"],
+      [{ type: "report", id: "\ud800" }, "NOT_FOUND"],
+      [{ type: "report", id: "report-\udc00" }, "NOT_FOUND"],
       [{ type: "user", id: "has space" }, "NOT_FOUND"],
       [{ type: "user", id: "nope" }, "NOT_FOUND"],
       [{ type: "comment", id: "nope" }, "NOT_FOUND"],
@@ -2875,7 +3193,7 @@ describe("the switches", () => {
 });
 
 describe("the release record's App-role preflight", () => {
-  it("runs as written, on the grants this repository holds, and every row is true", async () => {
+  const preflightFor = async (name: string) => {
     const record = await readFile(
       `${root}/docs/development/admin-mcp-completion-v1.md`,
       "utf8",
@@ -2885,10 +3203,107 @@ describe("the release record's App-role preflight", () => {
         record,
       )?.[1];
     expect(sql).toBeTypeOf("string");
-    const { rows } = await setup.query(
-      sql!.replaceAll(":'app_role'", `'${role}'`),
-    );
+    return (await setup.query(sql!.replaceAll(":'app_role'", `'${name}'`)))
+      .rows as { rel: string; priv: string; granted: boolean }[];
+  };
+
+  it("runs as written, on the grants this repository holds, and every row is true", async () => {
+    const rows = await preflightFor(role);
     expect(rows.length).toBeGreaterThan(10);
     expect(rows.filter(({ granted }) => granted !== true)).toEqual([]);
+  });
+
+  it("is all these reads need: a role holding only its rows reads every op, branch and type", async () => {
+    const narrow = `community_narrow_${run}`;
+    const url = new URL(target);
+    url.pathname = `/${database}`;
+    url.username = narrow;
+    url.password = randomBytes(32).toString("hex");
+    await admin.query(
+      `CREATE ROLE ${narrow} LOGIN PASSWORD '${url.password}' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT`,
+    );
+    const pool = poolFor(url.toString());
+    const server = backendOn(pool);
+    try {
+      await setup.query(`GRANT USAGE ON SCHEMA public, community TO ${narrow}`);
+      for (const { rel, priv } of await preflightFor(narrow))
+        await setup.query(
+          `GRANT ${priv} ON ${priv === "EXECUTE" ? "FUNCTION" : "TABLE"} ${rel} TO ${narrow}`,
+        );
+      const address = await startServer(server, {
+        host: "127.0.0.1",
+        port: 0,
+      });
+      vi.stubEnv(
+        "COMMUNITY_OPERATOR_BASE_URL",
+        `http://127.0.0.1:${address.port}/`,
+      );
+      const unread: string[] = [];
+      const reads = (label: string, envelope: Json) => {
+        const sources = Object.entries(envelope.meta?.sources ?? {});
+        if (
+          ["COMMUNITY_UNAVAILABLE", "READ_TIMED_OUT"].includes(envelope.code) ||
+          sources.some(([, status]) => status === "failed")
+        )
+          unread.push(label);
+      };
+      for (const op of ADMIN_OP_NAMES.filter(
+        (name) =>
+          adminOpMeta[name].tool === "admin_read" &&
+          /^(?:community|list)\./u.test(name) &&
+          !NOT_BUILT_HERE.has(name) &&
+          !FROM_ELSEWHERE.has(name),
+      ))
+        for (const input of inputsOf(op))
+          for (const view of adminOpMeta[op].readArgs === undefined
+            ? [{}]
+            : [{}, { view: "full" }, { view: "count" }])
+            reads(
+              `${op} ${JSON.stringify({ input, view })}`,
+              await read({ op, input, ...view }),
+            );
+      for (const query of [
+        `Reporter ${run}`,
+        ids.lishu,
+        ids.publicWork,
+        ids.publicComment,
+        ids.thread,
+        ids.rightsReport,
+        ids.feedback,
+        ids.job,
+        ids.publicRevision,
+        ids.item,
+        ids.pendingArticle,
+      ])
+        reads(`find ${query}`, await find(query));
+      for (const [type, id] of [
+        ["user", ids.author],
+        ["work", ids.publicWork],
+        ["comment", ids.publicComment],
+        ["thread", ids.thread],
+        ["report", ids.rightsReport],
+        ["feedback", ids.feedback],
+        ["publishing_job", ids.job],
+        ["work_revision", ids.publicRevision],
+        ["media_item", ids.item],
+        ["article", ids.pendingArticle],
+      ] as const)
+        reads(`get ${type}`, await get(type, id));
+      expect(unread).toEqual([]);
+      const opened = await openCommunityAiMedia(
+        `publishing/media/${ids.publicRevision}/${ids.publicBytesItem}/display/base`,
+        null,
+        undefined,
+      );
+      expect(
+        Buffer.from(await new Response(opened.body).arrayBuffer()),
+      ).toEqual(PNG_BYTES.public);
+    } finally {
+      server.closeAllConnections();
+      if (server.listening) await stopServer(server);
+      await pool.end();
+      await setup.query(`DROP OWNED BY ${narrow}`);
+      await admin.query(`DROP ROLE ${narrow}`);
+    }
   });
 });

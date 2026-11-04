@@ -9,6 +9,7 @@ import type {
   ArticlePendingPreview,
   ModerateArticlePendingCommand,
 } from "@moya/contracts/internal/community-operator";
+import { operatorReadScopeFor } from "@moya/contracts/internal/community-operator";
 import {
   CommunityConflictError,
   CommunityNotFoundError,
@@ -128,6 +129,17 @@ export class ArticlePublicationOperatorService {
       ...candidate,
       resolvedReferences: resolved,
     });
+  }
+  /**
+   * What the submission route answers. AI reads the candidate alone: a resolved
+   * reference holds an address for the Owner's screen, of a self-only item too.
+   */
+  readSubmission(
+    id: ArticleId,
+  ): Promise<ArticlePendingCandidate | ArticlePendingPreview> {
+    return operatorReadScopeFor(this.operator).length > 0
+      ? this.port.readPending(id)
+      : this.readPending(id);
   }
   /** Owner-only transport calls this with no client-supplied owner/item/URL. */
   async openPendingMedia(

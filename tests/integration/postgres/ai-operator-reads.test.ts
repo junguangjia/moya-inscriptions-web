@@ -40,6 +40,7 @@ import {
   aiFindResultSchema,
 } from "@moya/contracts/internal/admin-mcp";
 import {
+  articlePendingCandidateSchema,
   moderationSummarySchema,
   operatorReportAiPageSchema,
   operatorReportAiSchema,
@@ -47,6 +48,8 @@ import {
   operatorUserAiPageSchema,
   operatorUserPageSchema,
 } from "@moya/contracts/internal/community-operator";
+import { emptyArticleDocument } from "@moya/contracts/schemas";
+import type { PublicUserId } from "@moya/contracts";
 import { UnconfiguredStorageUrlResolver } from "@moya/image";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -898,6 +901,151 @@ describe("a route naming a self-only record", () => {
   });
 });
 
+describe("a pending Article's submission", () => {
+  it("answers no resolved reference on a direct call with the AI token, and the Owner's keeps them", async () => {
+    const article = opaque("article");
+    const blank = emptyArticleDocument();
+    const document = JSON.stringify({
+      ...blank,
+      blocks: [
+        ...blank.blocks,
+        {
+          id: "used",
+          type: "managedImage",
+          props: { refId: "used", caption: "", alt: "Synthetic" },
+          children: [],
+        },
+      ],
+      references: { used: { type: "managed", itemId: ids.articleItem } },
+    });
+    await setup.query(
+      "INSERT INTO community.article_documents(id,owner_id,version,title,document,fingerprint,created_at,updated_at) VALUES($1,$2,1,'Article',$3::jsonb,$4,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",
+      [article, ids.author, document, "d".repeat(64)],
+    );
+    await setup.query(
+      "INSERT INTO community.article_revisions(article_id,version,owner_id,title,document,fingerprint,submitted_policy,submitted_by_source,created_at) VALUES($1,1,$2,'Article',$3::jsonb,$4,'PRE_MODERATION','human',CURRENT_TIMESTAMP)",
+      [article, ids.author, document, "d".repeat(64)],
+    );
+    await setup.query(
+      "UPDATE community.article_documents SET version=2,status='pending',pending_version=1,updated_at=CURRENT_TIMESTAMP WHERE id=$1",
+      [article],
+    );
+    const route = `articles/${article}/submission`;
+    const read = await ai(route);
+    expect(read.status).toBe(200);
+    expect(read.json).not.toHaveProperty("resolvedReferences");
+    expect(articlePendingCandidateSchema.parse(read.json).articleId).toBe(
+      article,
+    );
+    const seen = await owner(route);
+    expect(seen.status).toBe(200);
+    expect(seen.json).toHaveProperty("resolvedReferences.used");
+  });
+});
+
+describe("a report on an Article retitled in private", () => {
+  it("keeps the title its reporter saw, so the draft's reaches no read or search, and that title finds the case", async () => {
+    const authoring = new PostgresArticleAuthoringAdapter(setup);
+    const reporting = new PostgresCommunityReportingAdapter(setup);
+    const actor = {
+      source: "human" as const,
+      userId: ids.author as PublicUserId,
+    };
+    const publicTitle = `publictitle${run}`;
+    const draftTitle = `draftretitlecanary${run}`;
+    const created = await authoring.create(
+      actor,
+      {
+        requestId: randomUUID(),
+        title: publicTitle,
+        coverRefId: null,
+        document: emptyArticleDocument(),
+      },
+      new Date(),
+    );
+    const published = await authoring.publish(
+      actor,
+      created.id,
+      {
+        requestId: randomUUID(),
+        expectedVersion: created.version,
+        fingerprint: created.fingerprint,
+      },
+      new Date(),
+    );
+    expect(published.status).toBe("published");
+    await authoring.save(
+      actor,
+      created.id,
+      {
+        requestId: randomUUID(),
+        expectedVersion: published.version,
+        title: draftTitle,
+        coverRefId: null,
+        document: published.document,
+      },
+      new Date(),
+    );
+    const comment = opaque("comment");
+    await setup.query(
+      "INSERT INTO community.catalog_comments(id,catalog_id,target_type,author_id,text,moderation) VALUES($1,$2,'article',$3,'On an Article','visible')",
+      [comment, created.id, ids.author],
+    );
+    const onArticle = await reporting.create(ids.reporter, {
+      kind: "standard",
+      target: { type: "article", id: created.id },
+      reason: "other",
+      requestId: randomUUID(),
+    });
+    const onComment = await reporting.create(ids.reporter, {
+      kind: "quick_comment",
+      target: { type: "comment", id: comment },
+      requestId: randomUUID(),
+    });
+    try {
+      for (const route of [
+        `reports/${onArticle.id}`,
+        `reports/${onComment.id}`,
+        `reports?${query({ targetId: created.id, targetType: "article" })}`,
+        `reports?${query({ targetId: comment, targetType: "comment" })}`,
+        `ai/find?${query({ text: draftTitle, source: "reports" })}`,
+      ]) {
+        const read = await ai(route);
+        expect(read.status, route).toBe(200);
+        expect(read.text, route).not.toContain(draftTitle);
+      }
+      expect((await ai(`reports/${onArticle.id}`)).json).toMatchObject({
+        snapshot: { title: publicTitle },
+      });
+      expect((await ai(`reports/${onComment.id}`)).json).toMatchObject({
+        snapshot: { post: { title: publicTitle } },
+      });
+      expect((await owner(`reports/${onArticle.id}`)).json).toMatchObject({
+        snapshot: { title: publicTitle },
+      });
+      expect(
+        aiFindResultSchema
+          .parse(
+            (
+              await ai(
+                `ai/find?${query({ text: publicTitle, source: "reports" })}`,
+              )
+            ).json,
+          )
+          .items.map(({ id }) => id),
+      ).toEqual([onArticle.id]);
+    } finally {
+      await setup.query(
+        "DELETE FROM community.report_cases WHERE id=ANY($1::text[])",
+        [[onArticle.id, onComment.id]],
+      );
+      await setup.query("DELETE FROM community.catalog_comments WHERE id=$1", [
+        comment,
+      ]);
+    }
+  });
+});
+
 describe("ai/find", () => {
   const find = async (values: Record<string, string>) => {
     const read = await ai(`ai/find?${query(values)}`);
@@ -1167,6 +1315,19 @@ describe("ai/count", () => {
     const byTarget = await count({ source: "reports", groupBy: "targetType" });
     expect(byTarget.groups!.map(({ value }) => value)).toEqual(["work"]);
     expect((await count({ source: "reports", groupBy: "kind" })).total).toBe(5);
+    // Each says so, whatever the rows hold, because the query alone decides it.
+    expect(byReason.leavesOutOwnerOnly).toBe(true);
+    expect(byTarget.leavesOutOwnerOnly).toBe(true);
+    for (const asked of [
+      { source: "reports", groupBy: "kind" },
+      { source: "reports", groupBy: "status" },
+      { source: "reports" },
+      { source: "comments", groupBy: "kind" },
+    ] as const)
+      expect(await count(asked)).not.toHaveProperty("leavesOutOwnerOnly");
+    expect(
+      await count({ source: "reports", groupBy: "kind", urgent: "false" }),
+    ).toMatchObject({ leavesOutOwnerOnly: true });
   });
 
   it("answers no number when it runs out of time", async () => {
@@ -1301,6 +1462,55 @@ describe("additive filters", () => {
   });
 });
 
+describe("the comment queue's withholding", () => {
+  it("reads one set per statement, not one lookup per row, on its list and its search", async () => {
+    const statements: string[] = [];
+    const watched = <Target extends object>(target: Target) =>
+      new Proxy(target, {
+        get: (held, name) => {
+          const value = Reflect.get(held, name) as unknown;
+          if (name !== "query") return value;
+          return (...args: unknown[]) => {
+            statements.push(String(args[0]));
+            return (value as (...call: unknown[]) => unknown).apply(held, args);
+          };
+        },
+      });
+    const pool = {
+      query: (...args: unknown[]) =>
+        (watched(setup).query as (...call: unknown[]) => unknown)(...args),
+      connect: async () => watched(await setup.connect()),
+    } as unknown as Pool;
+    const scope = { withholdSelfOnly: true };
+    const listed = await new PostgresCommunityCommentAdapter(
+      pool,
+    ).readOperatorComments({ page: 1, pageSize: 20, order: "newest" }, scope);
+    await new PostgresAiOperatorReader(pool).find({
+      text: "Public comment",
+      source: "comments",
+      limit: 5,
+    });
+    const scans = statements.filter((text) => text.includes("so_w"));
+    // The page, its total and its tab counts, and the search's one branch.
+    expect(scans.length).toBeGreaterThanOrEqual(4);
+    for (const text of scans) {
+      expect(text).toContain("IN (SELECT so_w.id FROM community.works so_w");
+      expect(text).not.toContain("so_w.id=");
+    }
+    // The same total as before: every comment and reply but what the work withholds.
+    const { rows } = await setup.query(
+      `SELECT count(*)::integer AS n FROM (
+         SELECT c.catalog_id,c.target_type FROM community.catalog_comments c
+         UNION ALL SELECT c.catalog_id,c.target_type FROM community.catalog_comment_replies r
+           JOIN community.catalog_comments c ON c.id=r.root_comment_id) e
+       LEFT JOIN community.works w ON w.id=e.catalog_id AND e.target_type='work'
+       WHERE w.id IS NULL OR NOT (w.visibility='self' AND w.deleted_at IS NULL)`,
+    );
+    expect(listed.total).toBe(rows[0]!.n);
+    expect(listed.items.map(({ id }) => id)).not.toContain(ids.selfComment);
+  });
+});
+
 describe("a bad input on the AI path", () => {
   it.each([
     ["a NUL in a search", "works?search=%00"],
@@ -1313,6 +1523,17 @@ describe("a bad input on the AI path", () => {
     ],
     ["an impossible date", "works?from=2026-02-30T00:00:00Z"],
     ["year zero", "comments?from=0000-01-01T00:00:00Z"],
+    ["an offset past 15:59", "comments?from=2026-01-01T00:00:00%2B16:00"],
+    ["a negative offset past 15:59", "works?to=2026-01-01T00:00:00-23:00"],
+    ["no seconds and such an offset", "comments?from=2026-01-01T00:00%2B23:00"],
+    [
+      "such an offset on a count",
+      "ai/count?source=comments&from=2026-01-01T00:00:00%2B23:00",
+    ],
+    [
+      "a time longer than PostgreSQL's field buffer",
+      `comments?from=2026-01-01T00:00:00.${"1".repeat(200)}Z`,
+    ],
     ["an unknown filter", "reports?nosuch=1"],
     ["a page out of range", "works?page=9999999"],
     ["an unknown count source", "ai/count?source=nosuch"],
@@ -1335,6 +1556,15 @@ describe("a bad input on the AI path", () => {
     const read = await ai(route);
     expect(read.status, route).toBe(400);
     expect(read.code, route).toMatch(/^[A-Z_]+$/u);
+  });
+
+  it("still reads the offsets PostgreSQL holds", async () => {
+    for (const route of [
+      "comments?from=2026-01-01T00:00:00%2B15:59",
+      "works?to=2026-01-01T00:00:00-15:59",
+      "ai/count?source=comments&from=2026-01-01T00:00:00%2B15:59",
+    ])
+      expect((await ai(route)).status, route).toBe(200);
   });
 
   it("answers a malformed escape and an unknown id as a missing subject", async () => {
