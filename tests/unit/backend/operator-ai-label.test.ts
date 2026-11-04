@@ -2,10 +2,19 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 
-import { startServer, stopServer } from "@moya/backend-runtime";
+import {
+  createBackendApplication,
+  createBackendServer,
+  startServer,
+  stopServer,
+} from "@moya/backend-runtime";
+import { MappedStorageUrlResolver } from "@moya/image";
 import { handleOperatorRequest } from "@moya/backend-runtime/internal/community-operator";
 import type { OperatorRouteDependencies } from "@moya/backend-runtime/internal/community-operator";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { InMemoryCommunityCommentPort } from "./community-comment-fixture.js";
+import { InMemoryCommunityIdentityPort } from "./community-identity-fixture.js";
 
 // A later table: today's has no row reaching a labelled service, so nothing else
 // could show which label those services are handed.
@@ -17,12 +26,13 @@ vi.mock("@moya/contracts/internal/admin-mcp", async (importOriginal) => ({
     method,
     path,
     klass: "write",
-    credentials: ["base"],
+    credentials: ["base", "community"],
   }),
 }));
 
 const ownerToken = randomBytes(32).toString("base64url");
 const baseToken = randomBytes(32).toString("base64url");
+const communityToken = randomBytes(32).toString("base64url");
 
 const servers = new Set<Server>();
 afterEach(async () => {
@@ -46,6 +56,7 @@ const start = async () => {
   };
   const dependencies = {
     moderationService: {},
+    aiServices: { moderationService: {} },
     threadService,
     directMessageService,
     contentOperatorPort,
@@ -108,5 +119,90 @@ describe("the label the operator services are handed", () => {
       label,
       expect.objectContaining({ state: "hidden" }),
     );
+  });
+});
+
+describe("the service factory per label", () => {
+  const start = async () => {
+    const report = {
+      id: `report-${"a".repeat(32)}`,
+      claimant: { name: "Synthetic", contact: "synthetic", rightsBasis: "x" },
+      evidence: [],
+    };
+    const reportingPort = {
+      decide: vi.fn<(...args: unknown[]) => Promise<typeof report>>(
+        async () => report,
+      ),
+    };
+    const publishingOperatorPort = {
+      moderateSubmission: vi.fn<(...args: unknown[]) => Promise<object>>(
+        async () => ({}),
+      ),
+    };
+    const commentPort = new InMemoryCommunityCommentPort();
+    const writePolicy = vi.spyOn(commentPort, "writePublicationPolicy");
+    const server = createBackendServer(
+      createBackendApplication({
+        nodeEnv: "development",
+        communityIdentityPort: new InMemoryCommunityIdentityPort(),
+        storageUrlResolver: new MappedStorageUrlResolver(new Map()),
+        communityCommentPort: commentPort,
+        reportingPort: reportingPort as never,
+        publishingOperatorPort: publishingOperatorPort as never,
+        communityOperatorCredential: ownerToken,
+        operatorAiCommunityCredential: communityToken,
+      }),
+    );
+    servers.add(server);
+    const address = await startServer(server, { host: "127.0.0.1", port: 0 });
+    const send = (
+      token: string,
+      method: string,
+      route: string,
+      body: unknown,
+    ) =>
+      fetch(`http://127.0.0.1:${address.port}/internal/community/${route}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+    return { send, reportingPort, publishingOperatorPort, writePolicy };
+  };
+
+  it.each([
+    ["ai-admin", communityToken],
+    ["owner", ownerToken],
+  ])("records %s on every service it builds", async (label, token) => {
+    const backend = await start();
+    const decided = await backend.send(
+      token,
+      "POST",
+      `reports/report-${"a".repeat(32)}/decisions`,
+      { expectedVersion: 1, action: "retain", reason: "Synthetic" },
+    );
+    expect(backend.reportingPort.decide.mock.calls[0]?.[0]).toBe(label);
+    // The report here is a stub, so only the AI projection can refuse its shape.
+    expect(decided.status).toBe(label === "owner" ? 200 : 500);
+    await backend.send(
+      token,
+      "POST",
+      `publishing/submissions/work-revision-${"a".repeat(32)}/moderation`,
+      {
+        requestId: randomUUID(),
+        action: "approve",
+        expectedVersion: 1,
+        reason: "Synthetic",
+      },
+    );
+    expect(
+      backend.publishingOperatorPort.moderateSubmission.mock.calls[0]?.[1],
+    ).toBe(label);
+    await backend.send(token, "PUT", "publication-policy", {
+      policy: "PRE_MODERATION",
+    });
+    expect(backend.writePolicy.mock.calls[0]?.[1]).toBe(label);
   });
 });

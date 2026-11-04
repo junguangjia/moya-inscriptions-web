@@ -7,7 +7,7 @@ import {
 import type { AdminExecuteData } from "@moya/contracts/internal/admin-mcp";
 
 import type { AnalyticsOracle } from "./analytics-seed.ts";
-import type { BenchOracle } from "./seed.ts";
+import type { BenchOracle, CommunityOracle } from "./seed.ts";
 
 // Each task's reference path, as a client with no model would replay it, and its
 // grader against the seed's oracle (admin-mcp-completion-v1 section 21). L0 replays
@@ -288,6 +288,84 @@ const differs = (
     failures.push(
       `${name}: ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`,
     );
+};
+
+/** M1: 「现在待处理的举报有多少？按类型分组，最早那条等了多久？」 One read, no rows. */
+export const M1_CALL: ToolCall = {
+  name: "admin_read",
+  arguments: {
+    op: "list.reports",
+    view: "count",
+    groupBy: "kind",
+    input: { unresolved: "true" },
+  },
+};
+
+export const gradeM1 = (data: unknown, oracle: CommunityOracle["m1"]) => {
+  const answer = adminReadCountDataSchema.parse(data);
+  const failures: string[] = [];
+  differs(failures, "total", answer.total, oracle.total);
+  differs(failures, "oldest", answer.oldestAt, oracle.oldestAt);
+  const ordered = (groups: readonly { readonly value: string | null }[]) =>
+    [...groups].sort((a, b) => String(a.value).localeCompare(String(b.value)));
+  differs(
+    failures,
+    "groups",
+    ordered(answer.groups ?? []),
+    ordered(oracle.groups),
+  );
+  return failures;
+};
+
+/** U1: 「查一下 @lishu_test：注册时间、账号状态、作品数、评论数、被举报过几次。」 */
+export const u1FindCall = (handle: string): ToolCall => ({
+  name: "admin_find",
+  arguments: { query: `@${handle}` },
+});
+
+export const u1ReadCall = (ref: { readonly id: unknown }): ToolCall => ({
+  name: "admin_read",
+  arguments: { op: "list.users", input: { userId: ref.id } },
+});
+
+export const gradeU1 = (
+  found: unknown,
+  listed: unknown,
+  oracle: CommunityOracle["u1"],
+) => {
+  const failures: string[] = [];
+  const find = adminFindDataSchema.parse(found);
+  differs(failures, "resolution", find.resolution, {
+    status: "exact",
+    uniqueIdentity: true,
+    ref: { type: "user", id: oracle.id },
+  });
+  const rows = (listed as { rows?: readonly Json[] }).rows ?? [];
+  differs(failures, "rows", rows.length, 1);
+  const row = rows[0];
+  differs(
+    failures,
+    "facts",
+    [
+      row?.id,
+      row?.handle,
+      row?.createdAt,
+      row?.state,
+      row?.submittedWorks,
+      row?.commentCount,
+      row?.reportCount,
+    ],
+    [
+      oracle.id,
+      oracle.handle,
+      oracle.createdAt,
+      oracle.status,
+      oracle.submittedWorks,
+      oracle.commentCount,
+      oracle.reportCount,
+    ],
+  );
+  return failures;
 };
 
 /** A1: 「昨天（北京时间）的访客数、访问次数、浏览量各是多少？和前一天比变化多少？」 */

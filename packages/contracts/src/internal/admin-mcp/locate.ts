@@ -1,6 +1,9 @@
 import { z } from "zod";
 
+import { operatorWorksQuerySchema } from "../community-operator/content-schemas.js";
+import { operatorCommentQuerySchema } from "../community-operator/schemas.js";
 import { isWellFormedEditorialText } from "../editorial/schemas.js";
+import { ANALYTICS_RANGE_PRESETS } from "./analytics.js";
 
 /**
  * admin_find, admin_get, admin_read and admin_view_media
@@ -103,7 +106,8 @@ export const adminFindItemSchema = z.strictObject({
   type: adminRecordTypeSchema,
   id: recordId,
   title: z.string().optional(),
-  state: recordState.optional(),
+  /** A CMS record's one word, or a community record's own state as it stands. */
+  state: z.string().min(1).optional(),
   updatedAt: z.string().optional(),
   version: z.number().optional(),
   lock: adminLockSchema.optional(),
@@ -228,6 +232,26 @@ export const adminGetDataSchema = z
   })
   .loose();
 
+/**
+ * A community record has no draft, version history or render: only what is there now,
+ * read through the Backend's AI routes. Its id is its public identity.
+ */
+export const ADMIN_COMMUNITY_GET_VIEWS = ["outline", "full", "field"] as const;
+
+export const adminCommunityGetDataSchema = z
+  .object({
+    type: adminRecordTypeSchema,
+    id: z.string().min(1),
+    view: z.enum(ADMIN_COMMUNITY_GET_VIEWS),
+    readFrom: z.literal("live"),
+    state: z.string().min(1),
+    version: z.number().optional(),
+    title: z.string().optional(),
+    updatedAt: z.string().optional(),
+    actions: z.array(adminActionSkeletonSchema).optional(),
+  })
+  .loose();
+
 export const ADMIN_READ_VIEWS = ["compact", "full", "count"] as const;
 
 export const ADMIN_READ_PAGE_SIZE_MAX = 100;
@@ -322,15 +346,44 @@ export const adminReceiptListInputSchema = filterOf({
     .optional(),
 });
 
+/**
+ * A queue's time filter takes a named range too, in Asia/Shanghai, and the answer
+ * echoes the instants it resolved to. `last_N_days` are N finished days.
+ */
+const namedRange = { range: z.enum(ANALYTICS_RANGE_PRESETS).optional() };
+const rangeOrDates = ({
+  range,
+  from,
+  to,
+}: {
+  readonly range?: string | undefined;
+  readonly from?: string | undefined;
+  readonly to?: string | undefined;
+}) => range === undefined || (from === undefined && to === undefined);
+
+export const adminCommentListInputSchema = operatorCommentQuerySchema
+  .safeExtend(namedRange)
+  .refine(rangeOrDates);
+
+export const adminWorkListInputSchema = operatorWorksQuerySchema
+  .safeExtend(namedRange)
+  .refine(rangeOrDates);
+
 export const adminReadRowsDataSchema = z.strictObject({
   rows: z.array(z.record(z.string(), z.unknown())),
   /** What the filter resolved to, so a default never reads as the whole table. */
   filter: z.record(z.string(), z.unknown()),
+  /** On a source that counts its rows: no page number, because `next` is the way on. */
+  total: z.number().int().nonnegative().optional(),
+  /** What a page says beyond its rows, such as a queue's tab counts. */
+  about: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const adminReadCountDataSchema = z.strictObject({
   total: z.number().int().nonnegative(),
   filter: z.record(z.string(), z.unknown()),
+  /** How long the longest waiter has waited, where the source can say. */
+  oldestAt: z.string().nullable().optional(),
   groupBy: z.string().optional(),
   /** A non-VALUE state keeps its own row: unknown never reads as a dynasty. */
   groups: z
@@ -339,6 +392,7 @@ export const adminReadCountDataSchema = z.strictObject({
         value: z.string().nullable(),
         state: z.string().optional(),
         count: z.number().int().positive(),
+        oldestAt: z.string().nullable().optional(),
       }),
     )
     .optional(),

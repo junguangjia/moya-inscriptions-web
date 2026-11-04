@@ -36,9 +36,11 @@ import { handleFeedbackRequest } from "../community/feedback-handler.js";
 import { handleAuthorRequest } from "../community/author-handler.js";
 import { handleDevelopmentCatalogRendition } from "../community/development-catalog-rendition-handler.js";
 import type { DevelopmentCatalogRenditions } from "../community/development-catalog-rendition-handler.js";
+import type { AiOperatorReader } from "@moya/contracts/internal/admin-mcp";
 import {
   handleOperatorRequest,
   type OperatorAiCredentials,
+  type OperatorLabelledServices,
 } from "../community/operator-handler.js";
 import { healthHandler } from "../health/health-handler.js";
 import { sendJson } from "./json-response.js";
@@ -137,6 +139,8 @@ export interface CommunityRouterDependencies {
    */
   readonly operatorCredential: string;
   readonly aiCredentials?: OperatorAiCredentials;
+  readonly aiServices?: OperatorLabelledServices;
+  readonly aiOperatorReader?: AiOperatorReader | undefined;
 }
 
 export interface RouterDependencies {
@@ -554,6 +558,8 @@ export const createRouter =
           directMessageService: community?.directMessageService,
           operatorCredential: community?.operatorCredential ?? "",
           aiCredentials: community?.aiCredentials,
+          aiServices: community?.aiServices,
+          aiOperatorReader: community?.aiOperatorReader,
         }),
         operatorFailure,
       );

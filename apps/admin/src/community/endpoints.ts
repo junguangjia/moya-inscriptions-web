@@ -28,6 +28,7 @@ import {
   moderationEventQuerySchema,
   moderationSummaryQuerySchema,
   operatorCommentQuerySchema,
+  publicationPolicyStateSchema,
   setPublicationPolicyCommandSchema,
   adminModerateWorkSubmissionRequestSchema,
   adminPublishingJobRequestSchema,
@@ -58,6 +59,15 @@ import {
   operatorReportQuerySchema,
   operatorReportSchema,
   operatorReportPageSchema,
+  operatorReportAiAnswerSchema,
+  operatorReportAiPageSchema,
+  operatorUserAiPageSchema,
+  operatorWorkPageSchema,
+  featuredPageSchema,
+  operatorCommentPageSchema,
+  operatorCommentDetailSchema,
+  moderationEventPageSchema,
+  moderationSummarySchema,
   operatorReportDecisionRequestSchema,
   operatorReportReviewRequestSchema,
   operatorReportMetadataRequestSchema,
@@ -268,35 +278,35 @@ const forwardReportRequestSchema = operatorReportForwardRequestSchema.extend({
 export const communityOperationDefinitions = {
   "read-reports": define({
     input: operatorReportQuerySchema,
-    output: { owner: operatorReportPageSchema },
+    output: { owner: operatorReportPageSchema, ai: operatorReportAiPageSchema },
     run: (query, call) => call("GET", `reports${toQuery(query)}`),
   }),
   "read-report": define({
     input: readReportRequestSchema,
-    output: { owner: operatorReportSchema },
+    output: { owner: operatorReportSchema, ai: operatorReportAiAnswerSchema },
     run: ({ id }, call) => call("GET", `reports/${segment(id)}`),
   }),
   "decide-report": define({
     input: decideReportRequestSchema,
-    output: { owner: operatorReportSchema },
+    output: { owner: operatorReportSchema, ai: operatorReportAiAnswerSchema },
     run: ({ id, ...command }, call) =>
       call("POST", `reports/${segment(id)}/decisions`, command),
   }),
   "review-report": define({
     input: reviewReportRequestSchema,
-    output: { owner: operatorReportSchema },
+    output: { owner: operatorReportSchema, ai: operatorReportAiAnswerSchema },
     run: ({ id, ...command }, call) =>
       call("POST", `reports/${segment(id)}/review`, command),
   }),
   "set-report-metadata": define({
     input: reportMetadataRequestSchema,
-    output: { owner: operatorReportSchema },
+    output: { owner: operatorReportSchema, ai: operatorReportAiAnswerSchema },
     run: ({ id, ...command }, call) =>
       call("POST", `reports/${segment(id)}/metadata`, command),
   }),
   "forward-report": define({
     input: forwardReportRequestSchema,
-    output: { owner: operatorReportSchema },
+    output: { owner: operatorReportSchema, ai: operatorReportAiAnswerSchema },
     run: ({ id, ...command }, call) =>
       call("POST", `reports/${segment(id)}/forward`, command),
   }),
@@ -307,11 +317,12 @@ export const communityOperationDefinitions = {
   }),
   "read-works": define({
     input: operatorWorksQuerySchema,
+    output: { ai: operatorWorkPageSchema },
     run: (query, call) => call("GET", `works${toQuery(query)}`),
   }),
   "read-users": define({
     input: operatorUsersQuerySchema,
-    output: { owner: operatorUserPageSchema },
+    output: { owner: operatorUserPageSchema, ai: operatorUserAiPageSchema },
     run: (query, call) => call("GET", `users${toQuery(query)}`),
   }),
   "recommend-user": define({
@@ -325,6 +336,7 @@ export const communityOperationDefinitions = {
   }),
   "read-featured": define({
     input: operatorFeaturedQuerySchema,
+    output: { ai: featuredPageSchema },
     run: (query, call) => call("GET", `featured${toQuery(query)}`),
   }),
   "set-featured": define({
@@ -421,6 +433,7 @@ export const communityOperationDefinitions = {
   }),
   "read-policy": define({
     input: noParameters,
+    output: { ai: publicationPolicyStateSchema },
     body: "ignored",
     run: (_query, call) => call("GET", "publication-policy"),
   }),
@@ -430,6 +443,7 @@ export const communityOperationDefinitions = {
   }),
   "read-comments": define({
     input: operatorCommentQuerySchema,
+    output: { ai: operatorCommentPageSchema },
     body: "optional",
     run: (query, call) =>
       call(
@@ -439,6 +453,9 @@ export const communityOperationDefinitions = {
           kind: query.kind,
           catalogId: query.catalogId,
           search: query.search,
+          authorId: query.authorId,
+          from: query.from,
+          to: query.to,
           order: query.order,
           page: query.page,
           pageSize: query.pageSize,
@@ -447,6 +464,7 @@ export const communityOperationDefinitions = {
   }),
   "read-comment": define({
     input: adminReadCommentRequestSchema,
+    output: { ai: operatorCommentDetailSchema },
     run: ({ id }, call) => call("GET", `comments/${segment(id)}`),
   }),
   "moderate-comment": define({
@@ -466,6 +484,7 @@ export const communityOperationDefinitions = {
   }),
   "read-events": define({
     input: moderationEventQuerySchema,
+    output: { ai: moderationEventPageSchema },
     body: "optional",
     run: (query, call) =>
       call(
@@ -480,6 +499,7 @@ export const communityOperationDefinitions = {
   }),
   "read-summary": define({
     input: moderationSummaryQuerySchema,
+    output: { ai: moderationSummarySchema },
     body: "optional",
     run: (query, call) =>
       call("GET", `summary${toQuery({ range: query.range })}`),
@@ -527,6 +547,8 @@ export const communityOperationDefinitions = {
         "GET",
         `publishing/submissions${toQuery({
           state: query.state,
+          authorId: query.authorId,
+          workId: query.workId,
           page: query.page,
           pageSize: query.pageSize,
         })}`,
@@ -568,6 +590,8 @@ export const communityOperationDefinitions = {
         `publishing/jobs${toQuery({
           state: query.state,
           kind: query.kind,
+          subjectId: query.subjectId,
+          id: query.id,
           page: query.page,
           pageSize: query.pageSize,
         })}`,

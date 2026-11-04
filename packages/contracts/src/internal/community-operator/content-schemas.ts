@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { operatorModerationReasonSchema } from "./moderation-reason.js";
+import { operatorTimeBoundSchema, rangeInOrder } from "./query-filters.js";
 import {
   contentIdentitySchema,
   catalogCommentIdSchema,
@@ -25,9 +26,16 @@ export const operatorContentQuerySchema = z.strictObject({
     .default(20),
   search: z.string().trim().max(200).default(""),
 });
-export const operatorWorksQuerySchema = operatorContentQuerySchema.extend({
+/** `authorId` leaves out deleted and never-submitted works. */
+export const operatorWorksFilterSchema = operatorContentQuerySchema.extend({
   authorId: userId.optional(),
+  workId: workId.optional(),
+  /** By first publication, else first submission, as the page orders them. */
+  from: operatorTimeBoundSchema.optional(),
+  to: operatorTimeBoundSchema.optional(),
 });
+export const operatorWorksQuerySchema =
+  operatorWorksFilterSchema.refine(rangeInOrder);
 export const operatorFeaturedQuerySchema = operatorContentQuerySchema.extend({
   filter: z.enum(["all", "active"]).optional(),
 });
@@ -253,7 +261,15 @@ export const operatorThreadPageSchema = z.strictObject({
 export const operatorThreadsQuerySchema = z.strictObject({
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().min(1).max(50).default(20),
-  includeHidden: z.coerce.boolean().default(true),
+  /** As text on the Backend, where a coercion would read `false` as true. */
+  includeHidden: z
+    .union([
+      z.boolean(),
+      z.enum(["true", "false"]).transform((value) => value === "true"),
+    ])
+    .default(true),
+  search: z.string().trim().min(1).max(200).optional(),
+  id: threadId.optional(),
 });
 export const createThreadCommandSchema = z.strictObject({
   requestId: z.uuid(),

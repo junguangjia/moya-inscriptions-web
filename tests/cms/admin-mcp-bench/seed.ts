@@ -783,7 +783,183 @@ export const seedCms = async (
  * these tables, so their latency is not measured yet: the rows are here so the first
  * reader meets the target scale. Row-level triggers stay on, as in Production.
  */
-export const seedCommunity = async (db: BenchDb) => {
+/** A case's kind and state, a pure function of its index, in the seed and the oracle. */
+const reportKindOf = (index: number) =>
+  index % 5 === 0
+    ? "rights_notice"
+    : index % 5 === 1
+      ? "quick_comment"
+      : "standard";
+const reportStatusOf = (index: number) =>
+  index % 3 === 0
+    ? "resolved"
+    : index % 7 === 0
+      ? "appealed"
+      : index % 11 === 0
+        ? "reviewing"
+        : "open";
+const reportAtOf = (index: number) =>
+  new Date(Date.parse(AT) - index * 3_600_000).toISOString();
+
+/**
+ * The account U1 asks about, past the scale's own rows, holding what a count must leave
+ * out: a self-only work with a comment and a report on it, and a deleted work. The
+ * handle follows public_users_handle_normalized, which holds no underscore.
+ */
+const U1 = {
+  id: `user-${"1".repeat(32)}`,
+  handle: "lishu-test",
+  createdAt: "2025-03-04T05:06:07.000Z",
+  publicWorks: [`work-${"a".repeat(32)}`, `work-${"b".repeat(32)}`],
+  selfWork: `work-${"c".repeat(32)}`,
+  deletedWork: `work-${"d".repeat(32)}`,
+  canary: "u1selfonlycanary",
+};
+
+export interface CommunityOracle {
+  readonly m1: {
+    readonly total: number;
+    readonly oldestAt: string;
+    readonly groups: readonly {
+      readonly value: string;
+      readonly count: number;
+      readonly oldestAt: string;
+    }[];
+  };
+  readonly u1: {
+    readonly id: string;
+    readonly handle: string;
+    readonly createdAt: string;
+    readonly status: string;
+    readonly submittedWorks: number;
+    readonly commentCount: number;
+    readonly reportCount: number;
+    readonly canary: string;
+  };
+}
+
+const seedU1 = async (db: BenchDb) => {
+  await db.query(
+    `INSERT INTO community.public_users (id, handle, display_name, status, created_at, updated_at)
+     VALUES ($1, $2, '李书', 'active', $3::timestamptz, $3::timestamptz)`,
+    [U1.id, U1.handle, U1.createdAt],
+  );
+  for (const id of U1.publicWorks)
+    await db.query(
+      `INSERT INTO community.works (id, author_id, title, text, first_published_at, updated_at, visibility, operator_state)
+       VALUES ($1, $2, '合成作品', '合成作品正文', $3::timestamptz, $3::timestamptz, 'public', 'visible')`,
+      [id, U1.id, AT],
+    );
+  await db.query(
+    `INSERT INTO community.works (id, author_id, title, text, visibility, created_via)
+     VALUES ($1, $2, $3, $3, 'self', 'publishing')`,
+    [U1.selfWork, U1.id, U1.canary],
+  );
+  await db.query(
+    `INSERT INTO community.works (id, author_id, title, text, visibility, deleted_at, created_via)
+     VALUES ($1, $2, '', '', 'self', $3::timestamptz, 'publishing')`,
+    [U1.deletedWork, U1.id, AT],
+  );
+  const comment = (name: string) =>
+    `comment-${createHash("md5").update(`u1-${name}`).digest("hex")}`;
+  for (const [name, work] of [
+    ["a", U1.publicWorks[0]],
+    ["b", U1.publicWorks[0]],
+    ["c", U1.publicWorks[1]],
+    ["self", U1.selfWork],
+  ] as const)
+    await db.query(
+      `INSERT INTO community.catalog_comments (id, catalog_id, author_id, text, moderation, target_type, created_at)
+       VALUES ($1, $2, $3, $4, 'visible', 'work', $5::timestamptz)`,
+      [
+        comment(name),
+        work,
+        U1.id,
+        name === "self" ? U1.canary : "合成评论",
+        AT,
+      ],
+    );
+  for (const [name, root] of [
+    ["reply-a", "a"],
+    ["reply-self", "self"],
+  ] as const)
+    await db.query(
+      `INSERT INTO community.catalog_comment_replies (id, root_comment_id, author_id, text, moderation, created_at)
+       VALUES ($1, $2, $3, $4, 'visible', $5::timestamptz)`,
+      [
+        comment(name),
+        comment(root),
+        U1.id,
+        name === "reply-self" ? U1.canary : "合成回复",
+        AT,
+      ],
+    );
+  const reporter = `user-${createHash("md5").update("bench-user-1").digest("hex")}`;
+  for (const [name, work, status] of [
+    ["a", U1.publicWorks[0], "open"],
+    ["b", U1.publicWorks[1], "resolved"],
+    ["self", U1.selfWork, "open"],
+  ] as const)
+    await db.query(
+      `INSERT INTO community.report_cases (id, reporter_id, target_type, target_id, canonical_path, affected_user_id, snapshot, kind, reason, status, created_at, updated_at)
+       VALUES ($1, $2, 'work', $3, '/', $4, $5::jsonb, 'standard', 'other', $6, $7::timestamptz, $7::timestamptz)`,
+      [
+        `report-${createHash("md5").update(`u1-${name}`).digest("hex")}`,
+        reporter,
+        work,
+        U1.id,
+        JSON.stringify(name === "self" ? { title: U1.canary } : {}),
+        status,
+        AT,
+      ],
+    );
+};
+
+/** Every number comes from the functions the rows came from, never through a tool. */
+const communityOracleOf = (reports: number): CommunityOracle => {
+  const byKind = new Map<string, { count: number; oldestAt: string }>();
+  const add = (kind: string, at: string) => {
+    const known = byKind.get(kind);
+    byKind.set(kind, {
+      count: (known?.count ?? 0) + 1,
+      oldestAt:
+        known === undefined || at < known.oldestAt ? at : known.oldestAt,
+    });
+  };
+  for (let index = 1; index <= reports; index += 1)
+    if (reportStatusOf(index) !== "resolved")
+      add(reportKindOf(index), reportAtOf(index));
+  // The two open cases of U1's three, one of them owner-only: it still waits on someone.
+  add("standard", AT);
+  add("standard", AT);
+  const groups = [...byKind.entries()].map(([value, group]) => ({
+    value,
+    ...group,
+  }));
+  return {
+    m1: {
+      total: groups.reduce((sum, { count }) => sum + count, 0),
+      oldestAt: groups
+        .map(({ oldestAt }) => oldestAt)
+        .sort((a, b) => a.localeCompare(b))[0]!,
+      groups,
+    },
+    u1: {
+      id: U1.id,
+      handle: U1.handle,
+      createdAt: U1.createdAt,
+      status: "active",
+      submittedWorks: U1.publicWorks.length,
+      // Roots a, b and c and the reply under a; those under the self-only work are out.
+      commentCount: 4,
+      // The case on the self-only work names its author only to the Owner.
+      reportCount: 2,
+      canary: U1.canary,
+    },
+  };
+};
+
+export const seedCommunity = async (db: BenchDb): Promise<CommunityOracle> => {
   const { users, works, comments, reports } = BENCH_SCALE;
   await db.query(
     `INSERT INTO community.public_users (id, handle, display_name, status, created_at, updated_at)
@@ -815,19 +991,27 @@ export const seedCommunity = async (db: BenchDb) => {
      FROM generate_series(1, $1::int) i`,
     [comments, works, users, AT],
   );
+  // Each case by kind and state as reportKindOf and reportStatusOf say.
   await db.query(
-    `INSERT INTO community.report_cases (id, reporter_id, target_type, target_id, canonical_path, affected_user_id, snapshot, kind, reason, status, created_at, updated_at)
+    `INSERT INTO community.report_cases (id, reporter_id, target_type, target_id, canonical_path, affected_user_id, snapshot, kind, reason, claimant, status, created_at, updated_at)
      SELECT 'report-' || md5('bench-report-' || i),
-       'user-' || md5('bench-user-' || (1 + i % $2::int)), 'work',
-       'work-' || md5('bench-work-' || (1 + i % $3::int)),
+       'user-' || md5('bench-user-' || (1 + i % $2::int)),
+       CASE WHEN i % 5 = 1 THEN 'comment' ELSE 'work' END,
+       CASE WHEN i % 5 = 1 THEN 'comment-' || md5('bench-comment-' || (1 + i % $5::int))
+         ELSE 'work-' || md5('bench-work-' || (1 + i % $3::int)) END,
        '/works/work-' || md5('bench-work-' || (1 + i % $3::int)),
        'user-' || md5('bench-user-' || (2 + i % ($2::int - 1))),
-       '{}'::jsonb, 'standard', 'spam_scam',
-       CASE WHEN i % 3 = 0 THEN 'resolved' ELSE 'open' END,
+       '{}'::jsonb,
+       CASE WHEN i % 5 = 0 THEN 'rights_notice' WHEN i % 5 = 1 THEN 'quick_comment' ELSE 'standard' END,
+       CASE WHEN i % 5 = 0 THEN 'copyright' WHEN i % 5 = 1 THEN NULL ELSE 'spam_scam' END,
+       CASE WHEN i % 5 = 0 THEN '{"name":"合成权利人","contact":"contact-canary","rightsBasis":"合成依据"}'::jsonb END,
+       CASE WHEN i % 3 = 0 THEN 'resolved' WHEN i % 7 = 0 THEN 'appealed' WHEN i % 11 = 0 THEN 'reviewing' ELSE 'open' END,
        $4::timestamptz - i * interval '1 hour', $4::timestamptz - i * interval '1 hour'
      FROM generate_series(1, $1::int) i`,
-    [reports, users, works, AT],
+    [reports, users, works, AT, comments],
   );
+  await seedU1(db);
+  return communityOracleOf(reports);
 };
 
 const CMS_TABLES = [
@@ -849,14 +1033,11 @@ const COMMUNITY_TABLES = [
 ] as const;
 
 /** What actually landed, read with plain counts, and planner statistics refreshed. */
-export const finishSeed = async (db: BenchDb, withCommunity: boolean) => {
+export const finishSeed = async (db: BenchDb) => {
   // Not in parallel: a container's 64 MiB of /dev/shm cannot hold it at a million rows.
   await db.query("VACUUM (ANALYZE, PARALLEL 0)");
   const counts: Record<string, number> = {};
-  for (const [table, name] of [
-    ...CMS_TABLES,
-    ...(withCommunity ? COMMUNITY_TABLES : []),
-  ]) {
+  for (const [table, name] of [...CMS_TABLES, ...COMMUNITY_TABLES]) {
     const { rows } = await db.query(`SELECT count(*)::int AS n FROM ${table}`);
     counts[name] = Number(rows[0]!.n);
   }

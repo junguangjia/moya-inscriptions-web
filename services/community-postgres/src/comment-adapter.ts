@@ -78,6 +78,7 @@ import type {
   ModerationEventAction,
   PublicationPolicy,
 } from "@moya/contracts/internal/community-operator";
+import type { OperatorReadScope } from "@moya/contracts/internal/community-operator";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
 const offset = (page: number, pageSize: number): number =>
@@ -386,12 +387,17 @@ export class PostgresCommunityCommentAdapter
    */
   async readOperatorComments(
     query: OperatorCommentQueryInput,
+    scope?: OperatorReadScope,
   ): Promise<OperatorCommentListing> {
     const filters = [
       query.moderation ?? null,
       query.kind ?? null,
       query.catalogId ?? null,
       query.search === undefined ? null : toSearchPattern(query.search),
+      query.authorId ?? null,
+      query.from ?? null,
+      query.to ?? null,
+      scope?.withholdSelfOnly === true,
     ];
     return this.snapshot(async (run) => {
       const totals = await run<{ total: unknown } & QueryResultRow>(
@@ -429,8 +435,13 @@ export class PostgresCommunityCommentAdapter
 
   async readModerationEvents(
     query: ModerationEventQueryInput,
+    scope?: OperatorReadScope,
   ): Promise<CommentPageRecord<ModerationEvent>> {
-    const filters = [query.subjectId ?? null, query.action ?? null];
+    const filters = [
+      query.subjectId ?? null,
+      query.action ?? null,
+      scope?.withholdSelfOnly === true,
+    ];
     return this.snapshot(async (run) => {
       const totals = await run<{ total: unknown } & QueryResultRow>(
         countModerationEventsSql,
@@ -450,21 +461,34 @@ export class PostgresCommunityCommentAdapter
     });
   }
 
-  async readModerationSummary(range: {
-    readonly from: Date;
-    readonly to: Date;
-  }): Promise<ModerationSummaryRecord> {
+  async readModerationSummary(
+    range: {
+      readonly from: Date;
+      readonly to: Date;
+    },
+    scope?: OperatorReadScope,
+  ): Promise<ModerationSummaryRecord> {
+    const withhold = scope?.withholdSelfOnly === true;
     return this.snapshot(async (run) => {
       const byState = await run<
         { moderation: unknown; total: unknown } & QueryResultRow
-      >(countOperatorCommentsByStateSql, [null, null, null, null]);
+      >(countOperatorCommentsByStateSql, [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        withhold,
+      ]);
       const byAction = await run<
         { action: unknown; total: unknown } & QueryResultRow
-      >(countModerationActionsInRangeSql, [range.from, range.to]);
-      const recent = await run<ModerationEventRow>(
-        recentModerationEventsSql,
-        [10],
-      );
+      >(countModerationActionsInRangeSql, [range.from, range.to, withhold]);
+      const recent = await run<ModerationEventRow>(recentModerationEventsSql, [
+        10,
+        withhold,
+      ]);
       const actions: Record<ModerationEventAction, number> = {
         approve: 0,
         reject: 0,

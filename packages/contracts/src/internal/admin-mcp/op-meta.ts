@@ -82,6 +82,8 @@ export interface AdminOpMeta<Input, Output, Context> {
    * `pageSize` of its own input. Absent: it takes neither, and a cut cannot continue.
    */
   readonly paging?: "keyset" | "numbered";
+  /** On a numbered op that answers rows: which of admin_read's own arguments it reads. */
+  readonly readArgs?: readonly ("view" | "fields" | "groupBy")[];
   readonly input?: z.ZodType;
   readonly output?: AdminOpOutput;
   /** A valid `input`, shown by admin_actions and parsed by the registry test. */

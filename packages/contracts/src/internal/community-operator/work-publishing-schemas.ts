@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { operatorModerationReasonSchema } from "./moderation-reason.js";
+import { operatorExactIdSchema } from "./query-filters.js";
 
 import {
   WORK_BODY_MAXIMUM,
@@ -115,6 +116,8 @@ export const workSubmissionQueueStateSchema = z.enum([
 
 export const operatorWorkSubmissionQuerySchema = z.strictObject({
   state: workSubmissionQueueStateSchema.optional(),
+  authorId: strictUserId.optional(),
+  workId: workId.optional(),
   page: pageNumber,
   pageSize,
 });
@@ -323,6 +326,9 @@ export const operatorPublishingJobSchema = z.strictObject({
 export const operatorPublishingJobQuerySchema = z.strictObject({
   state: publishingJobStateSchema.optional(),
   kind: publishingJobKindSchema.optional(),
+  /** A media item or Catalog asset id: a work id names no job. */
+  subjectId: operatorExactIdSchema.optional(),
+  id: publishingJobIdSchema.optional(),
   page: pageNumber,
   pageSize,
 });

@@ -212,6 +212,7 @@ describe("Production auth source admission before pools", () => {
     "ANALYTICS_RELAY_TOKEN",
     "ANALYTICS_HMAC_KEY",
     "AUTH_LOOKUP_KEY",
+    "A_TOKEN_ADDED_LATER",
   ])(
     "refuses an AI base credential equal to %s before opening any pool",
     async (other) => {
@@ -233,6 +234,7 @@ describe("Production auth source admission before pools", () => {
     "ANALYTICS_RELAY_TOKEN",
     "ANALYTICS_HMAC_KEY",
     "AUTH_LOOKUP_KEY",
+    "A_TOKEN_ADDED_LATER",
   ])(
     "refuses an AI community credential equal to %s before opening any pool",
     async (other) => {

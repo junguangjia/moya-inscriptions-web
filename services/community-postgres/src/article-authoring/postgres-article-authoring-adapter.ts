@@ -1048,9 +1048,11 @@ export class PostgresArticleAuthoringAdapter
     return readTransaction(this.pool, async (db) => {
       const rows = (
         await db.query<PendingSummaryRow>(
+          // The cursor holds milliseconds and the column microseconds, so the row a
+          // page ended on must not read as past its own cursor.
           `SELECT ${pendingColumns} ${pendingFrom}
-        AND ($1::timestamptz IS NULL OR (r.created_at,a.id)>($1::timestamptz,$2::text))
-        ORDER BY r.created_at ASC,a.id ASC LIMIT $3`,
+        AND ($1::timestamptz IS NULL OR (date_trunc('milliseconds',r.created_at),a.id)>($1::timestamptz,$2::text))
+        ORDER BY date_trunc('milliseconds',r.created_at) ASC,a.id ASC LIMIT $3`,
           [cursor?.[0] ?? null, cursor?.[1] ?? null, query.pageSize + 1],
         )
       ).rows;

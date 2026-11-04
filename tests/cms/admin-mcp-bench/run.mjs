@@ -561,16 +561,13 @@ async function main() {
       path.join(root, "apps/admin"),
       "migrations",
     );
-    // Nothing in S3 reads the community tables, so L0 stays on what it grades.
-    if (mode !== "l0") {
-      const { runCommunityMigrations } = await import(
-        path.join(root, "services/community-postgres/dist/index.js")
-      );
-      await runCommunityMigrations(
-        pool,
-        path.join(root, "database/community-migrations"),
-      );
-    }
+    const { runCommunityMigrations } = await import(
+      path.join(root, "services/community-postgres/dist/index.js")
+    );
+    await runCommunityMigrations(
+      pool,
+      path.join(root, "database/community-migrations"),
+    );
 
     stage = "provision";
     const started = Date.now();
@@ -605,19 +602,25 @@ async function main() {
       pathToFileURL(path.join(root, here, "seed.ts")).href
     );
     const oracle = await seedCms(pool, ownerId);
-    if (mode !== "l0") await seedCommunity(pool);
+    const communityOracle = await seedCommunity(pool);
     const manifest =
       mode === "analytics"
         ? JSON.parse(await readFile(umamiManifest, "utf8"))
         : undefined;
     const analyticsOracle =
       mode === "analytics" ? await seedCanonical(pool, manifest) : undefined;
-    const rows = await finishSeed(pool, mode !== "l0");
+    const rows = await finishSeed(pool);
     const seedMs = Date.now() - started;
     const oracleFile = path.join(session.directory, "oracle.json");
     await writeFile(
       oracleFile,
-      JSON.stringify({ oracle, analyticsOracle, rows, seedMs }),
+      JSON.stringify({
+        oracle,
+        communityOracle,
+        analyticsOracle,
+        rows,
+        seedMs,
+      }),
       { mode: 0o600 },
     );
     console.log(JSON.stringify({ seededRows: rows, seedMs }));

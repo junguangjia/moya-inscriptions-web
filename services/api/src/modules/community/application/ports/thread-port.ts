@@ -43,6 +43,8 @@ export interface ThreadPort {
     page: number;
     pageSize: number;
     includeHidden: boolean;
+    search?: string | undefined;
+    id?: string | undefined;
   }): Promise<OperatorThreadPage>;
   operatorCreateThread(
     operator: string,

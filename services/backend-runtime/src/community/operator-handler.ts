@@ -1,5 +1,5 @@
 import { handleReportingOperatorRequest } from "./reporting-handler.js";
-import type { CommunityReportingService } from "@moya/api";
+import type { ReportingOperatorRoutes } from "./reporting-handler.js";
 import { timingSafeEqual } from "node:crypto";
 import type { readBoundedArticleThumbnail } from "./article-runtime-read.js";
 
@@ -37,9 +37,13 @@ import {
   AI_OPERATOR_LABEL,
   AI_OPERATOR_RUN_HEADER,
   aiOperatorRouteFor,
+  aiOperatorRouteId,
+  SELF_ONLY_OWNER_REVIEW,
   type AiOperatorCredential,
+  type AiOperatorReader,
 } from "@moya/contracts/internal/admin-mcp";
 
+import { aiInputRefusal, handleAiOperatorRead } from "./ai-operator.js";
 import { deliverPublishingMedia } from "./publishing-media-read.js";
 import { JsonBodyError, readJsonBody } from "../http/json-body.js";
 import { sendJson } from "../http/json-response.js";
@@ -69,13 +73,25 @@ import type {
 } from "@moya/api";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-export interface OperatorRouteDependencies {
+/** The services that record who acted: one bundle per audit label. */
+export interface OperatorLabelledServices {
+  readonly moderationService: CommunityModerationService;
+  readonly reportingService?: ReportingOperatorRoutes | undefined;
+  readonly publishingOperatorService?: PublishingOperatorService | undefined;
+  readonly articlePublicationOperatorService?:
+    ArticlePublicationOperatorService | undefined;
+}
+
+export interface OperatorRouteDependencies extends OperatorLabelledServices {
+  /** Built for `ai-admin`; absent, an AI credential reaches none of them. */
+  readonly aiServices?: OperatorLabelledServices | undefined;
+  /** The AI-only reads and the current visibility check on the AI path. */
+  readonly aiOperatorReader?: AiOperatorReader | undefined;
   readonly catalogThumbnail?:
     | ((
         input: CatalogThumbnailRequest,
       ) => ReturnType<typeof readBoundedArticleThumbnail>)
     | undefined;
-  readonly reportingService?: CommunityReportingService | undefined;
   readonly catalogDeliveryReadiness?:
     | ((intentId: string) => Promise<CatalogDeliveryReadiness | null>)
     | undefined;
@@ -91,13 +107,8 @@ export interface OperatorRouteDependencies {
    * backlog, counts only, read with the Backend's own role. */
   readonly catalogRenderBacklog?:
     (() => Promise<CatalogRenderBacklogReport>) | undefined;
-  readonly articlePublicationOperatorService?:
-    ArticlePublicationOperatorService | undefined;
-  readonly moderationService: CommunityModerationService;
   readonly contentOperatorPort?: CommunityContentOperatorPort | undefined;
   readonly discussionPort?: DiscussionPort | undefined;
-  /** Work publishing operations (Development only); absent leaves publishing/* unrouted. */
-  readonly publishingOperatorService?: PublishingOperatorService | undefined;
   /** Agent administration (Development only); absent leaves agent/* unrouted. */
   readonly agentAdministrationService?: AgentAdministrationService | undefined;
   /** Threads (content-community-completion-v1, Development only); absent leaves threads/* unrouted. */
@@ -162,8 +173,9 @@ export const resolveOperatorActor = (
 
 /**
  * What stands between an AI credential and a route. Default deny: only a row of
- * the route table naming this credential passes. No sensitive category is
- * provisioned on this path yet, so a sensitive row refuses.
+ * the route table naming this credential passes, so `agent/*` refuses on every AI
+ * credential. No sensitive category is provisioned on this path yet, so a sensitive
+ * row refuses, binary routes included.
  */
 export const aiOperatorRefusal = (
   request: IncomingMessage,
@@ -282,8 +294,12 @@ export const handleOperatorRequest = async (
   response: ServerResponse,
   pathname: string,
   {
-    moderationService,
-    reportingService,
+    moderationService: ownerModerationService,
+    reportingService: ownerReportingService,
+    publishingOperatorService: ownerPublishingOperatorService,
+    articlePublicationOperatorService: ownerArticlePublicationOperatorService,
+    aiServices,
+    aiOperatorReader,
     catalogRecipePolicy,
     catalogThumbnail,
     catalogDeliveryReadiness,
@@ -293,12 +309,10 @@ export const handleOperatorRequest = async (
     aiCredentials,
     contentOperatorPort,
     discussionPort,
-    publishingOperatorService,
     agentAdministrationService,
     threadService,
     feedbackService,
     directMessageService,
-    articlePublicationOperatorService,
   }: OperatorRouteDependencies,
 ): Promise<void> => {
   if (/^\/internal\/community\/comments\/[^/]+\/images\//u.test(pathname)) {
@@ -324,7 +338,62 @@ export const handleOperatorRequest = async (
   const method = request.method ?? "GET";
   const methodNotAllowed = () =>
     sendOperatorError(response, 405, "METHOD_NOT_ALLOWED");
+  const services: OperatorLabelledServices | undefined =
+    actor.label === AI_OPERATOR_LABEL
+      ? aiServices
+      : {
+          moderationService: ownerModerationService,
+          reportingService: ownerReportingService,
+          publishingOperatorService: ownerPublishingOperatorService,
+          articlePublicationOperatorService:
+            ownerArticlePublicationOperatorService,
+        };
+  if (services === undefined) {
+    sendOperatorError(response, 503, "OPERATOR_UNAVAILABLE");
+    return;
+  }
+  const {
+    moderationService,
+    reportingService,
+    publishingOperatorService,
+    articlePublicationOperatorService,
+  } = services;
   try {
+    if (actor.label === AI_OPERATOR_LABEL) {
+      const invalid = aiInputRefusal(request, pathname);
+      if (invalid !== null) {
+        sendOperatorError(response, invalid.status, invalid.code);
+        return;
+      }
+      const route = aiOperatorRouteFor(
+        method,
+        pathname,
+        new URL(request.url ?? "/", "http://request.invalid").searchParams,
+      );
+      if (route?.selfOnly !== undefined) {
+        if (aiOperatorReader === undefined) {
+          sendOperatorError(response, 503, "OPERATOR_UNAVAILABLE");
+          return;
+        }
+        const id = decodeSegment(aiOperatorRouteId(route, pathname) ?? "");
+        if (
+          id !== undefined &&
+          (await aiOperatorReader.isSelfOnly(route.selfOnly, id))
+        ) {
+          sendOperatorError(response, 403, SELF_ONLY_OWNER_REVIEW);
+          return;
+        }
+      }
+      if (
+        await handleAiOperatorRead(
+          request,
+          response,
+          pathname,
+          aiOperatorReader,
+        )
+      )
+        return;
+    }
     if (pathname === "/internal/community/catalog-delivery/thumbnail") {
       if (method !== "GET") return methodNotAllowed();
       if (!catalogThumbnail)
@@ -705,6 +774,9 @@ export const handleOperatorRequest = async (
             ["kind", stringQuery(query.kind)],
             ["catalogId", stringQuery(query.catalogId)],
             ["search", stringQuery(query.search)],
+            ["authorId", stringQuery(query.authorId)],
+            ["from", stringQuery(query.from)],
+            ["to", stringQuery(query.to)],
             ["order", stringQuery(query.order)],
           ]),
           ...withDefined([

@@ -1,5 +1,6 @@
 import type { ExecutionFence } from "./community-comment-port.js";
 import type {
+  OperatorReadScope,
   OperatorWorksQuery,
   OperatorFeaturedQuery,
   OperatorUsersQuery,
@@ -16,8 +17,14 @@ import type {
 } from "@moya/contracts/internal/community-operator";
 export interface CommunityContentOperatorPort {
   readWorkTitle(id: string): Promise<string | null>;
-  readWorks(query: OperatorWorksQuery): Promise<OperatorWorkPage>;
-  readUsers(query: OperatorUsersQuery): Promise<OperatorUserPage>;
+  readWorks(
+    query: OperatorWorksQuery,
+    scope?: OperatorReadScope,
+  ): Promise<OperatorWorkPage>;
+  readUsers(
+    query: OperatorUsersQuery,
+    scope?: OperatorReadScope,
+  ): Promise<OperatorUserPage>;
   recommendUser(
     operator: string,
     input: RecommendUserCommand,
@@ -27,7 +34,10 @@ export interface CommunityContentOperatorPort {
     operator: string,
     input: ModerateWorkCommand,
   ): Promise<OperatorWork>;
-  readFeatured(query: OperatorFeaturedQuery): Promise<FeaturedPage>;
+  readFeatured(
+    query: OperatorFeaturedQuery,
+    scope?: OperatorReadScope,
+  ): Promise<FeaturedPage>;
   setFeatured(
     operator: string,
     input: FeaturedMutation,

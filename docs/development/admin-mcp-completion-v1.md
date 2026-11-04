@@ -427,10 +427,135 @@ tests/unit/backend/operator-ai-label.test.ts:
   not exist yet.
 - Distinctness at startup compares the value with the whole environment, not a
   list, so a later token cannot be missed. The analytics list names it too.
-- Not built, because no base route reaches them yet: the service factory per
-  label, which S6 needs, and `callAiBase`, which comes with its first JSON
-  route. The literal `"owner"` sites already take the resolved actor, proven by
-  a test that widens the table.
+- Not built then, because no base route reached them: the service factory per
+  label and `callAiBase`, which S6 brings. The literal `"owner"` sites already
+  took the resolved actor, proven by a test that widens the table.
+
+Recorded when built in S6, on the Backend, tests in
+tests/unit/backend/operator-ai-community-credential.test.ts,
+tests/unit/backend/operator-ai-label.test.ts and
+tests/integration/postgres/ai-operator-reads.test.ts:
+
+- `AI_OPERATOR_ROUTES` gains the community credential's read rows, JSON and
+  binary, and refuses every community write until the slice that builds it lists
+  them with its self-only check. A path may hold whole `:name` segments. A row's
+  `selfOnly` names the record its `:id` holds, and while that record is
+  self-only the route answers 403 `SELF_ONLY_OWNER_REVIEW`, so withheld never
+  reads as not found.
+- `ai/settlement` on the community credential is left for the slice that builds
+  its handler, because a row with no handler would only answer 404.
+- `createOperatorServices` in application.ts builds the bundle per label; the
+  Owner's and AI's come from it alike. `operatorReadScopeFor(label)` is the
+  trailing argument a service gives its reads, empty for the Owner, so an Owner
+  port call is the call it always was and an AI read cannot forget to ask.
+- The AI shape of a report is `CommunityReportingService.forAiOperator()`. The
+  Owner's methods keep their answers and their types.
+- `callAiOperator(credential)` and `openCommunityAiMedia`,
+  `openCommunityAiEvidence` keep the Backend's status and bare code.
+  `callAiBase` is `callAiOperator("base")`.
+- A NUL in a path or query, or a query key an object inherits, is refused for AI
+  before any handler, as `INVALID_COMMAND`. A malformed escape is `NOT_FOUND`.
+
+Recorded when built in S6, on locating:
+
+- `GET internal/community/ai/find` takes `{text, source?, limit?}`, `{type, id}`
+  or `{handle}`. `limit` is per branch, up to 226, because admin_find pages to
+  200 and reads one row past a page: Admin merges and slices, so the Backend has
+  no `skip`. It answers `{items, sources, excluded}`, naming only branches it
+  really read.
+- Community text is matched raw, as stored, with no t2s or s2t: there is no
+  normalized copy. A hit is `identity` only on an id or a handle.
+- The reports branch reads description, claimant name, rights basis, the
+  snapshot's title, text, display name and handle, decision and appeal text,
+  materials, messages and audit reasons. It names each claimant field, so
+  `contact` cannot join it by a cast of the whole column.
+- `{type:"work_revision"}` leaves out `not_required` autosaves, and
+  `{type:"article"}` leaves out drafts and shows a title only while pending,
+  because a live document's working title may be a draft's. That answer names
+  `private_draft` in `excluded`.
+- `{type:"media_item"}` is content free: id, state, kind and owner. It is
+  refused for an item in a revision of a self-only work. It does not look inside
+  comment `image_refs`, which no index serves, so an item only on a comment
+  under such a work still answers those four facts.
+- `GET internal/community/ai/count` takes `source` (reports, comments, works,
+  users, work_submissions, jobs), that source's own list filters and `groupBy`.
+  It shares each list's WHERE, and a test holds each total equal to its list. It
+  answers `oldestAt` overall and per group, so M1 is one read. Past 2000 ms it
+  answers 503 `READ_TIMED_OUT` with no number.
+- `list.*` filters added: `unresolved=true` on reports (open, reviewing,
+  appealed), beside the design's list. The time filters take ISO instants; Admin
+  resolves named ranges and echoes them.
+
+Recorded when built in S6, on withholding:
+
+- The scope is a condition in the same SQL, not a filter on the answer, so a
+  search, a total, `counts`, a sort or a page cannot read a withheld row back.
+  Carriers: read-works, read-featured (`filter=all`, inherited rows too),
+  read-comments, read-comment, comment images, moderation events and the
+  summary's queue, actions and recent events, work submissions and their bytes,
+  find, count and a user's `submittedWorks`, `commentCount` and `reportCount`.
+- A report's target, people and urgency stay unread: an owner-only row stays in
+  the list only under a `status` or `unresolved` filter, and in a count only
+  grouped by kind or status. Any other filter or group leaves it out, so its
+  affected user cannot be read back by counting. `reportCount` leaves it out for
+  the same reason.
+- A comment's case still goes to the Owner once a purge has taken the comment's
+  row, through the work its snapshot's `post` names.
+- A self-only work's position is left to the row that names it: an owner-only
+  row keeps its place in the queue's order, urgent first and then oldest, so its
+  row position says those two facts. They hold no text.
+- A pending Article may use an item its author also holds in a self-only work.
+  Its media route answers `SELF_ONLY_OWNER_REVIEW` for all of that Article's
+  media while it does, because the reference, not the route, names the item. The
+  Article's text stays readable, with that item's id in its `references`.
+- A deleted work is not self-only, so a case on it keeps the snapshot its
+  reporter saw and a comment under it stays readable, even if the author made
+  the work self-only before deleting it. Both were public when written. The work
+  itself holds no text.
+- `operatorReadScopeFor` withholds for `ai-admin` always. The selfOnly switch
+  reaches the Backend with the slice that builds `x-ai-sensitive`; until then
+  the switch can open nothing here, which fails safe.
+
+Recorded when built in S6, on the proof, tests in
+tests/cms/admin-mcp-community.test.ts and
+tests/integration/postgres/ai-operator-reads.test.ts:
+
+- A rights notice in each of the four states is read field by field on list and
+  get. Its name, basis, description, materials, messages, audit reasons and
+  appeal text are readable and searchable, and no answer holds `contact`, an
+  evidence id, name or path, including a call that asks for one by name and a
+  case retention emptied. With every switch on, contact stays out.
+- Every registry read op, every queue walked to its end with `next`, `admin_get`
+  on each type and window and `admin_find` on each type are swept for the
+  canaries and for a withheld record's own id. The audit ledger is swept too.
+- The byte test holds real bytes, the legacy way, which needs no media store: AI
+  opens a public work's item, the Owner opens the self-only work's, and AI gets
+  403 with no byte until the work is public again.
+
+Release record, App-role preflight, read-only, for the Owner to run on
+Production before `COMMUNITY_OPERATOR_AI_TOKEN` is placed. Every row must be
+true:
+
+```sql
+SELECT rel, priv, has_table_privilege(:'app_role', rel, priv) AS granted
+FROM (VALUES
+  ('community.report_cases','SELECT'), ('community.report_decisions','SELECT'),
+  ('community.report_materials','SELECT'), ('community.report_messages','SELECT'),
+  ('community.report_audit','SELECT'), ('community.report_evidence','SELECT'),
+  ('community.works','SELECT'), ('community.work_revisions','SELECT'),
+  ('community.work_revision_items','SELECT'), ('community.media_items','SELECT'),
+  ('community.catalog_comments','SELECT'), ('community.catalog_comment_replies','SELECT'),
+  ('community.moderation_events','SELECT'), ('community.public_users','SELECT'),
+  ('community.threads','SELECT'), ('community.feedback','SELECT'),
+  ('community.publishing_jobs','SELECT'), ('community.article_documents','SELECT'),
+  ('community.featured_content','SELECT'), ('community.featured_users','SELECT'),
+  ('community.featured_settings','SELECT'), ('community.feedback_images','SELECT'),
+  ('community.publication_setting','SELECT'), ('community.thread_works','SELECT'),
+  ('community.article_revisions','SELECT'), ('community.media_renditions','SELECT'),
+  ('community.media_blobs','SELECT'), ('community.user_media','SELECT'),
+  ('community.discussion_command_receipts','INSERT')
+) AS needed(rel, priv);
+```
 
 ## 3. Door and native transport
 
@@ -1140,6 +1265,60 @@ tests/unit/backend/admin-mcp-locate.test.ts:
   does; without it the build traces all of `apps/admin` into the standalone
   output.
 
+Recorded when built in S6, in Admin, tests in
+tests/cms/admin-mcp-community.test.ts:
+
+- `community.read-*` and the `list.*` on them answer through
+  `apps/admin/src/admin-mcp/ops/community-reads.ts`. A queue answers
+  `{rows, filter, total, about?}`: compact rows, `fields` from a per-source
+  whitelist, and long text only as state, length and hash. The Backend's answer
+  is checked against the AI schema first, so a contact in it answers
+  `COMMUNITY_UNAVAILABLE` and leaves nothing. That code joins the envelope: the
+  store could not be read, and that is no empty answer.
+- These queues page by number, not by the keyset this section first asked for,
+  because the routes they run on and the Owner's screens number their pages. A
+  page keeps `total` and drops its page number, page size and page count, so
+  `next` is the one way on, as `editorial.owner-drafts` does. Rows moving
+  between two calls can repeat a row, or skip one. `list.article_submissions`
+  pages on the Backend's own cursor, ten rows at a time, because ten always fit
+  one answer.
+- `view:"count"` runs on `ai/count` for reports, appeals, comments, works,
+  users, work submissions and jobs, with `oldestAt` overall and per group. Any
+  other queue answers `not_for_this_op`.
+- `list.comments` and `list.works` take a named `range`, resolved by the
+  analytics resolver in Asia/Shanghai, so `last_N_days` are N finished days. The
+  answer's `filter` echoes the range, the time zone and the two instants, and a
+  filter's `to` is the last millisecond, because the Backend's is inclusive.
+- `admin_read` on one record answers it whole when it fits. Past the cap, long
+  strings go by length and hash, `meta.truncated` is set and `next` is
+  `admin_get`, whose windows read every field, so a rights notice of any length
+  is readable. A nested value such as a report's `snapshot` is a field holding
+  its JSON.
+- An owner-only case answers `SELF_ONLY_OWNER_REVIEW` on `admin_read` and
+  `admin_get`, with `{id, kind, status, ownerOnly, code}` in `data`. In a queue
+  it is that row alone, whatever `fields` asks for. A work the AI cannot read
+  answers `NOT_FOUND` exactly as a work that does not exist, with
+  `meta.excluded` naming `self_only` on both, so neither a miss nor an exclusion
+  says which it was.
+- `meta.excluded` is named on every read that can withhold, whatever the answer
+  holds, so it says nothing about any one record. `meta.redacted` is named on
+  every report read.
+- `admin_find` runs the community search beside the CMS branches, not after
+  them: the wait holds no Admin connection. With no token the sources are
+  `not_available`, with the Backend out of reach or a query too long for its
+  address they are `failed`, and a CMS answer still comes back. Candidates carry
+  only `admin_get`; an exact hit also carries the reads around the record.
+  Community writes join those skeletons with the slice that builds them.
+- `read-threads`, `read-feedback` and `read-publishing-jobs` gained an additive
+  `id` filter, so `admin_get` can read one by id. `includeHidden` now reads the
+  text `false` as false, because a coercion read it as true; the Owner's screen
+  sends only `true`.
+- A pending Article's `resolvedReferences` is left out and named in
+  `meta.redacted`, because it holds media addresses for the Owner's screen.
+- `listPending` compares its cursor in milliseconds. It held microseconds in the
+  column and milliseconds in the cursor, so the row a page ended on came back at
+  the head of the next page, on the Owner's screen too.
+
 ## 7. Reversible execution, direct
 
 `admin_execute {requestId, op, input, targets<=100, startAt?}`. No run table.
@@ -1212,8 +1391,9 @@ Recorded when built in S5, tests in tests/cms/admin-mcp-execute.test.ts:
   the same, and `removedItems.links` then names its place and never its value.
 - `editorial.save-article-draft` takes `adminArticleContentSchema`, so a value
   of the wrong kind, an array of text, an unknown key and what the server sets
-  (`firstPublishedAt`, `publishedAt`) answer INPUT_INVALID before any effect.
-  The route keeps its loose schema.
+  (`firstPublishedAt`, `publishedAt`) answer INPUT_INVALID before any effect. A
+  row sent by id is refused the same way, because a row kept by id would keep a
+  link the answer said was removed. The route keeps its loose schema.
 - SQLSTATE 23503 on a statement answers REFERENCE_NOT_FOUND: the transaction
   rolled back, so nothing committed. The same state from the COMMIT itself stays
   OUTCOME_UNKNOWN, as any commit that cannot be confirmed does. More than 1,000
@@ -1568,7 +1748,8 @@ Recorded when built in S5, tests in tests/cms/admin-mcp-editorial-ops.test.ts:
   as it was. `catalog.restore` also refuses a version of another record as
   NOT_FOUND and names the images and sources a restore drops in `removedItems`.
   It needs no `allowRemoving`: the Owner's restore asks nothing either, and the
-  version is the content asked for.
+  version is the content asked for. `article.restore` names a withheld link it
+  clears in `removedItems.links` the same way, by its place and never its value.
 - `catalog.patch_text` takes `catalogId` as a row id or the public identity. Its
   fields are the Catalog's text and stateful fields, not array rows. Edits read
   the text as it was, so their order changes nothing, and two that reach the
@@ -3214,3 +3395,20 @@ Numbers stay in the private evidence of each run, not here.
   above. A publish here has no images, because a record with images needs a real
   Backend's readiness answer. That read is not in these numbers. Nothing here
   says anything about TencentDB until L4.
+
+Recorded when built in S6, the community half, in tests/cms/admin-mcp-bench/.
+
+- `l0.scale.ts` now seeds the community tables at target scale and runs the real
+  Backend's AI routes in its own process, as the owner of the tables, so their
+  statements count on the same row as the Admin's. The App role's grants have
+  their own suite. L1 does not time these reads yet.
+- M1 is one call: `list.reports`, `view:"count"`, grouped by kind. The oracle
+  adds up the functions the rows came from, including an owner-only case, which
+  still waits on someone. It reads `report_cases` sequentially, because most of
+  its cases are waiting; that is reported on its row, and no other table may
+  join it.
+- U1 is two calls: `admin_find` on the handle, then `list.users` with the `ref`.
+  Its account holds a self-only work, a comment and a report on it, and a
+  deleted work, so a count that takes in a withheld row is wrong. Handles hold
+  no underscore, by `public_users_handle_normalized`, so the seed's is
+  `lishu-test`.

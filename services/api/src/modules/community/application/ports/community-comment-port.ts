@@ -5,6 +5,7 @@ import type {
 } from "@moya/contracts";
 import type {
   CommentModerationState,
+  OperatorReadScope,
   ModerationEventAction as ContractModerationEventAction,
   OperatorComment,
   OperatorCommentKind,
@@ -139,6 +140,9 @@ export interface OperatorCommentQueryInput {
   readonly kind?: OperatorCommentKind;
   readonly catalogId?: CatalogId;
   readonly search?: string;
+  readonly authorId?: string;
+  readonly from?: string;
+  readonly to?: string;
   readonly order: "newest" | "oldest";
   readonly page: number;
   readonly pageSize: number;
@@ -236,6 +240,7 @@ export interface CommunityCommentPort {
   /** Bounded operator listing with its status counts; V1 keeps no large review queue. */
   readOperatorComments(
     query: OperatorCommentQueryInput,
+    scope?: OperatorReadScope,
   ): Promise<OperatorCommentListing>;
 
   /** One review item by id, whichever table holds it; null when unknown. */
@@ -246,13 +251,17 @@ export interface CommunityCommentPort {
   /** The audit trail, newest first, optionally for one subject or action. */
   readModerationEvents(
     query: ModerationEventQueryInput,
+    scope?: OperatorReadScope,
   ): Promise<CommentPageRecord<ModerationEvent>>;
 
   /** Queue counts now, action counts inside [from, to), the last few events. */
-  readModerationSummary(range: {
-    readonly from: Date;
-    readonly to: Date;
-  }): Promise<ModerationSummaryRecord>;
+  readModerationSummary(
+    range: {
+      readonly from: Date;
+      readonly to: Date;
+    },
+    scope?: OperatorReadScope,
+  ): Promise<ModerationSummaryRecord>;
 
   readPublicationPolicy(): Promise<{
     readonly policy: PublicationPolicy;

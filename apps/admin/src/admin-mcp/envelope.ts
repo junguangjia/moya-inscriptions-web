@@ -128,6 +128,10 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     hint: "This read ran out of time, so it gives no number and this is not a zero. Retry shortly, or narrow the filter.",
     retryable: true,
   },
+  COMMUNITY_UNAVAILABLE: {
+    hint: "The community store could not be read just now, so this has no answer and it is not an empty one. Retry shortly.",
+    retryable: true,
+  },
   ANALYTICS_UNAVAILABLE: {
     hint: "The canonical analytics store could not be read just now, so this has no number and it is not a zero. Retry shortly.",
     retryable: true,

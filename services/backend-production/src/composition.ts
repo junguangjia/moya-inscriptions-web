@@ -48,6 +48,7 @@ import {
   selectOwnArticleThumbnail,
   PostgresAgentAdministrationAdapter,
   PostgresArticleAuthoringAdapter,
+  PostgresAiOperatorReader,
   PostgresCommunityContentOperatorAdapter,
   PostgresAuthorCommunityAdapter,
   PostgresCommunityDiscoveryAdapter,
@@ -280,8 +281,10 @@ export const prepareProductionBackend = async (
     environment,
     "OPERATOR_AI_BASE_TOKEN",
   );
-  // No route takes it yet, but a value shared with any other token still stops here.
-  parseAiCredential(environment, "COMMUNITY_OPERATOR_AI_TOKEN");
+  const operatorAiCommunityCredential = parseAiCredential(
+    environment,
+    "COMMUNITY_OPERATOR_AI_TOKEN",
+  );
   if (
     runtimeConfig.nodeEnv !== "production" &&
     runtimeConfig.nodeEnv !== "development"
@@ -1064,6 +1067,8 @@ export const prepareProductionBackend = async (
         },
         communityOperatorCredential: parseOperatorCredential(environment),
         operatorAiBaseCredential,
+        operatorAiCommunityCredential,
+        aiOperatorReader: new PostgresAiOperatorReader(communityPool),
       }),
     ),
     closeResources,
