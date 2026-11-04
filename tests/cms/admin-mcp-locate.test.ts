@@ -303,6 +303,11 @@ describe("Catalog missing transcription", () => {
         dynasty: { state: "VALUE", value: dynastyB },
       })
     ).id;
+    // No dynasty: the count below keeps it in a row of its own.
+    await saveCatalog("missing-no-dynasty", {
+      transcription: { state: "UNSUPPLIED" },
+      dynasty: { state: "UNSUPPLIED" },
+    });
     // Has its text: not missing.
     ids.present = (
       await saveCatalog("missing-present", {
@@ -491,7 +496,8 @@ describe("the other CMS sources", () => {
   });
 
   it("goes on from a cut page the route numbers itself, losing no row and repeating none", async () => {
-    for (let index = 0; index < 50; index += 1)
+    // Two full pages of its own, so page 2 is cut on an empty database too.
+    for (let index = 0; index < 100; index += 1)
       await saveCatalog(`relay-wide-${index}`);
     const idsOf = (envelope: AdminMcpEnvelope) =>
       (envelope.data as { docs: { id: number }[] }).docs.map(({ id }) => id);
