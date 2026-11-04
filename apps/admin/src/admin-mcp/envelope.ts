@@ -41,7 +41,7 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     retryable: false,
   },
   DOCUMENT_LOCKED: {
-    hint: "Someone holds this document open. Wait for the lock to expire or take it over.",
+    hint: "Someone holds this document open; the target's lock says who and until when. Wait for it to expire, or take it over with document.lock_takeover.",
     retryable: false,
   },
   CONCURRENT_OPERATION_BUSY: {
@@ -140,10 +140,184 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     hint: "Umami refused this read or answered in a shape this tool does not accept, so this has no number. Retrying unchanged cannot help; tell the Owner.",
     retryable: false,
   },
+  REVISION_CONFLICT: {
+    hint: "The record moved past the revision you sent. Read it again, then decide under a new requestId.",
+    retryable: false,
+  },
+  REVISION_REQUIRED: {
+    hint: "An edit needs the revision you read. Read the record and send it.",
+    retryable: false,
+  },
+  CONTENT_INVALID: {
+    hint: "The content does not pass validation; the target names the fields. Nothing was saved.",
+    retryable: false,
+  },
+  RECORD_ID_INVALID: {
+    hint: "That is not a record id. Locate the record with admin_find.",
+    retryable: false,
+  },
+  REMOVAL_NOT_ALLOWED: {
+    hint: "This save removes media or provenance entries; the target names which field. Nothing was saved. If you mean to, send allowRemoving:true on the same requestId.",
+    retryable: false,
+  },
+  PATCH_NO_MATCH: {
+    hint: "An edit's oldText is not in the field, so the whole patch was refused and nothing changed; the target names which edit. Read the field, then patch under a new requestId.",
+    retryable: false,
+  },
+  PATCH_MULTIPLE_MATCHES: {
+    hint: "An edit's oldText is in the field more than once, so the whole patch was refused and nothing changed; the target names which edit. Send more of the text, or occurrence, under a new requestId.",
+    retryable: false,
+  },
+  PATCH_OVERLAP: {
+    hint: "Two edits reach the same text, so the whole patch was refused and nothing changed; the target names them. Make them one edit, under a new requestId.",
+    retryable: false,
+  },
+  LOCK_CHANGED: {
+    hint: "The lock moved since you read it, so nothing was taken over: its holder may still be working. Read the record again, then decide.",
+    retryable: false,
+  },
+  LOCK_NOT_HELD: {
+    hint: "Nobody holds this document now, so there is nothing to take over and a save goes through. Read the record for its revision.",
+    retryable: false,
+  },
+  IDENTITY_ALREADY_BOUND: {
+    hint: "An identity in this save is already bound to another record, permanently. Use another, or edit that record.",
+    retryable: false,
+  },
+  IDENTITY_IMMUTABLE: {
+    hint: "A record's catalogId and sourceId never change. Send the ones it has.",
+    retryable: false,
+  },
+  REFERENCE_NOT_FOUND: {
+    hint: "This record references something that does not exist. Fix the reference, then use a new requestId.",
+    retryable: false,
+  },
+  REFERENCE_NOT_PUBLISHED: {
+    hint: "This record references a Catalog that is not published. Publish that one first; the same requestId then works.",
+    retryable: false,
+  },
+  MEDIA_REFERENCE_INVALID: {
+    hint: "A media entry does not match the registered media row. Read the row with admin_read list.media and send what it says.",
+    retryable: false,
+  },
+  MEDIA_PUBLICATION_REFERENCE_INVALID: {
+    hint: "A media entry cannot be published as it stands. Read the row with admin_read list.media and save a corrected draft.",
+    retryable: false,
+  },
+  APPROVAL_INVALID: {
+    hint: "This approval batch is not valid: an automation account and up to 100 distinct records.",
+    retryable: false,
+  },
+  APPROVAL_ACCOUNT_INVALID: {
+    hint: "Approvals go to an automation account, and this one is not. Name an automation account.",
+    retryable: false,
+  },
+  APPROVAL_SCOPE_INVALID: {
+    hint: "A record in this batch is outside that automation account's scope. Only the Owner can widen a scope.",
+    retryable: false,
+  },
+  APPROVAL_REVOKED: {
+    hint: "This approval was revoked. Approve the revision again.",
+    retryable: false,
+  },
+  APPROVED_REVISION_CHANGED: {
+    hint: "The record changed after it was approved. Read it and approve the revision it has now.",
+    retryable: false,
+  },
+  RECORD_NOT_APPROVED: {
+    hint: "This approval does not name this record. Read the approval, or approve the record.",
+    retryable: false,
+  },
+  CATALOG_DELIVERY_PREPARATION_REQUIRED: {
+    hint: "This record has images with no public renditions yet. Prepare and release it through editorial.prepare-catalog-delivery; the same requestId works once they are ready.",
+    retryable: false,
+  },
+  CATALOG_DELIVERY_PENDING: {
+    hint: "The images are not ready, so nothing was published. Retry shortly with the same requestId.",
+    retryable: true,
+  },
+  CATALOG_DELIVERY_NOT_CONFIGURED: {
+    hint: "Catalog delivery is not configured here. Retrying cannot help; tell the Owner.",
+    retryable: false,
+  },
+  CATALOG_DELIVERY_DRAFT_CHANGED: {
+    hint: "The draft moved after this delivery was prepared. Read it and prepare again.",
+    retryable: false,
+  },
+  CATALOG_DELIVERY_BASE_CHANGED: {
+    hint: "The live record moved after this delivery was prepared. Read it and prepare again.",
+    retryable: false,
+  },
+  CATALOG_DELIVERY_STATE_CONFLICT: {
+    hint: "This delivery moved past the state version you sent. Read it with editorial.read-catalog-delivery.",
+    retryable: false,
+  },
+  CATALOG_DELIVERY_MANIFEST_CHANGED: {
+    hint: "The media manifest differs from the one you sent. Read the delivery with editorial.read-catalog-delivery.",
+    retryable: false,
+  },
+  CATALOG_DELIVERY_PROOF_CHANGED: {
+    hint: "The readiness proof no longer matches this delivery. Read it again with editorial.read-catalog-delivery.",
+    retryable: false,
+  },
+  CATALOG_DELIVERY_INACTIVE: {
+    hint: "This delivery has ended and cannot move. Prepare a new one if it is still wanted.",
+    retryable: false,
+  },
+  CATALOG_DELIVERY_EXPIRED: {
+    hint: "This delivery expired and cannot move. Prepare a new one.",
+    retryable: false,
+  },
+  CATALOG_DELIVERY_REPREPARE_REQUIRED: {
+    hint: "The render recipes changed since this delivery was prepared. Prepare it again.",
+    retryable: false,
+  },
+  CATALOG_DELIVERY_SOURCE_TOO_LARGE: {
+    hint: "An image in this record is longer on one edge than delivery can process. Replace it.",
+    retryable: false,
+  },
+  CATALOG_DELIVERY_READINESS_UNAVAILABLE: {
+    hint: "The readiness proof could not be read, so nothing was published. Retry shortly with the same requestId.",
+    retryable: true,
+  },
+  CATALOG_RECIPE_POLICY_UNAVAILABLE: {
+    hint: "The render recipes could not be read, so nothing changed. Retry shortly with the same requestId.",
+    retryable: true,
+  },
+  CATALOG_RECIPE_POLICY_INVALID: {
+    hint: "The render recipes came back in a shape this does not accept, so nothing changed. Retrying cannot help; tell the Owner.",
+    retryable: false,
+  },
+  CATALOG_RELEASE_NOT_REQUESTED: {
+    hint: "A release needs editorial.request-catalog-release first.",
+    retryable: false,
+  },
+  CATALOG_RENDER_BACKLOG_NOT_CONFIGURED: {
+    hint: "The render backlog is not configured here, so this has no number. Retrying cannot help; tell the Owner.",
+    retryable: false,
+  },
+  CATALOG_RENDER_BACKLOG_UNAVAILABLE: {
+    hint: "The render backlog could not be read just now, so this has no number and it is not a zero. Retry shortly.",
+    retryable: true,
+  },
+  OPERATION_REFUSED: {
+    hint: "The operation refused this target; its row names why. Repeating the call unchanged meets the same refusal.",
+    retryable: false,
+  },
 };
 
 type EnvelopeFields = Partial<
-  Pick<AdminMcpEnvelope, "data" | "issues" | "state" | "next" | "runId">
+  Pick<
+    AdminMcpEnvelope,
+    | "data"
+    | "issues"
+    | "state"
+    | "next"
+    | "runId"
+    | "done"
+    | "total"
+    | "remaining"
+  >
 >;
 
 export const okEnvelope = (
@@ -291,7 +465,7 @@ const withRecords = (
 };
 
 /** A pointer into a record that was cut is dropped; `*` stands for any item. */
-const pointerResolves = (
+export const pointerResolves = (
   value: unknown,
   [segment, ...rest]: readonly string[],
 ): boolean => {

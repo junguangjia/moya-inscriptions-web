@@ -67,20 +67,20 @@ reports `not_available`.
 | `editorial.owner-drafts`                  | read                                                                   | `admin_read`    | sync       | state_idempotent | none       |        | yes   |
 | `editorial.owner-history`                 | read                                                                   | `admin_read`    | sync       | state_idempotent | none       |        | yes   |
 | `editorial.read-draft`                    | read                                                                   | `admin_read`    | sync       | state_idempotent | none       |        | yes   |
-| `editorial.save-draft`                    | reversible; irreversible when the save binds an identity not yet bound | `admin_execute` | sync       | receipt          | none       |        | no    |
-| `editorial.approve-batch`                 | reversible                                                             | `admin_execute` | sync       | receipt          | none       |        | no    |
-| `editorial.publish-approved`              | reversible                                                             | `admin_execute` | sync       | receipt          | none       |        | no    |
-| `editorial.restore-draft`                 | reversible                                                             | `admin_execute` | sync       | cas_read_back    | none       |        | no    |
-| `editorial.prepare-catalog-delivery`      | reversible                                                             | `admin_execute` | async      | receipt          | none       |        | no    |
-| `editorial.read-catalog-delivery`         | read                                                                   | `admin_read`    | sync       | state_idempotent | none       |        | no    |
-| `editorial.request-catalog-release`       | reversible                                                             | `admin_execute` | async      | receipt          | none       |        | no    |
-| `editorial.release-catalog-delivery`      | reversible                                                             | `admin_execute` | sync       | receipt          | none       |        | no    |
-| `editorial.cancel-catalog-delivery`       | reversible                                                             | `admin_execute` | sync       | receipt          | none       |        | no    |
-| `editorial.catalog-delivery-capabilities` | read                                                                   | `admin_read`    | sync       | state_idempotent | none       |        | no    |
-| `editorial.catalog-render-backlog`        | read                                                                   | `admin_read`    | sync       | state_idempotent | none       |        | no    |
-| `editorial.save-article-draft`            | reversible; irreversible when the save binds an identity not yet bound | `admin_execute` | sync       | receipt          | none       |        | no    |
-| `editorial.approve-article-batch`         | reversible                                                             | `admin_execute` | sync       | receipt          | none       |        | no    |
-| `editorial.publish-approved-article`      | reversible                                                             | `admin_execute` | sync       | receipt          | none       |        | no    |
+| `editorial.save-draft`                    | reversible; irreversible when the save binds an identity not yet bound | `admin_execute` | sync       | receipt          | none       |        | yes   |
+| `editorial.approve-batch`                 | reversible                                                             | `admin_execute` | sync       | receipt          | none       |        | yes   |
+| `editorial.publish-approved`              | reversible                                                             | `admin_execute` | sync       | receipt          | none       |        | yes   |
+| `editorial.restore-draft`                 | reversible                                                             | `admin_execute` | sync       | receipt          | none       |        | yes   |
+| `editorial.prepare-catalog-delivery`      | reversible                                                             | `admin_execute` | async      | receipt          | none       |        | yes   |
+| `editorial.read-catalog-delivery`         | read                                                                   | `admin_read`    | sync       | state_idempotent | none       |        | yes   |
+| `editorial.request-catalog-release`       | reversible                                                             | `admin_execute` | async      | receipt          | none       |        | yes   |
+| `editorial.release-catalog-delivery`      | reversible                                                             | `admin_execute` | sync       | receipt          | none       |        | yes   |
+| `editorial.cancel-catalog-delivery`       | reversible                                                             | `admin_execute` | sync       | receipt          | none       |        | yes   |
+| `editorial.catalog-delivery-capabilities` | read                                                                   | `admin_read`    | sync       | state_idempotent | none       |        | yes   |
+| `editorial.catalog-render-backlog`        | read                                                                   | `admin_read`    | sync       | state_idempotent | none       |        | yes   |
+| `editorial.save-article-draft`            | reversible; irreversible when the save binds an identity not yet bound | `admin_execute` | sync       | receipt          | none       |        | yes   |
+| `editorial.approve-article-batch`         | reversible                                                             | `admin_execute` | sync       | receipt          | none       |        | yes   |
+| `editorial.publish-approved-article`      | reversible                                                             | `admin_execute` | sync       | receipt          | none       |        | yes   |
 
 ### list (28)
 
@@ -110,7 +110,7 @@ reports `not_available`.
 | `list.articles`            | read  | `admin_read` | sync       | state_idempotent | none       |        | yes   |
 | `list.collections`         | read  | `admin_read` | sync       | state_idempotent | none       |        | yes   |
 | `list.media`               | read  | `admin_read` | sync       | state_idempotent | none       |        | yes   |
-| `list.render_backlog`      | read  | `admin_read` | sync       | state_idempotent | none       |        | no    |
+| `list.render_backlog`      | read  | `admin_read` | sync       | state_idempotent | none       |        | yes   |
 | `list.invitations`         | read  | `admin_read` | sync       | state_idempotent | community  |        | no    |
 | `list.masters`             | read  | `admin_read` | sync       | state_idempotent | base       |        | no    |
 | `list.runs`                | read  | `admin_read` | sync       | state_idempotent | none       |        | no    |
@@ -119,51 +119,51 @@ reports `not_available`.
 
 | Op                   | Class        | Tool                         | Completion | Recovery | Credential | Switch | Built |
 | -------------------- | ------------ | ---------------------------- | ---------- | -------- | ---------- | ------ | ----- |
-| `catalog.publish`    | reversible   | `admin_execute`              | sync       | receipt  | none       |        | no    |
-| `catalog.withdraw`   | reversible   | `admin_execute`              | async      | receipt  | none       |        | no    |
-| `catalog.restore`    | reversible   | `admin_execute`              | sync       | receipt  | none       |        | no    |
-| `catalog.patch_text` | reversible   | `admin_execute`              | sync       | receipt  | none       |        | no    |
+| `catalog.publish`    | reversible   | `admin_execute`              | sync       | receipt  | none       |        | yes   |
+| `catalog.withdraw`   | reversible   | `admin_execute`              | async      | receipt  | none       |        | yes   |
+| `catalog.restore`    | reversible   | `admin_execute`              | sync       | receipt  | none       |        | yes   |
+| `catalog.patch_text` | reversible   | `admin_execute`              | sync       | receipt  | none       |        | yes   |
 | `catalog.duplicate`  | irreversible | `admin_execute_irreversible` | sync       | receipt  | none       |        | no    |
 
 ### approval (1)
 
 | Op                | Class      | Tool            | Completion | Recovery         | Credential | Switch | Built |
 | ----------------- | ---------- | --------------- | ---------- | ---------------- | ---------- | ------ | ----- |
-| `approval.revoke` | reversible | `admin_execute` | sync       | state_idempotent | none       |        | no    |
+| `approval.revoke` | reversible | `admin_execute` | sync       | state_idempotent | none       |        | yes   |
 
 ### article (4)
 
 | Op                  | Class        | Tool                         | Completion | Recovery | Credential | Switch | Built |
 | ------------------- | ------------ | ---------------------------- | ---------- | -------- | ---------- | ------ | ----- |
-| `article.publish`   | reversible   | `admin_execute`              | sync       | receipt  | none       |        | no    |
-| `article.withdraw`  | reversible   | `admin_execute`              | sync       | receipt  | none       |        | no    |
-| `article.restore`   | reversible   | `admin_execute`              | sync       | receipt  | none       |        | no    |
+| `article.publish`   | reversible   | `admin_execute`              | sync       | receipt  | none       |        | yes   |
+| `article.withdraw`  | reversible   | `admin_execute`              | sync       | receipt  | none       |        | yes   |
+| `article.restore`   | reversible   | `admin_execute`              | sync       | receipt  | none       |        | yes   |
 | `article.duplicate` | irreversible | `admin_execute_irreversible` | sync       | receipt  | none       |        | no    |
 
 ### collection (5)
 
 | Op                     | Class                                                                  | Tool                         | Completion | Recovery | Credential | Switch | Built |
 | ---------------------- | ---------------------------------------------------------------------- | ---------------------------- | ---------- | -------- | ---------- | ------ | ----- |
-| `collection.save`      | reversible; irreversible when the save binds an identity not yet bound | `admin_execute`              | sync       | receipt  | none       |        | no    |
-| `collection.publish`   | reversible                                                             | `admin_execute`              | sync       | receipt  | none       |        | no    |
-| `collection.withdraw`  | reversible                                                             | `admin_execute`              | sync       | receipt  | none       |        | no    |
-| `collection.restore`   | reversible                                                             | `admin_execute`              | sync       | receipt  | none       |        | no    |
+| `collection.save`      | reversible; irreversible when the save binds an identity not yet bound | `admin_execute`              | sync       | receipt  | none       |        | yes   |
+| `collection.publish`   | reversible                                                             | `admin_execute`              | sync       | receipt  | none       |        | yes   |
+| `collection.withdraw`  | reversible                                                             | `admin_execute`              | sync       | receipt  | none       |        | yes   |
+| `collection.restore`   | reversible                                                             | `admin_execute`              | sync       | receipt  | none       |        | yes   |
 | `collection.duplicate` | irreversible                                                           | `admin_execute_irreversible` | sync       | receipt  | none       |        | no    |
 
 ### media (3)
 
 | Op                        | Class                                                            | Tool                         | Completion | Recovery         | Credential | Switch | Built |
 | ------------------------- | ---------------------------------------------------------------- | ---------------------------- | ---------- | ---------------- | ---------- | ------ | ----- |
-| `media.register_existing` | reversible; irreversible when the media id is not yet registered | `admin_execute`              | sync       | state_idempotent | none       |        | no    |
+| `media.register_existing` | reversible; irreversible when the media id is not yet registered | `admin_execute`              | sync       | state_idempotent | none       |        | yes   |
 | `media.register_upload`   | irreversible                                                     | `admin_execute_irreversible` | async      | state_idempotent | none       |        | no    |
-| `media.update_metadata`   | reversible                                                       | `admin_execute`              | sync       | cas_read_back    | none       |        | no    |
+| `media.update_metadata`   | reversible                                                       | `admin_execute`              | sync       | cas_read_back    | none       |        | yes   |
 
 ### document (2)
 
 | Op                       | Class      | Tool            | Completion | Recovery         | Credential | Switch | Built |
 | ------------------------ | ---------- | --------------- | ---------- | ---------------- | ---------- | ------ | ----- |
-| `document.lock_takeover` | reversible | `admin_execute` | sync       | cas_read_back    | none       |        | no    |
-| `document.lock_release`  | reversible | `admin_execute` | sync       | state_idempotent | none       |        | no    |
+| `document.lock_takeover` | reversible | `admin_execute` | sync       | cas_read_back    | none       |        | yes   |
+| `document.lock_release`  | reversible | `admin_execute` | sync       | state_idempotent | none       |        | yes   |
 
 ### catalog_search (2)
 

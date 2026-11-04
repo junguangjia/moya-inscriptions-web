@@ -10,8 +10,9 @@ import { expect } from "@playwright/test";
  * only place a Next production compile, its minified error classes and its folded
  * Development branches can be seen: "Reserved surface by any key or Authorization
  * header", "Admin control page and audit list", the door's named refusals, both
- * MCP paths, "Pause on" and "artvenn_*", and the code half of "Document open by the
- * Owner" and "Approval duplicate". tests/cms/admin-mcp-*.test.ts and
+ * MCP paths, "Pause on" and "artvenn_*", the code half of "Document open by the Owner"
+ * and "Approval duplicate", and "Take over a document lock", whose modal and form state
+ * have no other test. tests/cms/admin-mcp-*.test.ts and
  * editorial-hardening.test.ts hold the same rows in depth; this holds them where
  * they ship.
  *
@@ -24,12 +25,290 @@ const CONTROL = "/admin/mcp-control";
 const AUDIT = "/admin/collections/mcp-audit-events";
 const secret = () => randomBytes(32).toString("hex");
 const bearer = (value) => ({ authorization: `Bearer ${value}` });
+const syntheticDraft = (catalogId, sourceId) => ({
+  catalogId,
+  sourceId,
+  kind: "calligraphy",
+  title: "Synthetic record",
+  summary: "Synthetic summary",
+  dynasty: { state: "UNSUPPLIED" },
+  dateText: { state: "UNSUPPLIED" },
+  province: { state: "UNSUPPLIED" },
+  prefecture: { state: "UNSUPPLIED" },
+  county: { state: "UNSUPPLIED" },
+  currentLocation: { state: "UNSUPPLIED" },
+  currentCustodian: { state: "UNSUPPLIED" },
+  description: { state: "UNSUPPLIED" },
+  scriptStyle: { state: "UNSUPPLIED" },
+  transcription: { state: "VALUE", value: "合成" },
+  historicalContext: { state: "UNSUPPLIED" },
+  scholarlyResearch: { state: "UNSUPPLIED" },
+  aliases: [],
+  provenance: [],
+  sourceCitations: [],
+  contributors: [],
+  media: [],
+});
 const rpc = (method, params) => ({
   jsonrpc: "2.0",
   id: 1,
   method,
   ...(params === undefined ? {} : { params }),
 });
+
+/**
+ * "Take over a document lock" and "Document open by the Owner", in a real Owner tab:
+ * a context of its own, so the refusals this expects are not the main page's failures.
+ * What it pins about unsaved form state is what document.lock_takeover's op says.
+ */
+export const verifyLockTakeover = async ({
+  browser,
+  page,
+  origin,
+  access,
+  setStage,
+}) => {
+  const run = randomUUID();
+  const asOwner = async (method, route, data) => {
+    const response = await page.request.fetch(`${origin}/api/${route}`, {
+      method,
+      ...(data === undefined ? {} : { data }),
+    });
+    assert(response.ok());
+    return response.json();
+  };
+
+  setStage("admin-mcp-lock-setup");
+  const { doc: aiUser } = await asOwner("POST", "users", {
+    email: `mcp-lock-${run}@example.invalid`,
+    password: secret(),
+    role: "ai_operator",
+    scopeCatalogIds: [],
+  });
+  const value = secret();
+  await asOwner("POST", "payload-mcp-api-keys", {
+    user: aiUser.id,
+    label: `synthetic-lock-${run}`,
+    enableAPIKey: true,
+    apiKey: value,
+    toolProfile: "operate",
+  });
+  const operator = new Client({ name: "synthetic", version: "1.0.0" });
+  await operator.connect(
+    new StreamableHTTPClientTransport(new URL(`${origin}/api/mcp`), {
+      requestInit: { headers: bearer(value) },
+    }),
+  );
+  const context = await browser.newContext({
+    storageState: await page.context().storageState(),
+  });
+  try {
+    const execute = async (op, input) =>
+      (
+        await operator.callTool({
+          name: "admin_execute",
+          arguments: { requestId: randomUUID(), op, input },
+        })
+      ).structuredContent;
+    const save = await asOwner("POST", "editorial/save-draft", {
+      idempotencyKey: `${run}:lock`,
+      content: syntheticDraft(`mcp-lock-${run}`, `lock-source-${run}`),
+    });
+    const { id } = save.result;
+    const draft = async () =>
+      asOwner("GET", `catalogs/${id}?draft=true&depth=0`);
+    const lockRows = async () =>
+      (
+        await asOwner(
+          "GET",
+          `payload-locked-documents?where[document.relationTo][equals]=catalogs&where[document.value][equals]=${id}&depth=0`,
+        )
+      ).docs;
+    const holder = async () => (await lockRows())[0]?.user?.value ?? null;
+    const heldBy = (expected) =>
+      expect.poll(holder, { timeout: 15_000 }).toBe(expected);
+    /** What admin_get offers, with the one field a caller decides. */
+    const takeOver = async () => {
+      for (let attempt = 0; ; attempt += 1) {
+        const { structuredContent } = await operator.callTool({
+          name: "admin_get",
+          arguments: { type: "catalog", id },
+        });
+        const action = structuredContent.data.actions.find(
+          ({ args }) => args.op === "document.lock_takeover",
+        );
+        assert(action, "no takeover offered");
+        const answer = await execute("document.lock_takeover", {
+          ...action.args.input,
+          reason: "Synthetic takeover",
+        });
+        // Its holder typing moves the lock, as often as every 10 s.
+        if (answer.code !== "LOCK_CHANGED" || attempt === 3) return answer;
+      }
+    };
+    const owner = await context.newPage();
+    owner.setDefaultTimeout(20_000);
+    const documentPath = `${origin}/admin/collections/catalogs/${id}`;
+    const title = owner.locator('input[name="title"]');
+    const autosaveOfThisRecord = (response) =>
+      new URL(response.url()).pathname === `/api/catalogs/${id}` &&
+      response.request().method() === "PATCH";
+
+    /** The tab's next autosave stays in flight until the test sends it. */
+    const holdingAutosave = async () => {
+      let send;
+      const sent = new Promise((resolve) => {
+        send = resolve;
+      });
+      let reached;
+      const caught = new Promise((resolve) => {
+        reached = resolve;
+      });
+      const pattern = `**/api/catalogs/${id}*`;
+      await owner.route(pattern, async (route) => {
+        if (route.request().method() !== "PATCH") return route.fallback();
+        reached();
+        await sent;
+        return route.continue();
+      });
+      return {
+        caught,
+        send: async () => {
+          const answer = owner.waitForResponse(autosaveOfThisRecord);
+          send();
+          const status = (await answer).status();
+          await owner.unroute(pattern);
+          return status;
+        },
+      };
+    };
+
+    setStage("admin-mcp-lock-owner-tab");
+    let autosave = await holdingAutosave();
+    await owner.goto(documentPath);
+    await title.fill("Owner typed first");
+    await heldBy(access.ownerId);
+    await autosave.caught;
+    const before = await draft();
+
+    setStage("admin-mcp-lock-takeover");
+    const taken = await takeOver();
+    assert.equal(taken.ok, true, taken.code);
+    const fresh = taken.data.results[0];
+    assert.equal(fresh.revision, before.revision);
+    await heldBy(aiUser.id);
+
+    setStage("admin-mcp-lock-autosave-refused");
+    assert.equal(await autosave.send(), 423);
+    const unmoved = await draft();
+    assert.equal(unmoved.title, before.title);
+    assert.equal(unmoved.revision, before.revision);
+
+    setStage("admin-mcp-lock-owner-modal");
+    // The tab learns from its next form state, so its next keystroke brings the modal.
+    await title.fill("Owner typed second");
+    await owner
+      .locator("#document-take-over-view-read-only")
+      .waitFor({ state: "visible" });
+    await expect(title).toHaveValue("Owner typed second");
+    await owner.locator("#document-take-over-view-read-only").click();
+    await expect(title).toBeDisabled();
+
+    setStage("admin-mcp-lock-ai-save");
+    const saved = await execute("catalog.patch_text", {
+      catalogId: id,
+      field: "title",
+      edits: [{ oldText: before.title, newText: "AI corrected record" }],
+      expected: { revision: fresh.revision, fingerprint: fresh.fingerprint },
+    });
+    assert.equal(saved.ok, true, saved.code);
+    assert.deepEqual(await lockRows(), []);
+    assert.equal((await draft()).title, "AI corrected record");
+
+    setStage("admin-mcp-lock-form-state");
+    // The result the op states: what the holder had not saved goes as the tab turns
+    // read-only, which shows the stored record, and it reaches no version of the record.
+    await expect(title).toHaveValue(before.title);
+    const versions = await asOwner(
+      "GET",
+      `catalogs/versions?where[parent][equals]=${id}&limit=100&depth=0`,
+    );
+    assert.doesNotMatch(JSON.stringify(versions), /Owner typed/u);
+    await owner.reload();
+    await expect(title).toHaveValue("AI corrected record");
+    await expect(title).toBeEnabled();
+
+    setStage("admin-mcp-lock-stale-tab");
+    // The AI saves before this tab's autosave lands, so no row is left to refuse it and
+    // no modal to show: its revision refuses it, and it never overwrites the AI's save.
+    autosave = await holdingAutosave();
+    await title.fill("Owner typed third");
+    await heldBy(access.ownerId);
+    await autosave.caught;
+    const second = await takeOver();
+    assert.equal(second.ok, true, second.code);
+    const overwritten = await execute("catalog.patch_text", {
+      catalogId: id,
+      field: "title",
+      edits: [{ oldText: "AI corrected record", newText: "AI second record" }],
+      expected: {
+        revision: second.data.results[0].revision,
+        fingerprint: second.data.results[0].fingerprint,
+      },
+    });
+    assert.equal(overwritten.ok, true, overwritten.code);
+    assert.deepEqual(await lockRows(), []);
+    assert.equal(await autosave.send(), 409);
+    assert.equal((await draft()).title, "AI second record");
+    // Typing on takes a new lock, and is refused the same way until a reload.
+    const staleAgain = owner.waitForResponse(autosaveOfThisRecord);
+    await title.fill("Owner typed fourth");
+    assert.equal((await staleAgain).status(), 409);
+    assert.equal((await draft()).title, "AI second record");
+    await heldBy(access.ownerId);
+
+    setStage("admin-mcp-lock-owner-takes-back");
+    // Reversible: a reload shows the Admin's locked modal, and its take-over wins.
+    const third = await takeOver();
+    assert.equal(third.ok, true, third.code);
+    await owner.reload();
+    await owner
+      .locator("#document-locked-take-over")
+      .waitFor({ state: "visible" });
+    await owner.locator("#document-locked-take-over").click();
+    await heldBy(access.ownerId);
+    const lockedOut = await execute("document.lock_release", {
+      type: "catalog",
+      id,
+    });
+    assert.equal(lockedOut.code, "DOCUMENT_LOCKED");
+    assert.equal(lockedOut.data.conflict[0].lock.by, "owner");
+    assert.equal((await draft()).title, "AI second record");
+
+    setStage("admin-mcp-lock-release");
+    // Given back with no save, the Owner's next keystroke carries on with no modal.
+    const fourth = await takeOver();
+    assert.equal(fourth.ok, true, fourth.code);
+    const released = await execute("document.lock_release", {
+      type: "catalog",
+      id,
+    });
+    assert.equal(released.ok, true, released.code);
+    assert.deepEqual(await lockRows(), []);
+    const resumed = owner.waitForResponse(autosaveOfThisRecord);
+    await title.fill("Owner typed fifth");
+    assert.equal((await resumed).status(), 200);
+    await expect(
+      owner.locator("#document-take-over-view-read-only"),
+    ).toHaveCount(0);
+    assert.equal((await draft()).title, "Owner typed fifth");
+    // Every save clears the row, so with the tab still open nothing reads as held.
+    await heldBy(null);
+  } finally {
+    await context.close();
+    await operator.close();
+  }
+};
 
 export const verifyAdminMcpSurfaces = async ({
   browser,
@@ -471,30 +750,7 @@ export const verifyAdminMcpSurfaces = async ({
     status,
     { ok: false, error: { code, fields: [] } },
   ];
-  const content = {
-    catalogId,
-    sourceId: `source-${run}`,
-    kind: "calligraphy",
-    title: "Synthetic record",
-    summary: "Synthetic summary",
-    dynasty: { state: "UNSUPPLIED" },
-    dateText: { state: "UNSUPPLIED" },
-    province: { state: "UNSUPPLIED" },
-    prefecture: { state: "UNSUPPLIED" },
-    county: { state: "UNSUPPLIED" },
-    currentLocation: { state: "UNSUPPLIED" },
-    currentCustodian: { state: "UNSUPPLIED" },
-    description: { state: "UNSUPPLIED" },
-    scriptStyle: { state: "UNSUPPLIED" },
-    transcription: { state: "VALUE", value: "合成" },
-    historicalContext: { state: "UNSUPPLIED" },
-    scholarlyResearch: { state: "UNSUPPLIED" },
-    aliases: [],
-    provenance: [],
-    sourceCitations: [],
-    contributors: [],
-    media: [],
-  };
+  const content = syntheticDraft(catalogId, `source-${run}`);
   const [createdStatus, created] = await editorial("save-draft", {
     idempotencyKey: `${run}:create`,
     content,
@@ -605,6 +861,8 @@ export const verifyAdminMcpSurfaces = async ({
     (await copied.json()).errors[0].message,
     "APPROVAL_DUPLICATE_DISABLED",
   );
+
+  await verifyLockTakeover({ browser, page, origin, access, setStage });
 
   setStage("admin-mcp-control-page-gate");
   for (const options of [{}, { extraHTTPHeaders: bearer(aiKey.secret) }]) {

@@ -20,7 +20,12 @@ import {
 import { sql } from "@payloadcms/db-postgres";
 import type { PayloadRequest } from "payload";
 
-import { canEditCatalog, actsAsOwner, requireActor } from "./access";
+import {
+  canEditCatalog,
+  actsAsOwner,
+  isAiOperator,
+  requireActor,
+} from "./access";
 import {
   catalogDeliveryReadiness,
   catalogRenderBacklog,
@@ -580,13 +585,14 @@ export const invalidateCatalogDelivery = async (
 /** Editorial originals are published by the release path, or when every one
  * of them already has its complete, current and published rendition set (a
  * text-only edit of a live record). Anything less still needs preparation,
- * unless CMS_CATALOG_DIRECT_PUBLISH is on.
+ * unless CMS_CATALOG_DIRECT_PUBLISH is on. That switch never covers an AI key:
+ * its answer would report success while the images are unavailable.
  */
 export const assertCatalogDeliveryPublication = async (
   content: EditorialDraft,
   req?: PayloadRequest,
 ) => {
-  if (catalogDirectPublishEnabled()) return;
+  if (catalogDirectPublishEnabled() && !(req && isAiOperator(req))) return;
   if (
     req &&
     catalogDeliveryPublishProof(req)?.fingerprint ===

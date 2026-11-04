@@ -55,6 +55,9 @@ export const adminActionSkeletonSchema = z.strictObject({
 export const adminLockSchema = z.strictObject({
   held: z.boolean(),
   by: z.enum(["owner", "ai", "automation"]).optional(),
+  /** With lastEditedAt, what document.lock_takeover sends back as `expected`. */
+  lockId: z.number().int().positive().optional(),
+  holderUserId: z.number().int().positive().optional(),
   lastEditedAt: z.string().optional(),
   expiresAt: z.string().optional(),
 });
@@ -295,7 +298,28 @@ export const adminApprovalListInputSchema = filterOf({
 
 export const adminReceiptListInputSchema = filterOf({
   status: z.enum(["completed", "rejected"]).optional(),
-  operation: z.enum(["save-draft", "publish-approved"]).optional(),
+  operation: z
+    .enum([
+      "save-draft",
+      "publish-approved",
+      "approve-batch",
+      "approve-article-batch",
+      "publish-direct",
+      "withdraw",
+      "restore-draft",
+      "patch-text",
+      "duplicate",
+      "article-publish",
+      "article-withdraw",
+      "article-restore",
+      "article-duplicate",
+      "collection-save",
+      "collection-publish",
+      "collection-withdraw",
+      "collection-restore",
+      "collection-duplicate",
+    ])
+    .optional(),
 });
 
 export const adminReadRowsDataSchema = z.strictObject({

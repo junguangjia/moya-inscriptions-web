@@ -112,7 +112,7 @@ const withActions = (
       state: common.state,
       revision: common.revision,
       fingerprint: common.fingerprint,
-      locked: common.lock?.held === true,
+      lock: common.lock,
       ...(family.type === "catalog"
         ? { catalogId: String(doc.catalogId) }
         : {}),

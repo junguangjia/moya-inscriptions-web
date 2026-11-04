@@ -132,9 +132,10 @@ export class ReplayedEditorialError extends EditorialError {
 // Refusals the same command can get past once something else changes: the key,
 // the Owner's open document, the account's scope, the images, the record or what
 // it references. Payload refusals, which are not EditorialError, write no receipt
-// either.
+// either. An effect found already in place holds only until the record moves again.
 const RETRYABLE_REFUSALS: ReadonlySet<string> = new Set([
   "ALREADY_PUBLISHED",
+  "ALREADY_WITHDRAWN",
   "CATALOG_DELIVERY_PREPARATION_REQUIRED",
   "CATALOG_OUT_OF_SCOPE",
   "CONCURRENT_OPERATION_BUSY",

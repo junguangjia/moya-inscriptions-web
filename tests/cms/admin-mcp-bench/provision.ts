@@ -36,6 +36,8 @@ try {
     overrideAccess: true,
     data: { role: "ai_operator" },
   });
+  // Approval batches name an automation account; the AI key publishes them.
+  const approvedFor = await account("automation", "automation");
   const secrets: Record<string, string> = {};
   for (const profile of ["read", "full"]) {
     secrets[profile] = randomBytes(32).toString("hex");
@@ -76,6 +78,7 @@ try {
     destination,
     JSON.stringify({
       ownerId: owner.id,
+      automationId: approvedFor.id,
       secrets,
       chartMediaId: CHART_MEDIA_ID,
     }),

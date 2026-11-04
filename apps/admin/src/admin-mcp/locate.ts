@@ -534,6 +534,27 @@ const containsHits = async (
   });
 };
 
+/** A title given whole names its record however many others contain those words. */
+const wholeTitleHits = async (
+  branch: PayloadRequest,
+  family: CmsFamily,
+  text: string,
+  limit: number,
+): Promise<readonly Hit[]> =>
+  (
+    await findDocuments(branch, family, {
+      where: { title: { equals: text } },
+      limit,
+      select: family.findSelect,
+    })
+  ).map((doc) => ({
+    family,
+    doc,
+    field: "title",
+    kind: "raw",
+    ...snippetAround(text, text),
+  }));
+
 /** Step 3: each branch budgeted and named, never added up as if complete. */
 const fuzzyStage = async (
   req: PayloadRequest,
@@ -560,9 +581,10 @@ const fuzzyStage = async (
       await runBranch("catalogs_published", (branch, db) =>
         publishedCatalogHits(branch, db, text, limit),
       );
-      await runBranch("catalogs_draft", (branch) =>
-        containsHits(branch, family, text, limit),
-      );
+      await runBranch("catalogs_draft", async (branch) => [
+        ...(await wholeTitleHits(branch, family, text, limit)),
+        ...(await containsHits(branch, family, text, limit)),
+      ]);
     } else
       await runBranch(SOURCE_OF_FAMILY[family.type], (branch) =>
         containsHits(branch, family, text, limit),
@@ -581,7 +603,11 @@ const fuzzyStage = async (
       sources[source] = "not_available";
   else if (!isCmsType(input.type))
     sources[COMMUNITY_SOURCE[input.type]!] = "not_available";
-  return distinct(hits);
+  // First wherever a branch read it: drafts come after the published branch, and past
+  // enough near-twins no page would reach one.
+  const found = distinct(hits);
+  const isWhole = ({ family, doc }: Hit) => titleOf(family, doc) === text;
+  return [...found.filter(isWhole), ...found.filter((hit) => !isWhole(hit))];
 };
 
 const itemsOf = async (
@@ -643,12 +669,16 @@ const itemsOf = async (
                   id,
                   state,
                   ...(version === undefined ? {} : { revision: version }),
-                  locked: lock?.held === true,
+                  lock,
                   ...(family.type === "catalog"
                     ? { catalogId: String(doc.catalogId) }
                     : {}),
+                  // The one fingerprint a find can read: the rest cover long text.
                   ...(family.type === "media"
-                    ? { mediaId: String(doc.mediaId) }
+                    ? {
+                        mediaId: String(doc.mediaId),
+                        fingerprint: family.fingerprint(doc),
+                      }
                     : {}),
                 },
                 scope,

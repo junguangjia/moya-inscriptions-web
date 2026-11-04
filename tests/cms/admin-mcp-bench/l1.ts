@@ -14,8 +14,14 @@ import {
 } from "./legibility.ts";
 import type { StrokeReading } from "./legibility.ts";
 import { C1_CALL, c4Calls, GATE_A_P95_MS, gradeC1, gradeC4 } from "./paths.ts";
-import { BENCH_SCALE, catalogIdOf, sourceIdOf } from "./seed.ts";
-import type { BenchOracle } from "./seed.ts";
+import {
+  BENCH_SCALE,
+  catalogIdOf,
+  catalogSpec,
+  kindOf,
+  sourceIdOf,
+} from "./seed.ts";
+import type { BenchOracle, CatalogSpec } from "./seed.ts";
 
 // One L1 run against the Next production build over real HTTP, started by run.mjs.
 // Sequential, one client, no model. Gate A asks for at least 200 calls per class;
@@ -492,6 +498,100 @@ const legibility = {
 };
 
 await client.close();
+
+// Writes come last, so no read above meets a record they moved. Each names its record
+// from the seed with no read, as a client holding the revision would, and each sample
+// is one target, so the audit rows and the echo are in it. Past the three seeded locks.
+const WRITABLE = Array.from({ length: BENCH_SCALE.catalogs }, (_, at) =>
+  catalogSpec(at + 1),
+).filter(({ index }) => index > 13);
+
+const saveOf = (
+  variant: string,
+  spec: CatalogSpec,
+  revision: number,
+  sample: number,
+) =>
+  toolCall(variant, "admin_execute", {
+    requestId: `l1-${variant}-${sample}`,
+    op: "editorial.save-draft",
+    input: {
+      id: spec.index,
+      expectedRevision: revision,
+      content: {
+        catalogId: spec.catalogId,
+        sourceId: spec.sourceId,
+        kind: kindOf(spec.index),
+        title: `${spec.versions.at(-1)!.title}（改${sample}）`,
+      },
+    },
+  });
+
+// Evenly through the seed, so the sample has its share of each length of text.
+const everyNth = <T>(list: readonly T[], count: number) =>
+  Array.from(
+    { length: count },
+    (_, at) => list[Math.floor((at * list.length) / count)]!,
+  );
+
+const SAVED = everyNth(
+  WRITABLE.filter(({ status, mediaCount }) => status === "draft" && mediaCount),
+  SAMPLES + 1,
+);
+await measure(
+  "single_write_save",
+  GATE_A_P95_MS.single_write,
+  "admin_execute",
+  SAMPLES,
+  (index) => {
+    const spec = SAVED[index]!;
+    return saveOf("save", spec, spec.versions.at(-1)!.revision, index);
+  },
+);
+
+// A record's whole 90k text goes through the hooks twice and is hashed: its worst case.
+const LONG_TEXT = oracle.longTextIds.map(catalogSpec);
+await measure(
+  "single_write_save_90k",
+  GATE_A_P95_MS.single_write,
+  "admin_execute",
+  SLOW_SAMPLES,
+  (index) => {
+    const spec = LONG_TEXT[index % LONG_TEXT.length]!;
+    const saves = Math.floor(index / LONG_TEXT.length);
+    return saveOf(
+      "save_90k",
+      spec,
+      spec.versions.at(-1)!.revision + saves,
+      index,
+    );
+  },
+);
+
+// Only a record with no images can publish here. It goes through the search sync too.
+const PUBLISHED = WRITABLE.filter(
+  ({ index, status, mediaCount }) =>
+    status !== "published" &&
+    mediaCount === 0 &&
+    !oracle.longTextIds.includes(index),
+);
+await measure(
+  "single_write_publish",
+  GATE_A_P95_MS.single_write,
+  "admin_execute",
+  Math.min(SAMPLES, PUBLISHED.length - 1),
+  (index) => {
+    const spec = PUBLISHED[index]!;
+    return toolCall("publish", "admin_execute", {
+      requestId: `l1-publish-${index}`,
+      op: "catalog.publish",
+      input: {
+        id: spec.index,
+        expected: { revision: spec.versions.at(-1)!.revision },
+      },
+    });
+  },
+);
 
 await writeFile(
   env("ADMIN_MCP_BENCH_RESULT_FILE"),

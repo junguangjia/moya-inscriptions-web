@@ -16,6 +16,7 @@ import { isAutomation, actsAsOwner, requireActor } from "../editorial/access";
 import { relationshipID } from "../editorial/collections";
 import { requestFingerprint } from "../editorial/content";
 import { EditorialError, validationError } from "../editorial/errors";
+import { approvalOnce } from "../editorial/operations";
 import { withApprovedPublish, withLedgerWrite } from "../editorial/state";
 import {
   lockEditorialKey,
@@ -263,6 +264,23 @@ export const approveArticleBatch = async (
     status: approval.status,
   };
 };
+
+/** As approveBatchOnce: for a caller that can lose the answer. */
+export const approveArticleBatchOnce = (
+  req: PayloadRequest,
+  idempotencyKey: string,
+  input: unknown,
+) =>
+  approvalOnce(
+    req,
+    idempotencyKey,
+    {
+      operation: "approve-article-batch",
+      parsed: parse(editorialArticleApproveBatchSchema, input),
+    },
+    "editorial-article-approvals",
+    () => approveArticleBatch(req, input),
+  );
 
 export const publishApprovedArticle = async (
   req: PayloadRequest,

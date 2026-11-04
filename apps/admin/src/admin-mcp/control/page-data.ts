@@ -12,7 +12,10 @@ import { CONTROL_SLUG, SWITCH_LABELS } from "./global";
 const EXPIRING_WITHIN_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Section 21's p95 budgets, by the tools that exist. Each slice adds its own. */
-const TOOL_BUDGET_MS: Readonly<Record<string, number>> = { admin_whoami: 100 };
+const TOOL_BUDGET_MS: Readonly<Record<string, number>> = {
+  admin_whoami: 100,
+  admin_execute: 800,
+};
 
 const auditFigures = async (
   payload: Payload,

@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import { performance } from "node:perf_hooks";
@@ -19,16 +19,42 @@ import {
   adminReadRowsDataSchema,
   adminViewMediaDataSchema,
 } from "@moya/contracts/internal/admin-mcp";
-import { getPayload, type Payload } from "payload";
+import {
+  approveBatch,
+  contentFingerprint,
+  publishApproved,
+} from "admin/editorial";
+import { createLocalReq, getPayload, type Payload } from "payload";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { InMemoryCommunityCommentPort } from "../../unit/backend/community-comment-fixture.js";
 import { InMemoryCommunityIdentityPort } from "../../unit/backend/community-identity-fixture.js";
 import { connectClient, serveRoutes } from "../admin-mcp-wire.js";
 import { CHART, finestSurviving, readStrokes } from "./legibility.ts";
-import { C1_CALL, c4Calls, GATE_A_P95_MS, gradeC1, gradeC4 } from "./paths.ts";
+import {
+  C1_CALL,
+  C3_APPROVALS_CALL,
+  c2Candidate,
+  c2FindCall,
+  c2SaveCall,
+  c3PublishCall,
+  c4Calls,
+  GATE_A_P95_MS,
+  gradeC1,
+  gradeC2,
+  gradeC3,
+  gradeC4,
+} from "./paths.ts";
 import type { ToolCall } from "./paths.ts";
-import { BENCH_SCALE, catalogIdOf, sourceIdOf } from "./seed.ts";
+import {
+  BENCH_FIXTURE_RECORDS,
+  BENCH_SCALE,
+  catalogIdOf,
+  catalogSpec,
+  holdLock,
+  kindOf,
+  sourceIdOf,
+} from "./seed.ts";
 import type { BenchOracle } from "./seed.ts";
 
 // L0, the CI floor of admin-mcp-completion-v1 section 21, at seeded scale: tools/list
@@ -45,6 +71,8 @@ const access = JSON.parse(
 ) as {
   secrets: Record<"read" | "full", string>;
   chartMediaId: string;
+  ownerId: number;
+  automationId: number;
 };
 const { oracle, rows } = JSON.parse(
   await readFile(process.env.ADMIN_MCP_BENCH_ORACLE_FILE!, "utf8"),
@@ -69,7 +97,19 @@ const STATEMENTS = {
   list_page: 7,
   // Its own READ ONLY transaction with a statement timeout: four of these.
   aggregate: 10,
+  // The hooks, the receipt and the echo. A publish costs about the same per target.
+  single_write: 51,
+  batch_write_30: 1_425,
 } as const;
+
+/**
+ * Every publish, the Owner's too, has services/catalog-postgres read one record for its
+ * search document through the catalog_entries view, which filters after reading every
+ * live record. It breaks the no-scan rule and is outside the Admin MCP's paths, so it is
+ * reported on C3's row and named here, and no other statement may join it.
+ */
+const SEARCH_SYNC_READ =
+  /FROM catalog_entries AS entry\s+WHERE entry\.catalog_id/u;
 
 /**
  * The door writes last_used_at once a key's last touch is 60 s old, so whether a call
@@ -211,8 +251,9 @@ const checkClass = async (
   budgetMs: number,
   ceiling: number,
   callAt: (index: number) => ToolCall,
+  key: "read" | "full" = "read",
 ) => {
-  const first = await callOn(callAt(0));
+  const first = await callOn(callAt(0), key);
   expect(first.envelope.ok).toBe(true);
   expect(first.statements.length).toBeLessThanOrEqual(ceiling);
   const seqScans = await largeSeqScans(first.statements);
@@ -221,7 +262,7 @@ const checkClass = async (
   let bytes = first.bytes;
   let statements = first.statements.length;
   for (let index = 1; index <= TIMING_SAMPLES; index += 1) {
-    const sample = await callOn(callAt(index));
+    const sample = await callOn(callAt(index), key);
     expect(sample.envelope.ok).toBe(true);
     expect(sample.statements.length).toBeLessThanOrEqual(ceiling);
     bytes = Math.max(bytes, sample.bytes);
@@ -246,6 +287,70 @@ const contentState = async () => {
 
 const recordAt = (index: number) =>
   1 + ((index * 1_543) % BENCH_SCALE.catalogs);
+
+const VERSION_ROWS = [
+  "_catalogs_v_version_aliases",
+  "_catalogs_v_version_contributors",
+  "_catalogs_v_version_media",
+  "_catalogs_v_version_provenance",
+  "_catalogs_v_version_source_citations",
+] as const;
+
+/** A record's latest version as the tables hold it, with the rows under it. */
+const latestRowOf = async (id: number) => {
+  const { rows: found } = await pool.query(
+    `SELECT to_jsonb(v) AS row FROM _catalogs_v v WHERE parent_id = $1 AND latest`,
+    [id],
+  );
+  const version = found[0]!.row as Record<string, unknown>;
+  const under: Record<string, unknown> = {};
+  for (const table of VERSION_ROWS)
+    under[table] = (
+      await pool.query(
+        `SELECT to_jsonb(c) - '_parent_id' - '_uuid' - 'id' AS row FROM "${table}" c
+         WHERE _parent_id = $1 ORDER BY _order`,
+        [version.id],
+      )
+    ).rows.map(({ row }) => row);
+  return { ...version, ...under };
+};
+
+/** Every other record's rows, short enough to compare before and after a write. */
+const restOf = async (ids: readonly number[]) => {
+  const { rows: state } = await pool.query(
+    `SELECT
+       (SELECT count(*)::int FROM _catalogs_v) AS versions,
+       (SELECT md5(string_agg(concat_ws(':', id, version_revision, version_title, version__status), ',' ORDER BY id))
+        FROM _catalogs_v WHERE NOT parent_id = ANY($1::int[])) AS versions_digest,
+       (SELECT md5(string_agg(concat_ws(':', id, revision, title, _status), ',' ORDER BY id))
+        FROM catalogs WHERE NOT id = ANY($1::int[])) AS live_digest`,
+    [ids],
+  );
+  return state[0]!;
+};
+
+const liveRowOf = async (id: number) =>
+  (
+    await pool.query(
+      `SELECT to_jsonb(c) AS row FROM catalogs c WHERE id = $1`,
+      [id],
+    )
+  ).rows[0]!.row as Record<string, unknown>;
+
+const reqOf = async (id: number) =>
+  createLocalReq(
+    {
+      user: {
+        ...(await payload.findByID({
+          collection: "users",
+          id,
+          overrideAccess: true,
+        })),
+        collection: "users",
+      } as never,
+    },
+    payload,
+  );
 
 beforeAll(async () => {
   const config = await (await import("admin/config")).default;
@@ -281,16 +386,14 @@ afterAll(async () => {
 
 describe("the seed", () => {
   it("holds the target scale, one latest version per record", async () => {
-    expect(rows.catalogs).toBe(BENCH_SCALE.catalogs);
+    const records = BENCH_SCALE.catalogs + BENCH_FIXTURE_RECORDS;
+    expect(rows.catalogs).toBe(records);
     expect(rows.catalogVersions).toBeGreaterThan(2 * BENCH_SCALE.catalogs);
     const { rows: latest } = await pool.query(
       `SELECT count(*)::int AS n, count(DISTINCT parent_id)::int AS records
        FROM _catalogs_v WHERE latest`,
     );
-    expect(latest[0]).toEqual({
-      n: BENCH_SCALE.catalogs,
-      records: BENCH_SCALE.catalogs,
-    });
+    expect(latest[0]).toEqual({ n: records, records });
     expect(largeTables).toContain("_catalogs_v");
     expect(largeTables).toContain("catalogs");
   });
@@ -426,6 +529,218 @@ describe("C4 reference path", () => {
   );
 });
 
+describe("C2 reference path", () => {
+  it("edits the title of the one draft it names, and nothing else, in three calls", async () => {
+    const { id, title, newTitle, nearTwinId, publishedTwinId } = oracle.c2;
+    const [before, liveBefore, twins, rest] = [
+      await latestRowOf(id),
+      await liveRowOf(id),
+      [await latestRowOf(nearTwinId), await latestRowOf(publishedTwinId)],
+      await restOf([id]),
+    ];
+    const found = await callOn(c2FindCall(title));
+    expect(found.envelope.ok).toBe(true);
+    const candidate = c2Candidate(found.envelope.data, title);
+    expect(candidate?.id).toBe(id);
+    const got = await callOn({
+      name: "admin_get",
+      arguments: { type: "catalog", id: candidate!.id },
+    });
+    expect(got.envelope.ok).toBe(true);
+    const record = got.envelope.data as { id: number; revision: number | null };
+    const saved = await callOn(
+      c2SaveCall(randomUUID(), record, candidate!.disambiguators, newTitle),
+      "full",
+    );
+    expect(saved.envelope.ok).toBe(true);
+    const answer = saved.envelope.data as {
+      applied: number[];
+      results: Record<string, unknown>[];
+    };
+    expect(answer.applied).toEqual([id]);
+    expect(answer.results[0]).toMatchObject({
+      id,
+      title: newTitle,
+      changedFields: ["title"],
+      noRereadNeeded: true,
+    });
+
+    expect(gradeC2(before, await latestRowOf(id), oracle.c2)).toEqual([]);
+    // A draft's edit is on its latest version; the public row stays as it was.
+    expect(await liveRowOf(id)).toEqual(liveBefore);
+    expect([
+      await latestRowOf(nearTwinId),
+      await latestRowOf(publishedTwinId),
+    ]).toEqual(twins);
+    expect(await restOf([id])).toEqual({
+      ...rest,
+      versions: Number(rest.versions) + 1,
+    });
+
+    expect(saved.statements.length).toBeLessThanOrEqual(
+      STATEMENTS.single_write,
+    );
+    // This phrase is in a sixth of the seeded records, so the planner reads them all and
+    // the branch answers to its own budget. That is reported; one few rows hold is not.
+    const seqScans = await largeSeqScans(found.statements);
+    const selective = await callOn(c2FindCall(`${title}（拓片）`));
+    expect(await largeSeqScans(selective.statements)).toEqual([]);
+    expect(
+      await largeSeqScans([...got.statements, ...saved.statements]),
+    ).toEqual([]);
+    report({
+      name: "C2",
+      budgetMs:
+        GATE_A_P95_MS.fuzzy_locate +
+        GATE_A_P95_MS.single_read +
+        GATE_A_P95_MS.single_write,
+      ms: [found.ms + got.ms + saved.ms],
+      statements:
+        found.statements.length +
+        got.statements.length +
+        saved.statements.length,
+      bytes: Math.max(found.bytes, got.bytes, saved.bytes),
+      seqScans,
+    });
+  });
+});
+
+describe("C3 reference path", () => {
+  const { targets, locked, missingField, alreadyPublished, publishes } =
+    oracle.c3;
+  let approvalId: number;
+
+  const published = async () =>
+    (
+      await pool.query(
+        `SELECT id FROM catalogs
+         WHERE id = ANY($1::int[]) AND _status = 'published' ORDER BY id`,
+        [targets],
+      )
+    ).rows.map(({ id }) => Number(id));
+
+  const searchable = async () =>
+    (
+      await pool.query(
+        `SELECT count(*)::int AS n FROM catalog_search_documents
+         WHERE catalog_id = ANY($1::text[])`,
+        [targets.map(catalogIdOf)],
+      )
+    ).rows[0]!.n;
+
+  beforeAll(async () => {
+    // An account can only be approved for what it may edit.
+    await payload.update({
+      collection: "users",
+      id: access.automationId,
+      overrideAccess: true,
+      data: { scopeCatalogIds: targets.map(catalogIdOf) } as never,
+    });
+    const owner = await reqOf(access.ownerId);
+    const approved = await approveBatch(owner, {
+      automationUserId: access.automationId,
+      items: targets
+        .filter((id) => id !== missingField.id)
+        .map((id) => ({ id, revision: 1 })),
+    });
+    approvalId = Number(approved.approvalId);
+    // The approval's own check refuses a record that cannot publish, so only a row can
+    // hold this one: an approval from before the rule was tightened, say.
+    const incomplete = await payload.findByID({
+      collection: "catalogs",
+      id: missingField.id,
+      draft: true,
+      depth: 0,
+      overrideAccess: true,
+    });
+    await pool.query(
+      `INSERT INTO editorial_approvals_items (_order, _parent_id, id, catalog_id, revision, fingerprint)
+       VALUES ($1, $2, $3, $4, 1, $5)`,
+      [
+        targets.length,
+        approvalId,
+        randomBytes(12).toString("hex"),
+        missingField.id,
+        contentFingerprint(incomplete),
+      ],
+    );
+    await publishApproved(owner, {
+      approvalId,
+      id: alreadyPublished,
+      idempotencyKey: randomUUID(),
+    });
+    // Held from now: a lock lasts 5 minutes, and a slow runner may be past that.
+    await holdLock(pool, locked, access.ownerId);
+  });
+
+  it("publishes exactly what it can, and names each one it could not and why", async () => {
+    expect(await published()).toEqual([alreadyPublished]);
+    const lockedBefore = await latestRowOf(locked);
+    const missingBefore = await latestRowOf(missingField.id);
+    const rest = await restOf(targets);
+
+    const approvals = await callOn(C3_APPROVALS_CALL);
+    const { rows: listed } = adminReadRowsDataSchema.parse(
+      approvals.envelope.data,
+    );
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({
+      id: approvalId,
+      itemCount: targets.length,
+    });
+
+    const requestId = randomUUID();
+    const call = c3PublishCall(requestId, approvalId, targets);
+    const first = await callOn(call, "full");
+    expect(gradeC3(first.envelope, oracle.c3)).toEqual([]);
+    expect(first.envelope).toMatchObject({
+      done: targets.length,
+      total: targets.length,
+    });
+    // One way on: the lock's own time, then the same request.
+    expect(first.envelope.next?.tool).toBe("admin_execute");
+    expect(first.envelope.next?.args.requestId).toBe(requestId);
+    expect(first.envelope.next?.afterMs).toBeGreaterThan(0);
+
+    const expected = [...publishes, alreadyPublished].sort((a, b) => a - b);
+    expect(await published()).toEqual(expected);
+    expect(await searchable()).toBe(expected.length);
+    expect(await latestRowOf(locked)).toEqual(lockedBefore);
+    expect(await latestRowOf(missingField.id)).toEqual(missingBefore);
+    const after = await restOf(targets);
+    expect(after).toEqual({
+      ...rest,
+      versions: Number(rest.versions) + publishes.length,
+    });
+
+    // The same request again repeats nothing, and says what each target is now.
+    const replay = await callOn(call, "full");
+    expect(gradeC3(replay.envelope, oracle.c3, false)).toEqual([]);
+    expect(await published()).toEqual(expected);
+    expect(await restOf(targets)).toEqual(after);
+
+    expect(first.statements.length).toBeLessThanOrEqual(
+      STATEMENTS.batch_write_30,
+    );
+    const seqScans = await largeSeqScans(first.statements);
+    expect(
+      await largeSeqScans(
+        first.statements.filter(({ text }) => !SEARCH_SYNC_READ.test(text)),
+      ),
+    ).toEqual([]);
+    report({
+      name: "C3",
+      budgetMs:
+        GATE_A_P95_MS.list_page +
+        targets.length * GATE_A_P95_MS.batch_write_per_target,
+      ms: [approvals.ms + first.ms],
+      statements: approvals.statements.length + first.statements.length,
+      bytes: Math.max(approvals.bytes, first.bytes),
+      seqScans,
+    });
+  });
+});
+
 describe("the other classes at scale", () => {
   it("locates exactly by catalogId, sourceId and link", async () => {
     const variants = [
@@ -532,6 +847,44 @@ describe("the other classes at scale", () => {
       GATE_A_P95_MS.aggregate,
       STATEMENTS.aggregate,
       () => C1_CALL,
+    );
+  });
+
+  it("saves one draft", async () => {
+    // Past the three the seed holds locks on.
+    const drafts = Array.from(
+      { length: BENCH_SCALE.catalogs },
+      (_, at) => at + 1,
+    )
+      .filter((index) => index > 13 && catalogSpec(index).status === "draft")
+      .slice(0, TIMING_SAMPLES + 1)
+      .map(catalogSpec);
+    await checkClass(
+      "single_write",
+      GATE_A_P95_MS.single_write,
+      STATEMENTS.single_write,
+      (index) => {
+        const spec = drafts[index]!;
+        const latest = spec.versions.at(-1)!;
+        return {
+          name: "admin_execute",
+          arguments: {
+            requestId: randomUUID(),
+            op: "editorial.save-draft",
+            input: {
+              id: spec.index,
+              expectedRevision: latest.revision,
+              content: {
+                catalogId: spec.catalogId,
+                sourceId: spec.sourceId,
+                kind: kindOf(spec.index),
+                title: `${latest.title}（改）`,
+              },
+            },
+          },
+        };
+      },
+      "full",
     );
   });
 });

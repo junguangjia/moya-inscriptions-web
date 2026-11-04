@@ -180,12 +180,30 @@ describe("op names", () => {
       expect(entry.input, route).toBe(definition.input);
       expect(entry.output, route).toBe(definition.output);
     }
-    for (const route of EDITORIAL_ROUTES)
-      expect(entryOf(`editorial.${route}` as AdminOpName).input, route).toBe(
+    for (const route of EDITORIAL_ROUTES) {
+      const { input } =
         editorialOperationDefinitions[
           route as keyof typeof editorialOperationDefinitions
-        ].input,
+        ];
+      const entry = entryOf(`editorial.${route}` as AdminOpName);
+      const routeShape = (input as { shape?: Record<string, unknown> }).shape;
+      // A client never sends the route's key: admin_execute derives it per target.
+      if (routeShape === undefined || !("idempotencyKey" in routeShape)) {
+        expect(entry.input, route).toBe(input);
+        continue;
+      }
+      const { allowRemoving, ...rowFields } = (
+        entry.input as unknown as { shape: Record<string, unknown> }
+      ).shape;
+      expect(Object.keys(rowFields).sort(), route).toEqual(
+        Object.keys(routeShape)
+          .filter((field) => field !== "idempotencyKey")
+          .sort(),
       );
+      expect(allowRemoving !== undefined, route).toBe(
+        route === "save-draft" || route === "save-article-draft",
+      );
+    }
   });
 });
 

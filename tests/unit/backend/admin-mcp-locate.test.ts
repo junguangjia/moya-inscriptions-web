@@ -626,7 +626,7 @@ describe("op skeletons", () => {
 
   it("offers a read a key can call today, and no op that nothing has built", () => {
     const actions = actionsFor(catalogFacts, scope);
-    expect(actions.map(({ tool }) => tool)).toEqual([
+    expect(actions.slice(0, 2).map(({ tool }) => tool)).toEqual([
       "admin_get",
       "admin_read",
     ]);
@@ -634,6 +634,12 @@ describe("op skeletons", () => {
       op: "list.media",
       input: { filter: { catalogId: "synthetic-catalog" } },
     });
+    for (const { args } of actions)
+      if (typeof args.op === "string")
+        expect(
+          adminOpMeta[args.op as keyof typeof adminOpMeta].run,
+          args.op,
+        ).toBeDefined();
   });
 
   it("offers a mutation on an exact record the moment its op exists, prefilled", () => {
@@ -661,24 +667,51 @@ describe("op skeletons", () => {
       withBuilt(["catalog.publish", "catalog.withdraw"], () =>
         actionsFor({ ...catalogFacts, state }, scope),
       )
-        .map(({ args }) => args.op)
-        .filter(Boolean);
-    expect(ops("published")).toEqual(["list.media", "catalog.withdraw"]);
-    expect(ops("draft")).toEqual(["list.media", "catalog.publish"]);
+        .map(({ args }) => String(args.op))
+        .filter((op) => /\.(?:publish|withdraw)$/u.test(op));
+    expect(ops("published")).toEqual(["catalog.withdraw"]);
+    expect(ops("draft")).toEqual(["catalog.publish"]);
     expect(ops("draft_over_published")).toEqual([
-      "list.media",
       "catalog.publish",
       "catalog.withdraw",
     ]);
   });
 
-  it("offers a lock takeover only on a locked document", () => {
-    const ops = (locked: boolean) =>
-      withBuilt(["document.lock_takeover"], () =>
-        actionsFor({ ...catalogFacts, locked }, scope),
-      ).map(({ args }) => args.op);
-    expect(ops(false)).not.toContain("document.lock_takeover");
-    expect(ops(true)).toContain("document.lock_takeover");
+  it("offers a lock takeover only on a locked document, with what it must send back", () => {
+    const lock = {
+      held: true,
+      by: "owner",
+      lockId: 3,
+      holderUserId: 5,
+      lastEditedAt: "2026-11-04T10:00:00.000Z",
+      expiresAt: "2026-11-04T10:05:00.000Z",
+    } as const;
+    const actions = (facts: Partial<Parameters<typeof actionsFor>[0]>) =>
+      withBuilt(["document.lock_takeover", "document.lock_release"], () =>
+        actionsFor({ ...catalogFacts, ...facts }, scope),
+      );
+    const ops = (facts: object) => actions(facts).map(({ args }) => args.op);
+    expect(ops({ lock: { held: false } })).not.toContain(
+      "document.lock_takeover",
+    );
+    expect(ops({})).not.toContain("document.lock_takeover");
+    expect(
+      actions({ lock }).find(({ args }) => args.op === "document.lock_takeover")
+        ?.args.input,
+    ).toEqual({
+      type: "catalog",
+      id: catalogFacts.id,
+      expected: {
+        lockId: 3,
+        holderUserId: 5,
+        lastEditedAt: "2026-11-04T10:00:00.000Z",
+      },
+    });
+    // Only a key's own kind can give a lock back.
+    expect(ops({ lock })).not.toContain("document.lock_release");
+    expect(ops({ lock: { ...lock, by: "ai" } })).toContain(
+      "document.lock_release",
+    );
   });
 
   it("offers nothing on a tool this key does not hold", () => {
@@ -800,6 +833,7 @@ describe("what tools/list advertises", () => {
         "admin_analytics",
         "admin_actions",
         "admin_view_media",
+        ...(profile === "read" ? [] : ["admin_execute"]),
       ]);
   });
 
@@ -823,7 +857,9 @@ describe("what tools/list advertises", () => {
     }
   });
 
-  it("names only read ops on admin_read, and refuses none at the door", () => {
+  it("takes op as a plain string, because the names do not fit the budget", () => {
+    // Section 5: the enum is dropped when the size gate fails, and it did at S5. A
+    // wrong name gets near names, and admin_actions gives the list.
     const listing = toolListingFor("read", false).find(
       ({ name }) => name === "admin_read",
     )!;
@@ -831,12 +867,7 @@ describe("what tools/list advertises", () => {
       string,
       { enum?: string[] }
     >;
-    const names = properties.op!.enum!;
-    for (const name of names)
-      expect(adminOpMeta[name as keyof typeof adminOpMeta].tool).toBe(
-        "admin_read",
-      );
-    // The runtime check is wider, so a wrong name gets near names, not a bare refusal.
+    expect(properties.op!.enum).toBeUndefined();
     expect(adminReadInputSchema.safeParse({ op: "list.catalog" }).success).toBe(
       true,
     );

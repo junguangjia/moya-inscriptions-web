@@ -29,11 +29,19 @@ export type AdminOpCompletion<Input, Context> =
   | { readonly kind: "sync" }
   | {
       readonly kind: "async";
-      /** Absent until a slice builds the op. */
+      /**
+       * Read again on a replay. Absent, the op answers QUEUED: nothing has shown it
+       * finished, so it never reads as done. `result` is what the op answered, and
+       * absent when the op found its effect already in place and wrote nothing. A
+       * `hint` replaces the code's, when more calls cannot change this answer.
+       */
       readonly settle?: (
         input: Input,
+        result: unknown,
         context: Context,
-      ) => Promise<Pick<AdminMcpEnvelope, "ok" | "code" | "state" | "next">>;
+      ) => Promise<
+        Pick<AdminMcpEnvelope, "ok" | "code" | "state" | "next" | "hint">
+      >;
     };
 
 /** The four Owner-only switches. Each stays off until the Owner opens it. */
@@ -82,6 +90,11 @@ export interface AdminOpMeta<Input, Output, Context> {
     readonly type: string;
     readonly id?: string;
   };
+  /** For DOCUMENT_LOCKED's lock block, when `target` is not the record that is held. */
+  readonly lockedRecord?: (
+    input: Input,
+    context: Context,
+  ) => Promise<{ readonly type: string; readonly id?: number }>;
   /** Shown to the client, never compared with the threshold. */
   readonly impact?: (input: Input, context: Context) => Promise<unknown>;
   readonly preview?: (input: Input, context: Context) => Promise<unknown>;

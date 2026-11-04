@@ -2,6 +2,12 @@ import { sql, type PostgresAdapter } from "@payloadcms/db-postgres";
 import { createLocalReq, type PayloadRequest } from "payload";
 
 const BRANCH_STATEMENT_TIMEOUT = "2000ms";
+
+/**
+ * admin_execute, checked before each target, and a target runs to its end. A lock wait
+ * is 5 s, so the worst case is about 25 s plus auth and audit (section 9).
+ */
+export const EXECUTE_BUDGET_MS = 10_000;
 const QUERY_CANCELED = "57014";
 
 export interface BranchDb {
