@@ -396,38 +396,40 @@ export const readCatalogDelivery = async (
   requireActor(req);
   requireStandaloneTransaction(req);
   const parsed = parse(readCatalogDeliverySchema, input);
-  return withEditorialTransaction(req, async () => {
-    // A read writes nothing: it says what time has decided, and the next command
-    // records it.
-    const stored = await intentByID(req, parsed.intentId);
-    const row: IntentRow =
-      ["prepared", "release_requested"].includes(stored.state) &&
-      new Date(stored.expires_at).getTime() <= Date.now()
+  const row = await withEditorialTransaction(
+    req,
+    async (): Promise<IntentRow> => {
+      // A read writes nothing: it says what time has decided, and the next command
+      // records it.
+      const stored = await intentByID(req, parsed.intentId);
+      return ["prepared", "release_requested"].includes(stored.state) &&
+        new Date(stored.expires_at).getTime() <= Date.now()
         ? { ...stored, state: "expired" }
         : stored;
-    const result = resultFor(row, false);
+    },
+  );
+  const result = resultFor(row, false);
+  if (
+    row.recipe_manifest_sha256 &&
+    ["prepared", "release_requested"].includes(row.state)
+  ) {
+    // Past the transaction: the Backend can take 15 s, and a read that waits for it
+    // holds none of the connections the Owner's requests need.
+    const proof = await readCatalogReadiness(row.id);
     if (
-      row.recipe_manifest_sha256 &&
-      ["prepared", "release_requested"].includes(row.state)
-    ) {
-      const proof = await readCatalogReadiness(row.id);
-      if (
-        proof.intentId !== row.id ||
-        proof.manifestSha256 !== row.media_manifest_sha256 ||
-        proof.recipeManifestSha256 !== row.recipe_manifest_sha256 ||
-        proof.stateVersion !== row.state_version ||
-        proof.mediaCount !== row.media_manifest.length
-      )
-        throw new EditorialError("CATALOG_DELIVERY_PROOF_CHANGED", 409);
-      return {
-        ...result,
-        readiness: proof.publicReady
-          ? ("READY" as const)
-          : ("PENDING" as const),
-      };
-    }
-    return result;
-  });
+      proof.intentId !== row.id ||
+      proof.manifestSha256 !== row.media_manifest_sha256 ||
+      proof.recipeManifestSha256 !== row.recipe_manifest_sha256 ||
+      proof.stateVersion !== row.state_version ||
+      proof.mediaCount !== row.media_manifest.length
+    )
+      throw new EditorialError("CATALOG_DELIVERY_PROOF_CHANGED", 409);
+    return {
+      ...result,
+      readiness: proof.publicReady ? ("READY" as const) : ("PENDING" as const),
+    };
+  }
+  return result;
 };
 
 const expectState = (row: IntentRow, version: number) => {

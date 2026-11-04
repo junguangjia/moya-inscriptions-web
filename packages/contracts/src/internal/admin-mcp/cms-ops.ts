@@ -147,7 +147,6 @@ export const adminArticleContentSchema = z
     sections: z.array(
       z
         .strictObject({
-          id: articleText,
           heading: articleText,
           body: articleText,
           imageCatalog: rowId.nullable(),
@@ -156,9 +155,7 @@ export const adminArticleContentSchema = z
         .partial(),
     ),
     citations: z.array(
-      z
-        .strictObject({ id: articleText, text: articleText, url: articleText })
-        .partial(),
+      z.strictObject({ text: articleText, url: articleText }).partial(),
     ),
   })
   .partial();

@@ -1684,6 +1684,98 @@ describe("a save that removes entries", () => {
     expect(JSON.stringify(allowed)).not.toContain(link);
   });
 
+  it("refuses an Article row sent by its id, so a link it keeps never reads as cleared", async () => {
+    const link = withheldLink();
+    const article = await saveArticleDraft(await reqFor(owner), {
+      idempotencyKey: `${run}:article:${randomUUID()}`,
+      content: {
+        presentation: "news",
+        title: "Held citation",
+        summary: "Synthetic",
+        section: "田野观察",
+        byline: "由艺编辑室",
+        sections: [{ body: "第一段。" }],
+        citations: [{ text: "原引用", url: link }],
+      },
+    });
+    const stored = () =>
+      payload.findByID({
+        collection: "articles",
+        id: article.id,
+        draft: true,
+        depth: 0,
+      });
+    const before = await stored();
+    const answer = await call({
+      requestId: requestId(),
+      op: "editorial.save-article-draft",
+      input: {
+        id: article.id,
+        expectedRevision: article.revision,
+        allowRemoving: true,
+        content: {
+          citations: [{ id: before.citations?.[0]?.id, text: "改了文字" }],
+        },
+      },
+    });
+    expect(answer).toMatchObject({ ok: false, code: "INPUT_INVALID" });
+    const after = await stored();
+    expect(after.revision).toBe(before.revision);
+    expect(after.citations).toEqual(before.citations);
+  });
+
+  it("names a link an Article's restore drops, without asking first", async () => {
+    const content = {
+      presentation: "news",
+      title: "Restored citation",
+      summary: "Synthetic",
+      section: "田野观察",
+      byline: "由艺编辑室",
+      sections: [{ body: "第一段。" }],
+    };
+    const first = await saveArticleDraft(await reqFor(owner), {
+      idempotencyKey: `${run}:article:${randomUUID()}`,
+      content: { ...content, citations: [{ text: "原引用" }] },
+    });
+    const link = withheldLink();
+    const second = await saveArticleDraft(await reqFor(owner), {
+      idempotencyKey: `${run}:article:${randomUUID()}`,
+      id: first.id,
+      expectedRevision: first.revision,
+      content: { ...content, citations: [{ text: "原引用", url: link }] },
+    });
+    const { docs } = await payload.findVersions({
+      collection: "articles",
+      where: { parent: { equals: first.id } },
+      sort: "createdAt",
+      limit: 1,
+      depth: 0,
+      overrideAccess: true,
+    });
+    const restored = await call({
+      requestId: requestId(),
+      op: "article.restore",
+      input: {
+        id: first.id,
+        versionId: docs[0]!.id,
+        expected: { revision: second.revision },
+      },
+    });
+    expect(restored.ok).toBe(true);
+    expect(restored.data.results?.[0]).toMatchObject({
+      changedFields: ["citations"],
+      removedItems: { links: ["citations.0.url"] },
+    });
+    expect(JSON.stringify(restored)).not.toContain(link);
+    const after = await payload.findByID({
+      collection: "articles",
+      id: first.id,
+      draft: true,
+      depth: 0,
+    });
+    expect(after.citations?.[0]?.url ?? null).toBeNull();
+  });
+
   it("keeps a kept entry out of what it calls removed, and reads a stale save as a conflict", async () => {
     const draft = await seedDraftWithMedia();
     const kept = await call({
@@ -2200,6 +2292,8 @@ describe("an Article save", () => {
       { citations: ["见《金石录》"] },
       { citations: null },
       { citations: [{ text: "x", link: "https://example.invalid/" }] },
+      { citations: [{ id: "synthetic-row", text: "x" }] },
+      { sections: [{ id: "synthetic-row", body: "x" }] },
       { title: { a: 1 } },
       { titel: "错字段" },
       { firstPublishedAt: "2000-01-01T00:00:00.000Z" },
@@ -2231,18 +2325,30 @@ describe("an Article save", () => {
 
   it("takes rows as they read, and allowRemoving as its input says", async () => {
     const saved = await seedWithRows();
-    const stored = await storedArticle(saved.id);
+    const read = await client.callTool({
+      name: "admin_get",
+      arguments: { type: "article", id: saved.id, view: "full" },
+    });
+    const rowsOfField = (name: string) =>
+      (
+        read.structuredContent as {
+          data: { fields: { name: string; value?: unknown }[] };
+        }
+      ).data.fields.find((field) => field.name === name)!.value;
+    const sections = rowsOfField("sections");
+    const citations = rowsOfField("citations");
+    expect(sections).toEqual([
+      { body: "第一段原文。" },
+      { body: "第二段原文。" },
+    ]);
+    expect(citations).toEqual([{ text: "原引用一" }, { text: "原引用二" }]);
     const answer = await call({
       requestId: requestId(),
       op: "editorial.save-article-draft",
       input: {
         id: saved.id,
         expectedRevision: saved.revision,
-        content: {
-          sections: stored.sections,
-          citations: stored.citations,
-          subtitle: null,
-        },
+        content: { sections, citations, subtitle: null },
       },
     });
     expect(answer).toMatchObject({ ok: true });

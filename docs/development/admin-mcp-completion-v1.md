@@ -3139,10 +3139,9 @@ Numbers stay in the private evidence of each run, not here.
 - A cold overview cannot meet 800 ms while Umami's part takes longer than that
   and the tool waits up to 1.5 s for it. The two numbers come from this document
   and cannot both hold at this scale. The canonical part alone is well inside.
-- Production's Umami held 40,146 events on 2026-11-04, read once with the
-  Owner's approval, about 1/25 of the 1,000,020 assumed here, so the cold misses
-  above are expected to be far smaller live. That is an estimate until measured
-  after release.
+- Production holds far fewer events than the 1,000,020 assumed here. The reading
+  is in the private evidence, and the cold misses recorded there are expected to
+  be far smaller live, which stays an estimate until measured after release.
 - The time is in PostgreSQL, not in Umami's CPU limit: Umami's own routes took
   the same time at 0.5 and at 18 CPUs. `/stats` is most of it, because it runs
   two queries in turn, each with the per-event LATERAL, and it grows with the

@@ -3039,6 +3039,61 @@ describe("the delivery tools", () => {
     });
   });
 
+  it("holds no connection while a read waits on the Backend, so the Owner is still served", async () => {
+    const draft = await seedDraftWithMedia();
+    const proofs = proofRoutes({ ready: false });
+    let answerReads = () => {};
+    const heldBackend = new Promise<void>((resolve) => {
+      answerReads = resolve;
+    });
+    let waiting = 0;
+    await withOperator(
+      {
+        ...proofs,
+        catalogDeliveryReadiness: async (intentId: string) => {
+          waiting += 1;
+          await heldBackend;
+          return proofs.catalogDeliveryReadiness(intentId);
+        },
+      },
+      async () => {
+        const { intentId } = intentOf(await prepared(draft));
+        const reads = Array.from({ length: 5 }, () =>
+          read("editorial.read-catalog-delivery", { intentId }),
+        );
+        try {
+          await vi.waitFor(() => expect(waiting).toBe(5), {
+            timeout: 10_000,
+            interval: 10,
+          });
+          const ownerRead = await fetch(
+            new URL(
+              `/api/catalogs/${draft.id}?draft=true&depth=0`,
+              server.origin,
+            ),
+            {
+              headers: {
+                authorization: ["users", "API-Key", ownerRestKey].join(" "),
+              },
+            },
+          );
+          expect(ownerRead.status).toBe(200);
+          expect(((await ownerRead.json()) as { id: number }).id).toBe(
+            draft.id,
+          );
+        } finally {
+          answerReads();
+          await Promise.allSettled(reads);
+        }
+        for (const answer of await Promise.all(reads))
+          expect(answer).toMatchObject({
+            ok: true,
+            data: { intentId, state: "prepared", readiness: "PENDING" },
+          });
+      },
+    );
+  });
+
   it("reads released as done on a replay, and ended once the record moves on", async () => {
     const draft = await seedDraftWithMedia();
     const state = { ready: false };

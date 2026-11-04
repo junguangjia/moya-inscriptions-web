@@ -347,9 +347,7 @@ export const restoreRecord =
         spec.slug,
         saved,
         before,
-        type === "catalog" && before !== undefined
-          ? (after) => removedBy(before, after)
-          : undefined,
+        before !== undefined ? (after) => removedBy(before, after) : undefined,
         spec.contentOf,
       ),
     );
