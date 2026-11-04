@@ -725,9 +725,11 @@ describe("a read cut at the size cap", () => {
   it.each([
     [{}, 7, { page: 2, pageSize: 7 }],
     [{ page: 1, pageSize: 50 }, 31, { page: 2, pageSize: 31 }],
-    [{ page: 2, pageSize: 7 }, 5, { page: 4, pageSize: 4 }],
+    [{ page: 2, pageSize: 7 }, 5, { page: 2, pageSize: 12 }],
     [{ page: 3, pageSize: 50 }, 1, { page: 102, pageSize: 1 }],
     [{ page: 2, pageSize: 50 }, 49, { page: 4, pageSize: 33 }],
+    // The size grows back to the default page once the offset allows it.
+    [{ page: 20, pageSize: 1 }, 1, { page: 2, pageSize: 20 }],
   ])(
     "starts a numbered page right after %j and %i rows",
     (input, kept, want) => {
@@ -741,7 +743,7 @@ describe("a read cut at the size cap", () => {
       expect((want.page - 1) * want.pageSize).toBe(
         (page - 1) * pageSize + kept,
       );
-      expect(want.pageSize).toBeLessThanOrEqual(kept);
+      expect(want.pageSize).toBeLessThanOrEqual(Math.max(kept, 20));
       expect(
         ownerDraftPageRequestSchema.safeParse(next?.args.input).success,
       ).toBe(true);

@@ -1042,13 +1042,15 @@ tests/unit/backend/admin-mcp-locate.test.ts:
   integer range names no row, so it is refused as `invalid_cursor`.
   `editorial.owner-drafts` and `list.review_page` number their own pages, and a
   row there runs near 1 KB, so a default page of 20 is often cut: `next` starts
-  a page right after the rows kept, at a smaller `pageSize`. These two answer
-  `totalDocs` with no page number or page count, because on a cut page those
-  would be a second way on that skips rows. A page that fits sets `next` to the
-  following page when more follow, and the last page sets none.
-  `editorial.owner-history` takes no page size, so a cut there has no way on and
-  says so. An op that is no list source refuses `cursor`, `pageSize`, `view`,
-  `fields` and `groupBy` with `not_for_this_op` rather than dropping them.
+  a page right after the rows kept, at the largest `pageSize` that divides that
+  offset, up to the rows kept or the default of 20. These two answer `totalDocs`
+  with no page number or page count, because on a cut page those would be a
+  second way on that skips rows. A page that fits sets `next` the same way when
+  more follow, so the size grows back after a cut and a walk never sinks to one
+  row a call. The last page sets none. `editorial.owner-history` takes no page
+  size, so a cut there has no way on and says so. An op that is no list source
+  refuses `cursor`, `pageSize`, `view`, `fields` and `groupBy` with
+  `not_for_this_op` rather than dropping them.
 - A `sourceId` bound only in a record's provenance list resolves through
   `editorial-identities`, after the indexed lookup on the main column.
 - Trigram is its own branch, `catalogs_similar`, tried only when no branch

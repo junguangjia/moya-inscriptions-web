@@ -17,6 +17,7 @@ import {
   inputInvalidEnvelope,
   issuesOfError,
 } from "../envelope";
+import { numberedPageAfter } from "../ops/define";
 import {
   adminOpMeta,
   isAdminOpName,
@@ -106,14 +107,6 @@ export const readEnvelope = async (
       issuesOfError(parsed.error, entry.input, ["input"]),
     );
   return entry.run!(parsed.data, { req, key, read });
-};
-
-/** The largest page size that starts a page right after the rows kept. */
-const numberedPageAfter = (page: number, pageSize: number, kept: number) => {
-  const offset = (page - 1) * pageSize + kept;
-  let size = kept;
-  while (offset % size !== 0) size -= 1;
-  return { page: offset / size + 1, pageSize: size };
 };
 
 /** A cut page goes on from the last whole row it kept; a cut count from its offset. */

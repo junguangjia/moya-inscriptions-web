@@ -22,6 +22,23 @@ export type AdminOpEntry = AdminOpMeta<
   AdminOpContext
 >;
 
+const NUMBERED_PAGE_SIZE = 20;
+
+/**
+ * The largest page size that starts a page right after the rows read, up to the
+ * rows kept or the default page. A size that only shrinks would end at one row a call.
+ */
+export const numberedPageAfter = (
+  page: number,
+  pageSize: number,
+  kept: number,
+) => {
+  const offset = (page - 1) * pageSize + kept;
+  let size = Math.max(kept, NUMBERED_PAGE_SIZE);
+  while (offset % size !== 0) size -= 1;
+  return { page: offset / size + 1, pageSize: size };
+};
+
 type Facts = Partial<Omit<AdminOpEntry, "summary" | "klass" | "recovery">>;
 
 const sync = { kind: "sync" } as const;

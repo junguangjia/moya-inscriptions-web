@@ -11,6 +11,7 @@ import { CMS_FAMILIES, readLatest, rowIdOf } from "../records";
 import {
   asynchronous,
   example,
+  numberedPageAfter,
   readOp,
   reversibleOp,
   type AdminOpContext,
@@ -46,12 +47,19 @@ const reviewPage = async (input: unknown, { req, read }: AdminOpContext) => {
   const envelope = okEnvelope({ docs, totalDocs, automationUsers }, [
     "/data/docs",
   ]);
+  const { pageSize } = input as { pageSize: number };
   return page < totalPages
     ? {
         ...envelope,
         next: {
           tool: "admin_read",
-          args: { ...read, input: { ...read?.input, page: page + 1 } },
+          args: {
+            ...read,
+            input: {
+              ...read?.input,
+              ...numberedPageAfter(page, pageSize, docs.length),
+            },
+          },
         },
       }
     : envelope;

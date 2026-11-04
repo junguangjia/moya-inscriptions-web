@@ -756,6 +756,30 @@ describe("the other CMS sources", () => {
         );
       }
     }
+    // The size grows back, so a walk never sinks to one row a call.
+    const small = await call("admin_read", {
+      op: "list.review_page",
+      input: { page: 20, pageSize: 1 },
+    });
+    expect(small.next?.args).toEqual({
+      op: "list.review_page",
+      input: { page: 2, pageSize: 20 },
+    });
+    const walked: number[] = [];
+    let calls = 0;
+    let current: { tool: string; args: Record<string, unknown> } = {
+      tool: "admin_read",
+      args: { op: "list.review_page", input: { page: 1, pageSize: 50 } },
+    };
+    while (walked.length < order.length) {
+      const answer = await call(current.tool, current.args);
+      walked.push(...idsOf(answer));
+      calls += 1;
+      if (answer.next === undefined) break;
+      current = answer.next;
+    }
+    expect(walked.slice(0, order.length)).toEqual(order);
+    expect(calls).toBeLessThanOrEqual(20);
   });
 
   it("refuses an argument the op does not read, rather than dropping it", async () => {
