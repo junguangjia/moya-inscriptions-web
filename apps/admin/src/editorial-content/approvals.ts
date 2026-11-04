@@ -11,9 +11,12 @@ import { createHash } from "node:crypto";
 import type { CollectionConfig, PayloadRequest } from "payload";
 
 import { isAutomation, actsAsOwner } from "../editorial/access";
-import { relationshipID } from "../editorial/collections";
+import {
+  refuseApprovalDuplicate,
+  relationshipID,
+} from "../editorial/collections";
 import { EditorialError } from "../editorial/errors";
-import { lockEditorialKey } from "../editorial/transaction";
+import { isMissingRecord, lockEditorialKey } from "../editorial/transaction";
 
 const contentKeys = [
   "presentation",
@@ -50,10 +53,12 @@ const canonical = (value: unknown): unknown => {
   return value ?? null;
 };
 
-/** Order-preserving digest of the Article's editorial content only. */
-export const articleContentFingerprint = (document: object): string => {
+/** The Article's editorial content only, with row ids and populated rows left out. */
+export const articleContentSubset = (
+  document: object,
+): Record<string, unknown> => {
   const record = document as Record<string, unknown>;
-  const subset = Object.fromEntries(
+  return Object.fromEntries(
     contentKeys.map((key) => [
       key,
       key === "coverCatalog"
@@ -61,8 +66,13 @@ export const articleContentFingerprint = (document: object): string => {
         : canonical(record[key]),
     ]),
   );
-  return createHash("sha256").update(JSON.stringify(subset)).digest("hex");
 };
+
+/** Order-preserving digest of that content. */
+export const articleContentFingerprint = (document: object): string =>
+  createHash("sha256")
+    .update(JSON.stringify(articleContentSubset(document)))
+    .digest("hex");
 
 export const editableArticle = async (
   req: PayloadRequest,
@@ -78,13 +88,16 @@ export const editableArticle = async (
       req,
       user: req.user,
     });
-  } catch {
-    throw new EditorialError("RECORD_UNAVAILABLE", 404);
+  } catch (error) {
+    if (isMissingRecord(error))
+      throw new EditorialError("RECORD_UNAVAILABLE", 404);
+    throw error;
   }
 };
 
 export const EditorialArticleApprovals: CollectionConfig = {
   slug: "editorial-article-approvals",
+  disableDuplicate: true,
   labels: {
     singular: workspacePageLabel(
       "/admin/collections/editorial-article-approvals",
@@ -181,6 +194,7 @@ export const EditorialArticleApprovals: CollectionConfig = {
   hooks: {
     beforeOperation: [
       async ({ args, operation, req }) => {
+        if (operation === "create") refuseApprovalDuplicate(args);
         if (operation === "update") {
           if (!actsAsOwner(req))
             throw new EditorialError("APPROVAL_OWNER_ONLY", 403);

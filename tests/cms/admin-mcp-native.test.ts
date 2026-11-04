@@ -1,11 +1,18 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { request as httpRequest } from "node:http";
 import path from "node:path";
 
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { sql, type PostgresAdapter } from "@payloadcms/db-postgres";
 import {
+  ADMIN_MCP_TEXT_CAP_BYTES,
+  ADMIN_OP_NAMES,
+  ADMIN_OP_TOOLS,
+  adminActionDetailsSchema,
+  adminActionsIndexSchema,
   adminMcpEnvelopeSchema,
   adminWhoamiDataSchema,
+  type AdminMcpToolProfile,
 } from "@moya/contracts/internal/admin-mcp";
 import {
   createLocalReq,
@@ -17,7 +24,7 @@ import {
 } from "payload";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { findKey } from "admin/admin-mcp";
+import { findKey, toolListingFor } from "admin/admin-mcp";
 import { isAiOperator, saveDraft } from "admin/editorial";
 
 import {
@@ -48,8 +55,8 @@ const email = (name: string) => `${name}-${run}@example.invalid`;
 const password = randomBytes(24).toString("hex");
 const DAY_MS = 24 * 60 * 60 * 1000;
 const STREAMABLE_ACCEPT = "application/json, text/event-stream";
-// Matrix "admin_view_media result": text plus image, so no result schema. That
-// tool arrives in a later slice; nothing else may join this list.
+// Matrix "admin_view_media result": text plus image, so no result schema. Nothing
+// else may join this list.
 const TOOLS_WITHOUT_RESULT_SCHEMA = ["admin_view_media"];
 
 let config: SanitizedConfig;
@@ -116,6 +123,12 @@ const INITIALIZE = rpc("initialize", {
   capabilities: {},
   clientInfo: { name: "synthetic", version: "1.0.0" },
 });
+
+/** What the tool table lists for a key named after its profile: ai-read and so on. */
+const namesFor = (name: string) =>
+  toolListingFor(name.replace(/^ai-/u, "") as AdminMcpToolProfile, false).map(
+    (tool) => tool.name,
+  );
 
 const clientFor = async (name: string): Promise<Client> =>
   (await connectClient(endpoint, bearer(name))).client;
@@ -232,8 +245,8 @@ describe("ai_operator keys on the native path", () => {
       const client = await clientFor(name);
       try {
         const { tools } = await client.listTools();
-        expect(tools.map((tool) => tool.name)).toEqual(["admin_whoami"]);
-        const [whoami] = tools;
+        expect(tools.map((tool) => tool.name)).toEqual(namesFor(name));
+        const whoami = tools.find((tool) => tool.name === "admin_whoami");
         expect(whoami?.annotations).toEqual({
           readOnlyHint: true,
           destructiveHint: false,
@@ -325,7 +338,7 @@ describe("ai_operator keys on the native path", () => {
           allow: "POST",
         }),
       );
-      expect((await client.listTools()).tools).toHaveLength(1);
+      expect((await client.listTools()).tools.length).toBeGreaterThan(0);
     } finally {
       await client.close();
     }
@@ -345,7 +358,7 @@ describe("ai_operator keys on the native path", () => {
     }
     const fresh = await clientFor("ai-read");
     try {
-      expect((await fresh.listTools()).tools).toHaveLength(1);
+      expect((await fresh.listTools()).tools.length).toBeGreaterThan(0);
     } finally {
       await fresh.close();
     }
@@ -385,7 +398,7 @@ describe("ai_operator keys on the native path", () => {
             label: "synthetic-ai-operate",
             toolProfile: "operate",
           },
-          tools: ["admin_whoami"],
+          tools: namesFor("ai-operate"),
         },
       });
       const [text] = result.content as { type: string; text: string }[];
@@ -503,9 +516,9 @@ describe("ai_operator keys on the native path", () => {
     });
     const client = await clientFor("ai-ticked");
     try {
-      expect((await client.listTools()).tools.map(({ name }) => name)).toEqual([
-        "admin_whoami",
-      ]);
+      expect((await client.listTools()).tools.map(({ name }) => name)).toEqual(
+        namesFor("ai-full"),
+      );
       await expect(
         client.callTool({ name: "editorial_query", arguments: { page: 1 } }),
       ).rejects.toMatchObject({ code: -32602 });
@@ -603,6 +616,197 @@ describe("ai_operator keys on the native path", () => {
   });
 });
 
+// Behavior Matrix "Text result over the size cap", and section 5's admin_actions,
+// over real JSON-RPC: the official client validates each result against the schema
+// tools/list advertised, and throws where they disagree.
+describe("admin_actions over JSON-RPC", () => {
+  const textOf = (result: Awaited<ReturnType<Client["callTool"]>>) =>
+    (result.content as { type: string; text: string }[])[0]!.text;
+  const asText = (result: Awaited<ReturnType<Client["callTool"]>>) => {
+    const text = textOf(result);
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(
+      ADMIN_MCP_TEXT_CAP_BYTES,
+    );
+    const envelope = adminMcpEnvelopeSchema.parse(JSON.parse(text));
+    expect(envelope).toEqual(result.structuredContent);
+    return envelope;
+  };
+
+  it.each(["ai-read", "ai-operate", "ai-full"])(
+    "answers %s an index of only the tools it can call",
+    async (name) => {
+      const client = await clientFor(name);
+      try {
+        const envelope = asText(
+          await client.callTool({ name: "admin_actions" }),
+        );
+        expect(envelope).toMatchObject({ ok: true, code: "OK", untrusted: [] });
+        const index = adminActionsIndexSchema.parse(envelope.data);
+        const listed = (await client.listTools()).tools.map(
+          (tool) => tool.name,
+        );
+        for (const { tool } of index.groups) expect(listed).toContain(tool);
+        expect(index.groups.map(({ tool }) => tool)).toEqual(
+          ADMIN_OP_TOOLS.filter((tool) => listed.includes(tool)),
+        );
+      } finally {
+        await client.close();
+      }
+    },
+  );
+
+  it("gives one op's JSON Schema, class, recovery, completion and example", async () => {
+    const client = await clientFor("ai-read");
+    try {
+      const envelope = asText(
+        await client.callTool({
+          name: "admin_actions",
+          arguments: { op: "community.moderate-work" },
+        }),
+      );
+      const { details } = adminActionDetailsSchema.parse(envelope.data);
+      expect(details).toHaveLength(1);
+      expect(details[0]).toMatchObject({
+        op: "community.moderate-work",
+        tool: "admin_execute",
+        class: "reversible",
+        recovery: "receipt",
+        completion: "async",
+        available: false,
+        unavailable: "tool_not_listed",
+        input: { type: "object" },
+        example: { state: "hidden" },
+      });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("cuts five large details at the cap, stays valid, and next reaches the rest", async () => {
+    const client = await clientFor("ai-full");
+    try {
+      const asked = [
+        "editorial.save-draft",
+        "community.read-work-submissions",
+        "community.read-work-submission",
+        "community.decide-report",
+        "community.read-reports",
+      ];
+      const first = asText(
+        await client.callTool({
+          name: "admin_actions",
+          arguments: { ops: asked },
+        }),
+      );
+      expect(first).toMatchObject({ ok: true, meta: { truncated: true } });
+      const kept = adminActionDetailsSchema
+        .parse(first.data)
+        .details.map(({ op }) => op);
+      expect(kept.length).toBeGreaterThan(0);
+      expect(kept.length).toBeLessThan(asked.length);
+      expect(first.remaining).toBe(asked.length - kept.length);
+      const reached = [...kept];
+      let next = first.next;
+      for (let call = 0; next !== undefined && call < asked.length; call += 1) {
+        expect(next.tool).toBe("admin_actions");
+        const answer = asText(
+          await client.callTool({ name: next.tool, arguments: next.args }),
+        );
+        reached.push(
+          ...adminActionDetailsSchema
+            .parse(answer.data)
+            .details.map(({ op }) => op),
+        );
+        next = answer.next;
+      }
+      expect(reached).toEqual(asked);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("fits every op's detail in one text result", async () => {
+    const client = await clientFor("ai-read");
+    try {
+      for (const op of ADMIN_OP_NAMES) {
+        const envelope = asText(
+          await client.callTool({ name: "admin_actions", arguments: { op } }),
+        );
+        expect(envelope.meta, op).toEqual({});
+      }
+    } finally {
+      await client.close();
+    }
+  }, 120_000);
+
+  it("answers an unknown op with near names as a tool error, never its text", async () => {
+    const client = await clientFor("ai-read");
+    try {
+      const result = await client.callTool({
+        name: "admin_actions",
+        arguments: { op: "list.catalog-canary" },
+      });
+      expect(result.isError).toBe(true);
+      expect(asText(result)).toMatchObject({
+        ok: false,
+        code: "UNKNOWN_OP",
+        data: {
+          nearest: expect.arrayContaining(["list.catalogs"]) as string[],
+        },
+      });
+      expect(textOf(result)).not.toContain("canary");
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("refuses more than five ops, naming the path and no value", async () => {
+    const client = await clientFor("ai-read");
+    try {
+      const canary = "synthetic-canary-op";
+      const result = await client.callTool({
+        name: "admin_actions",
+        arguments: { ops: Array.from({ length: 6 }, () => canary) },
+      });
+      expect(result.isError).toBe(true);
+      expect(asText(result)).toMatchObject({
+        code: "INPUT_INVALID",
+        issues: [{ path: ["ops"] }],
+      });
+      expect(textOf(result)).not.toContain(canary);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("stops while paused, and writes one finish row per call", async () => {
+    const before = await auditRowCount("ai-read");
+    const client = await clientFor("ai-read");
+    try {
+      asText(await client.callTool({ name: "admin_actions" }));
+      expect(await auditRowCount("ai-read")).toBe(before + 1);
+      await db().execute(sql`UPDATE mcp_control SET pause = true`);
+      try {
+        const paused = await clientFor("ai-read");
+        try {
+          expect(
+            (await paused.listTools()).tools.map(({ name }) => name),
+          ).toEqual(["admin_whoami"]);
+          await expect(
+            paused.callTool({ name: "admin_actions" }),
+          ).resolves.toMatchObject({ isError: true });
+        } finally {
+          await paused.close();
+        }
+      } finally {
+        await db().execute(sql`UPDATE mcp_control SET pause = false`);
+      }
+    } finally {
+      await client.close();
+    }
+  });
+});
+
 describe("the key door", () => {
   const refusal = async (response: Response) => ({
     status: response.status,
@@ -665,7 +869,7 @@ describe("the key door", () => {
     await makeKey("ai-lapsing", aiOperator);
     const client = await clientFor("ai-lapsing");
     try {
-      expect((await client.listTools()).tools).toHaveLength(1);
+      expect((await client.listTools()).tools.length).toBeGreaterThan(0);
       await db().execute(
         sql`UPDATE payload_mcp_api_keys SET expires_at = now() - interval '1 second' WHERE id = ${keyIds["ai-lapsing"]}`,
       );
@@ -935,6 +1139,45 @@ describe("one spelling of the URL", () => {
         { authorization: bearerHeader(forgedConnectionToken) },
       ],
     ] as const;
+
+  it("answers a dot-segment path as the same URL, over a raw socket that sends it as written", async () => {
+    const { hostname, port } = new URL(endpoint);
+    const body = JSON.stringify(LIST);
+    for (const path of ["/api/./mcp", "/api/x/../mcp"]) {
+      const answer = await new Promise<{ status: number; text: string }>(
+        (resolve, reject) => {
+          const request = httpRequest(
+            {
+              hostname,
+              port,
+              path,
+              method: "POST",
+              headers: {
+                accept: STREAMABLE_ACCEPT,
+                "content-type": "application/json",
+                "content-length": Buffer.byteLength(body),
+                ...bearer("ai-full"),
+              },
+            },
+            (response) => {
+              const chunks: Buffer[] = [];
+              response.on("data", (chunk: Buffer) => chunks.push(chunk));
+              response.on("end", () =>
+                resolve({
+                  status: response.statusCode ?? 0,
+                  text: Buffer.concat(chunks).toString(),
+                }),
+              );
+            },
+          );
+          request.on("error", reject);
+          request.end(body);
+        },
+      );
+      expect([path, answer.status]).toEqual([path, 200]);
+      expect(answer.text).toContain("admin_whoami");
+    }
+  });
 
   it("answers 404 on every other spelling, for every credential, on both paths", async () => {
     secrets["forged-spelling"] = randomBytes(32).toString("hex");

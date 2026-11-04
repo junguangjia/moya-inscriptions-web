@@ -46,22 +46,45 @@ function configuredOrigin(name: "CMS_PUBLIC_URL" | "CMS_PREVIEW_WEB_URL"): URL {
   return url;
 }
 
-/** The Admin link contains only the internal document id. Authentication remains a session cookie. */
-export function adminPreviewURL(doc: Record<string, unknown>): string | null {
-  if (!doc.id || !/^[1-9]\d*$/.test(String(doc.id))) return null;
+export type AdminPreviewLocation =
+  | { readonly href: string }
+  | {
+      readonly reason:
+        "PREVIEW_ORIGIN_NOT_CONFIGURED" | "PREVIEW_HOST_MISMATCH";
+    };
+
+/** The rendered page's address, or why this environment has none. */
+export function adminPreviewLocation(id: unknown): AdminPreviewLocation {
+  if (!id || !/^[1-9]\d*$/.test(String(id)))
+    return { reason: "PREVIEW_ORIGIN_NOT_CONFIGURED" };
   try {
     const web = configuredOrigin("CMS_PREVIEW_WEB_URL");
     const cms = configuredOrigin("CMS_PUBLIC_URL");
     // Payload's session cookie is host-only. A shared public hostname with
     // separate proxy routes (or synthetic ports) keeps that boundary intact.
-    if (web.hostname !== cms.hostname) return null;
-    return new URL(`/editorial-preview/${String(doc.id)}`, web).href;
+    if (web.hostname !== cms.hostname)
+      return { reason: "PREVIEW_HOST_MISMATCH" };
+    return { href: new URL(`/editorial-preview/${String(id)}`, web).href };
   } catch {
-    return null;
+    return { reason: "PREVIEW_ORIGIN_NOT_CONFIGURED" };
   }
 }
 
-export async function previewCatalogDetail(req: PayloadRequest, id: unknown) {
+/** The Admin link contains only the internal document id. Authentication remains a session cookie. */
+export function adminPreviewURL(doc: Record<string, unknown>): string | null {
+  const location = adminPreviewLocation(doc.id);
+  return "href" in location ? location.href : null;
+}
+
+/**
+ * `mediaBase` is where an image's protected URL starts. Admin MCP passes its own,
+ * because it replaces each one with a media id and needs no public origin for that.
+ */
+export async function previewCatalogDetail(
+  req: PayloadRequest,
+  id: unknown,
+  mediaBase: () => URL = () => configuredOrigin("CMS_PUBLIC_URL"),
+) {
   requireActor(req);
   const { content } = await readDraft(req, { id });
   if (content.title === undefined)
@@ -69,7 +92,7 @@ export async function previewCatalogDetail(req: PayloadRequest, id: unknown) {
   await validateCatalogMedia(req, content, { publishing: false });
   const resolved = new Map<MediaId, ResolvedMediaUrl>();
   if (content.media.length > 0) {
-    const base = configuredOrigin("CMS_PUBLIC_URL");
+    const base = mediaBase();
     for (let offset = 0; offset < content.media.length; offset += 100) {
       const subset = content.media.slice(offset, offset + 100);
       const registered = await req.payload.find({

@@ -15,8 +15,20 @@ export const relationshipID = (value: unknown): number | string | undefined => {
   return undefined;
 };
 
+/**
+ * disableDuplicate guards only the Local API. REST `POST /:id/duplicate` goes
+ * straight to the create operation with this argument (payload
+ * dist/collections/endpoints/duplicate.js), and an approval binds exact revisions
+ * the Owner chose, so a copy of one is never a thing to make.
+ */
+export const refuseApprovalDuplicate = (args: object) => {
+  if ("duplicateFromID" in args && args.duplicateFromID)
+    throw new EditorialError("APPROVAL_DUPLICATE_DISABLED", 403);
+};
+
 export const EditorialApprovals: CollectionConfig = {
   slug: "editorial-approvals",
+  disableDuplicate: true,
   labels: {
     singular: workspacePageLabel("/admin/collections/editorial-approvals"),
     plural: workspacePageLabel("/admin/collections/editorial-approvals"),
@@ -112,6 +124,7 @@ export const EditorialApprovals: CollectionConfig = {
   hooks: {
     beforeOperation: [
       async ({ args, operation, req }) => {
+        if (operation === "create") refuseApprovalDuplicate(args);
         if (operation === "update") {
           if (!actsAsOwner(req))
             throw new EditorialError("APPROVAL_OWNER_ONLY", 403);
@@ -238,6 +251,22 @@ export const EditorialReceipts: CollectionConfig = {
       options: [
         { label: "保存草稿", value: "save-draft" },
         { label: "发布已批准内容", value: "publish-approved" },
+        { label: "批准资料批次", value: "approve-batch" },
+        { label: "批准文章批次", value: "approve-article-batch" },
+        { label: "直接发布资料", value: "publish-direct" },
+        { label: "撤回资料", value: "withdraw" },
+        { label: "恢复资料版本", value: "restore-draft" },
+        { label: "修改长文本", value: "patch-text" },
+        { label: "复制资料", value: "duplicate" },
+        { label: "发布文章", value: "article-publish" },
+        { label: "撤回文章", value: "article-withdraw" },
+        { label: "恢复文章版本", value: "article-restore" },
+        { label: "复制文章", value: "article-duplicate" },
+        { label: "保存合集", value: "collection-save" },
+        { label: "发布合集", value: "collection-publish" },
+        { label: "撤回合集", value: "collection-withdraw" },
+        { label: "恢复合集版本", value: "collection-restore" },
+        { label: "复制合集", value: "collection-duplicate" },
       ],
       required: true,
     },
@@ -256,6 +285,18 @@ export const EditorialReceipts: CollectionConfig = {
       type: "relationship",
       relationTo: "catalogs",
       label: "资料",
+    },
+    {
+      name: "article",
+      type: "relationship",
+      relationTo: "articles",
+      label: "文章",
+    },
+    {
+      name: "articleCollection",
+      type: "relationship",
+      relationTo: "article-collections",
+      label: "专题合集",
     },
     { name: "errorCode", type: "text", label: "错误代码" },
     {

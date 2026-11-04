@@ -2,8 +2,8 @@
  * REST operations extending the editorial batch mechanism to Articles:
  * scoped draft saving, exact-revision Owner approval and approval-bound
  * publication by automation. Receipts reuse `editorial-receipts` (operation
- * `publish-approved`, no Catalog); an identical retry replays its result and a
- * different command under the same key conflicts.
+ * `publish-approved`, naming the Article); an identical retry replays its result
+ * and a different command under the same key conflicts.
  */
 import {
   editorialArticleApproveBatchSchema,
@@ -16,10 +16,13 @@ import { isAutomation, actsAsOwner, requireActor } from "../editorial/access";
 import { relationshipID } from "../editorial/collections";
 import { requestFingerprint } from "../editorial/content";
 import { EditorialError, validationError } from "../editorial/errors";
+import { approvalOnce } from "../editorial/operations";
 import { withApprovedPublish, withLedgerWrite } from "../editorial/state";
 import {
   lockEditorialKey,
+  ReplayedEditorialError,
   withEditorialTransaction,
+  writesRejectedReceipt,
 } from "../editorial/transaction";
 import { articleContentFingerprint, editableArticle } from "./approvals";
 
@@ -67,7 +70,30 @@ const documentResult = (
   status: document._status === "published" ? "published" : "draft",
 });
 
-/** Article receipts are replayed from the command itself plus the stored result. */
+/**
+ * A receipt names its Article; one written before that column names none, so the
+ * command supplies the id, and a create from then has no id left to return.
+ */
+const replayedArticle = async (
+  req: PayloadRequest,
+  receipt: Record<string, unknown>,
+  commandID: number | string | undefined,
+  status: ArticleMutationResult["status"],
+): Promise<Omit<ArticleMutationResult, "replayed">> => {
+  const id = relationshipID(receipt.article) ?? commandID;
+  return {
+    id: id === undefined ? 0 : numericID(id),
+    articleId:
+      id === undefined
+        ? ""
+        : String((await editableArticle(req, id)).articleId),
+    revision: Number(receipt.revision),
+    fingerprint: String(receipt.fingerprint),
+    status,
+  };
+};
+
+/** Article receipts are replayed from the stored result. */
 const idempotentArticleMutation = async (
   req: PayloadRequest,
   idempotencyKey: string,
@@ -75,7 +101,7 @@ const idempotentArticleMutation = async (
   work: () => Promise<Omit<ArticleMutationResult, "replayed">>,
   replayFrom: (
     receipt: Record<string, unknown>,
-  ) => Omit<ArticleMutationResult, "replayed">,
+  ) => Promise<Omit<ArticleMutationResult, "replayed">>,
 ): Promise<ArticleMutationResult> => {
   const actor = requireActor(req);
   const deduplicationKey = requestFingerprint([
@@ -104,11 +130,10 @@ const idempotentArticleMutation = async (
         if (prior.requestFingerprint !== fingerprint)
           throw new EditorialError("IDEMPOTENCY_CONFLICT", 409);
         if (prior.status !== "completed")
-          throw new EditorialError(
+          throw new ReplayedEditorialError(
             String(prior.errorCode ?? "OPERATION_REJECTED"),
-            409,
           );
-        return { ...replayFrom(prior), replayed: true };
+        return { ...(await replayFrom(prior)), replayed: true };
       }
       const result = await work();
       await withLedgerWrite(req, () =>
@@ -123,6 +148,7 @@ const idempotentArticleMutation = async (
             actor: actor.id,
             operation: "publish-approved",
             status: "completed",
+            article: result.id,
             revision: result.revision,
             fingerprint: result.fingerprint,
           },
@@ -131,11 +157,8 @@ const idempotentArticleMutation = async (
       return { ...result, replayed: false };
     });
   } catch (error) {
-    if (
-      !req.transactionID &&
-      error instanceof EditorialError &&
-      error.code !== "IDEMPOTENCY_CONFLICT"
-    ) {
+    // As in the Catalog path: the rejection is the answer, receipt or not.
+    if (!req.transactionID && writesRejectedReceipt(error)) {
       await withEditorialTransaction(req, async () => {
         await lockEditorialKey(req, `receipt:${deduplicationKey}`);
         if (await receiptFor()) return;
@@ -155,7 +178,7 @@ const idempotentArticleMutation = async (
             },
           }),
         );
-      });
+      }).catch(() => undefined);
     }
     throw error;
   }
@@ -207,13 +230,7 @@ export const saveArticleDraft = async (req: PayloadRequest, input: unknown) => {
       });
       return documentResult(document as unknown as Record<string, unknown>);
     },
-    (receipt) => ({
-      id: parsed.id === undefined ? 0 : numericID(parsed.id),
-      articleId: "",
-      revision: Number(receipt.revision),
-      fingerprint: String(receipt.fingerprint),
-      status: "draft",
-    }),
+    (receipt) => replayedArticle(req, receipt, parsed.id, "draft"),
   );
 };
 
@@ -223,28 +240,47 @@ export const approveArticleBatch = async (
 ) => {
   if (!actsAsOwner(req)) throw new EditorialError("APPROVAL_OWNER_ONLY", 403);
   const parsed = parse(editorialArticleApproveBatchSchema, input);
-  const approval = await req.payload.create({
-    collection: "editorial-article-approvals",
-    depth: 0,
-    req,
-    user: req.user,
-    overrideAccess: false,
-    data: {
-      label: parsed.label ?? "Approved article batch",
-      automationUser: numericID(parsed.automationUserId),
-      status: "active",
-      items: parsed.items.map(({ id, revision }) => ({
-        article: numericID(id),
-        revision,
-      })),
-    },
-  });
+  const approval = await withEditorialTransaction(req, () =>
+    req.payload.create({
+      collection: "editorial-article-approvals",
+      depth: 0,
+      req,
+      user: req.user,
+      overrideAccess: false,
+      data: {
+        label: parsed.label ?? "Approved article batch",
+        automationUser: numericID(parsed.automationUserId),
+        status: "active",
+        items: parsed.items.map(({ id, revision }) => ({
+          article: numericID(id),
+          revision,
+        })),
+      },
+    }),
+  );
   return {
     approvalId: approval.id,
     itemCount: parsed.items.length,
     status: approval.status,
   };
 };
+
+/** As approveBatchOnce: for a caller that can lose the answer. */
+export const approveArticleBatchOnce = (
+  req: PayloadRequest,
+  idempotencyKey: string,
+  input: unknown,
+) =>
+  approvalOnce(
+    req,
+    idempotencyKey,
+    {
+      operation: "approve-article-batch",
+      parsed: parse(editorialArticleApproveBatchSchema, input),
+    },
+    "editorial-article-approvals",
+    () => approveArticleBatch(req, input),
+  );
 
 export const publishApprovedArticle = async (
   req: PayloadRequest,
@@ -290,8 +326,15 @@ export const publishApprovedArticle = async (
       if (
         latest.revision !== item.revision ||
         articleContentFingerprint(latest) !== item.fingerprint
-      )
+      ) {
+        // As in the Catalog path: what it approved is already live.
+        if (
+          latest._status === "published" &&
+          articleContentFingerprint(latest) === item.fingerprint
+        )
+          throw new EditorialError("ALREADY_PUBLISHED", 409);
         throw new EditorialError("APPROVED_REVISION_CHANGED", 409);
+      }
       const document = await withApprovedPublish(req, () =>
         req.payload.update({
           collection: "articles",
@@ -307,12 +350,6 @@ export const publishApprovedArticle = async (
       );
       return documentResult(document as unknown as Record<string, unknown>);
     },
-    (receipt) => ({
-      id: numericID(parsed.id),
-      articleId: "",
-      revision: Number(receipt.revision),
-      fingerprint: String(receipt.fingerprint),
-      status: "published",
-    }),
+    (receipt) => replayedArticle(req, receipt, parsed.id, "published"),
   );
 };

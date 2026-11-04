@@ -163,7 +163,10 @@ describe("Admin MCP guide and op types", () => {
 
   it("types an op from its input, output and server context", async () => {
     const op: AdminOpMeta<{ id: string }, { done: true }, { now: number }> = {
+      summary: "Synthetic op.",
       klass: "reversible",
+      tool: "admin_execute",
+      credential: "none",
       target: ({ id }) => ({ type: "catalog", id }),
       run: async () => ({ done: true }),
       recovery: "cas_read_back",
@@ -173,8 +176,8 @@ describe("Admin MCP guide and op types", () => {
       },
       untrusted: ["/title"],
     };
-    expect(await op.run({ id: "a" }, { now: 0 })).toEqual({ done: true });
-    expect(op.target({ id: "a" })).toEqual({ type: "catalog", id: "a" });
+    expect(await op.run?.({ id: "a" }, { now: 0 })).toEqual({ done: true });
+    expect(op.target?.({ id: "a" })).toEqual({ type: "catalog", id: "a" });
   });
 });
 

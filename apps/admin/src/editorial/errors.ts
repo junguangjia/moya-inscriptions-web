@@ -21,6 +21,10 @@ export const safeEditorialFailure = (error: unknown) => ({
   ok: false as const,
   error:
     error instanceof EditorialError
-      ? { code: error.code, fields: error.fields }
+      ? {
+          code: error.code,
+          fields: error.fields,
+          ...("replayed" in error ? { replayed: true } : {}),
+        }
       : { code: "OPERATION_FAILED", fields: [] as string[] },
 });

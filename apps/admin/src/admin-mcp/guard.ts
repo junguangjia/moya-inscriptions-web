@@ -20,6 +20,8 @@ export interface GuardCall {
   readonly req: PayloadRequest;
   readonly tool: string;
   readonly klass: McpAuditEvent["class"];
+  readonly op?: string;
+  readonly count?: number;
   readonly targetType?: string;
   readonly targetId?: string;
   readonly requestId?: string;
@@ -154,7 +156,7 @@ const pluginOutcomeOf =
           ? reply.code
           : ok
             ? "OK"
-            : "REJECTED",
+            : "OUTCOME_UNKNOWN",
       responseBytes: Buffer.byteLength(text),
       ...(tool.startsWith("editorial_") &&
       ok &&

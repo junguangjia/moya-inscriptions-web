@@ -257,6 +257,11 @@ resolver 地址作为合成地址 fixture；并非真实访客或真实用户位
 原生 collect
 API 不是幂等事件 upsert；seed 每个全新 disposable 数据库只执行一次，不自动重试。它只报告接收数量和 stats 接口可读性，不能替代浏览器验收。
 
+目标规模（100 万事件）的只读耗时与已知答案在
+`tests/cms/admin-mcp-bench/umami-stack.mjs` 和 `run.mjs analytics`
+中验证：先经真实 collector 运行本工具，再按 worker 转发的形状直接写入其余事件，并逐列比对两者写出的行。说明见
+`docs/development/admin-mcp-completion-v1.md` 第 21 节。
+
 ## 城市级离线定位与精度边界
 
 现有固定 Umami 的 `getLocation` 支持本地 MaxMind-compatible City MMDB，读取
@@ -381,6 +386,18 @@ MiB。只有批准后才安装/启用；模板存在不表示生产保留任务�
 或 `skippedLocksPossible`
 表示不能声称已清完全部过期数据；超时/未知 schema 失败须调查。Autovacuum 是否及时、数据库容量和备份生命周期需部署负责人核对，不在线执行全表 VACUUM
 FULL。
+
+## MCP 读取路径：`admin_analytics`
+
+AI 运维通过 `admin_analytics`
+直接读取，不经过统计页面，也不开启 Umami 自身的 MCP。Canonical 经
+`/internal/analytics/insights/*`，使用
+`OPERATOR_AI_BASE_TOKEN`，只读快照；Umami 经 `umamiGuard`
+用 viewer 身份访问本机回环地址，走路由白名单，MCP 最多占用 2 个连接池连接。每个回答标明
+`source`、`range`、`asOf`、`quality`。未采集的 referrer、UTM、channel、replay、heatmap、revenue、performance 与 rankingVersion 回答
+`collected:false`，不返回 0 或空行。Umami 读不到时回答 `UMAMI_QUERY_TIMEOUT`
+或标明 `stale` 的上次结果，canonical 数字照常返回。设计与取舍见
+`docs/development/admin-mcp-completion-v1.md` 第 19 节。
 
 ## Canonical 私有流式导出
 

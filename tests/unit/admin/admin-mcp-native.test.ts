@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   ADMIN_MCP_CODES,
+  ADMIN_MCP_NATIVE_TOOLS,
   ADMIN_MCP_TOOL_PROFILES,
   adminMcpEnvelopeSchema,
   type AdminMcpCodeGuide,
@@ -132,6 +133,13 @@ describe("tool result", () => {
       ["invisible plus", "\u2064"],
       ["Mongolian vowel separator", "\u180E"],
       ["byte order mark", "\uFEFF"],
+      ["soft hyphen", "\u00AD"],
+      ["inhibit symmetric swapping", "\u206A"],
+      ["activate Arabic form shaping", "\u206C"],
+      ["nominal digit shapes", "\u206F"],
+      ["interlinear annotation anchor", "\uFFF9"],
+      ["interlinear annotation separator", "\uFFFA"],
+      ["interlinear annotation terminator", "\uFFFB"],
     ] as const) {
       const result = toolResult(
         scope(300),
@@ -202,9 +210,14 @@ describe("tool result", () => {
 });
 
 describe("tool table", () => {
-  it("ships exactly admin_whoami in this slice, within the top-level lock", () => {
-    expect(ADMIN_MCP_TOOLS.map(({ name }) => name)).toEqual(["admin_whoami"]);
-    expect(ADMIN_MCP_TOOLS.length).toBeLessThanOrEqual(15);
+  it("ships the tools built so far in the design's order, within the top-level lock", () => {
+    const names = ADMIN_MCP_TOOLS.map(({ name }) => name);
+    expect(names).toEqual(
+      ADMIN_MCP_NATIVE_TOOLS.filter((name) => names.includes(name)),
+    );
+    expect(names).toContain("admin_whoami");
+    expect(names).toContain("admin_actions");
+    expect(ADMIN_MCP_NATIVE_TOOLS.length).toBeLessThanOrEqual(15);
   });
 
   it("sets all four annotations and an input schema on every listed tool", () => {
@@ -546,6 +559,22 @@ describe("the guard", () => {
       Promise.resolve(reply(JSON.stringify({ id: 58 }))),
     )({}, other.req, undefined);
     expect(rowsOf(other.create)[0]).not.toHaveProperty("targetId");
+  });
+
+  it("records a failure with no usable code as unknown, never as a rejection", async () => {
+    for (const text of [
+      JSON.stringify({ ok: false }),
+      JSON.stringify({ ok: false, code: "not a code" }),
+    ]) {
+      const { req, create } = request();
+      await pluginTool("editorial_save_draft", () =>
+        Promise.resolve(reply(text)),
+      )({}, req, undefined);
+      expect(rowsOf(create)[1]).toMatchObject({
+        ok: false,
+        code: "OUTCOME_UNKNOWN",
+      });
+    }
   });
 
   it("leaves a caller's dedupe key out of the row unless it reads as an id", async () => {
@@ -1101,6 +1130,24 @@ describe("dispatch", () => {
     },
   );
 
+  it.each(["/api/./mcp", "/api/x/../mcp", "/x/../api/./mcp"])(
+    "treats the dot segments in %s as the same URL, because they resolve to it",
+    async (pathname) => {
+      const plugin = vi.fn(() => Promise.resolve(fromPlugin));
+      const anonymous = request(null, [], "POST", pathname);
+      await expect(adminMcpDispatch(plugin)(anonymous.req)).resolves.toBe(
+        fromPlugin,
+      );
+      const { req } = request(
+        "Bearer abc",
+        [keyFor("ai_operator")],
+        "GET",
+        pathname,
+      );
+      expect((await adminMcpDispatch(plugin)(req)).status).toBe(405);
+    },
+  );
+
   it("takes the path from Payload's configured api route, and ignores a query", async () => {
     const plugin = vi.fn(() => Promise.resolve(fromPlugin));
     const moved = request(null, [], "POST", "/cms/mcp");
@@ -1202,6 +1249,7 @@ describe("fixed log categories", () => {
     "ADMIN_MCP_TOOL_FAILED",
     "ADMIN_MCP_CONTROL_READ_FAILED",
     "ADMIN_MCP_AUDIT_WRITE_FAILED",
+    "ADMIN_MCP_FIND_BRANCH_FAILED",
   ])("passes %s and nothing else", (category) => {
     const fields = cmsRuntimeLogFields([{ category, key: "secret-value" }]);
     expect(fields).toMatchObject({ category });

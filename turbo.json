@@ -72,7 +72,8 @@
         "CMS_*",
         "DATABASE_IDLE_TIMEOUT_MS",
         "COMMUNITY_OPERATOR_BASE_URL",
-        "COMMUNITY_OPERATOR_TOKEN"
+        "COMMUNITY_OPERATOR_TOKEN",
+        "OPERATOR_AI_BASE_TOKEN"
       ]
     },
     "@moya/backend-production#dev": {
@@ -89,6 +90,7 @@
         "APP_DATABASE_URL",
         "APP_DATABASE_SSL_CA_FILE",
         "COMMUNITY_OPERATOR_TOKEN",
+        "OPERATOR_AI_BASE_TOKEN",
         "CMS_STORAGE_MODE",
         "CMS_ENVIRONMENT",
         "CMS_DATABASE_URL",

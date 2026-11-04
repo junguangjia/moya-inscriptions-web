@@ -10,6 +10,7 @@ import { nativeMcp } from "./native";
  * decodes the slug, so /api/MCP, /api/globals/mcp and /api/%4Dcp all reach this
  * handler. Nginx's rate limit and body limit sit on the one exact location, so
  * only the request's own raw pathname counts: `new URL` keeps percent-encoding.
+ * Dot segments resolve to the same URL (/api/./mcp is /api/mcp), as they do at Nginx.
  */
 const isTheConfiguredPath = (req: PayloadRequest): boolean =>
   new URL(req.url ?? "http://invalid").pathname ===

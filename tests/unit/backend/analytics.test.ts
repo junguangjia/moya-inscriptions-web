@@ -247,6 +247,43 @@ describe("analytics configuration", () => {
         "production",
       ),
     ).toThrow("ANALYTICS_RELAY_TOKEN");
+    const shared = environment();
+    for (const aiToken of [
+      "OPERATOR_AI_BASE_TOKEN",
+      "COMMUNITY_OPERATOR_AI_TOKEN",
+    ] as const)
+      for (const other of [
+        "ANALYTICS_RELAY_TOKEN",
+        "ANALYTICS_HMAC_KEY",
+      ] as const)
+        expect(() =>
+          parseAnalyticsConfiguration(
+            { ...shared, [aiToken]: shared[other] },
+            "production",
+          ),
+        ).toThrow("must be separate");
+    const aiValue = randomBytes(32).toString("base64url");
+    for (const other of [
+      "COMMUNITY_OPERATOR_TOKEN",
+      "AUTH_SOURCE_RELAY_TOKEN",
+      "OPERATOR_AI_BASE_TOKEN",
+    ])
+      expect(() =>
+        parseAnalyticsConfiguration(
+          {
+            ...shared,
+            COMMUNITY_OPERATOR_AI_TOKEN: aiValue,
+            [other]: aiValue,
+          },
+          "production",
+        ),
+      ).toThrow("must be separate");
+    expect(() =>
+      parseAnalyticsConfiguration(
+        { ...shared, COMMUNITY_OPERATOR_AI_TOKEN: aiValue },
+        "production",
+      ),
+    ).not.toThrow();
     expect(() =>
       parseAnalyticsConfiguration(
         { ...environment(), UMAMI_ORIGIN: "https://external.example.invalid" },

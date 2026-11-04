@@ -502,9 +502,29 @@ export interface EditorialReceipt {
   deduplicationKey: string;
   requestFingerprint: string;
   actor: number | User;
-  operation: "save-draft" | "publish-approved";
+  operation:
+    | "save-draft"
+    | "publish-approved"
+    | "approve-batch"
+    | "approve-article-batch"
+    | "publish-direct"
+    | "withdraw"
+    | "restore-draft"
+    | "patch-text"
+    | "duplicate"
+    | "article-publish"
+    | "article-withdraw"
+    | "article-restore"
+    | "article-duplicate"
+    | "collection-save"
+    | "collection-publish"
+    | "collection-withdraw"
+    | "collection-restore"
+    | "collection-duplicate";
   status: "completed" | "rejected";
   catalog?: (number | null) | Catalog;
+  article?: (number | null) | Article;
+  articleCollection?: (number | null) | ArticleCollection;
   revision?: number | null;
   fingerprint?: string | null;
   errorCode?: string | null;
@@ -1163,6 +1183,8 @@ export interface EditorialReceiptsSelect<T extends boolean = true> {
   operation?: T;
   status?: T;
   catalog?: T;
+  article?: T;
+  articleCollection?: T;
   revision?: T;
   fingerprint?: T;
   errorCode?: T;

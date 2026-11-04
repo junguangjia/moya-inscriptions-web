@@ -200,9 +200,10 @@ Each validation plan owns one deadline from the explicit profiles in the
 [2026-09-16 validation-profiles amendment](../governance/amendments/2026-09-16-validation-profiles.md):
 feedback is capped at 120 seconds and stays labeled
 `FEEDBACK ONLY — NOT FULL ACCEPTANCE`; full profiles (Apple full 600 seconds,
-Web/CMS complete 300 seconds, local combined plan at most 900 seconds) are
-selected explicitly, and nested commands receive the remaining time, never a
-fresh budget. Record preparation, dependency installation, queueing and first
+Web complete 300 seconds, CMS and PostgreSQL complete 900 seconds, raised by the
+Owner on 2026-11-04, local combined plan at most 900 seconds) are selected
+explicitly, and nested commands receive the remaining time, never a fresh
+budget. Record preparation, dependency installation, queueing and first
 environment setup separately. A timeout fails its profile. Do not hide an
 applicable failure, loop unchanged retries, extend the deadline or split the
 same validation into new budgets. Full browser E2E and platform matrices are not
