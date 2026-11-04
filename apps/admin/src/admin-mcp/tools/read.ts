@@ -57,6 +57,21 @@ const refusalOf = async (entry: AdminOpEntry, req: PayloadRequest) => {
   );
 };
 
+/** PostgreSQL holds no NUL, so one is named here and never met as a driver error. */
+const nulPathOf = (
+  value: unknown,
+  path: readonly string[],
+): string[] | undefined => {
+  if (typeof value === "string")
+    return value.includes("\u0000") ? [...path] : undefined;
+  if (typeof value !== "object" || value === null) return undefined;
+  for (const [name, item] of Object.entries(value)) {
+    const found = nulPathOf(item, [...path, name]);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+};
+
 export const readEnvelope = async (
   rawInput: unknown,
   { key, req }: { readonly key: AdminMcpKey; readonly req: PayloadRequest },
@@ -78,6 +93,10 @@ export const readEnvelope = async (
         unread.map((name) => ({ path: [name], code: "not_for_this_op" })),
       );
   }
+  const nulPath =
+    nulPathOf(read.input, ["input"]) ?? nulPathOf(read.cursor, ["cursor"]);
+  if (nulPath !== undefined)
+    return inputInvalidEnvelope([{ path: nulPath, code: "nul_character" }]);
   const parsed = entry.input?.safeParse(read.input ?? {}) ?? {
     success: true as const,
     data: read.input ?? {},

@@ -65,6 +65,67 @@ const unconfirmed = () => ({
     error: { code: "OUTCOME_UNKNOWN", fields: [] },
   }),
 });
+const historyPage = {
+  id: 7,
+  currentRevision: 4,
+  page: 1,
+  totalPages: 1,
+  docs: [
+    {
+      id: 21,
+      revision: 2,
+      title: "Earlier synthetic",
+      status: "draft",
+      createdAt: "2026-10-23T12:00:00Z",
+    },
+  ],
+};
+/** Opens a version and restores it, with the route answering as `answer` does. */
+const restoreAnswering = async (answer: () => unknown) => {
+  const fetch = vi.fn(async (url: string) =>
+    url.endsWith("owner-drafts")
+      ? response(page)
+      : url.endsWith("owner-history")
+        ? response(historyPage)
+        : answer(),
+  );
+  vi.stubGlobal("fetch", fetch);
+  render(createElement(OwnerWorkflowClient));
+  await screen.findByText("Synthetic catalog");
+  fireEvent.click(screen.getByRole("tab", { name: "版本恢复" }));
+  fireEvent.click(screen.getByRole("button", { name: "查看历史" }));
+  await screen.findByLabelText("历史版本");
+  fireEvent.change(screen.getByLabelText("历史版本"), {
+    target: { value: "21" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "恢复为新草稿" }));
+  return screen.findByRole("alert");
+};
+// Either way the commit may have landed, and only the Owner's look can tell.
+const lostAnswers = [
+  [
+    "a dropped connection",
+    () => Promise.reject(new TypeError("Failed to fetch")),
+  ],
+  [
+    "an answer that is not JSON",
+    () =>
+      Promise.resolve({
+        ok: false,
+        status: 502,
+        json: () => Promise.reject(new SyntaxError("Unexpected token <")),
+      }),
+  ],
+  [
+    "JSON the route did not write",
+    () =>
+      Promise.resolve({
+        ok: false,
+        status: 502,
+        json: async () => ({ message: "Bad gateway" }),
+      }),
+  ],
+] as const;
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -131,121 +192,58 @@ describe("Owner editorial task presentation", () => {
     ).toHaveLength(1);
   });
 
-  it("says the same of an unconfirmed restore", async () => {
-    const fetch = vi.fn(async (url: string) =>
-      url.endsWith("owner-drafts")
-        ? response(page)
-        : url.endsWith("owner-history")
-          ? response({
-              id: 7,
-              currentRevision: 4,
-              page: 1,
-              totalPages: 1,
-              docs: [
-                {
-                  id: 21,
-                  revision: 2,
-                  title: "Earlier synthetic",
-                  status: "draft",
-                  createdAt: "2026-10-23T12:00:00Z",
-                },
-              ],
-            })
-          : unconfirmed(),
+  it("sends an unconfirmed restore to the record's version history, not the approval list", async () => {
+    const alert = await restoreAnswering(unconfirmed);
+    expect(alert.textContent).toBe(
+      "操作结果未确认，可能已经生效。请先刷新，并在这条记录的版本历史中核对，确认后再决定是否重复操作。",
     );
-    vi.stubGlobal("fetch", fetch);
-    render(createElement(OwnerWorkflowClient));
-    await screen.findByText("Synthetic catalog");
-    fireEvent.click(screen.getByRole("tab", { name: "版本恢复" }));
-    fireEvent.click(screen.getByRole("button", { name: "查看历史" }));
-    await screen.findByLabelText("历史版本");
-    fireEvent.change(screen.getByLabelText("历史版本"), {
-      target: { value: "21" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "恢复为新草稿" }));
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("操作结果未确认");
-    expect(alert.textContent).not.toContain("操作未完成");
   });
 
-  // Either way the commit may have landed, and only the Owner's look can tell.
-  it.each([
-    [
-      "a dropped connection",
-      () => Promise.reject(new TypeError("Failed to fetch")),
-    ],
-    [
-      "an answer that is not JSON",
-      () =>
-        Promise.resolve({
-          ok: false,
-          status: 502,
-          json: () => Promise.reject(new SyntaxError("Unexpected token <")),
-        }),
-    ],
-    [
-      "JSON the route did not write",
-      () =>
-        Promise.resolve({
-          ok: false,
-          status: 502,
-          json: async () => ({ message: "Bad gateway" }),
-        }),
-    ],
-  ])("calls an approve unconfirmed after %s", async (_label, answer) => {
-    const fetch = vi.fn(async (url: string) =>
-      url.endsWith("owner-drafts") ? response(page) : answer(),
-    );
-    vi.stubGlobal("fetch", fetch);
-    render(createElement(OwnerWorkflowClient));
-    await screen.findByText("Synthetic catalog");
-    fireEvent.click(screen.getByLabelText("选择 Synthetic catalog"));
-    fireEvent.change(screen.getByLabelText("执行账号"), {
-      target: { value: "11" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "核对并批准…" }));
-    fireEvent.click(screen.getByRole("button", { name: "确认批准" }));
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("操作结果未确认");
-    expect(alert.textContent).not.toContain("操作未完成");
+  it.each(lostAnswers)(
+    "does the same for a restore after %s",
+    async (_label, answer) => {
+      const alert = await restoreAnswering(answer);
+      expect(alert.textContent).toContain("操作结果未确认");
+      expect(alert.textContent).toContain("版本历史");
+      expect(alert.textContent).not.toContain("资料批准");
+      expect(alert.textContent).not.toContain("操作未完成");
+    },
+  );
+
+  it("names a refusal the route names on a restore", async () => {
+    const alert = await restoreAnswering(() => ({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        ok: false,
+        error: { code: "REVISION_CONFLICT", fields: [] },
+      }),
+    }));
+    expect(alert.textContent).toContain("记录已被他人修改");
+    expect(alert.textContent).not.toContain("操作结果未确认");
   });
 
-  it("calls a restore unconfirmed after a dropped connection", async () => {
-    const fetch = vi.fn(async (url: string) =>
-      url.endsWith("owner-drafts")
-        ? response(page)
-        : url.endsWith("owner-history")
-          ? response({
-              id: 7,
-              currentRevision: 4,
-              page: 1,
-              totalPages: 1,
-              docs: [
-                {
-                  id: 21,
-                  revision: 2,
-                  title: "Earlier synthetic",
-                  status: "draft",
-                  createdAt: "2026-10-23T12:00:00Z",
-                },
-              ],
-            })
-          : Promise.reject(new TypeError("Failed to fetch")),
-    );
-    vi.stubGlobal("fetch", fetch);
-    render(createElement(OwnerWorkflowClient));
-    await screen.findByText("Synthetic catalog");
-    fireEvent.click(screen.getByRole("tab", { name: "版本恢复" }));
-    fireEvent.click(screen.getByRole("button", { name: "查看历史" }));
-    await screen.findByLabelText("历史版本");
-    fireEvent.change(screen.getByLabelText("历史版本"), {
-      target: { value: "21" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "恢复为新草稿" }));
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("操作结果未确认");
-    expect(alert.textContent).not.toContain("操作未完成");
-  });
+  it.each(lostAnswers)(
+    "calls an approve unconfirmed after %s",
+    async (_label, answer) => {
+      const fetch = vi.fn(async (url: string) =>
+        url.endsWith("owner-drafts") ? response(page) : answer(),
+      );
+      vi.stubGlobal("fetch", fetch);
+      render(createElement(OwnerWorkflowClient));
+      await screen.findByText("Synthetic catalog");
+      fireEvent.click(screen.getByLabelText("选择 Synthetic catalog"));
+      fireEvent.change(screen.getByLabelText("执行账号"), {
+        target: { value: "11" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "核对并批准…" }));
+      fireEvent.click(screen.getByRole("button", { name: "确认批准" }));
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toContain("操作结果未确认");
+      expect(alert.textContent).toContain("资料批准");
+      expect(alert.textContent).not.toContain("操作未完成");
+    },
+  );
 
   it("keeps the plain failure text on a read, which changes nothing", async () => {
     const fetch = vi.fn(async () => {
@@ -291,21 +289,7 @@ describe("Owner editorial task presentation", () => {
         url.endsWith("owner-drafts")
           ? page
           : url.endsWith("owner-history")
-            ? {
-                id: 7,
-                currentRevision: 4,
-                page: 1,
-                totalPages: 1,
-                docs: [
-                  {
-                    id: 21,
-                    revision: 2,
-                    title: "Earlier synthetic",
-                    status: "draft",
-                    createdAt: "2026-10-23T12:00:00Z",
-                  },
-                ],
-              }
+            ? historyPage
             : { revision: 5 },
       ),
     );

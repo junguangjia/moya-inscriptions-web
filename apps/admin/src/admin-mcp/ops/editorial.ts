@@ -2,6 +2,7 @@ import {
   editorialOperationDefinitions,
   type EditorialOperationName,
 } from "../../editorial/endpoints";
+import { isMissingRecord } from "../../editorial/transaction";
 import { failedEnvelope, okEnvelope } from "../envelope";
 import { outlineEnvelope } from "../record-views";
 import { CMS_FAMILIES, readLatest, rowIdOf } from "../records";
@@ -41,9 +42,17 @@ const rows: Readonly<Record<EditorialOperationName, AdminOpEntry>> = {
       const family = CMS_FAMILIES.catalog;
       const { id } = input as { id: number | string };
       const row = await rowIdOf(req, family, id);
-      return row === undefined
-        ? failedEnvelope("NOT_FOUND")
-        : outlineEnvelope(req, family, await readLatest(req, family, row));
+      if (row === undefined) return failedEnvelope("NOT_FOUND");
+      try {
+        return await outlineEnvelope(
+          req,
+          family,
+          await readLatest(req, family, row),
+        );
+      } catch (error) {
+        if (isMissingRecord(error)) return failedEnvelope("NOT_FOUND");
+        throw error;
+      }
     },
   }),
   "save-draft": reversibleOp(

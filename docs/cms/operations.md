@@ -107,7 +107,7 @@ key 和放在请求头里的 JWT 在 `/api/*`
   重试是安全的：已提交的回放原结果，未提交的重新执行。服务端在提交后用
   `pg_xact_status` 另开连接核实，只有 `committed` 才算成功。
 - `approve-batch`、`approve-article-batch` 和 `restore-draft` 没有
-  `idempotencyKey`，上一条的重试规则不适用。结果未确认时先刷新并核对批准列表，再决定是否重做：批准重做可能多出一条 active 批准，撤销页面报告的那条不影响另一条，自动化仍可凭它发布；恢复重做时，如果第一次已提交，回答
+  `idempotencyKey`，上一条的重试规则不适用。结果未确认时先刷新，批准核对批准列表，恢复核对这条记录的版本历史（恢复不在批准列表里），再决定是否重做：批准重做可能多出一条 active 批准，撤销页面报告的那条不影响另一条，自动化仍可凭它发布；恢复重做时，如果第一次已提交，回答
   `REVISION_CONFLICT`。
 - 下列拒绝不写回执，同一 key 在情况变化后可以成功：`CONCURRENT_OPERATION_BUSY`、`DOCUMENT_LOCKED`（REST
   423，文档被 Owner 打开）、`CATALOG_OUT_OF_SCOPE`（Owner 可以放宽账号范围）、`CATALOG_DELIVERY_PREPARATION_REQUIRED`、`RECORD_UNAVAILABLE`、`REFERENCE_NOT_FOUND`、

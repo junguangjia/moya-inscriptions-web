@@ -56,8 +56,8 @@ export {
   LINK_PARAMETER_EXCLUSIONS,
   LINK_PARAMETER_RULES,
 } from "./locate-reference";
-export { withinBudget } from "./locate";
-export { CMS_FAMILIES } from "./records";
+export { withinBudget } from "./budget";
+export { CMS_FAMILIES, linkCarriesCredential } from "./records";
 export {
   findInText,
   normalizeSearchQuery,

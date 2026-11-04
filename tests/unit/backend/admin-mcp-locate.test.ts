@@ -28,6 +28,7 @@ import {
   CMS_FAMILIES,
   findContinuation,
   findInText,
+  linkCarriesCredential,
   LINK_PARAMETER_EXCLUSIONS,
   LINK_PARAMETER_RULES,
   normalizeSearchQuery,
@@ -149,12 +150,18 @@ describe("classifying a reference, with no I/O", () => {
       value: "42",
       id: 42,
     });
+    // Media stores these in lower case; a catalogId or sourceId is exact as typed.
     expect(
       classifyQuery("A1B2C3D4-0000-4000-8000-000000000001").references[0],
-    ).toMatchObject({ kind: "uuid" });
+    ).toEqual({
+      kind: "uuid",
+      value: "a1b2c3d4-0000-4000-8000-000000000001",
+      typed: "A1B2C3D4-0000-4000-8000-000000000001",
+    });
     expect(classifyQuery("A".repeat(64)).references[0]).toEqual({
       kind: "sha256",
       value: "a".repeat(64),
+      typed: "A".repeat(64),
     });
     expect(classifyQuery("@lishu_test").references[0]).toEqual({
       kind: "handle",
@@ -178,6 +185,14 @@ describe("classifying a reference, with no I/O", () => {
       "/catalog/abc",
       "https://artvenn.example/catalog/abc",
       "http://127.0.0.1:3000/catalog/abc?x=1#detail",
+      // As copied from an address bar, with no scheme.
+      "artvenn.example/catalog/abc",
+      "www.artvenn.example:8443/catalog/abc?x=1",
+      "localhost:3000/catalog/abc",
+      "127.0.0.1:3000/?catalogId=abc",
+      // Extra parts after what the link names.
+      "/catalog/abc/media/2",
+      "/catalog/abc/",
     ];
     for (const link of paths)
       expect(classifyQuery(link)).toMatchObject({
@@ -197,7 +212,25 @@ describe("classifying a reference, with no I/O", () => {
     expect(
       classifyQuery(`/catalog/${encodeURIComponent("碑-1")}`).references[0],
     ).toMatchObject({ value: "碑-1" });
-    expect(classifyQuery("/catalog/%E0%A4%A").references).toEqual([]);
+    expect(classifyQuery("/catalog/%E0%A4%A")).toMatchObject({
+      link: true,
+      references: [],
+    });
+  });
+
+  it("never lets a NUL out of a link: no record can hold one", () => {
+    for (const link of [
+      "/catalog/%00",
+      "/catalog/a%00b",
+      "/?catalogId=a%00b",
+      "/?articleId=a%00b",
+      "/#topic-a%00b",
+    ])
+      expect({ query: link, ...classifyQuery(link) }).toMatchObject({
+        query: link,
+        link: true,
+        references: [],
+      });
   });
 
   it("reads Admin paths as row ids, only on the families it can read", () => {
@@ -212,14 +245,98 @@ describe("classifying a reference, with no I/O", () => {
     expect(
       classifyQuery("/admin/collections/catalogs/create").references,
     ).toEqual([]);
+    // Extra parts after the row, such as a version of it.
+    expect(
+      classifyQuery("/admin/collections/catalogs/7/versions/3").references,
+    ).toEqual([{ kind: "row", type: "catalog", id: 7 }]);
   });
 
-  it("keeps a link from ever becoming a text search", () => {
-    expect(classifyQuery("/about")).toMatchObject({
+  it("reads the path a preview answer gives, on the Catalog's row id", () => {
+    for (const link of [
+      "/editorial-preview/7",
+      "https://any.example/editorial-preview/7/",
+      "any.example/editorial-preview/7",
+    ])
+      expect(classifyQuery(link)).toMatchObject({
+        link: true,
+        references: [{ kind: "row", type: "catalog", id: 7 }],
+      });
+    expect(classifyQuery("/editorial-preview/draft")).toMatchObject({
       link: true,
       references: [],
     });
-    expect(classifyQuery("?page=2").references).toEqual([]);
+  });
+
+  it("keeps a real link from ever becoming a text search", () => {
+    for (const link of [
+      "https://artvenn.example/about",
+      "http://artvenn.example/?page=2",
+      "?page=2",
+      "/admin",
+      "/admin/collections/users/7",
+      "/?catalogId=",
+    ])
+      expect(classifyQuery(link)).toMatchObject({
+        link: true,
+        references: [],
+      });
+  });
+
+  it("lets text that only looks like a link go on to identity and search", () => {
+    for (const text of [
+      "/about",
+      "/source/甲",
+      "/?page=2",
+      "#拓本",
+      "#detail",
+      "/",
+      "abc.def/ghi",
+      "artvenn.example/about",
+    ])
+      expect(classifyQuery(text)).toEqual({
+        references: [{ kind: "token", value: text }],
+        excluded: [],
+        link: false,
+      });
+    // No host, no path after it: a dotted id stays one.
+    expect(classifyQuery("artvenn.example").references[0]).toEqual({
+      kind: "token",
+      value: "artvenn.example",
+    });
+    expect(classifyQuery("/甲 乙")).toMatchObject({
+      link: false,
+      references: [{ kind: "text", text: "/甲 乙" }],
+    });
+  });
+
+  it("counts a value named twice once, and two values as two", () => {
+    for (const link of [
+      "/catalog/a?catalogId=a",
+      "/?catalogId=a&catalogId=a",
+      "https://any.example/catalog/a?catalogId=a#detail-a",
+    ])
+      expect(classifyQuery(link).references).toEqual([
+        { kind: "identity", type: "catalog", field: "catalogId", value: "a" },
+      ]);
+    expect(classifyQuery("/?topic=t1#topic-t1").references).toEqual([
+      { kind: "community", type: "thread", value: "t1" },
+    ]);
+    expect(classifyQuery("/catalog/a?catalogId=b").references).toHaveLength(2);
+  });
+
+  it("reads a name every object inherits as no rule at all", () => {
+    for (const link of [
+      "https://any.example/?constructor=1",
+      "https://any.example/?__proto__=1",
+      "https://any.example/?toString=1&hasOwnProperty=1",
+      "/admin/collections/constructor/7",
+      "/admin/collections/__proto__/7",
+    ])
+      expect(classifyQuery(link)).toEqual({
+        references: [],
+        excluded: [],
+        link: true,
+      });
   });
 
   it("reads every reference a link carries, so none is dropped silently", () => {
@@ -714,5 +831,83 @@ describe("what tools/list advertises", () => {
     expect(adminGetInputSchema.safeParse({ type: "dm", id: 1 }).success).toBe(
       false,
     );
+  });
+});
+
+describe("a stored link that carries a credential", () => {
+  const value = "0123456789abcdef";
+
+  it.each([
+    "token",
+    "access_token",
+    "accessToken",
+    "AccessToken",
+    "refresh-token",
+    "TOKEN",
+    "access%5Ftoken",
+    "api_key",
+    "apiKey",
+    "APIKey",
+    "apikey",
+    "key",
+    "x-api-key",
+    "AWSAccessKeyId",
+    "OSSAccessKeyId",
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "client_secret",
+    "sig",
+    "sign",
+    "signature",
+    "Signature",
+    "X-Amz-Signature",
+    "X-Amz-Credential",
+    "X-Amz-Security-Token",
+    "q-signature",
+    "q-sign-time",
+    "x-goog-signature",
+    "x-cos-security-token",
+    "auth",
+    "authorization",
+    "jwt",
+    "bearer",
+    "session",
+    "sessionId",
+    "JSESSIONID",
+    "PHPSESSID",
+    "ticket",
+  ])("reads the query parameter %s as one", (name) => {
+    expect(
+      linkCarriesCredential(`https://a.example/b?page=1&${name}=${value}`),
+    ).toBe(true);
+  });
+
+  it.each([
+    `https://reader:${value}@a.example/b`,
+    `https://${value}@a.example/b`,
+    `http://reader:${value}@a.example:8080/`,
+    `reader:${value}@a.example/b`,
+    `a.example/b?token=${value}`,
+    `//reader:${value}@a.example/b`,
+    `https://a.example/b?page=1;token=${value}`,
+    "https://[unreadable/b",
+  ])("reads %s as one", (link) => {
+    expect(linkCarriesCredential(link)).toBe(true);
+  });
+
+  it.each([
+    "https://a.example/b",
+    "https://a.example/b?page=3&v=2",
+    "https://a.example/b?keyword=碑&keywords=拓片",
+    "https://a.example/b?tokenize=1&monkey=2&signal=3&assign=4&design=5",
+    "https://a.example/@handle/b",
+    "https://a.example/b#token",
+    "https://kns.example/detail.aspx?dbcode=CJFD&filename=X&dbname=Y",
+    "见《金石萃编》卷一",
+    "",
+  ])("leaves %s alone", (link) => {
+    expect(linkCarriesCredential(link)).toBe(false);
   });
 });

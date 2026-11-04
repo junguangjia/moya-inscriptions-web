@@ -1249,6 +1249,7 @@ describe("fixed log categories", () => {
     "ADMIN_MCP_TOOL_FAILED",
     "ADMIN_MCP_CONTROL_READ_FAILED",
     "ADMIN_MCP_AUDIT_WRITE_FAILED",
+    "ADMIN_MCP_FIND_BRANCH_FAILED",
   ])("passes %s and nothing else", (category) => {
     const fields = cmsRuntimeLogFields([{ category, key: "secret-value" }]);
     expect(fields).toMatchObject({ category });

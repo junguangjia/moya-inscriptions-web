@@ -64,6 +64,19 @@ const converter = new OpenCC("t2s.json");
 export const normalizeSearchQuery = (text: string): string =>
   converter.convertSync(text);
 
+let toTraditional: InstanceType<typeof OpenCC> | undefined;
+
+/**
+ * Built by the first text it can change, never at startup: on opencc 1.4.1 its
+ * dictionaries take about 25 ms to load and hold about 25 MB. One simplified character
+ * can have several traditional forms, and this gives only the commonest one.
+ */
+export const traditionalSearchQuery = (text: string): string => {
+  if (/^\p{ASCII}*$/u.test(text)) return text;
+  toTraditional ??= new OpenCC("s2t.json");
+  return toTraditional.convertSync(text);
+};
+
 const convertedPoints = new Map<string, string>();
 
 /**

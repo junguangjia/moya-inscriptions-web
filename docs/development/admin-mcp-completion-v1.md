@@ -878,8 +878,8 @@ Result:
   kind, dynasty, province, sourceId and media count for Catalogs; handle and
   account state for users. Many stele works share similar names, so title alone
   is weak.
-- `match.kind` is identity, raw, t2s or trigram. A t2s or trigram hit never
-  yields `uniqueIdentity:true`; only identity fields can.
+- `match.kind` is identity, raw, t2s, s2t or trigram. A t2s, s2t or trigram hit
+  never yields `uniqueIdentity:true`; only identity fields can.
 - `actions` and `adminPath` appear only when `resolution.status=exact`, and
   always from `admin_get`. Candidates carry only an `admin_get` action. This
   enforces the rule from artvenn_users_find through the tool's shape: use
@@ -1001,6 +1001,25 @@ tests/unit/backend/admin-mcp-locate.test.ts:
   `not_available` until S6. An `article-` id is on both sides, because
   `community.article_documents` uses the same shape: a hit in the CMS settles
   it, a miss names `article_documents`.
+- A source is named only when its family was really read. A UUID or a 64-hex
+  query reads `catalogs` by the text as typed, because a catalogId or sourceId
+  is exact and can hold those shapes, and `media` in lower case, as it stores
+  them. An exact hit on a plain id stops before the fuzzy step, so it names
+  `catalogs` and `media` alone.
+- With nothing read and nothing withheld, the answer is `none`, `meta.partial`
+  and a fixed hint saying nothing was looked up. That covers a scheme link or
+  `?query` that names nothing this tool reads, a known link with an unreadable
+  id, and a type that rules out the only family the reference names.
+- `/editorial-preview/<id>` names a Catalog's row, and a known link keeps its
+  meaning with parts after the id or with no scheme. A value named twice is one
+  reference. Text starting `/` or `#`, or with a host-like first part, is legal
+  as a sourceId and as words, so it is a link only when it names something a
+  link can; otherwise it goes on to the identity and text steps.
+- Whitespace separates words on every branch: all must be in the record, in any
+  of the searched fields. `%`, `_` and `\` in the words mean themselves, escaped
+  for Payload's `contains`, which is `ILIKE` around the value as it stands.
+- A NUL in `query` is refused as `INPUT_INVALID`, because PostgreSQL text cannot
+  hold one, and a NUL decoded from a link leaves that part of it unread.
 - Unique means one identity hit from one reference. A link naming two records,
   or a bare number that is a row in two families, answers candidates. `type`
   narrows a number to one family.
@@ -1026,9 +1045,16 @@ tests/unit/backend/admin-mcp-locate.test.ts:
   is a draft there. `list.catalogs` filters to drafts unless asked, and every
   answer echoes the filter it resolved.
 - Rows page on the record's own id, newest first, so a row edited while paging
-  is neither lost nor seen twice. A count's groups page on an offset. A
-  non-VALUE state keeps its own group row, so unsupplied never reads as a
-  dynasty or as zero.
+  is neither lost nor seen twice. `next` is the one way on: a page has no second
+  cursor, because a cut keeps fewer rows than the page read. A count's groups
+  page on an offset, in an order count, value and state settle, so two groups
+  tied on the first two cannot swap across a page. A non-VALUE state keeps its
+  own group row, so unsupplied never reads as a dynasty or as zero.
+- `view:'count'` runs in the budget a search branch has: its own READ ONLY
+  transaction with `statement_timeout` 2000 ms, which a wait on a lock counts
+  towards. Past it the answer is `READ_TIMED_OUT` with no number, so a slow
+  count is never read as one, and the same call is worth repeating. That
+  transaction adds four statements, so the L0 ceiling on an aggregate is 10.
 - `editorial.read-draft` answers the outline for a key, because the whole draft
   would not fit a text result. `editorial.owner-drafts` and `owner-history`
   relay their small rows. The delivery reads stay unbuilt: they call the Backend
@@ -1038,18 +1064,60 @@ tests/unit/backend/admin-mcp-locate.test.ts:
 - Reading the lock row needs no change to `defaultAccess`: it admits any user,
   so S5's question about `ai_operator` is answered for reads and open for the
   takeover.
+- `readFrom` says `version` when a diff's `to` names a past version. A diff
+  whose `to` names `published` on a record with nothing live read no version, so
+  its `revision` and `fingerprint` are null, as `view=published` says for the
+  same record.
+- `fields` on a diff refuses a name that is no field of the family, as outline,
+  full and published do, and that includes the dotted name `view=field` takes.
+  An empty `changes` therefore always means those fields did not change.
+- A `field` window on a number or a row id answers the value the outline shows,
+  as text. A fact with no value is `ABSENT`, as it is there.
+- `find.text` refuses half a surrogate pair and a NUL, by the rule the write
+  contract uses. An `id` holding a NUL answers `NOT_FOUND`, because no text
+  column can hold one (SQLSTATE 22021).
+- Stored content that no longer parses has `fingerprint: null`. With the live
+  and latest revisions apart that reads as `hasUnpublishedChanges: true`, never
+  as no change, and a preview gives the failure as an issue, `CONTENT_INVALID`
+  with the field names. The review page still parses every row it lists, so such
+  a record fails that page, as it does for the Owner.
+- The identities a skeleton copies from the record, `catalogId` and `mediaId`,
+  are marked by leaf on find, outline, full and all preview branches, and a
+  diff's `from` and `to` values are marked, because an identity shows there
+  while nothing is live. The rest of a skeleton is ours and is not labelled as
+  data. A list source's `filter` is marked too, because a skeleton's filter
+  holds a stored `catalogId`. A value echoed from a call's own `next.args` is
+  the caller's.
+- A stored link that carries a credential does not leave:
+  `provenance[].sourceUrl`, `sourceCitations[].url` and an Article's
+  `citations[].url`, when the link has userinfo or a query parameter whose name
+  has a word that says secret, key, token, password, signature or session.
+  `view=full` puts `{state:"WITHHELD"}` where the link was, a window answers
+  `fieldState:"WITHHELD"` with no text, length, hash or count, and both set
+  `meta.excluded:["credential_url"]`. Outline, diff and history carry an array
+  by count and hash only, so a changed link still shows as a change. A preview
+  says `hasUrl`. Every other link stays verbatim. The name list errs towards
+  withholding, so a harmless `?key=` link is withheld too, says so, and the
+  Owner reads it in the Admin. A link in free text, such as a citation's words,
+  and a fragment are not read.
 - Codes added: `NOT_FOUND`, `NOT_AVAILABLE`, `MEDIA_UNAVAILABLE`,
-  `AI_ROUTE_FORBIDDEN`. `meta.sources` joins the envelope. `INPUT_INVALID` names
-  the allowed keys of the object an unknown key sits in, however deep.
+  `MEDIA_TOO_LARGE`, `AI_ROUTE_FORBIDDEN`, `READ_TIMED_OUT`. `meta.sources`
+  joins the envelope. `INPUT_INVALID` names the allowed keys of the object an
+  unknown key sits in, however deep.
 - `admin_view_media`: `catalog_original` requires a `region`; a full-size region
   is allowed for a record with no thumbnail. It reads the original by the media
   row this key can read, through the storage handler or the local directory, as
   `GET /api/media/file/:filename` does. Regions are in stored pixels, with no
   EXIF rotation. To fit 512 KiB it lowers quality first, then size, and the
   answer reports the size it rendered. One original decodes at a time per
-  process. Its reads of the local directory carry `turbopackIgnore`, as
-  upload-session-gc.ts does; without it the build traces all of `apps/admin`
-  into the standalone output.
+  process. An original over 128 MiB answers `MEDIA_TOO_LARGE`, which is not
+  retryable: refused on the row's `filesize`, then on the storage answer's
+  Content-Length, both before a byte is read, and a stream with neither stops at
+  the cap. A region outside a thumbnail answers `INPUT_INVALID` `outside_image`,
+  read from the thumbnail's own size, as an original's is from the row's. Its
+  reads of the local directory carry `turbopackIgnore`, as upload-session-gc.ts
+  does; without it the build traces all of `apps/admin` into the standalone
+  output.
 
 ## 7. Reversible execution, direct
 
@@ -1929,10 +1997,18 @@ Also:
 
 Accepted limits, recorded and not fixed:
 
-- A draft Catalog title is matched as typed and in simplified form against the
-  stored text, with no normalized copy, so simplified words do not reach a
-  stored traditional draft title. Published Catalogs have the normalized search
-  document.
+- A draft Catalog is matched on its title only, against the stored text, with no
+  normalized copy: as typed (`match.kind` `raw`), in simplified form (`t2s`) and
+  in one traditional form (`s2t`). So `龙门造像记` finds a draft titled
+  `龍門造像記`, as a candidate and never a unique identity. A simplified
+  character can have several traditional forms and the conversion gives one, so
+  `发` reaches `發` and not `髮`, and a draft's aliases are not searched. Such a
+  draft is simply not in the answer. `admin_find`'s description says so, because
+  the answer cannot: `catalogs_draft: ok` means the branch answered, not that
+  the record is absent. Published Catalogs have the normalized search document.
+  The traditional dictionaries load at the first non-ASCII free text, not at
+  startup: about 25 ms once and about 25 MB held by the process, measured on
+  opencc 1.4.1 on darwin-arm64.
 - A rejected receipt written before S2 keeps answering its key with its old
   code, transient ones included, because a key's receipt cannot be replaced. A
   new key gets past it. Whether Production holds any such row was not checked.
@@ -1946,8 +2022,10 @@ Accepted limits, recorded and not fixed:
   so revoking that one leaves the first active, and automation can still publish
   with it. What goes live is still a revision the Owner approved; what falls
   short is the revocation. The Owner page says the result is unconfirmed and
-  asks for a look at the approval list before repeating. An approve op for AI
-  keys needs a requestId, or it meets the Matrix row "Lost answer or timeout".
+  asks for a look at the approval list before repeating. A lost restore-draft
+  answer asks for a look at the record's version history instead, because a
+  restore is not on that list. An approve op for AI keys needs a requestId, or
+  it meets the Matrix row "Lost answer or timeout".
 - A replayed draft save does not report `supersededIntents`: the migration list
   has no column for them, so a client that lost the answer reads the intent
   instead.
@@ -2448,11 +2526,13 @@ private evidence of each run, not here.
   in S3 reads the community tables; the slice that reads them turns them on
   there.
 - L0's statement ceilings are measured at this scale and pinned, audit row and
-  transaction control included. The tool description ceiling of 1,024 characters
-  is this bench's own; the design asks for a check and names no number. Large
-  means at least 1,000 planner rows. The scan check catches a sequential scan
-  only: with the identity indexes gone an exact locate falls to a bitmap scan on
-  `latest`, which passes it, and only the timing alarm would notice.
+  transaction control included. The door's throttled `last_used_at` write is
+  left out, because whether a call carries it depends on the clock. The tool
+  description ceiling of 1,024 characters is this bench's own; the design asks
+  for a check and names no number. Large means at least 1,000 planner rows. The
+  scan check catches a sequential scan only: with the identity indexes gone an
+  exact locate falls to a bitmap scan on `latest`, which passes it, and only the
+  timing alarm would notice.
 - L1's clock is the driver's, POST sent to last byte over loopback, an upper
   bound on the design's POST received to last byte. The server's own clock from
   the audit rows stands beside it; tools/list writes no audit row. The first

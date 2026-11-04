@@ -31,7 +31,9 @@ export const ADMIN_MCP_CODES = [
   "NOT_FOUND",
   "NOT_AVAILABLE",
   "MEDIA_UNAVAILABLE",
+  "MEDIA_TOO_LARGE",
   "AI_ROUTE_FORBIDDEN",
+  "READ_TIMED_OUT",
 ] as const;
 
 export const adminMcpCodeSchema = z.enum(ADMIN_MCP_CODES);

@@ -103,16 +103,17 @@ export const withEditorialTransaction = async <T>(
 };
 
 // numeric_value_out_of_range and invalid_text_representation: an id the integer
-// column cannot hold, such as 3000000000 or "12.5", so no such record can exist.
+// column cannot hold, such as 3000000000 or "12.5". character_not_in_repertoire: an
+// id holding a NUL, which no text column can hold. So no such record can exist.
 const IMPOSSIBLE_ID_SQLSTATES: ReadonlySet<unknown> = new Set([
   "22003",
   "22P02",
+  "22021",
 ]);
 
 /**
  * No such record for this caller: a miss, a refusal that reads as one, or an id
- * the integer column cannot hold, so no record can have it. Any other failure
- * stays what it is.
+ * no column can hold, so no record can have it. Any other failure stays what it is.
  */
 export const isMissingRecord = (error: unknown): boolean =>
   error instanceof NotFound ||

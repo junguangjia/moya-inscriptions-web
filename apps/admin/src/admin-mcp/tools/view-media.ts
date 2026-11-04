@@ -91,13 +91,42 @@ const readStream = async (
   body: ReadableStream<Uint8Array> | null,
 ): Promise<Buffer> => Buffer.from(await new Response(body).arrayBuffer());
 
+type OriginalBytes = Buffer | "too_large" | undefined;
+
+/** Stops at the cap, so an object it would refuse anyway is never held in memory. */
+const readWithinCap = async (
+  body: ReadableStream<Uint8Array> | null,
+): Promise<OriginalBytes> => {
+  if (body === null) return undefined;
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return Buffer.concat(chunks, bytes);
+      bytes += value.byteLength;
+      if (bytes > CATALOG_ORIGINAL_MAX_BYTES) return "too_large";
+      chunks.push(value);
+    }
+  } finally {
+    // Ends the storage read behind the stream, and does nothing to a finished one.
+    void reader.cancel().catch(() => undefined);
+  }
+};
+
 /** The same bytes GET /api/media/file/:filename serves, by the row this key can read. */
 const readOriginal = async (
   req: PayloadRequest,
   doc: RecordDocument,
-): Promise<Buffer | undefined> => {
+): Promise<OriginalBytes> => {
   const filename = typeof doc.filename === "string" ? doc.filename : undefined;
   if (filename === undefined) return undefined;
+  if (
+    typeof doc.filesize === "number" &&
+    doc.filesize > CATALOG_ORIGINAL_MAX_BYTES
+  )
+    return "too_large";
   const collection = req.payload.collections.media;
   const upload = collection.config.upload;
   const prefix = typeof doc.prefix === "string" ? doc.prefix : undefined;
@@ -113,8 +142,15 @@ const readOriginal = async (
     });
     if (answer instanceof Response) {
       if (!answer.ok) return undefined;
-      const bytes = await readStream(answer.body);
-      return bytes.byteLength > CATALOG_ORIGINAL_MAX_BYTES ? undefined : bytes;
+      // A missing or unreadable length reads as no refusal, and the stream's cap holds.
+      if (
+        Number(answer.headers.get("content-length")) >
+        CATALOG_ORIGINAL_MAX_BYTES
+      ) {
+        void answer.body?.cancel().catch(() => undefined);
+        return "too_large";
+      }
+      return readWithinCap(answer.body);
     }
   }
   const directory = path.resolve(
@@ -124,7 +160,7 @@ const readOriginal = async (
   if (!file.startsWith(directory + path.sep)) return undefined;
   try {
     const { size } = await stat(/* turbopackIgnore: true */ file);
-    if (size > CATALOG_ORIGINAL_MAX_BYTES) return undefined;
+    if (size > CATALOG_ORIGINAL_MAX_BYTES) return "too_large";
     return await readFile(/* turbopackIgnore: true */ file);
   } catch {
     return undefined;
@@ -171,6 +207,19 @@ const answered = (
   image: { data: rendered.data, mimeType: "image/webp" },
 });
 
+const regionOutside = (
+  region: AdminMediaRegion,
+  width: unknown,
+  height: unknown,
+) =>
+  typeof width === "number" &&
+  typeof height === "number" &&
+  (region.left + region.width > width || region.top + region.height > height);
+
+const outsideImage = (): AdminMcpImageAnswer => ({
+  envelope: inputInvalidEnvelope([{ path: ["region"], code: "outside_image" }]),
+});
+
 const viewThumbnail = async (
   req: PayloadRequest,
   input: AdminViewMediaInput,
@@ -194,27 +243,26 @@ const viewThumbnail = async (
     return backendRefusal(error);
   }
   try {
+    const { width, height, format } = await sharp(bytes).metadata();
+    if (
+      input.region !== undefined &&
+      regionOutside(input.region, width, height)
+    )
+      return outsideImage();
     if (input.region !== undefined || input.maxEdge !== undefined) {
       const rendered = await renderBounded(bytes, input.region, input.maxEdge);
       return rendered === undefined
         ? refused("MEDIA_UNAVAILABLE")
         : answered(input, doc, rendered);
     }
-    const { width, height, format } = await sharp(bytes).metadata();
     return format === "webp"
       ? answered(input, doc, { data: bytes, width, height })
       : refused("MEDIA_UNAVAILABLE");
   } catch {
-    // Not a readable image, or a region outside it.
+    // Not a readable image.
     return refused("MEDIA_UNAVAILABLE");
   }
 };
-
-const regionIssue = (region: AdminMediaRegion, doc: RecordDocument) =>
-  typeof doc.width === "number" &&
-  typeof doc.height === "number" &&
-  (region.left + region.width > doc.width ||
-    region.top + region.height > doc.height);
 
 const viewOriginal = async (
   req: PayloadRequest,
@@ -225,16 +273,12 @@ const viewOriginal = async (
     return {
       envelope: inputInvalidEnvelope([{ path: ["region"], code: "required" }]),
     };
-  if (regionIssue(input.region, doc))
-    return {
-      envelope: inputInvalidEnvelope([
-        { path: ["region"], code: "outside_image" },
-      ]),
-    };
+  if (regionOutside(input.region, doc.width, doc.height)) return outsideImage();
   if (originalInFlight) return refused("CONCURRENT_OPERATION_BUSY");
   originalInFlight = true;
   try {
     const bytes = await readOriginal(req, doc);
+    if (bytes === "too_large") return refused("MEDIA_TOO_LARGE");
     if (bytes === undefined) return refused("MEDIA_UNAVAILABLE");
     const rendered = await renderBounded(
       bytes,

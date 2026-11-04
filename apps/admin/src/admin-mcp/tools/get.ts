@@ -22,6 +22,7 @@ import { actionsFor } from "../actions-for";
 import type { ActionScope } from "../actions-for";
 import { failedEnvelope, inputInvalidEnvelope, okEnvelope } from "../envelope";
 import {
+  ACTIONS_UNTRUSTED,
   OUTLINE_UNTRUSTED,
   outlineData,
   publicationOf,
@@ -33,10 +34,12 @@ import {
   accountKindsOf,
   changedFieldsBetween,
   CMS_FAMILIES,
+  CREDENTIAL_URL,
   factsOf,
   fieldTextOf,
   firstDifferenceOffset,
   fullFieldOf,
+  holdsWithheldLink,
   INLINE_TEXT_CHARS,
   readLatest,
   readLive,
@@ -90,6 +93,12 @@ const invalidField = (family: CmsFamily, path: string) =>
 const answered = (data: unknown, untrusted: readonly string[]) =>
   okEnvelope(adminGetDataSchema.parse(data), untrusted);
 
+/** A stored link that does not leave is named as withheld, never read as no link. */
+const excludingCredentialUrls = (envelope: AdminMcpEnvelope) => ({
+  ...envelope,
+  meta: { ...envelope.meta, excluded: [CREDENTIAL_URL] },
+});
+
 const withActions = (
   common: Awaited<ReturnType<typeof recordCommon>>,
   family: CmsFamily,
@@ -136,10 +145,10 @@ const outlineView = async (
     "outline",
     input.fields,
   );
-  return answered(
-    { ...data, ...withActions(data, family, doc, scope) },
-    OUTLINE_UNTRUSTED,
-  );
+  return answered({ ...data, ...withActions(data, family, doc, scope) }, [
+    ...OUTLINE_UNTRUSTED,
+    ...ACTIONS_UNTRUSTED,
+  ]);
 };
 
 const fullView = async (
@@ -163,19 +172,20 @@ const fullView = async (
     "full",
     readFromOf(family),
   );
-  return answered(
+  const specs = family.fields.filter(
+    ({ name }) => input.fields === undefined || input.fields.includes(name),
+  );
+  const envelope = answered(
     {
       ...withActions(common, family, doc, scope),
       lengthUnit: "codePoint",
-      fields: family.fields
-        .filter(
-          ({ name }) =>
-            input.fields === undefined || input.fields.includes(name),
-        )
-        .map((spec) => fullFieldOf(spec, doc)),
+      fields: specs.map((spec) => fullFieldOf(spec, doc)),
     },
-    OUTLINE_UNTRUSTED,
+    [...OUTLINE_UNTRUSTED, ...ACTIONS_UNTRUSTED],
   );
+  return specs.some((spec) => holdsWithheldLink(spec, doc))
+    ? excludingCredentialUrls(envelope)
+    : envelope;
 };
 
 /** A bounded window, or the matches inside one field. */
@@ -199,6 +209,13 @@ const fieldView = async (
     input.view ?? "field",
     readFrom,
   );
+  // No length, hash, count or empty text: any of them would read as an answer.
+  if (located.withheld)
+    return excludingCredentialUrls(
+      answered({ ...common, field: input.field, fieldState: "WITHHELD" }, [
+        "/data/title",
+      ]),
+    );
   const about = {
     ...common,
     field: input.field,
@@ -322,7 +339,7 @@ const boundedPreviewText = (name: string, value: unknown) => {
 /**
  * The page's own projection, in the size a text result allows. An image becomes its
  * media id, so no address reaches the model, and a citation says it has a link: the
- * link itself is in view=full.
+ * link itself is in view=full, unless it carries a credential.
  */
 const projectionOf = (
   detail: Awaited<ReturnType<typeof previewCatalogDetail>>,
@@ -363,7 +380,15 @@ const publishabilityIssues = async (
   req: PayloadRequest,
   doc: RecordDocument,
 ): Promise<readonly { path: readonly unknown[]; code: string }[]> => {
-  const content = draftContent(doc);
+  let content: ReturnType<typeof draftContent>;
+  try {
+    content = draftContent(doc);
+  } catch (error) {
+    // Stored content that no longer parses cannot go live, and that is the answer.
+    const issue = issueOf(error);
+    if (issue === undefined) throw error;
+    return [issue];
+  }
   const checked = editorialPublishSchema.safeParse(content);
   const schemaIssues = checked.success
     ? []
@@ -416,16 +441,20 @@ const previewView = async (
     ),
   };
   const base = { ...withActions(common, family, doc, scope), diff };
-  if (family.type !== "catalog")
-    return answered(
+  if (family.type !== "catalog") {
+    const envelope = answered(
       {
         ...base,
         ...renderOf(doc, family),
         lengthUnit: "codePoint",
         fields: family.fields.map((spec) => fullFieldOf(spec, doc)),
       },
-      OUTLINE_UNTRUSTED,
+      [...OUTLINE_UNTRUSTED, ...ACTIONS_UNTRUSTED],
     );
+    return family.fields.some((spec) => holdsWithheldLink(spec, doc))
+      ? excludingCredentialUrls(envelope)
+      : envelope;
+  }
   const issues = await publishabilityIssues(req, doc);
   try {
     const detail = await previewCatalogDetail(
@@ -440,7 +469,7 @@ const previewView = async (
         issues,
         projection: projectionOf(detail),
       },
-      ["/data/title", "/data/projection"],
+      ["/data/title", "/data/projection", ...ACTIONS_UNTRUSTED],
     );
   } catch (error) {
     if (error instanceof APIError && error.message === "PREVIEW_INCOMPLETE")
@@ -451,13 +480,20 @@ const previewView = async (
           reason: "PREVIEW_INCOMPLETE",
           issues,
         },
-        ["/data/title"],
+        ["/data/title", ...ACTIONS_UNTRUSTED],
       );
     const issue = issueOf(error);
     if (issue === undefined) throw error;
     return answered(
-      { ...base, ...renderOf(doc, family), issues: [...issues, issue] },
-      ["/data/title"],
+      {
+        ...base,
+        ...renderOf(doc, family),
+        // The page reads the same stored content, so it can meet the same refusal.
+        issues: issues.some(({ code }) => code === issue.code)
+          ? issues
+          : [...issues, issue],
+      },
+      ["/data/title", ...ACTIONS_UNTRUSTED],
     );
   }
 };
@@ -588,6 +624,11 @@ const diffView = async (
   publication: PublicationFacts,
   input: AdminGetInput,
 ) => {
+  if (
+    input.fields !== undefined &&
+    unknownFields(family, input.fields).length > 0
+  )
+    return invalidField(family, "fields");
   const fromName = input.from ?? "published";
   const toName = input.to ?? "draft";
   const [from, to] = await Promise.all([
@@ -600,7 +641,7 @@ const diffView = async (
     to ?? latest,
     publication,
     "diff",
-    toName === "published" ? "published" : "draft",
+    typeof toName === "number" ? "version" : toName,
   );
   const changed = changedFieldsBetween(family, from, to ?? {}).filter(
     ({ name }) => input.fields === undefined || input.fields.includes(name),
@@ -608,6 +649,8 @@ const diffView = async (
   return answered(
     {
       ...common,
+      // Nothing is live, so no revision or fingerprint can describe what is.
+      ...(to === undefined ? { revision: null, fingerprint: null } : {}),
       from: { version: fromName, revision: from?.revision ?? null },
       to: { version: toName, revision: to?.revision ?? null },
       changes: changed.map((spec) => {
@@ -623,7 +666,9 @@ const diffView = async (
         };
       }),
     },
-    ["/data/title"],
+    // An identity is a `fact`, so it travels by value, and it shows here while nothing
+    // is live.
+    ["/data/title", "/data/changes/*/from/value", "/data/changes/*/to/value"],
   );
 };
 
@@ -702,7 +747,8 @@ export const getContinuation = (
   const last = kept.at(-1) as Record<string, unknown>;
   if (view === "history")
     return nextOf(input, { cursor: last.versionId as number });
-  if (view === "field" && input.find !== undefined)
+  // Only these two read `find`: on the other views a kept row has no offset.
+  if ((view === "field" || view === "published") && input.find !== undefined)
     return nextOf(input, { offset: (last.offset as number) + 1 });
   if (
     view === "full" ||

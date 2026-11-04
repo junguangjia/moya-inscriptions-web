@@ -11,12 +11,13 @@ import {
 } from "@moya/contracts/internal/admin-mcp";
 import type { AdminMcpEnvelope } from "@moya/contracts/internal/admin-mcp";
 import { EDITORIAL_STATEFUL_FIELDS } from "@moya/contracts/internal/editorial";
-import { sql, type PostgresAdapter } from "@payloadcms/db-postgres";
+import { sql } from "@payloadcms/db-postgres";
 import type { PayloadRequest, Where } from "payload";
 import type { z } from "zod";
 
 import { actsAsOwner } from "../../editorial/access";
-import { inputInvalidEnvelope, okEnvelope } from "../envelope";
+import { withinBudget } from "../budget";
+import { failedEnvelope, inputInvalidEnvelope, okEnvelope } from "../envelope";
 import {
   findDocuments,
   CMS_FAMILIES,
@@ -34,7 +35,8 @@ import type { AdminOpContext } from "./define";
  * Rows are compact, a `fields` projection comes from a whitelist, and long text only
  * ever leaves as state, length and hash. view=count answers in SQL with the same
  * filter, so counting never pages rows through the model; a test holds the two
- * translations of each filter equal.
+ * translations of each filter equal. It runs under a search branch's budget, and a
+ * count past its time answers READ_TIMED_OUT, never a number.
  */
 
 type SqlFragment = ReturnType<typeof sql>;
@@ -506,7 +508,10 @@ const countEnvelope = async (
   if (!actsAsOwner(req))
     return inputInvalidEnvelope([{ path: ["view"], code: "not_for_this_key" }]);
   const group =
-    read.groupBy === undefined ? undefined : source.count.groups[read.groupBy];
+    read.groupBy !== undefined &&
+    Object.hasOwn(source.count.groups, read.groupBy)
+      ? source.count.groups[read.groupBy]
+      : undefined;
   if (read.groupBy !== undefined && group === undefined)
     return inputInvalidEnvelope([
       {
@@ -517,10 +522,6 @@ const countEnvelope = async (
     ]);
   if (read.cursor !== undefined && !OFFSET_PATTERN.test(read.cursor))
     return inputInvalidEnvelope([{ path: ["cursor"], code: "invalid_cursor" }]);
-  const { drizzle } = req.payload.db as unknown as Pick<
-    PostgresAdapter,
-    "drizzle"
-  >;
   const conditions = [
     ...(source.count.latestOnly ? [sql`latest = true`] : []),
     ...source.count.conditions(filter),
@@ -530,36 +531,47 @@ const countEnvelope = async (
     conditions.length === 0
       ? sql``
       : sql`WHERE ${sql.join(conditions, sql` AND `)}`;
-  const totalOf = async () =>
-    Number(
-      (
-        await drizzle.execute(
-          sql`SELECT count(*)::int AS total FROM ${from} ${where}`,
-        )
-      ).rows[0]!.total,
-    );
-  if (group === undefined)
-    return okEnvelope(
-      adminReadCountDataSchema.parse({ total: await totalOf(), filter }),
-    );
   const offset = Number(read.cursor ?? 0);
   const limit = read.pageSize ?? DEFAULT_GROUP_PAGE;
-  const { rows } = await drizzle.execute(sql`
-    SELECT ${sql.raw(group.state ?? "NULL")} AS state,
-      ${sql.raw(group.value)} AS value,
-      count(*)::int AS count,
-      sum(count(*)) OVER ()::int AS total
-    FROM ${from} ${where}
-    GROUP BY 1, 2
-    ORDER BY count DESC, value ASC NULLS LAST
-    LIMIT ${limit + 1} OFFSET ${offset}`);
+  const counted = await withinBudget(req, async (_branch, db) => {
+    const totalOf = async () =>
+      Number(
+        (
+          await db.execute(
+            sql`SELECT count(*)::int AS total FROM ${from} ${where}`,
+          )
+        ).rows[0]!.total,
+      );
+    if (group === undefined) return { total: await totalOf(), rows: [] };
+    const { rows } = await db.execute(sql`
+      SELECT ${sql.raw(group.state ?? "NULL")} AS state,
+        ${sql.raw(group.value)} AS value,
+        count(*)::int AS count,
+        sum(count(*)) OVER ()::int AS total
+      FROM ${from} ${where}
+      GROUP BY 1, 2
+      ORDER BY count DESC, value ASC NULLS LAST, state ASC NULLS LAST
+      LIMIT ${limit + 1} OFFSET ${offset}`);
+    return {
+      rows,
+      total:
+        rows.length > 0
+          ? Number(rows[0]!.total)
+          : offset === 0
+            ? 0
+            : await totalOf(),
+    };
+  });
+  if (counted.status !== "ok") {
+    if (counted.status === "timed_out") return failedEnvelope("READ_TIMED_OUT");
+    throw new Error("ADMIN_READ_COUNT_FAILED");
+  }
+  const { rows, total } = counted.value;
+  if (group === undefined)
+    return okEnvelope(adminReadCountDataSchema.parse({ total, filter }), [
+      "/data/filter",
+    ]);
   const page = rows.slice(0, limit);
-  const total =
-    rows.length > 0
-      ? Number(rows[0]!.total)
-      : offset === 0
-        ? 0
-        : await totalOf();
   const envelope = okEnvelope(
     adminReadCountDataSchema.parse({
       total,
@@ -571,7 +583,7 @@ const countEnvelope = async (
         count: Number(count),
       })),
     }),
-    ["/data/groups"],
+    ["/data/groups", "/data/filter"],
   );
   return rows.length > limit
     ? {
@@ -594,7 +606,13 @@ const rowsEnvelope = async (
     return inputInvalidEnvelope([{ path: ["cursor"], code: "invalid_cursor" }]);
   const asked =
     read.view === "full" ? Object.keys(source.fields) : (read.fields ?? []);
-  const projections = asked.map((name) => [name, source.fields[name]] as const);
+  const projections = asked.map(
+    (name) =>
+      [
+        name,
+        Object.hasOwn(source.fields, name) ? source.fields[name] : undefined,
+      ] as const,
+  );
   if (projections.some(([, projection]) => projection === undefined))
     return unknownFieldsEnvelope(source);
   const pageSize = Math.min(
@@ -635,14 +653,11 @@ const rowsEnvelope = async (
   }));
   const nextCursor =
     docs.length > pageSize ? String(page.at(-1)!.id) : undefined;
-  const envelope = okEnvelope(
-    adminReadRowsDataSchema.parse({
-      rows,
-      filter,
-      ...(nextCursor === undefined ? {} : { nextCursor }),
-    }),
-    ["/data/rows"],
-  );
+  // `next` is the one way on: a cut page keeps fewer rows than this page read.
+  const envelope = okEnvelope(adminReadRowsDataSchema.parse({ rows, filter }), [
+    "/data/rows",
+    "/data/filter",
+  ]);
   return nextCursor === undefined
     ? envelope
     : {

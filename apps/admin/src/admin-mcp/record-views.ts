@@ -58,13 +58,16 @@ export const publicationOf = async (
   const publishedRevision = asRevision(row.revision);
   if (row.revision === latest.revision)
     return { state, publishedRevision, hasUnpublishedChanges: false };
-  // A save moves the revision whether or not the content changed.
+  // A save moves the revision whether or not the content changed. Stored content that
+  // no longer parses has no fingerprint to compare, and that never reads as no change.
   const live = await readLive(req, family, id);
+  const before = fingerprintOf(family, live);
+  const after = fingerprintOf(family, latest);
   return {
     state,
     publishedRevision,
     hasUnpublishedChanges:
-      fingerprintOf(family, live) !== fingerprintOf(family, latest),
+      before === null || after === null || before !== after,
   };
 };
 
@@ -75,7 +78,7 @@ export const recordCommon = async (
   doc: RecordDocument,
   publication: PublicationFacts,
   view: AdminGetView,
-  readFrom: "draft" | "published" | "live",
+  readFrom: "draft" | "published" | "live" | "version",
 ) => {
   const id = doc.id as number;
   const lock = lockOf(await locksOf(req, family, [id]), family, id);
@@ -111,6 +114,12 @@ export const outlineFacts = (
 
 /** Pointers to what a person wrote: everything that carries a value or a title. */
 export const OUTLINE_UNTRUSTED = ["/data/title", "/data/fields/*/value"];
+
+/** The two identities a skeleton copies from the record; the rest of it is ours. */
+export const ACTIONS_UNTRUSTED = [
+  "/data/actions/*/args/input/filter/catalogId",
+  "/data/actions/*/args/mediaId",
+];
 
 /**
  * The default read: it answers "is the transcription there, did it change" in one

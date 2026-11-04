@@ -34,8 +34,9 @@ export type LocateReference =
   | { readonly kind: "token"; readonly value: string }
   /** Digits name a row in every family, and can be a catalogId too. */
   | { readonly kind: "digits"; readonly value: string; readonly id: number }
-  | { readonly kind: "sha256"; readonly value: string }
-  | { readonly kind: "uuid"; readonly value: string }
+  /** `value` in lower case, as media stores it; a Catalog identity is as `typed`. */
+  | { readonly kind: "sha256"; readonly value: string; readonly typed: string }
+  | { readonly kind: "uuid"; readonly value: string; readonly typed: string }
   | { readonly kind: "text"; readonly text: string };
 
 export interface ClassifiedQuery {
@@ -111,6 +112,10 @@ const ADMIN_COLLECTIONS: Readonly<Record<string, AdminCmsRecordType>> = {
   media: "media",
 };
 
+/** A pasted name is any text: `constructor` is on every object, and no rule. */
+const own = <T>(table: Readonly<Record<string, T>>, name: string) =>
+  Object.hasOwn(table, name) ? table[name] : undefined;
+
 const notExcluded = (references: readonly LocateReference[]) => ({
   references,
   excluded: [],
@@ -133,66 +138,106 @@ const referenceOfId = (value: string): LocateReference => {
   if (MEDIA_SHAPE.test(value))
     return { kind: "identity", type: "media", field: "mediaId", value };
   if (SHA256_SHAPE.test(value))
-    return { kind: "sha256", value: value.toLowerCase() };
+    return { kind: "sha256", value: value.toLowerCase(), typed: value };
   if (UUID_SHAPE.test(value))
-    return { kind: "uuid", value: value.toLowerCase() };
+    return { kind: "uuid", value: value.toLowerCase(), typed: value };
   if (DIGITS_SHAPE.test(value))
     return { kind: "digits", value, id: Number(value) };
   return { kind: "token", value };
 };
 
-const asLink = (text: string): URL | undefined => {
-  const looksLikeLink =
-    /^https?:\/\//iu.test(text) ||
-    text.startsWith("/") ||
-    text.startsWith("?") ||
-    text.startsWith("#");
-  if (!looksLikeLink || WHITESPACE.test(text)) return undefined;
+/** A host with no scheme ahead of a path or query, as copied from an address bar. */
+const BARE_HOST =
+  /^(?:localhost|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)(?::\d+)?(?=[/?#])/u;
+
+/**
+ * `certain` is a link whatever it names. Anything else that could be one, a leading
+ * `/` or `#` or a bare host, is also legal text and a legal sourceId, so it is read
+ * as a link only once it names something a link can.
+ */
+const asLink = (
+  text: string,
+): { readonly url: URL; readonly certain: boolean } | undefined => {
+  if (WHITESPACE.test(text)) return undefined;
+  const certain = /^https?:\/\//iu.test(text) || text.startsWith("?");
+  const address =
+    certain || text.startsWith("/") || text.startsWith("#")
+      ? text
+      : BARE_HOST.test(text)
+        ? `http://${text}`
+        : undefined;
+  if (address === undefined) return undefined;
   try {
     // Only path, query and hash are read, so the base is never compared to anything.
-    return new URL(text, "http://link.invalid");
+    return { url: new URL(address, "http://link.invalid"), certain };
   } catch {
     return undefined;
   }
 };
 
+/** PostgreSQL text cannot hold a NUL, so a value carrying one names no record. */
 const decoded = (segment: string): string | undefined => {
   try {
-    return decodeURIComponent(segment);
+    const value = decodeURIComponent(segment);
+    return value.includes("\u0000") ? undefined : value;
   } catch {
     return undefined;
   }
 };
 
-const fromPath = (pathname: string): readonly LocateReference[] => {
+/** What a path names, which can be nothing readable; undefined is no link we know. */
+const fromPath = (pathname: string): readonly LocateReference[] | undefined => {
   const segments = pathname.split("/").filter(Boolean);
-  if (segments[0] === "catalog" && segments.length === 2) {
+  if (segments[0] === "catalog" && segments.length >= 2) {
     const value = decoded(segments[1]!);
     return value === undefined || value.length > 128
       ? []
       : [{ kind: "identity", type: "catalog", field: "catalogId", value }];
   }
-  if (segments[0] === "admin" && segments[1] === "collections") {
-    const type = ADMIN_COLLECTIONS[segments[2] ?? ""];
+  // What admin_get view=preview gives as renderPath, on the Catalog's row id.
+  if (segments[0] === "editorial-preview" && segments.length >= 2)
+    return DIGITS_SHAPE.test(segments[1]!)
+      ? [{ kind: "row", type: "catalog", id: Number(segments[1]) }]
+      : [];
+  if (segments[0] === "admin") {
+    const type =
+      segments[1] === "collections"
+        ? own(ADMIN_COLLECTIONS, segments[2] ?? "")
+        : undefined;
     const id = segments[3] ?? "";
-    if (type !== undefined && DIGITS_SHAPE.test(id))
-      return [{ kind: "row", type, id: Number(id) }];
+    return type !== undefined && DIGITS_SHAPE.test(id)
+      ? [{ kind: "row", type, id: Number(id) }]
+      : [];
   }
-  return [];
+  return undefined;
 };
 
-const classifyLink = (url: URL): ClassifiedQuery => {
-  const references: LocateReference[] = [...fromPath(url.pathname)];
+/** A value named twice, by a path and a parameter, is one reference. */
+const distinctReferences = (references: readonly LocateReference[]) => [
+  ...new Map(
+    references.map((reference) => [JSON.stringify(reference), reference]),
+  ).values(),
+];
+
+const classifyLink = (
+  url: URL,
+): ClassifiedQuery & { readonly known: boolean } => {
+  const path = fromPath(url.pathname);
+  const references: LocateReference[] = [...(path ?? [])];
   const excluded = new Set<string>();
   let focusMediaId: string | undefined;
+  let known = path !== undefined;
   for (const [name, value] of url.searchParams) {
-    const exclusion = LINK_PARAMETER_EXCLUSIONS[name];
+    const exclusion = own(LINK_PARAMETER_EXCLUSIONS, name);
     if (exclusion !== undefined) {
+      known = true;
       excluded.add(exclusion);
       continue;
     }
-    const rule = LINK_PARAMETER_RULES[name];
-    if (rule === undefined || value.length === 0 || value.length > 128)
+    const rule = own(LINK_PARAMETER_RULES, name);
+    if (rule === undefined) continue;
+    known = true;
+    if (value.length === 0 || value.length > 128 || value.includes("\u0000"))
       continue;
     if (isDirectMessageId(value)) excluded.add("dm");
     else if (WORK_DRAFT_SHAPE.test(value)) excluded.add("private_draft");
@@ -219,6 +264,7 @@ const classifyLink = (url: URL): ClassifiedQuery => {
   }
   const topic = /^#topic-(.+)$/u.exec(url.hash);
   if (topic !== null) {
+    known = true;
     const value = decoded(topic[1]!);
     if (value !== undefined)
       references.push({ kind: "community", type: "thread", value });
@@ -227,10 +273,11 @@ const classifyLink = (url: URL): ClassifiedQuery => {
   if (focusMediaId !== undefined && references.length === 0)
     references.push(referenceOfId(focusMediaId));
   return {
-    references,
+    references: distinctReferences(references),
     excluded: [...excluded],
     ...(focusMediaId === undefined ? {} : { focusMediaId }),
     link: true,
+    known,
   };
 };
 
@@ -242,7 +289,10 @@ export const classifyQuery = (query: string): ClassifiedQuery => {
   if (WORK_DRAFT_SHAPE.test(text))
     return { references: [], excluded: ["private_draft"], link: false };
   const link = asLink(text);
-  if (link !== undefined) return classifyLink(link);
+  if (link !== undefined) {
+    const { known, ...classified } = classifyLink(link.url);
+    if (link.certain || known) return classified;
+  }
   if (HANDLE_SHAPE.test(text))
     return notExcluded([{ kind: "handle", handle: text.slice(1) }]);
   if (WHITESPACE.test(text) || text.length > 128)

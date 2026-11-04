@@ -58,6 +58,7 @@ const TIMING_SAMPLES = 20;
 /**
  * Statements one call may run, audit row and transaction control included: reads
  * measured at this scale, pinned so a new read per row or per call fails here.
+ * The one statement left out is THROTTLED_DOOR_WRITE.
  */
 const STATEMENTS = {
   door_whoami: 5,
@@ -66,8 +67,17 @@ const STATEMENTS = {
   exact_locate_miss_to_identity: 13,
   single_read: 10,
   list_page: 7,
-  aggregate: 6,
+  // Its own READ ONLY transaction with a statement timeout: four of these.
+  aggregate: 10,
 } as const;
+
+/**
+ * The door writes last_used_at once a key's last touch is 60 s old, so whether a call
+ * carries this depends on the clock. Counted, it fails a ceiling on a stalled runner
+ * with no code at fault, and wall-clock is no gate here. Every other statement counts.
+ */
+const THROTTLED_DOOR_WRITE =
+  /^\s*UPDATE\s+payload_mcp_api_keys\s+SET\s+last_used_at\b/iu;
 
 interface Pool {
   query(
@@ -111,7 +121,7 @@ const installCapture = async () => {
           : undefined) ??
         (typeof first === "object" ? first.values : undefined) ??
         [];
-      captured.push({ text, values });
+      if (!THROTTLED_DOOR_WRITE.test(text)) captured.push({ text, values });
     }
     return original.apply(this, args);
   };
@@ -339,6 +349,27 @@ describe("the door floor", () => {
       STATEMENTS.door_whoami,
       () => ({ name: "admin_whoami", arguments: {} }),
     );
+  });
+});
+
+describe("the door's throttled write", () => {
+  it("still runs and stays out of the count, so a stalled runner fails no ceiling", async () => {
+    const stale = async () =>
+      (
+        await pool.query(
+          `SELECT count(*)::int AS keys FROM payload_mcp_api_keys
+           WHERE last_used_at < now() - interval '60 seconds'`,
+        )
+      ).rows[0]!.keys;
+    await pool.query(
+      `UPDATE payload_mcp_api_keys SET last_used_at = now() - interval '61 seconds'`,
+    );
+    expect(await stale()).toBeGreaterThanOrEqual(2);
+    for (const key of ["read", "full"] as const) {
+      const { statements } = await measured(() => clients[key]!.listTools());
+      expect(statements.length).toBeLessThanOrEqual(STATEMENTS.door_tools_list);
+    }
+    expect(await stale()).toBe(0);
   });
 });
 

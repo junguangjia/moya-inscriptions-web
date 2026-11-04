@@ -112,9 +112,17 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     hint: "The image could not be read just now. Retry shortly; if it stays, report that you could not read it.",
     retryable: true,
   },
+  MEDIA_TOO_LARGE: {
+    hint: "This original is larger than this tool reads, so repeating the call cannot help. Read its thumbnail, or report that you could not read the original.",
+    retryable: false,
+  },
   AI_ROUTE_FORBIDDEN: {
     hint: "The Backend refused this credential on this route. Retrying cannot help; tell the Owner.",
     retryable: false,
+  },
+  READ_TIMED_OUT: {
+    hint: "This read ran out of time, so it gives no number and this is not a zero. Retry shortly, or narrow the filter.",
+    retryable: true,
   },
 };
 

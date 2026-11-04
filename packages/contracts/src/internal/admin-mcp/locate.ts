@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { isWellFormedEditorialText } from "../editorial/schemas.js";
+
 /**
  * admin_find, admin_get, admin_read and admin_view_media
  * (admin-mcp-completion-v1 sections 5, 6 and 10). Server-only, like the envelope:
@@ -57,14 +59,25 @@ export const adminLockSchema = z.strictObject({
   expiresAt: z.string().optional(),
 });
 
-/** Only `identity` can make a hit unique: t2s and trigram merge distinct records. */
-export const ADMIN_MATCH_KINDS = ["identity", "raw", "t2s", "trigram"] as const;
+/** Only `identity` can make a hit unique: t2s, s2t and trigram merge distinct records. */
+export const ADMIN_MATCH_KINDS = [
+  "identity",
+  "raw",
+  "t2s",
+  "s2t",
+  "trigram",
+] as const;
 
 /** How far a search pages. Past it the answer says so, and the query needs narrowing. */
 export const ADMIN_FIND_SKIP_MAX = 200;
 
 export const adminFindInputSchema = z.strictObject({
-  query: z.string().min(1).max(2_048),
+  /** PostgreSQL text cannot hold a NUL, so no record can match one. */
+  query: z
+    .string()
+    .min(1)
+    .max(2_048)
+    .refine((value) => !value.includes("\u0000")),
   type: adminRecordTypeSchema.optional(),
   limit: z.number().int().min(1).max(25).optional(),
   /** How many candidates a cut or paged answer already gave. */
@@ -146,7 +159,8 @@ export const adminGetInputSchema = z.strictObject({
   maxChars: z.number().int().positive().optional(),
   find: z
     .strictObject({
-      text: z.string().min(1).max(2_000),
+      /** Half a character would match inside a whole one, and report it whole. */
+      text: z.string().min(1).max(2_000).refine(isWellFormedEditorialText),
       mode: z.enum(["raw", "normalized"]).optional(),
       context: z.number().int().min(0).max(ADMIN_FIND_CONTEXT_MAX).optional(),
     })
@@ -193,8 +207,11 @@ export const adminGetDataSchema = z
     type: adminRecordTypeSchema,
     id: z.number().int().positive(),
     view: z.enum(ADMIN_GET_VIEWS),
-    /** Which version this answer read: a read with no draft flag gets the live row. */
-    readFrom: z.enum(["draft", "published", "live"]),
+    /**
+     * Which version this answer read: a read with no draft flag gets the live row.
+     * `version` is one named past version, on a diff `to`.
+     */
+    readFrom: z.enum(["draft", "published", "live", "version"]),
     state: recordState,
     revision: z.number().nullable(),
     fingerprint: z.string().nullable(),
@@ -285,7 +302,6 @@ export const adminReadRowsDataSchema = z.strictObject({
   rows: z.array(z.record(z.string(), z.unknown())),
   /** What the filter resolved to, so a default never reads as the whole table. */
   filter: z.record(z.string(), z.unknown()),
-  nextCursor: z.string().optional(),
 });
 
 export const adminReadCountDataSchema = z.strictObject({

@@ -523,6 +523,83 @@ export const factsOf = (
 /** Past this a string is long: it travels by length and hash, and is windowed. */
 export const INLINE_TEXT_CHARS = 200;
 
+/** The rows that hold a stored link, by array field and key. */
+const LINK_KEY_OF: Readonly<Record<string, string>> = {
+  provenance: "sourceUrl",
+  sourceCitations: "url",
+  citations: "url",
+};
+
+// Whole words of a parameter's name. A harmless `?key=` link is withheld with the
+// rest: it says so, and the Owner reads it in the Admin.
+const CREDENTIAL_WORDS: ReadonlySet<string> = new Set([
+  "accesskey",
+  "accesskeyid",
+  "apikey",
+  "auth",
+  "authkey",
+  "authorization",
+  "bearer",
+  "credential",
+  "credentials",
+  "hmac",
+  "jsessionid",
+  "jwt",
+  "key",
+  "pass",
+  "passwd",
+  "password",
+  "phpsessid",
+  "pwd",
+  "secret",
+  "session",
+  "sessionid",
+  "sig",
+  "sign",
+  "signature",
+  "ticket",
+  "token",
+]);
+
+const namesCredential = (name: string) =>
+  name
+    .replace(/([a-z0-9])([A-Z])/gu, "$1-$2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/u)
+    .some((word) => CREDENTIAL_WORDS.has(word));
+
+/**
+ * Userinfo, or a query parameter naming a credential or a signature. Stored links were
+ * imported as they stood, so one with no scheme is read too, and one that cannot be
+ * read at all is not assumed clean.
+ */
+export const linkCarriesCredential = (link: string): boolean => {
+  if (/^[^/?#]*:[^/?#]*@/u.test(link)) return true;
+  let url: URL;
+  try {
+    url = new URL(link, "https://relative.invalid/");
+  } catch {
+    return true;
+  }
+  return (
+    url.username !== "" ||
+    url.password !== "" ||
+    [...new URLSearchParams(url.search.replaceAll(";", "&")).keys()].some(
+      namesCredential,
+    )
+  );
+};
+
+const WITHHELD = "WITHHELD";
+
+/** How `meta.excluded` names a link that does not leave. */
+export const CREDENTIAL_URL = "credential_url";
+
+const isWithheldLink = (fieldName: string, key: string, value: unknown) =>
+  LINK_KEY_OF[fieldName] === key &&
+  typeof value === "string" &&
+  linkCarriesCredential(value);
+
 const boundedItem = (
   fieldName: string,
   index: number,
@@ -531,14 +608,29 @@ const boundedItem = (
   Object.fromEntries(
     Object.entries(item).map(([key, value]) => [
       key,
-      typeof value === "string" && codePointLength(value) > INLINE_TEXT_CHARS
-        ? {
-            length: codePointLength(value),
-            hash: textHash(value),
-            windowed: `${fieldName}.${index}.${key}`,
-          }
-        : value,
+      isWithheldLink(fieldName, key, value)
+        ? { state: WITHHELD }
+        : typeof value === "string" &&
+            codePointLength(value) > INLINE_TEXT_CHARS
+          ? {
+              length: codePointLength(value),
+              hash: textHash(value),
+              windowed: `${fieldName}.${index}.${key}`,
+            }
+          : value,
     ]),
+  );
+
+/** Whether view=full of this field has a link it does not give. */
+export const holdsWithheldLink = (
+  spec: FieldSpec,
+  doc: RecordDocument,
+): boolean =>
+  spec.kind === "array" &&
+  arrayItems(doc[spec.name]).some((item) =>
+    Object.entries(item).some(([key, value]) =>
+      isWithheldLink(spec.name, key, value),
+    ),
   );
 
 /** One field with its value when short: view=full. Whole rows, so a cut drops a row. */
@@ -569,11 +661,18 @@ export const fullFieldOf = (
 
 export type FieldText =
   | { readonly found: false }
-  | { readonly found: true; readonly state: string; readonly text: string };
+  | { readonly found: true; readonly withheld: true }
+  | {
+      readonly found: true;
+      readonly withheld?: never;
+      readonly state: string;
+      readonly text: string;
+    };
 
 /**
- * The text behind a field name: a text field, a stateful field's value, or a string
- * inside an array row as `sections.2.body`. Anything else is not text to window.
+ * The text behind a field name: a text field, a stateful field's value, a short fact,
+ * or a string inside an array row as `sections.2.body`. Anything else is not text to
+ * window.
  */
 export const fieldTextOf = (
   family: CmsFamily,
@@ -594,17 +693,21 @@ export const fieldTextOf = (
       };
     }
     if (spec.kind !== "text" && spec.kind !== "fact") return { found: false };
-    return typeof value === "string"
-      ? { found: true, state: "VALUE", text: value }
+    if (typeof value === "string")
+      return { found: true, state: "VALUE", text: value };
+    // A number or a row id: the same value the outline shows, as text.
+    return isPresent(value)
+      ? { found: true, state: "VALUE", text: JSON.stringify(value) }
       : { found: true, state: "ABSENT", text: "" };
   }
   if (spec.kind !== "array" || leaf === undefined || !/^\d+$/u.test(index))
     return { found: false };
   const item = arrayItems(value)[Number(index)];
   const text = item?.[leaf];
-  return typeof text === "string"
-    ? { found: true, state: "VALUE", text }
-    : { found: false };
+  if (typeof text !== "string") return { found: false };
+  return isWithheldLink(spec.name, leaf, text)
+    ? { found: true, withheld: true }
+    : { found: true, state: "VALUE", text };
 };
 
 /** Fields whose state, length or hash differ between two versions of one record. */

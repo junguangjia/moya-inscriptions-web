@@ -11,13 +11,15 @@ import type {
   AdminMcpEnvelope,
   AdminRecordType,
 } from "@moya/contracts/internal/admin-mcp";
-import { sql, type PostgresAdapter } from "@payloadcms/db-postgres";
-import { createLocalReq, type PayloadRequest, type Where } from "payload";
+import { sql } from "@payloadcms/db-postgres";
+import type { PayloadRequest, Where } from "payload";
 
 import { isMissingRecord } from "../editorial/transaction";
 import { withIdentityAccess } from "../editorial/state";
 import { actionsFor, candidateActions } from "./actions-for";
 import type { ActionScope } from "./actions-for";
+import { withinBudget } from "./budget";
+import type { BranchDb } from "./budget";
 import { CUT_WITH_NO_WAY_ON, okEnvelope } from "./envelope";
 import { classifyQuery } from "./locate-reference";
 import type { ClassifiedQuery, LocateReference } from "./locate-reference";
@@ -32,7 +34,11 @@ import {
   titleOf,
 } from "./records";
 import type { CmsFamily, RecordDocument } from "./records";
-import { normalizeSearchQuery, snippetAround } from "./text-window";
+import {
+  normalizeSearchQuery,
+  snippetAround,
+  traditionalSearchQuery,
+} from "./text-window";
 
 /**
  * One call resolves a human reference to a stable ref and says whether it is unique
@@ -235,23 +241,34 @@ const hitsOf = async (
         );
       return hits;
     }
+    // A catalogId or a sourceId can hold these two shapes too, and it is exact.
     case "sha256":
-      return media
-        ? identityHits(
-            CMS_FAMILIES.media,
-            "sha256",
-            await lookup(
-              req,
+      return [
+        ...(catalog ? await catalogByIdentity(req, reference.typed) : []),
+        ...(media
+          ? identityHits(
               CMS_FAMILIES.media,
-              { sha256: { equals: reference.value } },
-              reach,
-            ),
-          )
-        : [];
+              "sha256",
+              await lookup(
+                req,
+                CMS_FAMILIES.media,
+                { sha256: { equals: reference.value } },
+                reach,
+              ),
+            )
+          : []),
+      ];
     case "uuid":
-      return media
-        ? mediaByIdentity(req, [reference.value, `media-${reference.value}`])
-        : [];
+      return [
+        ...(catalog ? await catalogByIdentity(req, reference.typed) : []),
+        ...(media
+          ? await mediaByIdentity(req, [
+              reference.typed,
+              reference.value,
+              `media-${reference.value}`,
+            ])
+          : []),
+      ];
     default:
       return [];
   }
@@ -295,13 +312,13 @@ const exactStage = async (
     }
     considered += 1;
     const found = await hitsOf(req, reference, families, reach);
+    // Only what hitsOf really read: a family it skipped is not a zero.
     for (const family of families)
       if (
         reference.kind === "digits" ||
-        reference.kind === "token" ||
-        reference.kind === "sha256" ||
-        reference.kind === "uuid" ||
-        reference.type === family.type
+        (reference.kind === "row" || reference.kind === "identity"
+          ? reference.type === family.type
+          : family.type === "catalog" || family.type === "media")
       )
         sources[SOURCE_OF_FAMILY[family.type]] = "ok";
     hits.push(...found);
@@ -309,61 +326,10 @@ const exactStage = async (
   return { hits: distinct(hits), considered };
 };
 
-const BRANCH_STATEMENT_TIMEOUT = "2000ms";
-const QUERY_CANCELED = "57014";
-
-/**
- * A search branch's budget, enforced where the SQL runs: its own READ ONLY
- * transaction, because a timeout aborts the transaction it happens in and an abort
- * on this side would not stop the statement.
- */
-export const withinBudget = async <T>(
-  req: PayloadRequest,
-  work: (branch: PayloadRequest, db: BranchDb) => Promise<T>,
-): Promise<
-  | { readonly status: "ok"; readonly value: T }
-  | { readonly status: "timed_out" | "failed" }
-> => {
-  const { payload } = req;
-  const adapter = payload.db as unknown as Pick<PostgresAdapter, "sessions">;
-  let transactionID: number | string | undefined;
-  try {
-    const started = await payload.db.beginTransaction();
-    if (started === null) return { status: "failed" };
-    transactionID = started;
-    const db = adapter.sessions![String(started)]!.db as BranchDb;
-    await db.execute(sql`SET TRANSACTION READ ONLY`);
-    await db.execute(
-      sql.raw(`SET LOCAL statement_timeout = '${BRANCH_STATEMENT_TIMEOUT}'`),
-    );
-    const branch = await createLocalReq(
-      { user: req.user as NonNullable<PayloadRequest["user"]> },
-      payload,
-    );
-    branch.transactionID = started;
-    return { status: "ok", value: await work(branch, db) };
-  } catch (error) {
-    const code = (error as { cause?: { code?: unknown } } | null)?.cause?.code;
-    if (code === QUERY_CANCELED) return { status: "timed_out" };
-    payload.logger.error({ category: "ADMIN_MCP_FIND_BRANCH_FAILED" });
-    return { status: "failed" };
-  } finally {
-    if (transactionID !== undefined)
-      await payload.db
-        .rollbackTransaction(transactionID)
-        .catch(() => undefined);
-  }
-};
-
-interface BranchDb {
-  execute(query: ReturnType<typeof sql>): Promise<{
-    rows: readonly Record<string, unknown>[];
-  }>;
-}
-
 /** Whitespace separates same-record AND parts, and punctuation stays literal. */
 const queryParts = (text: string) => text.split(/\s+/u).filter(Boolean);
-const likePattern = (part: string) => `%${part.replace(/[\\%_]/gu, "\\$&")}%`;
+const escapedLike = (part: string) => part.replace(/[\\%_]/gu, "\\$&");
+const likePattern = (part: string) => `%${escapedLike(part)}%`;
 
 interface SearchRow {
   readonly catalog_id: string;
@@ -494,6 +460,24 @@ const SEARCHED_FIELDS: Readonly<Record<AdminCmsRecordType, readonly string[]>> =
     media: ["alt"],
   };
 
+/** Where the first word is, and only once each word is in one of these fields. */
+const locatedIn = (
+  doc: RecordDocument,
+  fields: readonly string[],
+  parts: readonly string[],
+) => {
+  const places = parts.map((part) => {
+    for (const field of fields) {
+      const value = doc[field];
+      const found =
+        typeof value === "string" ? snippetAround(value, part) : undefined;
+      if (found) return { field, ...found };
+    }
+    return undefined;
+  });
+  return places.every(Boolean) ? places[0] : undefined;
+};
+
 const containsHits = async (
   branch: PayloadRequest,
   family: CmsFamily,
@@ -501,15 +485,28 @@ const containsHits = async (
   limit: number,
 ): Promise<readonly Hit[]> => {
   const fields = SEARCHED_FIELDS[family.type];
-  // Simplified words reach a stored simplified title; a traditional stored title is
-  // only reached by the same characters, and the published branch covers the rest.
-  const normalized = normalizeSearchQuery(text);
-  const variants = normalized === text ? [text] : [text, normalized];
+  // There is no normalized copy to compare with here, so each form of the words is
+  // tried against the stored text. Conversion is one-to-many and cannot reach every
+  // form, and the published branch has the normalized text for the rest.
+  const forms = [
+    { words: text, kind: "raw" as const },
+    { words: normalizeSearchQuery(text), kind: "t2s" as const },
+    { words: traditionalSearchQuery(text), kind: "s2t" as const },
+  ];
+  const variants = forms.filter(
+    ({ words }, index) =>
+      forms.findIndex((form) => form.words === words) === index,
+  );
   const docs = await findDocuments(branch, family, {
     where: {
-      or: variants.flatMap((variant) =>
-        fields.map((field) => ({ [field]: { contains: variant } })),
-      ),
+      or: variants.map(({ words }) => ({
+        and: queryParts(words).map((part) => ({
+          or: fields.map((field) => ({
+            // Payload's contains is ILIKE around the value as it stands.
+            [field]: { contains: escapedLike(part) },
+          })),
+        })),
+      })),
     },
     limit,
     select: {
@@ -519,22 +516,10 @@ const containsHits = async (
     sort: "-updatedAt",
   });
   return docs.map((doc) => {
-    for (const variant of variants)
-      for (const field of fields) {
-        const value = doc[field];
-        const found =
-          typeof value === "string"
-            ? snippetAround(value, queryParts(variant)[0] ?? variant)
-            : undefined;
-        if (found)
-          return {
-            family,
-            doc,
-            field,
-            kind: variant === text ? "raw" : "t2s",
-            ...found,
-          };
-      }
+    for (const { words, kind } of variants) {
+      const found = locatedIn(doc, fields, queryParts(words));
+      if (found) return { family, doc, kind, ...found };
+    }
     return { family, doc, field: fields[0]!, kind: "raw" };
   });
 };
@@ -555,6 +540,8 @@ const fuzzyStage = async (
   ) => {
     const answer = await withinBudget(req, work);
     sources[source] = answer.status;
+    if (answer.status === "failed")
+      req.payload.logger.error({ category: "ADMIN_MCP_FIND_BRANCH_FAILED" });
     if (answer.status === "ok") hits.push(...answer.value);
   };
   // In turn: the Admin pool is five connections and the screens share it.
@@ -669,7 +656,13 @@ const UNTRUSTED = [
   "/data/items/*/title",
   "/data/items/*/match/snippet",
   "/data/items/*/disambiguators",
+  // The two identities a skeleton copies from the record; the rest of it is ours.
+  "/data/items/*/actions/*/args/input/filter/catalogId",
+  "/data/items/*/actions/*/args/mediaId",
 ];
+
+const NOTHING_LOOKED_UP =
+  "Nothing was looked up: this query names nothing this tool can read, or nothing of the type asked for. This none does not mean the record is missing. Try its id or title, or drop type.";
 
 export const findEnvelope = async (
   req: PayloadRequest,
@@ -709,14 +702,22 @@ export const findEnvelope = async (
     resolution: {
       status: unique ? "exact" : hits.length > 0 ? "candidates" : "none",
       uniqueIdentity: unique,
-      ...(unique ? { ref: { type: items[0]!.type, id: items[0]!.id } } : {}),
+      // From the hit: a skip past it leaves this page empty and the answer the same.
+      ...(unique
+        ? { ref: { type: hits[0]!.family.type, id: hits[0]!.doc.id as number } }
+        : {}),
     },
     items: [...items],
     ...(classified.focusMediaId === undefined
       ? {}
       : { focus: { mediaId: classified.focusMediaId } }),
   };
-  const partial = Object.values(sources).some((status) => status !== "ok");
+  // A withheld category is named on its own; with nothing read and nothing named, this
+  // none would read as searched and missing.
+  const unread =
+    Object.keys(sources).length === 0 && classified.excluded.length === 0;
+  const partial =
+    unread || Object.values(sources).some((status) => status !== "ok");
   const envelope = okEnvelope(data, UNTRUSTED);
   const more = hits.length > reached;
   const stopped = more && reached > ADMIN_FIND_SKIP_MAX;
@@ -726,6 +727,7 @@ export const findEnvelope = async (
       ? { next: { tool: "admin_find", args: { ...input, skip: reached } } }
       : {}),
     ...(stopped ? { hint: CUT_WITH_NO_WAY_ON } : {}),
+    ...(unread ? { hint: NOTHING_LOOKED_UP } : {}),
     meta: {
       ...envelope.meta,
       sources,
