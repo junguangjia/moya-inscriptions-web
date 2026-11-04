@@ -1004,6 +1004,17 @@ tests/unit/backend/admin-mcp-locate.test.ts:
 - Unique means one identity hit from one reference. A link naming two records,
   or a bare number that is a row in two families, answers candidates. `type`
   narrows a number to one family.
+- A search pages with `skip` as far as 200 candidates, reading one row past the
+  page on each branch, so a source holding more is seen to hold more. Past 200
+  the answer says so with `meta.truncated` and a fixed hint, and the query needs
+  narrowing.
+- `admin_read` pages a list source by its last row. `editorial.owner-drafts` and
+  `list.review_page` number their own pages, and a row there runs near 1 KB, so
+  a default page of 20 is often cut: `next` starts a page right after the rows
+  kept, at a smaller `pageSize`. `editorial.owner-history` takes no page size,
+  so a cut there has no way on and says so. An op that is no list source refuses
+  `cursor`, `pageSize`, `view`, `fields` and `groupBy` with `not_for_this_op`
+  rather than dropping them.
 - A `sourceId` bound only in a record's provenance list resolves through
   `editorial-identities`, after the indexed lookup on the main column.
 - Trigram is its own branch, `catalogs_similar`, tried only when no branch
@@ -1036,7 +1047,9 @@ tests/unit/backend/admin-mcp-locate.test.ts:
   `GET /api/media/file/:filename` does. Regions are in stored pixels, with no
   EXIF rotation. To fit 512 KiB it lowers quality first, then size, and the
   answer reports the size it rendered. One original decodes at a time per
-  process.
+  process. Its reads of the local directory carry `turbopackIgnore`, as
+  upload-session-gc.ts does; without it the build traces all of `apps/admin`
+  into the standalone output.
 
 ## 7. Reversible execution, direct
 

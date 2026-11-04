@@ -60,12 +60,15 @@ export const adminLockSchema = z.strictObject({
 /** Only `identity` can make a hit unique: t2s and trigram merge distinct records. */
 export const ADMIN_MATCH_KINDS = ["identity", "raw", "t2s", "trigram"] as const;
 
+/** How far a search pages. Past it the answer says so, and the query needs narrowing. */
+export const ADMIN_FIND_SKIP_MAX = 200;
+
 export const adminFindInputSchema = z.strictObject({
   query: z.string().min(1).max(2_048),
   type: adminRecordTypeSchema.optional(),
   limit: z.number().int().min(1).max(25).optional(),
-  /** How many candidates a cut answer already gave. */
-  skip: z.number().int().min(0).max(25).optional(),
+  /** How many candidates a cut or paged answer already gave. */
+  skip: z.number().int().min(0).max(ADMIN_FIND_SKIP_MAX).optional(),
 });
 
 /**

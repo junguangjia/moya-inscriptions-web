@@ -36,6 +36,14 @@ export const readListedInput = adminReadInputSchema.extend({
   op: z.enum(opsOnTool("admin_read") as [AdminOpName, ...AdminOpName[]]),
 });
 
+const LIST_SOURCE_ARGS = [
+  "cursor",
+  "pageSize",
+  "view",
+  "fields",
+  "groupBy",
+] as const;
+
 const unknownOp = (name: string): AdminMcpEnvelope =>
   failedEnvelope("UNKNOWN_OP", {
     data: adminUnknownOpDataSchema.parse({ nearest: nearestOps(name) }),
@@ -60,6 +68,16 @@ export const readEnvelope = async (
   if (entry.tool !== READ_TOOL_NAME) return unknownOp(read.op);
   const refusal = await refusalOf(entry, req);
   if (refusal !== undefined) return refusal;
+  // Only a list source reads these, and quietly dropping one reads as honouring it.
+  if (entry.paging !== "keyset") {
+    const unread = LIST_SOURCE_ARGS.filter(
+      (name) => read[name] !== undefined && read[name] !== "compact",
+    );
+    if (unread.length > 0)
+      return inputInvalidEnvelope(
+        unread.map((name) => ({ path: [name], code: "not_for_this_op" })),
+      );
+  }
   const parsed = entry.input?.safeParse(read.input ?? {}) ?? {
     success: true as const,
     data: read.input ?? {},
@@ -71,6 +89,14 @@ export const readEnvelope = async (
   return entry.run!(parsed.data, { req, key, read });
 };
 
+/** The largest page size that starts a page right after the rows kept. */
+const numberedPageAfter = (page: number, pageSize: number, kept: number) => {
+  const offset = (page - 1) * pageSize + kept;
+  let size = kept;
+  while (offset % size !== 0) size -= 1;
+  return { page: offset / size + 1, pageSize: size };
+};
+
 /** A cut page goes on from the last whole row it kept; a cut count from its offset. */
 export const readContinuation = (
   rawInput: unknown,
@@ -78,7 +104,25 @@ export const readContinuation = (
 ): AdminMcpNext | undefined => {
   const read = rawInput as AdminReadInput;
   const last = kept.at(-1) as { id?: unknown; count?: unknown } | undefined;
-  if (last === undefined) return undefined;
+  if (last === undefined || !isAdminOpName(read.op)) return undefined;
+  const entry: AdminOpEntry = adminOpMeta[read.op];
+  if (entry.paging === "numbered") {
+    const { page, pageSize } = entry.input!.parse(read.input ?? {}) as {
+      page: number;
+      pageSize: number;
+    };
+    return {
+      tool: READ_TOOL_NAME,
+      args: {
+        ...read,
+        input: {
+          ...read.input,
+          ...numberedPageAfter(page, pageSize, kept.length),
+        },
+      },
+    };
+  }
+  if (entry.paging !== "keyset") return undefined;
   if (read.view === "count")
     return {
       tool: READ_TOOL_NAME,

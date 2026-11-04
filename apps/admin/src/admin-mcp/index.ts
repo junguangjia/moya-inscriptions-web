@@ -28,6 +28,8 @@ export {
 } from "./tools";
 export type { AdminMcpTool } from "./tools";
 export { whoamiPluginTool } from "./tools/whoami";
+export { findContinuation } from "./tools/find";
+export { readContinuation } from "./tools/read";
 export {
   ACTIONS_TOOL_NAME,
   actionDetail,

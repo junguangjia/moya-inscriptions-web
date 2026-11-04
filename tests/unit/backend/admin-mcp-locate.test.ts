@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   ADMIN_CATALOG_MISSING_FIELDS,
   ADMIN_CMS_RECORD_TYPES,
+  ADMIN_FIND_SKIP_MAX,
   ADMIN_MCP_TOKEN_BUDGET,
   adminFindInputSchema,
   adminGetInputSchema,
@@ -14,6 +15,7 @@ import {
 import {
   EDITORIAL_FIELD_NAMES,
   EDITORIAL_STATEFUL_FIELDS,
+  ownerDraftPageRequestSchema,
 } from "@moya/contracts/internal/editorial";
 import { normalizeSearchText } from "@moya/search";
 import { describe, expect, it, vi } from "vitest";
@@ -24,10 +26,12 @@ import {
   candidateActions,
   classifyQuery,
   CMS_FAMILIES,
+  findContinuation,
   findInText,
   LINK_PARAMETER_EXCLUSIONS,
   LINK_PARAMETER_RULES,
   normalizeSearchQuery,
+  readContinuation,
   textHash,
   textWindow,
   toolListingFor,
@@ -559,6 +563,92 @@ describe("op skeletons", () => {
       expect(built).toEqual([{ tool: "admin_get", args: { type, id: 7 } }]);
     },
   );
+});
+
+describe("a read cut at the size cap", () => {
+  const rows = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({ id: index + 1 }));
+
+  it("goes on by the last row, or a count's offset, on a list source", () => {
+    expect(readContinuation({ op: "list.catalogs" }, rows(3))).toEqual({
+      tool: "admin_read",
+      args: { op: "list.catalogs", cursor: "3" },
+    });
+    expect(
+      readContinuation({ op: "list.catalogs", view: "count", cursor: "200" }, [
+        { count: 1 },
+        { count: 1 },
+        { count: 1 },
+      ]),
+    ).toEqual({
+      tool: "admin_read",
+      args: { op: "list.catalogs", view: "count", cursor: "203" },
+    });
+  });
+
+  it.each([
+    [{}, 7, { page: 2, pageSize: 7 }],
+    [{ page: 1, pageSize: 50 }, 31, { page: 2, pageSize: 31 }],
+    [{ page: 2, pageSize: 7 }, 5, { page: 4, pageSize: 4 }],
+    [{ page: 3, pageSize: 50 }, 1, { page: 102, pageSize: 1 }],
+    [{ page: 2, pageSize: 50 }, 49, { page: 4, pageSize: 33 }],
+  ])(
+    "starts a numbered page right after %j and %i rows",
+    (input, kept, want) => {
+      const next = readContinuation(
+        { op: "list.review_page", input },
+        rows(kept),
+      );
+      expect(next?.args.input).toEqual(want);
+      const page = (input as { page?: number }).page ?? 1;
+      const pageSize = (input as { pageSize?: number }).pageSize ?? 20;
+      expect((want.page - 1) * want.pageSize).toBe(
+        (page - 1) * pageSize + kept,
+      );
+      expect(want.pageSize).toBeLessThanOrEqual(kept);
+      expect(
+        ownerDraftPageRequestSchema.safeParse(next?.args.input).success,
+      ).toBe(true);
+    },
+  );
+
+  it("has no way on where the op takes no page", () => {
+    expect(
+      readContinuation(
+        { op: "editorial.owner-history", input: { id: 7, page: 1 } },
+        rows(3),
+      ),
+    ).toBeUndefined();
+    expect(
+      readContinuation(
+        { op: "editorial.read-draft", input: { id: 7 } },
+        rows(3),
+      ),
+    ).toBeUndefined();
+    expect(readContinuation({ op: "list.catalogs" }, [])).toBeUndefined();
+    expect(readContinuation({ op: "no.such_op" }, rows(3))).toBeUndefined();
+  });
+});
+
+describe("a search cut at the size cap", () => {
+  it("goes on after what it kept, only ever to a call the tool accepts", () => {
+    const kept = [{}, {}];
+    const next = findContinuation({ query: "词", skip: 4 }, kept);
+    expect(next).toEqual({
+      tool: "admin_find",
+      args: { query: "词", skip: 6 },
+    });
+    expect(adminFindInputSchema.safeParse(next!.args).success).toBe(true);
+    const atTheEdge = findContinuation(
+      { query: "词", skip: ADMIN_FIND_SKIP_MAX - 2 },
+      kept,
+    );
+    expect(adminFindInputSchema.safeParse(atTheEdge!.args).success).toBe(true);
+    expect(
+      findContinuation({ query: "词", skip: ADMIN_FIND_SKIP_MAX - 1 }, kept),
+    ).toBeUndefined();
+    expect(findContinuation({ query: "词" }, [])).toBeUndefined();
+  });
 });
 
 describe("what tools/list advertises", () => {

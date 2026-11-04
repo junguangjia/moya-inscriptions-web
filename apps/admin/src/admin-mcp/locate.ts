@@ -1,4 +1,7 @@
-import { ADMIN_CMS_RECORD_TYPES } from "@moya/contracts/internal/admin-mcp";
+import {
+  ADMIN_CMS_RECORD_TYPES,
+  ADMIN_FIND_SKIP_MAX,
+} from "@moya/contracts/internal/admin-mcp";
 import type {
   AdminCmsRecordType,
   AdminFindData,
@@ -15,7 +18,7 @@ import { isMissingRecord } from "../editorial/transaction";
 import { withIdentityAccess } from "../editorial/state";
 import { actionsFor, candidateActions } from "./actions-for";
 import type { ActionScope } from "./actions-for";
-import { okEnvelope } from "./envelope";
+import { CUT_WITH_NO_WAY_ON, okEnvelope } from "./envelope";
 import { classifyQuery } from "./locate-reference";
 import type { ClassifiedQuery, LocateReference } from "./locate-reference";
 import {
@@ -185,6 +188,7 @@ const hitsOf = async (
   req: PayloadRequest,
   reference: LocateReference,
   families: readonly CmsFamily[],
+  reach: number,
 ): Promise<readonly Hit[]> => {
   const catalog = wants(families, "catalog");
   const media = wants(families, "media");
@@ -240,7 +244,7 @@ const hitsOf = async (
               req,
               CMS_FAMILIES.media,
               { sha256: { equals: reference.value } },
-              25,
+              reach,
             ),
           )
         : [];
@@ -269,6 +273,7 @@ const exactStage = async (
   req: PayloadRequest,
   { references }: ClassifiedQuery,
   input: AdminFindInput,
+  reach: number,
   sources: Sources,
 ) => {
   const families = familiesFor(input.type);
@@ -289,7 +294,7 @@ const exactStage = async (
       continue;
     }
     considered += 1;
-    const found = await hitsOf(req, reference, families);
+    const found = await hitsOf(req, reference, families, reach);
     for (const family of families)
       if (
         reference.kind === "digits" ||
@@ -675,7 +680,10 @@ export const findEnvelope = async (
   const sources: Sources = {};
   const limit = input.limit ?? DEFAULT_LIMIT;
   const skip = input.skip ?? 0;
-  const exact = await exactStage(req, classified, input, sources);
+  const reached = skip + limit;
+  // One past the page, so a source that holds more is seen to hold more.
+  const reach = reached + 1;
+  const exact = await exactStage(req, classified, input, reach, sources);
   const textToSearch =
     exact.hits.length > 0 || classified.link
       ? undefined
@@ -689,13 +697,13 @@ export const findEnvelope = async (
   const fuzzy =
     textToSearch === undefined
       ? []
-      : await fuzzyStage(req, textToSearch, input, limit + skip, sources);
+      : await fuzzyStage(req, textToSearch, input, reach, sources);
   const hits = exact.hits.length > 0 ? exact.hits : fuzzy;
   // Unique means one identity hit from one reference: a link naming two things, one
   // of them unanswered, has not said which it means.
   const unique =
     hits.length === 1 && hits[0]!.kind === "identity" && exact.considered === 1;
-  const page = hits.slice(skip, skip + limit);
+  const page = hits.slice(skip, reached);
   const items = await itemsOf(req, page, unique, scope);
   const data: AdminFindData = {
     resolution: {
@@ -710,20 +718,19 @@ export const findEnvelope = async (
   };
   const partial = Object.values(sources).some((status) => status !== "ok");
   const envelope = okEnvelope(data, UNTRUSTED);
+  const more = hits.length > reached;
+  const stopped = more && reached > ADMIN_FIND_SKIP_MAX;
   return {
     ...envelope,
-    ...(hits.length > skip + limit
-      ? {
-          next: {
-            tool: "admin_find",
-            args: { ...input, skip: skip + limit },
-          },
-        }
+    ...(more && !stopped
+      ? { next: { tool: "admin_find", args: { ...input, skip: reached } } }
       : {}),
+    ...(stopped ? { hint: CUT_WITH_NO_WAY_ON } : {}),
     meta: {
       ...envelope.meta,
       sources,
       ...(partial ? { partial: true as const } : {}),
+      ...(stopped ? { truncated: true as const } : {}),
       ...(classified.excluded.length > 0
         ? { excluded: [...classified.excluded] }
         : {}),

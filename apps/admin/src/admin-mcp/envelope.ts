@@ -281,7 +281,7 @@ const pointerResolves = (
       );
 };
 
-const CUT_WITH_NO_WAY_ON =
+export const CUT_WITH_NO_WAY_ON =
   "This result was cut at the size limit and cannot continue from here. Narrow the request, or read it through the companion.";
 
 /**

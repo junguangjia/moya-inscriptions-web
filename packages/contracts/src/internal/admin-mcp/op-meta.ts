@@ -69,6 +69,11 @@ export interface AdminOpMeta<Input, Output, Context> {
   /** JSON pointers in `Output` holding user-authored strings. */
   readonly untrusted: readonly string[];
   readonly selectorSources?: readonly string[];
+  /**
+   * How admin_read goes on from this op: by its last row, or by the `page` and
+   * `pageSize` of its own input. Absent: it takes neither, and a cut cannot continue.
+   */
+  readonly paging?: "keyset" | "numbered";
   readonly input?: z.ZodType;
   readonly output?: AdminOpOutput;
   /** A valid `input`, shown by admin_actions and parsed by the registry test. */

@@ -14,6 +14,7 @@ import {
 } from "@moya/backend-runtime";
 import { MappedStorageUrlResolver } from "@moya/image";
 import {
+  ADMIN_FIND_SKIP_MAX,
   ADMIN_MCP_TEXT_CAP_BYTES,
   ADMIN_MCP_TOKEN_BUDGET,
   ADMIN_VIEW_MEDIA_MAX_BYTES,
@@ -489,6 +490,58 @@ describe("the other CMS sources", () => {
     expect(getData(draft)).toHaveProperty("fields");
   });
 
+  it("goes on from a cut page the route numbers itself, losing no row and repeating none", async () => {
+    for (let index = 0; index < 50; index += 1)
+      await saveCatalog(`relay-wide-${index}`);
+    const idsOf = (envelope: AdminMcpEnvelope) =>
+      (envelope.data as { docs: { id: number }[] }).docs.map(({ id }) => id);
+    const order: number[] = [];
+    for (let page = 1; page <= 25; page += 1) {
+      const whole = await call("admin_read", {
+        op: "list.review_page",
+        input: { page, pageSize: 5 },
+      });
+      expect(whole.meta.truncated).toBeUndefined();
+      order.push(...idsOf(whole));
+    }
+    for (const op of ["list.review_page", "editorial.owner-drafts"]) {
+      for (const page of [1, 2]) {
+        const asked = { op, input: { page, pageSize: 50 } };
+        const cut = await call("admin_read", asked);
+        expect(cut.ok).toBe(true);
+        expect(cut.meta.truncated).toBe(true);
+        const kept = idsOf(cut);
+        expect(kept.length + cut.remaining!).toBe(50);
+        expect(cut.next?.tool).toBe("admin_read");
+        const after = await call(cut.next!.tool, cut.next!.args);
+        expect(after.ok).toBe(true);
+        const start = (page - 1) * 50;
+        expect([...kept, ...idsOf(after)]).toEqual(
+          order.slice(start, start + kept.length + idsOf(after).length),
+        );
+      }
+    }
+  });
+
+  it("refuses an argument the op does not read, rather than dropping it", async () => {
+    for (const extra of [
+      { cursor: "9" },
+      { pageSize: 5 },
+      { view: "count" },
+      { fields: ["kind"] },
+      { groupBy: "kind" },
+    ]) {
+      const envelope = await call("admin_read", {
+        op: "list.review_page",
+        ...extra,
+      });
+      expect(envelope).toMatchObject({ ok: false, code: "INPUT_INVALID" });
+      expect(envelope.issues).toEqual([
+        { path: Object.keys(extra), code: "not_for_this_op" },
+      ]);
+    }
+  });
+
   it("answers NOT_AVAILABLE on a community read, never an empty page", async () => {
     for (const op of ["list.works", "list.reports", "community.read-users"]) {
       const answer = await call("admin_read", { op });
@@ -706,6 +759,48 @@ describe("admin_find: id, link, sourceId", () => {
     });
   });
 
+  it("pages every record sharing one sha256, past any one page of them", async () => {
+    const bytes = await sharp({
+      create: {
+        width: 41,
+        height: 21,
+        channels: 3,
+        background: `#${run.slice(6, 12)}`,
+      },
+    })
+      .jpeg()
+      .toBuffer();
+    const saved = new Set<number>();
+    let sha256: unknown;
+    for (let index = 0; index < 27; index += 1) {
+      const media = await payload.create({
+        collection: "media",
+        overrideAccess: false,
+        req: await ownerReq(),
+        data: {
+          mediaId: `media-shared-${run}-${index}`,
+          catalogId,
+          alt: `共用图片${run}`,
+          origin: "upload",
+        } as never,
+        file: {
+          name: "synthetic.jpg",
+          data: bytes,
+          mimetype: "image/jpeg",
+          size: bytes.length,
+        },
+      });
+      saved.add(media.id);
+      sha256 = media.sha256;
+    }
+    const pages = await followAll("admin_find", { query: String(sha256) });
+    const seen = pages.flatMap((page) =>
+      findData(page).items.map(({ id }) => id),
+    );
+    expect(seen).toHaveLength(saved.size);
+    expect(new Set(seen)).toEqual(saved);
+  });
+
   it("resolves a row id when told the family, and never guesses across families", async () => {
     expect(
       (await exactOf(String(catalogRow), "catalog")).data.resolution.ref,
@@ -744,6 +839,7 @@ describe("admin_find: id, link, sourceId", () => {
       [`media-item-${hex32("a")}`, "media_items"],
       [`invitation-${hex32("a")}`, "invitations"],
       [`feedback-${hex32("a")}`, "feedback"],
+      [`article-${hex32("a")}`, "article_documents"],
       ["@lishu_test", "users"],
       [`/?workId=work-${hex32("a")}`, "works"],
       [`https://x.example/?authorId=user-${hex32("a")}#profile`, "users"],
@@ -925,6 +1021,50 @@ describe("admin_find: free text", () => {
         { tool: "admin_get", args: { type: item.type, id: item.id } },
       ]);
     expect(envelope.untrusted).toContain("/data/items/*/title");
+  });
+
+  it("pages every candidate through next, and never stops short with no word of it", async () => {
+    const shared = `翻页词${run}`;
+    const saved = new Set<number>();
+    for (let index = 0; index < 34; index += 1)
+      saved.add(
+        (
+          await saveCatalog(`text-page-${index}`, {
+            title: `${shared}${index}`,
+          })
+        ).id,
+      );
+    const pages = await followAll("admin_find", {
+      query: shared,
+      type: "catalog",
+    });
+    const seen = pages.flatMap((page) =>
+      findData(page).items.map(({ id }) => id),
+    );
+    expect(seen).toHaveLength(saved.size);
+    expect(new Set(seen)).toEqual(saved);
+  });
+
+  it("says so where paging stops, and every next it offers is a call it accepts", async () => {
+    const shared = `尽头词${run}`;
+    const beyond = ADMIN_FIND_SKIP_MAX + 2;
+    for (let index = 0; index < beyond; index += 1)
+      await saveCatalog(`text-end-${index}`, { title: `${shared}${index}` });
+    const asked = { query: shared, type: "catalog", limit: 1 };
+    const last = await call("admin_find", {
+      ...asked,
+      skip: ADMIN_FIND_SKIP_MAX - 1,
+    });
+    expect(last.next?.args).toEqual({ ...asked, skip: ADMIN_FIND_SKIP_MAX });
+    const stopped = await call("admin_find", last.next!.args);
+    expect(stopped.ok).toBe(true);
+    expect(findData(stopped).items).toHaveLength(1);
+    expect(stopped.next).toBeUndefined();
+    expect(stopped.meta.truncated).toBe(true);
+    expect(stopped.hint).toMatch(/cannot continue/u);
+    expect(
+      await call("admin_find", { ...asked, skip: ADMIN_FIND_SKIP_MAX + 1 }),
+    ).toMatchObject({ ok: false, code: "INPUT_INVALID" });
   });
 
   it("names each branch, and the community branches as not_available", async () => {
@@ -1692,6 +1832,37 @@ describe("admin_get view=preview", () => {
     },
   );
 
+  it("opens the Web's preview route for the Owner's session, and for no MCP key", async () => {
+    const saved = await saveCatalog("preview-route");
+    const route = `${server.origin}/api/editorial/preview/${saved.id}`;
+    for (const name of ["read", "full"]) {
+      const secret = secrets[name]!;
+      for (const [form, headers] of [
+        ["bearer", { authorization: `Bearer ${secret}` }],
+        ["jwt", { authorization: `JWT ${secret}` }],
+        ["cookie", { cookie: `payload-token=${secret}` }],
+      ] as const) {
+        const response = await fetch(route, { headers });
+        expect({ name, form, status: response.status }).toEqual({
+          name,
+          form,
+          status: 403,
+        });
+        expect(await response.json()).toEqual({
+          error: "PREVIEW_AUTHORIZATION_REQUIRED",
+        });
+      }
+    }
+    const { token } = await payload.login({
+      collection: "users",
+      data: { email: email("owner"), password },
+    });
+    const opened = await fetch(route, {
+      headers: { cookie: `payload-token=${token}` },
+    });
+    expect(opened.status).toBe(200);
+  });
+
   it("says a draft with no title cannot be previewed, and why", async () => {
     const saved = await saveCatalog("preview-untitled", { title: undefined });
     const { data } = await previewOf(saved.id);
@@ -1737,6 +1908,41 @@ describe("admin_get view=preview", () => {
       )?.value,
     ).toBe("文章预览");
   });
+});
+
+describe("the same failure three times", () => {
+  it.each([
+    ["admin_find", { query: "x" }],
+    ["admin_read", { op: "list.catalogs" }],
+  ])(
+    "sets meta.repeat on %s, and its answer holds nothing the caller typed",
+    async (tool, good) => {
+      const canary = `canary${run}`;
+      expect((await call(tool, good)).ok).toBe(true);
+      const bad = { ...good, [canary]: canary };
+      const answers = [
+        await call(tool, bad),
+        await call(tool, bad),
+        await call(tool, bad),
+      ];
+      expect(answers.map(({ code }) => code)).toEqual([
+        "INPUT_INVALID",
+        "INPUT_INVALID",
+        "INPUT_INVALID",
+      ]);
+      expect(answers.map(({ meta }) => meta.repeat)).toEqual([
+        undefined,
+        undefined,
+        3,
+      ]);
+      expect(JSON.stringify(answers)).not.toContain(canary);
+      expect(answers[2]!.hint).toMatch(/Repeating the call unchanged/u);
+      // A success clears it, so the next failure starts over.
+      expect((await call(tool, good)).ok).toBe(true);
+      expect((await call(tool, bad)).meta.repeat).toBeUndefined();
+      expect((await call(tool, good)).ok).toBe(true);
+    },
+  );
 });
 
 describe("text results stay under the cap", () => {

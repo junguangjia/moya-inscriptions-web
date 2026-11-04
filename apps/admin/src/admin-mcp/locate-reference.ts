@@ -247,5 +247,11 @@ export const classifyQuery = (query: string): ClassifiedQuery => {
     return notExcluded([{ kind: "handle", handle: text.slice(1) }]);
   if (WHITESPACE.test(text) || text.length > 128)
     return notExcluded([{ kind: "text", text }]);
-  return notExcluded([referenceOfId(text)]);
+  // An Article id is on both sides, however it arrives.
+  return notExcluded([
+    referenceOfId(text),
+    ...(ARTICLE_SHAPE.test(text)
+      ? [{ kind: "community" as const, type: "article" as const, value: text }]
+      : []),
+  ]);
 };

@@ -117,12 +117,15 @@ const readOriginal = async (
       return bytes.byteLength > CATALOG_ORIGINAL_MAX_BYTES ? undefined : bytes;
     }
   }
-  const directory = path.resolve(upload.staticDir ?? "media");
+  const directory = path.resolve(
+    /* turbopackIgnore: true */ upload.staticDir ?? "media",
+  );
   const file = path.resolve(directory, filename);
   if (!file.startsWith(directory + path.sep)) return undefined;
   try {
-    if ((await stat(file)).size > CATALOG_ORIGINAL_MAX_BYTES) return undefined;
-    return await readFile(file);
+    const { size } = await stat(/* turbopackIgnore: true */ file);
+    if (size > CATALOG_ORIGINAL_MAX_BYTES) return undefined;
+    return await readFile(/* turbopackIgnore: true */ file);
   } catch {
     return undefined;
   }

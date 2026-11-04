@@ -59,7 +59,7 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
           "type": "string",
         },
         "skip": {
-          "maximum": 25,
+          "maximum": 200,
           "minimum": 0,
           "type": "integer",
         },
@@ -609,7 +609,7 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
           "type": "string",
         },
         "skip": {
-          "maximum": 25,
+          "maximum": 200,
           "minimum": 0,
           "type": "integer",
         },
@@ -1159,7 +1159,7 @@ exports[`tool table > matches the checked-in tools/list for the read profile 1`]
           "type": "string",
         },
         "skip": {
-          "maximum": 25,
+          "maximum": 200,
           "minimum": 0,
           "type": "integer",
         },

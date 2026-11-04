@@ -28,6 +28,7 @@ const rows: Readonly<Record<EditorialOperationName, AdminOpEntry>> = {
   "owner-drafts": readOp("The review page of Catalog drafts.", {
     example: { page: 1, pageSize: 20 },
     run: relayed("owner-drafts"),
+    paging: "numbered",
   }),
   "owner-history": readOp("A Catalog's version history.", {
     example: { id: 7, page: 1 },

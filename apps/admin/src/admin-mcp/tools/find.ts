@@ -1,3 +1,4 @@
+import { ADMIN_FIND_SKIP_MAX } from "@moya/contracts/internal/admin-mcp";
 import type {
   AdminFindInput,
   AdminMcpNext,
@@ -13,10 +14,8 @@ export const findContinuation = (
   kept: readonly unknown[],
 ): AdminMcpNext | undefined => {
   const input = rawInput as AdminFindInput;
-  return kept.length === 0
+  const skip = (input.skip ?? 0) + kept.length;
+  return kept.length === 0 || skip > ADMIN_FIND_SKIP_MAX
     ? undefined
-    : {
-        tool: FIND_TOOL_NAME,
-        args: { ...input, skip: (input.skip ?? 0) + kept.length },
-      };
+    : { tool: FIND_TOOL_NAME, args: { ...input, skip } };
 };

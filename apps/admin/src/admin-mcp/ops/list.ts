@@ -24,6 +24,7 @@ const ofSource = (
 ): Partial<AdminOpEntry> => ({
   input: source.input,
   run: runListSource(source),
+  paging: "keyset",
   example,
 });
 
