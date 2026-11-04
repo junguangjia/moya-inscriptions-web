@@ -1252,10 +1252,10 @@ describe("#358 review regressions: current authority and attachment lifetime", (
     );
     // A purge job can already have been claimed while refs still protected the item.
     await db.setup.query(
-      "INSERT INTO community.publishing_jobs(id,kind,subject_id,state,run_after) VALUES($1,'purge_item',$2,'queued',CURRENT_TIMESTAMP)",
+      "INSERT INTO community.publishing_jobs(id,kind,subject_id,state,run_after) VALUES($1,'purge_item',$2,'queued',CURRENT_TIMESTAMP - interval '1 minute')",
       [opaque("publishing-job"), image],
     );
-    await publishing.claimJobs(
+    const claims = await publishing.claimJobs(
       {
         owner: "comment358-deletion",
         limit: 100,
@@ -1264,15 +1264,7 @@ describe("#358 review regressions: current authority and attachment lifetime", (
       },
       new Date(),
     );
-    // Files share this queue in parallel, so another file's claim can win it.
-    expect(
-      (
-        await db.setup.query(
-          "SELECT state FROM community.publishing_jobs WHERE subject_id=$1 AND kind='purge_item'",
-          [image],
-        )
-      ).rows[0]!.state,
-    ).not.toBe("queued");
+    expect(claims.some((j) => j.subjectId === image)).toBe(true);
     await discussion.deleteDiscussionBody(alice, first.id, randomUUID());
     expect(
       (
