@@ -289,7 +289,7 @@ export const UMAMI_READ_ROUTES = {
   segments: reading({
     path: "/segments",
     ranged: false,
-    query: z.strictObject({ type: z.enum(["segment", "cohort"]) }),
+    query: z.strictObject({ type: z.enum(["segment", "cohort"]), ...paging }),
     reply: pageOf(definition),
   }),
   annotations: reading({

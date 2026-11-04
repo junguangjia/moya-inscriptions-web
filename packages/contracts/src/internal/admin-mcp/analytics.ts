@@ -350,11 +350,16 @@ const utcOf = (civil: Civil): number =>
 const offsetAt = (instant: number, tz: string): number =>
   utcOf(civilIn(instant, tz)) - Math.floor(instant / 1000) * 1000;
 
-/** Two passes, because the offset at the wall-clock guess can differ across a change. */
+/**
+ * Two passes, because the offset at the wall-clock guess can differ across a change. A
+ * wall time a change skips has no instant: the later side of the gap stands in, so a
+ * midnight that does not exist starts its own day and not the hour before it.
+ */
 const instantOf = (civil: Civil, tz: string): number => {
   const wall = utcOf(civil);
   const first = wall - offsetAt(wall, tz);
-  return wall - offsetAt(first, tz);
+  const second = wall - offsetAt(first, tz);
+  return utcOf(civilIn(second, tz)) === wall ? second : Math.max(first, second);
 };
 
 const midnight = (civil: Civil, tz: string, addDays = 0): number =>
@@ -465,14 +470,25 @@ const presetBounds = (
   }
 };
 
-/** Resolves the time zone, or refuses one that Intl cannot read. */
+/**
+ * Intl also reads short names, its own way: CST is Chicago, where someone writing it
+ * here means China. And Etc/GMT+8 is eight hours behind, not ahead. A Region/City
+ * name, or UTC, says which clock it means.
+ */
+const namesItsClock = (tz: string) =>
+  tz === "UTC" || (tz.includes("/") && !/^Etc\/GMT[+-]/iu.test(tz));
+
+/** Resolves the time zone, or refuses one Intl cannot read or that is ambiguous. */
 export const analyticsTimeZone = (query: AnalyticsInsightQuery): string => {
   const tz = query.tz ?? ANALYTICS_DEFAULT_TZ;
+  let resolved: string;
   try {
-    return formatterFor(tz).resolvedOptions().timeZone;
+    resolved = formatterFor(tz).resolvedOptions().timeZone;
   } catch {
     throw refuse("tz", "unknown_time_zone");
   }
+  if (!namesItsClock(tz)) throw refuse("tz", "time_zone_not_region_city");
+  return resolved;
 };
 
 /**
@@ -811,6 +827,8 @@ export const analyticsFunnelSchema = z.strictObject({
     unit: z.enum(["visitor", "session"]),
     order: z.literal("same_session"),
     sameTarget: z.boolean(),
+    /** Only with a surface: a client records every open on detail, so later steps cannot have it. */
+    surfaceAppliesTo: z.literal("first_step").optional(),
   }),
   steps: z.array(
     z.strictObject({
@@ -940,7 +958,9 @@ export const analyticsProductSchema = z.strictObject({
       openRate: z.number().nullable(),
     }),
   ),
+  /** One sample is one session's whole time on one target, not one foreground delta. */
   dwell: z.strictObject({
+    basis: z.literal("session_and_target"),
     samples: count,
     p50Ms: z.number().nullable(),
     p90Ms: z.number().nullable(),
@@ -951,7 +971,11 @@ export const analyticsProductSchema = z.strictObject({
     clickRate: z.number().nullable(),
     topQueries: z.array(z.strictObject({ query: z.string(), count })),
   }),
-  /** Rows created in the range that still exist. An undone like is not here. */
+  /**
+   * Rows created in the range that still exist. An undone like is not here. Always
+   * site-wide: the business tables have no surface, and a surface filter adds
+   * FINALS_NOT_BY_SURFACE to `notes`.
+   */
   finals: z.strictObject({
     likes: relationSchema,
     favorites: relationSchema,
@@ -1009,10 +1033,20 @@ export const analyticsReconcileSchema = z.strictObject({
       visitorsAny: count,
       forwarded: count,
       notForwarded: count,
+      /** Page views still queued for Umami, which can yet arrive. */
+      pageViewsQueued: count,
+      /** Page views that will not: delivery gave up, or they were never queued. */
+      pageViewsNeverForwarded: count,
     }),
   ),
   outbox: z.strictObject({ pending: count, failed: count }),
 });
+
+/** Fixed English for a name that means something else on Umami's side. */
+export const ANALYTICS_METRIC_DEFINITIONS = {
+  accountVisitors:
+    "Accounts seen on any event. Umami's field of the same name counts page views only, and no report here reads it.",
+} as const;
 
 export const analyticsStatusInsightSchema = z.strictObject({
   report: z.literal("status"),
@@ -1033,6 +1067,7 @@ export const analyticsStatusInsightSchema = z.strictObject({
   lastEventAt: instant.nullable(),
   lastForwardedAt: instant.nullable(),
   metrics: z.array(z.enum(ANALYTICS_CANONICAL_METRICS)),
+  definitions: z.strictObject({ accountVisitors: z.string() }),
   notCollected: z.record(
     z.enum(NOT_COLLECTED_NAMES),
     z.strictObject({ collected: z.literal(false), reason: z.string() }),
@@ -1225,11 +1260,13 @@ export const ANALYTICS_RECONCILE_EXPLANATIONS = {
   LATE_EVENTS_POSSIBLE:
     "The day ended less than 24.5 hours ago, so late client events can still arrive.",
   NOT_YET_FORWARDED:
-    "Canonical holds events on this day that have not reached Umami yet.",
+    "Canonical holds page views on this day still queued for Umami, so they can yet arrive.",
+  NEVER_FORWARDED:
+    "Canonical holds page views on this day that will not reach Umami: delivery gave up, or they were never queued.",
   UMAMI_HIGHER:
     "Umami counts more: delivery is at least once, so a lost acknowledgement can repeat an event, and page views from before the logical path count there too.",
   CANONICAL_HIGHER:
-    "Canonical counts more with nothing left to forward. No known cause explains this; canonical stands.",
+    "Canonical counts more than its page views not forwarded can explain. No known cause explains the rest; canonical stands.",
   VISITOR_KEYS_DIFFER:
     "Visitors differ: canonical counts visitor ids, Umami counts browser keys and falls back to its own session id.",
 } as const;

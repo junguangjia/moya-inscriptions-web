@@ -78,6 +78,8 @@ const works = {
 };
 const catalogId = `catalog-${id32()}`;
 const articleId = `article-${id32()}`;
+const withdrawnArticleId = `article-${id32()}`;
+const withdrawnTitle = `合成已撤回文章 ${id32()}`;
 
 interface Seed {
   readonly visitor: string;
@@ -165,6 +167,7 @@ views(5, "article", articleId, "2026-03-07T11:00:00");
 views(4, "work", works.deleted.id, "2026-03-07T12:00:00");
 views(3, "work", works.third.id, "2026-03-07T13:00:00");
 views(2, "work", works.trashed.id, "2026-03-08T09:00:00");
+views(1, "article", withdrawnArticleId, "2026-03-08T09:30:00");
 views(6, "work", works.selfOnly.id, "2026-03-05T14:00:00");
 for (let index = 0; index < 8; index += 1)
   event({
@@ -294,11 +297,13 @@ event({
   at: stamp("30"),
 });
 
-// Product: positions, dwell and search on one day of their own.
+// Product: positions, dwell and search on one day of their own, as the client sends
+// them: an impression names its listing, and the open after it is recorded on detail.
 const product = "2026-01-27T";
-for (const position of [0, 0, 0, 3, 12]) {
+const opener = visitor();
+[0, 0, 0, 3, 12].forEach((position, index) => {
   event({
-    visitor: visitor(),
+    visitor: index === 0 ? opener : visitor(),
     name: "content_impression",
     surface: "browse",
     type: "work",
@@ -306,18 +311,18 @@ for (const position of [0, 0, 0, 3, 12]) {
     at: cst(`${product}09:00:00`),
     data: { position },
   });
-}
+});
 event({
-  visitor: visitor(),
+  visitor: opener,
   name: "content_open",
-  surface: "browse",
   type: "work",
   id: works.first.id,
   at: cst(`${product}09:01:00`),
   data: { position: 0 },
 });
+const selfOnlyOpener = visitor();
 event({
-  visitor: visitor(),
+  visitor: selfOnlyOpener,
   name: "content_impression",
   surface: "browse",
   type: "work",
@@ -326,13 +331,44 @@ event({
   data: { position: 1 },
 });
 event({
-  visitor: visitor(),
+  visitor: selfOnlyOpener,
   name: "content_open",
-  surface: "browse",
   type: "work",
   id: works.selfOnly.id,
   at: cst(`${product}09:03:00`),
   data: { position: 1 },
+});
+// The same work at the same position on two listings: the later one is where it was tapped.
+const twoListings = visitor();
+for (const [surface, second] of [
+  ["home", "10"],
+  ["browse", "20"],
+] as const)
+  event({
+    visitor: twoListings,
+    name: "content_impression",
+    surface,
+    type: "work",
+    id: works.first.id,
+    at: cst(`${product}09:03:${second}`),
+    data: { position: 7 },
+  });
+event({
+  visitor: twoListings,
+  name: "content_open",
+  type: "work",
+  id: works.first.id,
+  at: cst(`${product}09:03:30`),
+  data: { position: 7 },
+});
+// Tapped inside the impression timer: an open with no impression to go to.
+event({
+  visitor: visitor(),
+  name: "content_open",
+  type: "work",
+  id: works.second.id,
+  at: cst(`${product}09:03:40`),
+  data: { position: 5 },
 });
 for (const dwellMs of [100, 200, 300, 400, 500])
   event({
@@ -369,6 +405,35 @@ for (const name of ["like", "like", "favorite", "follow"])
     id: works.first.id,
     at: cst(`${product}09:07:00`),
   });
+
+// Dwell: one read split by two tab switches, and the same session on another work.
+const dwellDay = "2026-01-28T";
+const splitReader = visitor();
+for (const dwellMs of [1_000, 2_000, 3_000])
+  event({
+    visitor: splitReader,
+    name: "content_dwell",
+    type: "work",
+    id: works.first.id,
+    at: cst(`${dwellDay}09:00:00`),
+    data: { dwellMs },
+  });
+event({
+  visitor: splitReader,
+  name: "content_dwell",
+  type: "work",
+  id: works.second.id,
+  at: cst(`${dwellDay}09:01:00`),
+  data: { dwellMs: 500 },
+});
+event({
+  visitor: visitor(),
+  name: "content_dwell",
+  type: "work",
+  id: works.first.id,
+  at: cst(`${dwellDay}09:02:00`),
+  data: { dwellMs: 1_000 },
+});
 
 // Realtime: heard within the last five minutes of noon.
 const onlineVisitor = visitor();
@@ -545,6 +610,17 @@ beforeAll(async () => {
       `INSERT INTO community.article_revisions(article_id,version,owner_id,title,document,fingerprint,submitted_policy,submitted_by_source,created_at)
       VALUES($1,1,$2,'合成文章',$3::jsonb,$4,'DIRECT_PUBLICATION','human',$5::timestamptz)`,
       [articleId, author, document, sha, now],
+    );
+    // Withdrawn: the revision stays, and the document no longer points at it.
+    await articleClient.query(
+      `INSERT INTO community.article_documents(id,owner_id,version,title,document,fingerprint,status,first_published_at,created_at,updated_at)
+      VALUES($1,$2,2,$3,$4::jsonb,$5,'withdrawn',$6::timestamptz,$6::timestamptz,$6::timestamptz)`,
+      [withdrawnArticleId, author, withdrawnTitle, document, sha, now],
+    );
+    await articleClient.query(
+      `INSERT INTO community.article_revisions(article_id,version,owner_id,title,document,fingerprint,submitted_policy,submitted_by_source,created_at)
+      VALUES($1,1,$2,$3,$4::jsonb,$5,'DIRECT_PUBLICATION','human',$6::timestamptz)`,
+      [withdrawnArticleId, author, withdrawnTitle, document, sha, now],
     );
     await articleClient.query("COMMIT");
   } finally {
@@ -939,6 +1015,22 @@ describe("time zones, ranges and alignment", () => {
   });
 });
 
+describe("a clock change at midnight", () => {
+  it("starts that day at the later side of the gap, so it has one bucket", async () => {
+    const body = await ok("trend", {
+      from: "2026-03-08",
+      to: "2026-03-08",
+      tz: "America/Havana",
+      groupBy: "day",
+    });
+    expect(body.range.start).toBe("2026-03-08T05:00:00.000Z");
+    expect(body.buckets.map((bucket: Json) => bucket.label)).toEqual([
+      "2026-03-08",
+    ]);
+    expect(body.buckets[0].partial).toBe(false);
+  });
+});
+
 describe("compare: which content dropped most", () => {
   it("ranks the largest drop first, with onlyInBase rows and shares of the change", async () => {
     const start = cst("2026-03-02T00:00:00");
@@ -1024,6 +1116,57 @@ describe("funnel", () => {
       steps: "content_open,content_impression",
     });
     expect(body.steps.map((step: Json) => step.count)).toEqual([2, 0]);
+  });
+
+  const productDay = { from: "2026-01-27", to: "2026-01-27" };
+  const counts = (body: Json) => body.steps.map((step: Json) => step.count);
+
+  it("takes a surface on its first step only, because a client records each open on detail", async () => {
+    const steps = "content_impression,content_open";
+    const browse = await ok("funnel", {
+      ...productDay,
+      steps,
+      sameTarget: "true",
+      surface: "browse",
+    });
+    // Seven visitors saw a listing on browse, and three of them opened the same work.
+    expect(counts(browse)).toEqual([7, 3]);
+    expect(browse.steps[1].fromFirst).toBe(42.86);
+    expect(browse.basis).toEqual({
+      unit: "visitor",
+      order: "same_session",
+      sameTarget: true,
+      surfaceAppliesTo: "first_step",
+    });
+    expect(
+      counts(await ok("funnel", { ...productDay, steps, surface: "home" })),
+    ).toEqual([1, 1]);
+    expect(
+      counts(await ok("funnel", { ...productDay, steps, surface: "search" })),
+    ).toEqual([0, 0]);
+  });
+
+  it("says when a sameTarget step never has a target, rather than read as nobody doing it", async () => {
+    const steps = "search,search_click";
+    const strict = await ok("funnel", {
+      ...productDay,
+      steps,
+      sameTarget: "true",
+    });
+    expect(counts(strict)).toEqual([0, 0]);
+    expect(strict.notes).toContain("SAME_TARGET_STEP_HAS_NO_TARGET:search");
+    expect(strict.notes).not.toContain(
+      "SAME_TARGET_STEP_HAS_NO_TARGET:search_click",
+    );
+    const loose = await ok("funnel", { ...productDay, steps });
+    expect(counts(loose)).toEqual([3, 0]);
+    expect(loose.notes).toEqual([]);
+    const targeted = await ok("funnel", {
+      ...productDay,
+      steps: "content_impression,content_open",
+      sameTarget: "true",
+    });
+    expect(targeted.notes).toEqual([]);
   });
 });
 
@@ -1178,6 +1321,26 @@ describe("sessions and one visitor's session", () => {
     expect(status).toBe(400);
     expect(body.error.issues[0].code).toBe("invalid_cursor");
   });
+
+  it.each(["0000", "0001", "1999", "2101", "9999"])(
+    "refuses a forged cursor in year %s by name, before the database reads it",
+    async (year) => {
+      const cursor = Buffer.from(
+        `${year}-01-01T00:00:00.000000Z|${randomUUID()}`,
+      ).toString("base64url");
+      for (const [report, query] of [
+        ["sessions", { ...window, cursor }],
+        ["session", { ...window, cursor, visitorId: timeline }],
+      ] as const) {
+        const { status, body } = await get(report, query);
+        expect(status).toBe(400);
+        expect(body.error.issues[0]).toMatchObject({
+          path: ["cursor"],
+          code: "invalid_cursor",
+        });
+      }
+    },
+  );
 });
 
 describe("product", () => {
@@ -1199,7 +1362,36 @@ describe("product", () => {
       impressions: 1,
       opens: 0,
     });
-    expect(body.dwell).toEqual({ samples: 5, p50Ms: 300, p90Ms: 460 });
+    // The open is on detail, and the impression's listing is what it goes to.
+    expect(browse.find((row: Json) => row.position === 7)).toMatchObject({
+      impressions: 1,
+      opens: 1,
+    });
+    const home = body.byPosition.filter((row: Json) => row.surface === "home");
+    expect(home.find((row: Json) => row.position === 7)).toMatchObject({
+      impressions: 1,
+      opens: 0,
+    });
+    expect(
+      body.byPosition.filter((row: Json) => row.surface === "detail"),
+    ).toEqual([
+      {
+        surface: "detail",
+        position: 5,
+        impressions: 0,
+        opens: 1,
+        openRate: null,
+      },
+    ]);
+    expect(body.notes).toContain("DETAIL_OPENS_HAD_NO_IMPRESSION");
+    expect(body.notes).not.toContain("FINALS_NOT_BY_SURFACE");
+    expect(body.notes).not.toContain("OPENS_AND_DWELL_RECORDED_ON_DETAIL");
+    expect(body.dwell).toEqual({
+      basis: "session_and_target",
+      samples: 5,
+      p50Ms: 300,
+      p90Ms: 460,
+    });
     expect(body.search).toEqual({
       searches: 3,
       clicks: 1,
@@ -1226,6 +1418,56 @@ describe("product", () => {
       opens: 1,
     });
   });
+
+  it("keeps opens with their listing under a surface filter, and states what the filter cannot reach", async () => {
+    const whole = await ok("product", day);
+    const browse = await ok("product", { ...day, surface: "browse" });
+    expect(browse.byPosition).toEqual(
+      whole.byPosition.filter((row: Json) => row.surface === "browse"),
+    );
+    expect(
+      browse.byPosition.find((row: Json) => row.position === 0).openRate,
+    ).toBe(33.33);
+    // The business tables have no surface, so these stay the site's, and say so.
+    expect(browse.finals).toEqual(whole.finals);
+    expect(browse.finals.likes.v).toBe(1);
+    expect(browse.clientEvents.like.v).toBe(0);
+    expect(browse.notes).toEqual(
+      expect.arrayContaining([
+        "FINALS_NOT_BY_SURFACE",
+        "OPENS_AND_DWELL_RECORDED_ON_DETAIL",
+      ]),
+    );
+    expect(browse.notes).not.toContain("DETAIL_OPENS_HAD_NO_IMPRESSION");
+    expect(browse.dwell.samples).toBe(0);
+
+    const detail = await ok("product", { ...day, surface: "detail" });
+    expect(detail.byPosition).toEqual([
+      {
+        surface: "detail",
+        position: 5,
+        impressions: 0,
+        opens: 1,
+        openRate: null,
+      },
+    ]);
+    expect(detail.notes).toContain("FINALS_NOT_BY_SURFACE");
+    expect(detail.notes).not.toContain("OPENS_AND_DWELL_RECORDED_ON_DETAIL");
+    expect(detail.dwell.samples).toBe(5);
+  });
+
+  it("reads dwell per open: one session's whole time on one target", async () => {
+    const body = await ok("product", {
+      from: "2026-01-28",
+      to: "2026-01-28",
+    });
+    expect(body.dwell).toEqual({
+      basis: "session_and_target",
+      samples: 3,
+      p50Ms: 1_000,
+      p90Ms: 5_000,
+    });
+  });
 });
 
 describe("reconcile and native", () => {
@@ -1249,6 +1491,9 @@ describe("reconcile and native", () => {
       visitorsAny: uniqueCount(rows, "visitor"),
       forwarded: 0,
       notForwarded: rows.length,
+      pageViewsQueued: 0,
+      pageViewsNeverForwarded: rows.filter((row) => row.name === "page_view")
+        .length,
     });
     expect(body.outbox).toEqual({ pending: 0, failed: 0 });
   });
@@ -1438,6 +1683,44 @@ describe("a self-only work", () => {
       title: works.trashed.name,
       state: "trashed",
     });
+    // Withdrawn from the public, so no title, though its revision is still stored.
+    expect(by(withdrawnArticleId)).toMatchObject({
+      title: null,
+      authorHandle,
+      state: "withdrawn",
+    });
+    expect(JSON.stringify(body)).not.toContain(withdrawnTitle);
+  });
+
+  it("gives no title for an Article a report hid from the public", async () => {
+    const read = () =>
+      ok("breakdown", {
+        range: "last_7_days",
+        dimension: "content",
+        limit: "100",
+      });
+    await setup.query(
+      "UPDATE community.article_documents SET reporting_hidden=true, version=version+1 WHERE id=$1",
+      [articleId],
+    );
+    try {
+      const body = await read();
+      const target = body.rows.find(
+        (row: Json) => row.target.id === articleId,
+      ).target;
+      expect(target.title).toBeNull();
+      expect(JSON.stringify(body)).not.toContain("合成文章");
+    } finally {
+      await setup.query(
+        "UPDATE community.article_documents SET reporting_hidden=false, version=version+1 WHERE id=$1",
+        [articleId],
+      );
+    }
+    const restored = await read();
+    expect(
+      restored.rows.find((row: Json) => row.target.id === articleId).target
+        .title,
+    ).toBe("合成文章");
   });
 });
 

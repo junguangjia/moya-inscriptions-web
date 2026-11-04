@@ -26,6 +26,35 @@ export const analyticsTtlMs = (
       ? ANALYTICS_CACHE_TTL_MS.unsettled
       : ANALYTICS_CACHE_TTL_MS.settled;
 
+/**
+ * Slots standing for connections of a pool others also need. First come, first served,
+ * so a read of two is not passed for ever by reads of one.
+ */
+export const createPoolSlots = (limit: number) => {
+  let held = 0;
+  const waiting: { readonly weight: number; readonly go: () => void }[] = [];
+  const drain = () => {
+    while (waiting[0] !== undefined && held + waiting[0].weight <= limit) {
+      const next = waiting.shift()!;
+      held += next.weight;
+      next.go();
+    }
+  };
+  return {
+    acquire: (weight = 1) =>
+      new Promise<void>((go) => {
+        waiting.push({ weight, go });
+        drain();
+      }),
+    release: (weight = 1) => {
+      held -= weight;
+      drain();
+    },
+  };
+};
+
+export type PoolSlots = ReturnType<typeof createPoolSlots>;
+
 /** The minute an open range is read up to, so calls in one minute ask the same thing. */
 export const snappedOpenEnd = (start: number, now: number): number =>
   Math.max(Math.floor(now / MINUTE_MS) * MINUTE_MS, start + MINUTE_MS);

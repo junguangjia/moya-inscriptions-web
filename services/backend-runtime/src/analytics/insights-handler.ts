@@ -7,6 +7,7 @@ import {
   ANALYTICS_CANONICAL_METRICS,
   ANALYTICS_INSIGHT_REPORTS,
   ANALYTICS_INSIGHTS_PATH,
+  ANALYTICS_METRIC_DEFINITIONS,
   ANALYTICS_NOT_COLLECTED,
   AnalyticsInsightRefusal,
   AnalyticsInsightTimeout,
@@ -48,6 +49,7 @@ const statusReport = async (dependencies: AnalyticsRouteDependencies) => {
     ...status,
     ipRetentionDays: ANALYTICS_IP_RETENTION_DAYS,
     metrics: [...ANALYTICS_CANONICAL_METRICS],
+    definitions: ANALYTICS_METRIC_DEFINITIONS,
     notCollected: Object.fromEntries(
       Object.entries(ANALYTICS_NOT_COLLECTED).map(([name, reason]) => [
         name,

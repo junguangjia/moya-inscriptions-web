@@ -2308,7 +2308,9 @@ private evidence of each run.
   zero.
 - A `targetId` naming a self-only work answers `SELF_ONLY_OWNER_REVIEW`, because
   a count filtered to one id would be that work's count with only the title
-  gone. Totals with no per-target rows still include its events.
+  gone. Totals with no per-target rows still include its events. This covers
+  canonical reports only; the Umami guard's notes below state what `native` can
+  count.
 - Nothing yet opens analytics to self-only works, so the Matrix row "Self-only
   work, switch on" is not met here: the Backend withholds them whatever the
   switch says, until a slice brings `x-ai-sensitive` and
@@ -2320,6 +2322,40 @@ private evidence of each run.
   and first event for the Admin's Umami call. `reconcile` gives per-day
   canonical counts and what was forwarded; the Umami side and the explanation
   are the Admin's.
+- `product`'s positions read an open under the listing it came from. A client
+  records every open on detail with the position its listing gave it, so an open
+  goes to the surface of its session's latest impression of that target at that
+  position. This is on the read side, so rows already stored read the same way.
+  An open with no such impression, tapped inside the impression timer or seen
+  before the range, stays under detail with a null rate and
+  `DETAIL_OPENS_HAD_NO_IMPRESSION`. A surface filter applies after that, so it
+  keeps the opens. `topContent` and dwell stay where they were recorded, so a
+  filter other than detail adds `OPENS_AND_DWELL_RECORDED_ON_DETAIL`.
+- `finals` are always site-wide, because the business tables have no surface, so
+  a surface filter adds `FINALS_NOT_BY_SURFACE`.
+- A funnel takes a surface on its first step only and says so,
+  `basis.surfaceAppliesTo: first_step`, because later steps may be on detail.
+- A sameTarget funnel names a step with events in the range and none with a
+  target, `SAME_TARGET_STEP_HAS_NO_TARGET:<step>`, because a client's `search`
+  has none, and that zero does not mean nobody searched.
+- `dwell` sums per session and target before its percentiles, because a client
+  sends one event for each time a page is hidden, so one read split by tab
+  switches would be several short samples. `samples` counts those sums and
+  `basis: session_and_target` says so: a second read of one work in one session
+  joins the first.
+- `reconcile` splits page views not forwarded into `pageViewsQueued`, which can
+  yet arrive, and `pageViewsNeverForwarded`, where delivery gave up or they were
+  never queued. Its explanations go by these, so another event in the queue
+  cannot explain a gap in page views.
+- `status.definitions` states what `accountVisitors` counts: accounts on any
+  event, where Umami's field of that name counts page views only.
+- A cursor outside the years 2000 to 2100 is `invalid_cursor`, as a date is,
+  because the database would answer it as an error.
+- A local midnight that a clock change skips starts its day at the later side of
+  the gap.
+- `tz` takes a Region/City name that the runtime can read, or `UTC`. Any other
+  is `time_zone_not_region_city`, because ICU reads CST as Chicago where someone
+  writing it here means China, and `Etc/GMT+8` is eight hours behind, not ahead.
 - Realtime goes by `received_at`, because a client's clock can be a day off.
 - Result flags that are false are left out on metrics, `compare` and `quality`,
   as on the envelope, and a content row carries `target` with no separate `key`,
@@ -2327,19 +2363,29 @@ private evidence of each run.
   pass it. `events`, impressions and opens are not overview metrics; `trend` and
   `product` have them.
 - Titles are public only: a work's public revision, an Article's published
-  revision, a published Catalog. The App role reads only `article_id` of
-  `public.article_entries`, so a CMS Article's row says `state:'unresolved'` and
-  no title. An unreadable `catalog_discovery` says `title_unavailable` and
-  `CATALOG_TITLES_UNAVAILABLE`, and the rest of the answer stands.
+  revision, a published Catalog. A withdrawn Article has none, because the store
+  clears its `published_version`, and neither does one a report hid from the
+  public. The App role reads only `article_id` of `public.article_entries`, so a
+  CMS Article's row says `state:'unresolved'` and no title. An unreadable
+  `catalog_discovery` says `title_unavailable` and `CATALOG_TITLES_UNAVAILABLE`,
+  and the rest of the answer stands.
 - No analytics index was needed. At the bench's assumed 1M events over 180 days
   every report used `analytics_events_received`, except a range wide enough that
   the planner chose a sequential scan, and the widest overview stayed inside the
   800 ms budget of section 21. Whether Production's rows and machine look like
   this is unknown.
-- Reports run on the community pool and nothing limits how many at once, so
-  several long reads at the same time can hold its connections for up to the
-  statement timeout each. Not built, because the Admin's cache and single-flight
-  sit in front.
+- A report holds one connection of the community pool for its whole snapshot,
+  and that pool also serves the public site, the Owner and ingestion. The
+  Admin's cache and single flight only join identical queries, so one Admin
+  process runs at most 2 canonical reads at once (`CANONICAL_POOL_SHARE`), and
+  the rest wait in turn inside the call's own budget. A read that waits past it
+  answers `READ_TIMED_OUT`, never a number, and if nobody still waits it never
+  starts. The Admin's 10 s abort does not end the Backend's read, and `product`
+  runs seven statements at up to 3 s each, so a read given up on keeps its slot
+  11 s longer. There is no limit on the Backend's side and pool sizes are
+  unchanged. The numbers behind this, on a real pool of 5 at 1M events on a
+  laptop: 5 reads at once add little, 10 at once add about 1 s to every
+  community route, and a burst of 40 made connections time out.
 
 Recorded when built in S4, Umami guard, tests in
 tests/unit/admin/analytics-umami-guard.test.ts, over a real HTTP stub through
@@ -2350,7 +2396,10 @@ the real upstream client.
   fields they name, and a null or a word where a count goes fails the reply, so
   it answers `UMAMI_REPLY_INVALID` and never a number. Filters are region, city,
   device, segment and cohort, and metric types are region, city and device, so
-  no filter can count one self-only work's path, and no route reads titles.
+  no metric lists paths and no filter narrows by path. `step` and `startStep` do
+  narrow native attribution and journey to one path, and journey rows pair a
+  path with a count. That is the Matrix's "native paths carry an id only": a
+  number against an opaque id, with no title behind it. No route reads titles.
 - `UMAMI_WORKSPACE_PATH` in the loopback URL is Umami's own `BASE_PATH`, which
   it serves everything under. That is not the Admin's proxy route of the same
   name.
@@ -2372,10 +2421,18 @@ the real upstream client.
 - The limit of 2 is per process. The design says one process or several affects
   only the hit rate; several would also multiply this limit.
   `infra/production/systemd/yoyi-admin.service` runs one.
-- All routes were read once from a real Umami of this repository's reviewed
-  image on PostgreSQL 16.15, and every reply parsed. That image has neither
-  `accountVisitors` nor `legacyPageviews` on `/stats`, so those stay optional
-  and a reader must not take their absence as zero.
+- All routes were read once from a real Umami on PostgreSQL 16.15, of the older
+  local image `artvenn-umami:3.4.0-r4-reviewed-task`, the only one built when
+  that run was made, and every reply parsed. That image has neither
+  `accountVisitors` nor `legacyPageviews` on `/stats`. The image section 21
+  requires has `visitor-device.patch`, whose query selects both (lines 934-935)
+  and whose reply schema holds them as optional (lines 153-154). That comes from
+  the patch, not from a captured reply. So both stay optional here, and a reader
+  must not take their absence as zero.
+- A complete range's `endAt` is its end less 1 ms, because Umami reads between
+  two ends with both included, and a range's end is not in it. Without this, an
+  event in the next day's first second counts in native's yesterday. `covers`
+  keeps the range's own end. An open range still ends on its snapped minute.
 
 Recorded when built in S4, the tool, tests in
 tests/cms/admin-mcp-analytics.test.ts: real JSON-RPC with the official client,
@@ -2399,22 +2456,37 @@ week edges are exact.
   instants, so a canonical answer, a Umami answer and the cache key cover one
   period, across midnight too. Canonical answers use the same cache and single
   flight as Umami's: `version` is the minute on an open range.
+- A canonical report that can name a target or an account (`overview`,
+  `breakdown`, `compare`, `product`, `session`, `sessions`), or that names one
+  `targetId`, lives the open-range 60 s whatever its period, because the
+  self-only check runs where the Backend reads and a change there cannot purge
+  this cache. So a work set self-only or permanently deleted, or an account
+  erased, can still appear for at most 60 s (10 s on realtime) in an answer read
+  before the change, and nothing written after the change enters it. This is a
+  known window for the Owner: closing it needs a check on every hit through a
+  new Backend route. Other canonical reports and all of Umami's keep the TTLs
+  above.
 - `sessions` and `session` with no range read from seven days ago through now,
   because `last_7_days` holds finished days only, and someone online now would
   read as having done nothing.
 - A cut is a smaller page read again, so `other`, shares and the cursor are
   computed for the rows that stay, and no field holds a value from before the
-  cut. `meta.truncated` and `remaining` say so. `data.next` becomes the
-  envelope's `next` and leaves the answer, so there is one way on. An overview
-  with more rows than its page goes on in `breakdown`, which holds the rest.
-  `product`'s positions cannot page, so they travel as columns: every surface at
-  every position fits.
+  cut. `meta.truncated` and `remaining` say so. A cut is accepted only once the
+  answer as it will be sent is measured, with those two, `next` and room for
+  `meta.stripped`, because past the cap the tool would cut again and keep a
+  cursor naming the row it dropped. `data.next` becomes the envelope's `next`
+  and leaves the answer, so there is one way on. An overview with more rows than
+  its page goes on in `breakdown`, which holds the rest. `product`'s positions
+  cannot page, so they travel as columns: every surface at every position fits.
 - Umami's rows count unique visitors and one visitor can be in two places, so
   rows can pass the whole. Shares divide `total` while the rows fit inside it
   (`shareBasis: total`), and the rows' sum otherwise (`place_rows`). `unknown`
   is the difference, and null when it cannot be known: past the total, at the
   500-row cap (`ROWS_CAPPED_AT_500`, which holds no next), or with `total`
-  unread.
+  unread. `total` is also null, with `UMAMI_TOTAL_NOT_READ` and `meta.partial`,
+  when one of the two reads is fresh and the other stale, because a total read
+  at another moment divides rows it never saw. Both stale stand together,
+  marked.
 - Native `prev` is null on a partial period, because Umami's comparison is the
   preceding hours and not the same hours of yesterday, and past retention, where
   it reads zeros. `lowBase` on all three goes by visits, not by the rate.
@@ -2422,6 +2494,11 @@ week edges are exact.
   beside one surface's numbers would read as that surface's.
 - `attribution` gives totals and `collected:false` for its sources. Umami's own
   lists there would read as no source at all.
+- A native list of goals, funnels, segments or cohorts asks for 500 rows,
+  because Umami's default page is 20. `total` is the reply's `count`. `next`
+  goes by the rows in hand, because a cursor past them would re-read the same
+  page and offer itself, so past 500 the last page has no next, with
+  `quality.truncated` and `ROWS_CAPPED_AT_500`.
 - A range past retention on Umami's path is refused as canonical's is. `native`
   answers `outOfRetention:true` with no Umami read.
 - `targetType` may narrow alone, so "the top work" is one call; `targetId` still
@@ -2435,6 +2512,27 @@ week edges are exact.
 - An own `__proto__` never reaches a tool: the SDK's request schema drops it
   first, so it cannot be refused by name and cannot be read either. A test pins
   that.
+
+Recorded from the S4 review, with no code here:
+
+- Around a clock change in a zone other than the default, `compare` can start an
+  hour off its wall-clock day, `compare: week` can be refused as overlapping,
+  and an hourly trend can hold two hours under one label or an empty bucket.
+  Totals stay right and the instants are stated. Asia/Shanghai has no clock
+  change.
+- The slice that opens self-only reads adds the switch state to the cache
+  family, or purges on a change, or an answer from before a switch change serves
+  on.
+- The slice that lets the AI save definitions refuses one whose step or filter
+  names a work path, because `filter.segment`, `filter.cohort`, `goalId` and
+  `funnelId` count whatever a definition names.
+- Checked at release: Production's Umami role timeout. The guard's 5 s hold
+  assumes the role's `statement_timeout`, which
+  `docs/analytics/umami-integration.md` recommends and nothing verifies, and the
+  bench's role does not set it.
+- Checked at release: the Owner's screen and ingestion while MCP holds its two
+  Umami connections. L1 calls in sequence from one client, so no recorded number
+  covers it.
 
 ## 20. Byte channel
 

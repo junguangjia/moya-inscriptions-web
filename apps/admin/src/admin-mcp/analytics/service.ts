@@ -3,6 +3,7 @@ import {
   ADMIN_MCP_TEXT_CAP_BYTES,
   ANALYTICS_DEFAULT_MIN_BASE,
   ANALYTICS_DEFAULT_TZ,
+  ANALYTICS_INSIGHT_STATEMENT_TIMEOUT_MS,
   ANALYTICS_INSIGHTS_PATH,
   ANALYTICS_NOT_COLLECTED,
   ANALYTICS_RECONCILE_EXPLANATIONS,
@@ -38,8 +39,9 @@ import {
   ANALYTICS_SETTLED_AFTER_MS,
   analyticsCache,
   analyticsTtlMs,
+  createPoolSlots,
 } from "./cache";
-import type { AnalyticsCache } from "./cache";
+import type { AnalyticsCache, PoolSlots } from "./cache";
 import { umamiFailureEnvelope, umamiGuard } from "./umami-guard";
 import type {
   UmamiAnswer,
@@ -51,6 +53,18 @@ export const ANALYTICS_TOOL_NAME = "admin_analytics";
 
 /** Section 9's limit on one call. Each statement inside it has its own 3 s. */
 const CANONICAL_CALL_BUDGET_MS = 10_000;
+/**
+ * A report holds one community pool connection for its whole snapshot, and that pool
+ * also serves the public site, the Owner and ingestion. Different questions pass the
+ * cache and single flight, so the AI takes this many at once and the rest wait.
+ */
+export const CANONICAL_POOL_SHARE = 2;
+/**
+ * Our abort does not end the Backend's read, and a product report runs seven statements
+ * with a time limit each, so a read given up on keeps its slot until the last has ended.
+ */
+const CANONICAL_OVERRUN_HOLD_MS =
+  7 * ANALYTICS_INSIGHT_STATEMENT_TIMEOUT_MS - CANONICAL_CALL_BUDGET_MS;
 /** Section 19: the native part of an answer never holds up the canonical part. */
 const UMAMI_SOFT_BUDGET_MS = 1_500;
 /** The screen's own cap. A row past it cannot be read, so it is named, not assumed. */
@@ -60,6 +74,25 @@ const DEFAULT_ROWS = 10;
 const DEFAULT_NATIVE_ROWS = 50;
 const ANNOTATION_BYTES = 1_500;
 const TOP_PROVINCES = 3;
+/**
+ * A cut answer is measured whole against this: `meta.stripped`, added after it leaves
+ * here, needs the rest of the cap. Past the cap the tool would cut again and keep a
+ * cursor naming the row it dropped.
+ */
+const FIT_BYTES = ADMIN_MCP_TEXT_CAP_BYTES - 16;
+/**
+ * Reports whose rows name a target or an account. The self-only check and an account's
+ * erasure run where the Backend reads, and a change there cannot purge this cache, so
+ * such an answer lives a minute, whatever period it is about.
+ */
+const NAMES_TARGETS_OR_ACCOUNTS: ReadonlySet<AnalyticsInsightReport> = new Set([
+  "overview",
+  "breakdown",
+  "compare",
+  "product",
+  "session",
+  "sessions",
+]);
 
 type Json = Record<string, unknown>;
 type UmamiDimension = (typeof ANALYTICS_UMAMI_DIMENSIONS)[number];
@@ -107,6 +140,7 @@ const failureOfStatus = (
 const fetchInsight = async <Report extends AnalyticsInsightReport>(
   report: Report,
   params: URLSearchParams,
+  signal: AbortSignal,
 ): Promise<AnalyticsInsightResults[Report]> => {
   let url: URL;
   let token: string;
@@ -122,7 +156,6 @@ const fetchInsight = async <Report extends AnalyticsInsightReport>(
       ? new AnalyticsReadFailure(failedEnvelope("AI_CREDENTIAL_NOT_CONFIGURED"))
       : unavailable("backend_not_configured");
   }
-  const signal = AbortSignal.timeout(CANONICAL_CALL_BUDGET_MS);
   let response: Response;
   try {
     response = await fetch(url, {
@@ -153,10 +186,36 @@ const fetchInsight = async <Report extends AnalyticsInsightReport>(
   return parsed.data as AnalyticsInsightResults[Report];
 };
 
+interface CanonicalLimits {
+  readonly slots: PoolSlots;
+  readonly callMs: number;
+  readonly holdMs: number;
+}
+
+/** One read inside the AI's share of the community pool. */
+const readInShare = async <Report extends AnalyticsInsightReport>(
+  report: Report,
+  params: URLSearchParams,
+  wanted: () => boolean,
+  { slots, callMs, holdMs }: CanonicalLimits,
+): Promise<AnalyticsInsightResults[Report]> => {
+  await slots.acquire();
+  const signal = AbortSignal.timeout(callMs);
+  try {
+    // Queued, and every caller left before its turn: it never reaches the Backend.
+    if (!wanted()) throw unavailable("abandoned");
+    return await fetchInsight(report, params, signal);
+  } finally {
+    if (signal.aborted) setTimeout(() => slots.release(), holdMs);
+    else slots.release();
+  }
+};
+
 export interface AnalyticsServiceDeps {
   readonly guard: UmamiGuard;
   readonly cache: AnalyticsCache;
   readonly now: () => number;
+  readonly canonical: CanonicalLimits;
 }
 
 /** One answer, before it is cut to size. What `limit` counts is `page`. */
@@ -221,8 +280,8 @@ const rowsThatFit = (
   const others =
     bytesOf(envelope) -
     page.reduce<number>((sum, row) => sum + bytesOf(row) + 1, 0);
-  // What a cut adds: its next, which repeats the arguments, and its two flags.
-  const room = ADMIN_MCP_TEXT_CAP_BYTES - others - bytesOf(input) - 120;
+  // What a cut adds: its next, which repeats the arguments and a cursor, and its flags.
+  const room = FIT_BYTES - others - bytesOf(input) - 240;
   let used = 0;
   let kept = 0;
   for (const row of page) {
@@ -244,7 +303,7 @@ const fitted = async (
 ): Promise<AdminMcpEnvelope> => {
   const first = await read(input.limit);
   const whole = envelopeOf(input, first);
-  if (bytesOf(whole) <= ADMIN_MCP_TEXT_CAP_BYTES) return whole;
+  if (bytesOf(whole) <= FIT_BYTES) return whole;
   const unitsFor = (built: Built, keep: number) =>
     built.unitsOf?.(built.page.slice(0, keep)) ?? keep;
   let units =
@@ -254,14 +313,16 @@ const fitted = async (
   for (let attempt = 0; attempt < 4 && units >= 1; attempt += 1) {
     const smaller = await read(units);
     const cut = envelopeOf(input, smaller);
-    if (bytesOf(cut) <= ADMIN_MCP_TEXT_CAP_BYTES)
-      return {
-        ...cut,
-        remaining: Math.max(0, first.page.length - smaller.page.length),
-        meta: { ...cut.meta, truncated: true },
-      };
+    const answer = {
+      ...cut,
+      remaining: Math.max(0, first.page.length - smaller.page.length),
+      meta: { ...cut.meta, truncated: true as const },
+    };
+    if (bytesOf(answer) <= FIT_BYTES) return answer;
     units = unitsFor(smaller, Math.floor(smaller.page.length / 2));
   }
+  // Under the cap it stays whole, way on included.
+  if (bytesOf(whole) <= ADMIN_MCP_TEXT_CAP_BYTES) return whole;
   // Not one row fits, so no cursor can go on from here: the size cap says so instead.
   return { ...whole, next: undefined };
 };
@@ -452,7 +513,7 @@ const nativeMetric = (
  */
 const serviceFor = (
   input: AdminAnalyticsInput,
-  { guard, cache, now }: AnalyticsServiceDeps,
+  { guard, cache, now, canonical }: AnalyticsServiceDeps,
 ) => {
   const umami = guard.forTool();
   const nowDate = () => new Date(now());
@@ -474,13 +535,17 @@ const serviceFor = (
       ttlMs: analyticsTtlMs(
         report === "realtime"
           ? "realtime"
-          : range === undefined || open
+          : range === undefined ||
+              open ||
+              NAMES_TARGETS_OR_ACCOUNTS.has(report) ||
+              params.has("targetId")
             ? "open"
             : { end: range.requestedEnd.getTime() },
         now(),
       ),
-      waitMs: CANONICAL_CALL_BUDGET_MS + 500,
-      load: () => fetchInsight(report, params),
+      // Time in the queue counts: past this the caller has READ_TIMED_OUT, no number.
+      waitMs: canonical.callMs + 500,
+      load: (wanted) => readInShare(report, params, wanted, canonical),
     });
     if (answer.status === "late")
       throw new AnalyticsReadFailure(failedEnvelope("READ_TIMED_OUT"));
@@ -824,7 +889,12 @@ const serviceFor = (
     );
     const counted = named.reduce((sum, row) => sum + row.y, 0);
     const capped = metrics.value.length === UMAMI_METRIC_ROWS;
-    const total = stats.status === "failed" ? null : stats.value.visitors;
+    // A total read at another moment divides rows it never saw: `unknown` would be
+    // true of no moment. Two stale answers stand together, and say they are stale.
+    const total =
+      stats.status === "failed" || stats.status !== metrics.status
+        ? null
+        : stats.value.visitors;
     // Each row counts unique visitors, and one visitor can be in two places, so the
     // rows can pass the whole. Shares divide whichever is larger and say what it is.
     const whole = total === null ? counted : Math.max(counted, total);
@@ -846,6 +916,7 @@ const serviceFor = (
     const unknownShare =
       unknownCount === null ? null : shareAt(shown.length + 1);
     const legacy =
+      total !== null &&
       stats.status !== "failed" &&
       stats.value.legacyPageviews !== undefined &&
       stats.value.pageviews > 0
@@ -894,7 +965,7 @@ const serviceFor = (
       cursor: more ? String(offset + shown.length) : undefined,
       page: shown,
       sources: { umami: worstSource(answers) },
-      partial: stats.status === "failed",
+      partial: total === null,
     };
   };
 
@@ -1262,6 +1333,7 @@ const serviceFor = (
     const whole = (
       answer: Exclude<UmamiAnswer<UmamiReadRoute>, UmamiFailureAnswer>,
       fields: Json,
+      extraNotes: readonly string[] = [],
     ): Built => ({
       data: {
         ...frame,
@@ -1270,24 +1342,35 @@ const serviceFor = (
         ...fields,
         notes: [
           ...facts.notes,
+          ...extraNotes,
           ...(answer.status === "stale" ? ["STALE_ANSWER"] : []),
         ],
       },
       page: [],
       sources: { umami: sourceStatus(answer) },
     });
+    /**
+     * `count` is what Umami holds and `rows` what it gave. `next` goes by the rows in
+     * hand: this route has one page to read, so a cursor past it would offer itself.
+     */
     const paged = (
       answer: Exclude<UmamiAnswer<UmamiReadRoute>, UmamiFailureAnswer>,
       rows: readonly unknown[],
+      count: number = rows.length,
     ): Built => {
       const shown = rows.slice(offset, offset + (limit ?? DEFAULT_NATIVE_ROWS));
       const more = offset + shown.length < rows.length;
-      const built = whole(answer, { total: rows.length, rows: shown });
+      const capped = count > rows.length;
+      const built = whole(
+        answer,
+        { total: count, rows: shown },
+        capped ? ["ROWS_CAPPED_AT_500"] : [],
+      );
       return {
         ...built,
         data: {
           ...built.data,
-          quality: more ? { truncated: true } : {},
+          quality: more || capped ? { truncated: true } : {},
         },
         cursor: more ? String(offset + shown.length) : undefined,
         page: shown,
@@ -1346,7 +1429,7 @@ const serviceFor = (
               query: { pageSize: UMAMI_METRIC_ROWS },
             }),
           );
-          return paged(answer, answer.value.data);
+          return paged(answer, answer.value.data, answer.value.count);
         }
         onlyThese(input, [...RANGE_ARGS, "kind", "goalId", "filter"]);
         const answer = answered(
@@ -1369,15 +1452,17 @@ const serviceFor = (
             query: { pageSize: UMAMI_METRIC_ROWS },
           }),
         );
-        return paged(answer, answer.value.data);
+        return paged(answer, answer.value.data, answer.value.count);
       }
       case "segment":
       case "cohort": {
         onlyThese(input, [...RANGE_ARGS, "kind", "limit", "cursor"]);
         const answer = answered(
-          await umami.read("segments", { query: { type: kind } }),
+          await umami.read("segments", {
+            query: { type: kind, pageSize: UMAMI_METRIC_ROWS },
+          }),
         );
-        return paged(answer, answer.value.data);
+        return paged(answer, answer.value.data, answer.value.count);
       }
       case "attribution": {
         onlyThese(input, [...RANGE_ARGS, "kind", "step", "filter"]);
@@ -1445,9 +1530,13 @@ const serviceFor = (
       if (day.partial) explained.push("DAY_NOT_FINISHED");
       else if (now() - dayEnd < ANALYTICS_SETTLED_AFTER_MS)
         explained.push("LATE_EVENTS_POSSIBLE");
-      if (day.notForwarded > 0) explained.push("NOT_YET_FORWARDED");
+      if (day.pageViewsQueued > 0) explained.push("NOT_YET_FORWARDED");
+      if (day.pageViewsNeverForwarded > 0) explained.push("NEVER_FORWARDED");
       if (diff.pageViews < 0) explained.push("UMAMI_HIGHER");
-      if (diff.pageViews > 0 && day.notForwarded === 0 && !day.partial)
+      if (
+        diff.pageViews > day.pageViewsQueued + day.pageViewsNeverForwarded &&
+        !day.partial
+      )
         explained.push("CANONICAL_HIGHER");
       if (diff.visitors !== 0) explained.push("VISITOR_KEYS_DIFFER");
       for (const code of explained) used.add(code);
@@ -1497,6 +1586,11 @@ const defaults: AnalyticsServiceDeps = {
   guard: umamiGuard,
   cache: analyticsCache,
   now: Date.now,
+  canonical: {
+    slots: createPoolSlots(CANONICAL_POOL_SHARE),
+    callMs: CANONICAL_CALL_BUDGET_MS,
+    holdMs: CANONICAL_OVERRUN_HOLD_MS,
+  },
 };
 
 /** `admin_analytics`, one answer. A bad input is a named refusal and never an error. */

@@ -65,7 +65,6 @@ interface ScanFilter {
   readonly targetId?: string | undefined;
   /** Event names to keep; absent keeps every event. */
   readonly events?: readonly string[] | undefined;
-  readonly hasTarget?: boolean;
 }
 
 /**
@@ -99,7 +98,6 @@ const periodWhere = (
     conditions.push(`e.target_id = ${st.bind(filter.targetId, "text")}`);
   if (filter.events !== undefined)
     conditions.push(`e.event_name = ANY(${st.bind(filter.events, "text[]")})`);
-  if (filter.hasTarget === true) conditions.push("e.target_id IS NOT NULL");
   return { cur, prev, where: conditions.join(" AND ") };
 };
 
@@ -239,7 +237,7 @@ const decodeKeyset = (
     extra !== undefined ||
     at === undefined ||
     id === undefined ||
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/u.test(at) ||
+    !/^(?:20\d{2}|2100)-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/u.test(at) ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(
       id,
     ) ||
@@ -496,7 +494,7 @@ export class PostgresAnalyticsInsights implements AnalyticsInsightsReader {
       }>(
         `SELECT a.id, a.status, r.title, u.handle
         FROM community.article_documents a
-        LEFT JOIN community.article_revisions r ON r.article_id = a.id AND r.version = a.published_version
+        LEFT JOIN community.article_revisions r ON r.article_id = a.id AND r.version = a.published_version AND NOT a.reporting_hidden
         LEFT JOIN community.public_users u ON u.id = a.owner_id
         WHERE a.id = ANY($1::text[])`,
         [articles],
@@ -832,7 +830,8 @@ export class PostgresAnalyticsInsights implements AnalyticsInsightsReader {
       count(DISTINCT visitor_id) AS visitors_any,
       count(DISTINCT user_id) AS accounts,
       count(DISTINCT session_id) AS sessions,
-      count(*) FILTER (WHERE forwarded_at IS NOT NULL) AS forwarded`;
+      count(*) FILTER (WHERE forwarded_at IS NOT NULL) AS forwarded,
+      count(*) FILTER (WHERE forwarded_at IS NOT NULL AND event_name = 'page_view') AS forwarded_page_views`;
     // The empty grouping set reads each unique count over the whole range, so a
     // total is never a sum of buckets.
     const rows = await db.query<{
@@ -847,6 +846,7 @@ export class PostgresAnalyticsInsights implements AnalyticsInsightsReader {
       accounts: string;
       sessions: string;
       forwarded: string;
+      forwarded_page_views: string;
     }>(
       `WITH scan AS MATERIALIZED (${scan}),
         rolled AS (
@@ -859,10 +859,11 @@ export class PostgresAnalyticsInsights implements AnalyticsInsightsReader {
         to_char(s.bucket, ${label}) AS label,
         coalesce(r.page_views, 0) AS page_views, coalesce(r.events, 0) AS events,
         coalesce(r.visitors_page_view, 0) AS visitors_page_view, coalesce(r.visitors_any, 0) AS visitors_any,
-        coalesce(r.accounts, 0) AS accounts, coalesce(r.sessions, 0) AS sessions, coalesce(r.forwarded, 0) AS forwarded
+        coalesce(r.accounts, 0) AS accounts, coalesce(r.sessions, 0) AS sessions, coalesce(r.forwarded, 0) AS forwarded,
+        coalesce(r.forwarded_page_views, 0) AS forwarded_page_views
       FROM series s LEFT JOIN rolled r ON r.is_total = 0 AND r.bucket = s.bucket
       UNION ALL
-      SELECT NULL, NULL, NULL, NULL, page_views, events, visitors_page_view, visitors_any, accounts, sessions, forwarded
+      SELECT NULL, NULL, NULL, NULL, page_views, events, visitors_page_view, visitors_any, accounts, sessions, forwarded, forwarded_page_views
       FROM rolled WHERE is_total = 1
       ORDER BY 2 NULLS LAST`,
       st.values,
@@ -885,6 +886,7 @@ export class PostgresAnalyticsInsights implements AnalyticsInsightsReader {
           accountVisitors: Number(row.accounts),
           canonicalSessions: Number(row.sessions),
           forwarded: Number(row.forwarded),
+          forwardedPageViews: Number(row.forwarded_page_views),
         })),
       totals: {
         ...measured(whole[0]!),
@@ -1224,11 +1226,9 @@ export class PostgresAnalyticsInsights implements AnalyticsInsightsReader {
       const facts = await this.facts(db);
       const st = new Statement();
       const scan = scanSql(st, range, null, {
-        surface: query.surface,
         targetType: query.targetType,
         targetId: query.targetId,
         events: steps,
-        ...(sameTarget ? { hasTarget: true } : {}),
       });
       const group = sameTarget
         ? ["visitor_id", "session_id", "target_type", "target_id"]
@@ -1237,8 +1237,15 @@ export class PostgresAnalyticsInsights implements AnalyticsInsightsReader {
         group.map((column) => `${alias}.${column}`).join(", ");
       const stages = steps.map((step, index) => {
         const name = st.bind(step, "text");
-        if (index === 0)
-          return `s0 AS (SELECT ${cols("b")}, min(b.occurred_at) AS at FROM scan b WHERE b.event_name = ${name} GROUP BY ${cols("b")})`;
+        if (index === 0) {
+          // Only the first step has a listing's surface: a client records each open on detail.
+          const listing =
+            query.surface === undefined
+              ? ""
+              : ` AND b.surface = ${st.bind(query.surface, "text")}`;
+          const targeted = sameTarget ? " AND b.target_id IS NOT NULL" : "";
+          return `s0 AS (SELECT ${cols("b")}, min(b.occurred_at) AS at FROM scan b WHERE b.event_name = ${name}${listing}${targeted} GROUP BY ${cols("b")})`;
+        }
         const joined = group
           .map((column) => `b.${column} = a.${column}`)
           .join(" AND ");
@@ -1248,19 +1255,33 @@ export class PostgresAnalyticsInsights implements AnalyticsInsightsReader {
           GROUP BY ${cols("a")})`;
       });
       const column = unit === "visitor" ? "visitor_id" : "session_id";
+      // A step seen only with no target cannot be asked about one, which is not nobody doing it.
+      const targetless = sameTarget
+        ? `, (SELECT coalesce(array_agg(event_name), '{}') FROM (SELECT event_name FROM scan GROUP BY event_name HAVING count(target_id) = 0) t) AS targetless`
+        : "";
       const row = (
-        await db.query<Record<string, string>>(
+        await db.query<Record<string, string> & { targetless?: string[] }>(
           `WITH scan AS MATERIALIZED (${scan}), ${stages.join(", ")}
-          SELECT ${steps.map((_, index) => `(SELECT count(DISTINCT ${column}) FROM s${index}) AS c${index}`).join(", ")}`,
+          SELECT ${steps.map((_, index) => `(SELECT count(DISTINCT ${column}) FROM s${index}) AS c${index}`).join(", ")}${targetless}`,
           st.values,
         )
       ).rows[0]!;
       const counts = steps.map((_, index) => Number(row[`c${index}`]));
+      const notes = steps
+        .filter((step) => row.targetless?.includes(step) === true)
+        .map((step) => `SAME_TARGET_STEP_HAS_NO_TARGET:${step}`);
       return {
         report: "funnel",
-        ...this.frame(range, facts, now, [], false),
+        ...this.frame(range, facts, now, notes, false),
         excluded: [],
-        basis: { unit, order: "same_session", sameTarget },
+        basis: {
+          unit,
+          order: "same_session",
+          sameTarget,
+          ...(query.surface === undefined
+            ? {}
+            : { surfaceAppliesTo: "first_step" as const }),
+        },
         steps: steps.map((event, index) => ({
           event,
           count: counts[index]!,
@@ -1658,33 +1679,40 @@ export class PostgresAnalyticsInsights implements AnalyticsInsightsReader {
       const scanWith = (st: Statement, filter: ScanFilter) =>
         scanSql(st, range, null, { ...surface, ...filter }, "e.event_data,");
       const heads = new Statement();
+      // A client sends one dwell per hide and show, so one read sums to one sample.
       const totals = (
         await db.query<Record<string, string | null>>(
-          `SELECT count(*) FILTER (WHERE event_name = 'search') AS searches,
+          `WITH scan AS MATERIALIZED (${scanWith(heads, {
+            events: [
+              "search",
+              "search_click",
+              "like",
+              "favorite",
+              "follow",
+              "content_dwell",
+            ],
+          })}),
+          reads AS (SELECT sum((s.event_data->>'dwellMs')::float8) AS dwell
+            FROM scan s
+            WHERE s.event_name = 'content_dwell' AND jsonb_typeof(s.event_data->'dwellMs') = 'number'
+            GROUP BY s.session_id, s.target_type, s.target_id)
+          SELECT count(*) FILTER (WHERE event_name = 'search') AS searches,
             count(*) FILTER (WHERE event_name = 'search_click') AS clicks,
             count(*) FILTER (WHERE event_name = 'like') AS like_events,
             count(*) FILTER (WHERE event_name = 'favorite') AS favorite_events,
             count(*) FILTER (WHERE event_name = 'follow') AS follow_events,
-            count(dwell) AS dwell_samples,
-            percentile_cont(0.5) WITHIN GROUP (ORDER BY dwell) AS p50,
-            percentile_cont(0.9) WITHIN GROUP (ORDER BY dwell) AS p90
-          FROM (SELECT s.event_name,
-              CASE WHEN s.event_name = 'content_dwell' AND jsonb_typeof(s.event_data->'dwellMs') = 'number'
-                THEN (s.event_data->>'dwellMs')::float8 END AS dwell
-            FROM (${scanWith(heads, {
-              events: [
-                "search",
-                "search_click",
-                "like",
-                "favorite",
-                "follow",
-                "content_dwell",
-              ],
-            })}) s) d`,
+            (SELECT count(*) FROM reads) AS dwell_samples,
+            (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY dwell) FROM reads) AS p50,
+            (SELECT percentile_cont(0.9) WITHIN GROUP (ORDER BY dwell) FROM reads) AS p90
+          FROM scan`,
           heads.values,
         )
       ).rows[0]!;
       const positions = new Statement();
+      // A client records each open on detail, with the position the listing gave it, so
+      // an open goes to the surface of its session's latest impression of that target at
+      // that position. The surface filter comes after, or it would remove the opens.
+      const latestImpression = `to_char(p.occurred_at AT TIME ZONE 'UTC', 'YYYYMMDDHH24MISSUS') || p.surface`;
       const byPosition = await db.query<{
         surface: string;
         position: string;
@@ -1694,9 +1722,16 @@ export class PostgresAnalyticsInsights implements AnalyticsInsightsReader {
         `SELECT surface, CASE WHEN pos >= 10 THEN '10+' ELSE pos::text END AS position,
           count(*) FILTER (WHERE event_name = 'content_impression') AS impressions,
           count(*) FILTER (WHERE event_name = 'content_open') AS opens
-        FROM (SELECT s.surface, s.event_name, floor((s.event_data->>'position')::numeric)::int AS pos
-          FROM (${scanWith(positions, { events: ["content_impression", "content_open"] })}) s
-          WHERE jsonb_typeof(s.event_data->'position') = 'number') p
+        FROM (SELECT p.event_name, p.pos,
+            CASE WHEN p.event_name = 'content_open' THEN coalesce(
+              substr(max(CASE WHEN p.event_name = 'content_impression' THEN ${latestImpression} END)
+                OVER (PARTITION BY p.session_id, p.target_type, p.target_id, p.pos ORDER BY p.occurred_at), 21),
+              p.surface) ELSE p.surface END AS surface
+          FROM (SELECT s.surface, s.event_name, s.session_id, s.target_type, s.target_id, s.occurred_at,
+              floor((s.event_data->>'position')::numeric)::int AS pos
+            FROM (${scanWith(positions, { surface: undefined, events: ["content_impression", "content_open"] })}) s
+            WHERE jsonb_typeof(s.event_data->'position') = 'number') p) a
+        ${query.surface === undefined ? "" : `WHERE a.surface = ${positions.bind(query.surface, "text")}`}
         GROUP BY 1, 2 ORDER BY 1, min(pos)`,
         positions.values,
       );
@@ -1739,6 +1774,18 @@ export class PostgresAnalyticsInsights implements AnalyticsInsightsReader {
         },
       );
       const notes = new Set<string>();
+      // Site-wide, because the business tables have no surface column.
+      if (query.surface !== undefined) notes.add("FINALS_NOT_BY_SURFACE");
+      // Top content's opens and dwell stay where they were recorded, so they can read 0 here.
+      if (query.surface !== undefined && query.surface !== "detail")
+        notes.add("OPENS_AND_DWELL_RECORDED_ON_DETAIL");
+      // An open with no impression in range: tapped inside the impression timer, or seen earlier.
+      if (
+        byPosition.rows.some(
+          (row) => row.surface === "detail" && Number(row.opens) > 0,
+        )
+      )
+        notes.add("DETAIL_OPENS_HAD_NO_IMPRESSION");
       const targets = await this.describeTargets(
         db,
         ranked.rows.map((row) => ({
@@ -1769,6 +1816,7 @@ export class PostgresAnalyticsInsights implements AnalyticsInsightsReader {
           openRate: rate(Number(row.opens), Number(row.impressions)),
         })),
         dwell: {
+          basis: "session_and_target",
           samples: Number(totals.dwell_samples),
           p50Ms: totals.p50 === null ? null : Number(totals.p50),
           p90Ms: totals.p90 === null ? null : Number(totals.p90),
@@ -1872,6 +1920,17 @@ export class PostgresAnalyticsInsights implements AnalyticsInsightsReader {
     return this.snapshot(async (db) => {
       const facts = await this.facts(db);
       const { series } = await this.buckets(db, range, "day", {});
+      const queuedRows = await db.query<{ day: string; queued: string }>(
+        `SELECT to_char(e.occurred_at AT TIME ZONE $3::text, 'YYYY-MM-DD') AS day, count(*) AS queued
+        FROM community.analytics_outbox o JOIN community.analytics_events e USING (event_id)
+        WHERE o.failed_at IS NULL AND e.event_name = 'page_view'
+          AND e.occurred_at >= $1::timestamptz AND e.occurred_at < $2::timestamptz
+        GROUP BY 1`,
+        [range.start, range.end, range.tz],
+      );
+      const queued = new Map(
+        queuedRows.rows.map((row) => [row.day, Number(row.queued)]),
+      );
       const page = series.slice(offset, offset + limit);
       const hasMore = offset + page.length < series.length;
       return {
@@ -1887,6 +1946,11 @@ export class PostgresAnalyticsInsights implements AnalyticsInsightsReader {
           visitorsAny: bucket.visitorsAny,
           forwarded: bucket.forwarded,
           notForwarded: bucket.events - bucket.forwarded,
+          pageViewsQueued: queued.get(bucket.label) ?? 0,
+          pageViewsNeverForwarded:
+            bucket.pageViews -
+            bucket.forwardedPageViews -
+            (queued.get(bucket.label) ?? 0),
         })),
         outbox: { pending: facts.outboxPending, failed: facts.outboxFailed },
         ...nextOffset(offset, page.length, hasMore),

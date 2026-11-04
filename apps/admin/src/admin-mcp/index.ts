@@ -64,8 +64,10 @@ export {
   analyticsCache,
   analyticsTtlMs,
   createAnalyticsCache,
+  createPoolSlots,
   snappedOpenEnd,
 } from "./analytics/cache";
+export { analyticsEnvelope, CANONICAL_POOL_SHARE } from "./analytics/service";
 export {
   createUmamiGuard,
   UMAMI_CALL_BUDGET_MS,

@@ -21,6 +21,7 @@ import {
   analyticsCache,
   analyticsTtlMs,
   createAnalyticsCache,
+  createPoolSlots,
   snappedOpenEnd,
 } from "./cache";
 import type { AnalyticsCache } from "./cache";
@@ -156,27 +157,7 @@ export const createUmamiGuard = ({
   readonly toolMs?: number;
   readonly overrunMs?: number;
 } = {}) => {
-  let held = 0;
-  const waiting: { readonly weight: number; readonly go: () => void }[] = [];
-  const drain = () => {
-    while (
-      waiting[0] !== undefined &&
-      held + waiting[0].weight <= UMAMI_POOL_SHARE
-    ) {
-      const next = waiting.shift()!;
-      held += next.weight;
-      next.go();
-    }
-  };
-  const acquire = (weight: number) =>
-    new Promise<void>((go) => {
-      waiting.push({ weight, go });
-      drain();
-    });
-  const release = (weight: number) => {
-    held -= weight;
-    drain();
-  };
+  const slots = createPoolSlots(UMAMI_POOL_SHARE);
 
   const fetchReply = async (
     route: UmamiReadRoute,
@@ -233,7 +214,7 @@ export const createUmamiGuard = ({
     path: string,
     wanted: () => boolean,
   ) => {
-    await acquire(row.pool);
+    await slots.acquire(row.pool);
     let overran = false;
     try {
       if (!wanted()) throw new UmamiFailure("abandoned");
@@ -242,8 +223,8 @@ export const createUmamiGuard = ({
       overran = error instanceof UmamiFailure && error.kind === "timed_out";
       throw error;
     } finally {
-      if (overran) setTimeout(() => release(row.pool), overrunMs);
-      else release(row.pool);
+      if (overran) setTimeout(() => slots.release(row.pool), overrunMs);
+      else slots.release(row.pool);
     }
   };
 
@@ -300,7 +281,8 @@ export const createUmamiGuard = ({
         ? []
         : [
             ["startAt", String(startAt)],
-            ["endAt", String(endAt)],
+            // Umami reads between two ends, both included. A complete range's end is not.
+            ["endAt", String(open ? endAt : endAt! - 1)],
           ]),
       ...search.filter(([name]) => !inPath.has(name)),
     ]);

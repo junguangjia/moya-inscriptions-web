@@ -89,6 +89,59 @@ describe("resolveAnalyticsRange", () => {
     });
   });
 
+  it("starts a day whose midnight does not exist at the later side of the gap", () => {
+    // Santiago and Havana go from 23:59:59 to 01:00 at these instants, west of UTC.
+    const santiago = new Date("2026-09-06T15:00:00.000Z");
+    expect(
+      resolved("range=yesterday&tz=America/Santiago", santiago),
+    ).toMatchObject({
+      start: new Date("2026-09-05T04:00:00.000Z"),
+      end: new Date("2026-09-06T04:00:00.000Z"),
+    });
+    expect(resolved("range=today&tz=America/Santiago", santiago).start).toEqual(
+      new Date("2026-09-06T04:00:00.000Z"),
+    );
+    expect(
+      resolved("from=2026-03-08&to=2026-03-08&tz=America/Havana"),
+    ).toMatchObject({
+      start: new Date("2026-03-08T05:00:00.000Z"),
+      end: new Date("2026-03-09T04:00:00.000Z"),
+    });
+    // East of UTC the same gap, which two passes always found.
+    expect(
+      resolved(
+        "from=2026-04-24&to=2026-04-24&tz=Africa/Cairo",
+        new Date("2026-05-01T00:00:00.000Z"),
+      ),
+    ).toMatchObject({
+      start: new Date("2026-04-23T22:00:00.000Z"),
+      end: new Date("2026-04-24T21:00:00.000Z"),
+    });
+  });
+
+  it.each(["Asia/Kolkata", "Asia/Calcutta", "Etc/UTC", "UTC"])(
+    "takes %s, whichever name the runtime lists",
+    (tz) => {
+      expect(() => resolved(`range=yesterday&tz=${tz}`)).not.toThrow();
+    },
+  );
+
+  it.each(["CST", "BST", "IST", "EST", "PRC", "GMT", "Etc/GMT+8", "etc/gmt-8"])(
+    "refuses the short name %s, which Intl reads its own way",
+    (tz) => {
+      expect(
+        issueOf(() => resolved(`range=yesterday&tz=${encodeURIComponent(tz)}`)),
+      ).toMatchObject({ path: ["tz"], code: "time_zone_not_region_city" });
+    },
+  );
+
+  it.each(["Asia/Shanghai", "UTC", "America/New_York", "Europe/London"])(
+    "takes the listed name %s",
+    (tz) => {
+      expect(resolved(`range=yesterday&tz=${tz}`).tz).toBe(tz);
+    },
+  );
+
   it("resolves each preset, and last_N_days as N finished days", () => {
     const at = (wall: string) => new Date(`${wall}T00:00:00+08:00`);
     expect(resolved("range=today")).toMatchObject({

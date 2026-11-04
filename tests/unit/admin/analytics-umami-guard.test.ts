@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   ADMIN_MCP_TEXT_CAP_BYTES,
@@ -17,8 +17,11 @@ import {
   UMAMI_OVERRUN_HOLD_MS,
   UMAMI_POOL_SHARE,
   UMAMI_TOOL_BUDGET_MS,
+  CANONICAL_POOL_SHARE,
+  analyticsEnvelope,
   analyticsTtlMs,
   createAnalyticsCache,
+  createPoolSlots,
   createUmamiGuard,
   umamiFailureEnvelope,
 } from "admin/admin-mcp";
@@ -307,8 +310,9 @@ describe("Umami route allowlist", () => {
     expect(hit!.url.searchParams.get("startAt")).toBe(
       String(settled.start.getTime()),
     );
+    // Umami's end is included and a complete range's is not.
     expect(hit!.url.searchParams.get("endAt")).toBe(
-      String(settled.end.getTime()),
+      String(settled.end.getTime() - 1),
     );
   });
 
@@ -1240,5 +1244,70 @@ describe("Umami slow or down", () => {
       .forTool()
       .read("stats", { range: settled });
     expect(back).toMatchObject({ status: "fresh", cache: { hit: false } });
+  });
+});
+
+describe("canonical reads' share of the community pool", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  /** The real service to a real server standing in for the Backend. */
+  const start = async (limits: { callMs: number; holdMs: number }) => {
+    const stub = await startStub(hang);
+    vi.stubEnv(
+      "COMMUNITY_OPERATOR_BASE_URL",
+      `${stub.environment.UMAMI_ORIGIN}/`,
+    );
+    vi.stubEnv("OPERATOR_AI_BASE_TOKEN", viewerToken);
+    const deps = {
+      guard: createUmamiGuard({ environment: {} }),
+      cache: createAnalyticsCache(),
+      now: Date.now,
+      canonical: {
+        slots: createPoolSlots(CANONICAL_POOL_SHARE),
+        ...limits,
+      },
+    };
+    return {
+      stub,
+      // Each day is a different question, so neither the cache nor single flight joins them.
+      read: (day: string) =>
+        analyticsEnvelope(
+          {
+            report: "compare",
+            dimension: "content",
+            from: `2026-03-${day}`,
+            to: `2026-03-${day}`,
+          },
+          deps,
+        ),
+    };
+  };
+
+  it("answers READ_TIMED_OUT with no number when its turn does not come, and never starts", async () => {
+    const { stub, read } = await start({ callMs: 100, holdMs: 800 });
+    const holders = [read("01"), read("02")];
+    const queued = read("03");
+    expect(await queued).toMatchObject({ ok: false, code: "READ_TIMED_OUT" });
+    expect(await queued).not.toHaveProperty("data");
+    expect((await Promise.all(holders)).map(({ code }) => code)).toEqual([
+      "READ_TIMED_OUT",
+      "READ_TIMED_OUT",
+    ]);
+    // Past our abort the Backend's read runs on, so its slot stayed taken.
+    expect(stub.hits).toHaveLength(CANONICAL_POOL_SHARE);
+    // The slots come back, and the read nobody waits for still reaches nothing.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(stub.hits).toHaveLength(CANONICAL_POOL_SHARE);
+    stub.setRespond((_url, response) =>
+      json(
+        response,
+        { error: { status: 503, code: "STORE_UNAVAILABLE" } },
+        503,
+      ),
+    );
+    expect(await read("04")).toMatchObject({ code: "ANALYTICS_UNAVAILABLE" });
+    expect(stub.hits).toHaveLength(CANONICAL_POOL_SHARE + 1);
   });
 });

@@ -537,7 +537,10 @@ const umamiReply = (path: string): unknown => {
 type UmamiMode = "normal" | "hang" | "down";
 let umamiMode: UmamiMode = "normal";
 let umamiDelayMs = 0;
-let umamiOverride: ((path: string) => unknown) | undefined;
+/** One route down while the others answer. */
+const UMAMI_DOWN = Symbol("down");
+let umamiOverride:
+  ((path: string, search: URLSearchParams) => unknown) | undefined;
 let umamiHits: string[] = [];
 let umamiActive = 0;
 let umamiPeak = 0;
@@ -566,7 +569,14 @@ const startUmami = async () => {
       send(response, {}, 503);
       return;
     }
-    const answer = (umamiOverride ?? umamiReply)(url.pathname);
+    const answer = (umamiOverride ?? umamiReply)(
+      url.pathname,
+      url.searchParams,
+    );
+    if (answer === UMAMI_DOWN) {
+      send(response, {}, 503);
+      return;
+    }
     setTimeout(() => {
       send(response, answer, answer === null ? 404 : 200);
     }, umamiDelayMs);
@@ -579,10 +589,10 @@ const startUmami = async () => {
 
 /** A Backend that answers one way, for what the real one will not do on request. */
 const startBackendStub = async (
-  respond: (path: string, response: ServerResponse) => void,
+  respond: (url: URL, response: ServerResponse) => void,
 ) => {
   const server = createServer((request, response) => {
-    respond(new URL(request.url!, "http://stub.invalid").pathname, response);
+    respond(new URL(request.url!, "http://stub.invalid"), response);
   });
   await new Promise<void>((resolve) =>
     server.listen(0, "127.0.0.1", () => resolve()),
@@ -1057,6 +1067,7 @@ describe("time", () => {
     ["an impossible hour", { from: "2026-03-01T25:00:00Z" }, "impossible_date"],
     ["a NUL", { from: "2026-03-01\u0000" }, "unparseable_date"],
     ["an unknown zone", { tz: "Mars/Olympus" }, "unknown_time_zone"],
+    ["a short zone name", { tz: "CST" }, "time_zone_not_region_city"],
     [
       "a range past the data",
       { from: "2025-01-01", to: "2025-01-31" },
@@ -1156,6 +1167,8 @@ describe("never collected", () => {
       Object.keys(ANALYTICS_NOT_COLLECTED).sort(),
     );
     expect(data.notCollected.referrer.collected).toBe(false);
+    expect(data.definitions.accountVisitors).toMatch(/any event/u);
+    expect(data.definitions.accountVisitors).toMatch(/page views only/u);
     expect(data).toMatchObject({ source: "canonical", quality: {} });
     expect(data.range.end).toBe(data.asOf);
     expect(Date.parse(data.range.end) - Date.parse(data.range.start)).toBe(
@@ -1433,6 +1446,74 @@ describe("a self-only work", () => {
     });
   });
 
+  it("leaves a cached answer within a minute of being set self-only", async () => {
+    const breakdown = {
+      report: "breakdown",
+      range: "last_week",
+      dimension: "content",
+      limit: 100,
+    };
+    const scoped = {
+      report: "trend",
+      range: "last_week",
+      filter: { targetType: "work", targetId: works.first.id },
+    };
+    const before = await ok(breakdown);
+    const row = (before.data.rows as Json[]).find(
+      (entry) => entry.target.id === works.first.id,
+    )!;
+    await ok(scoped);
+    await setup.query(
+      "UPDATE community.works SET visibility='self' WHERE id=$1",
+      [works.first.id],
+    );
+    try {
+      vi.setSystemTime(NOW.getTime() + 61_000);
+      const after = await ok(breakdown);
+      const text = JSON.stringify(after);
+      expect(text).not.toContain(works.first.name);
+      expect(text).not.toContain(works.first.id);
+      expect(after.data.withheld.count).toBe(
+        before.data.withheld.count + row.count,
+      );
+      expect(await call(scoped)).toMatchObject({
+        ok: false,
+        code: "SELF_ONLY_OWNER_REVIEW",
+      });
+    } finally {
+      await setup.query(
+        "UPDATE community.works SET visibility='public' WHERE id=$1",
+        [works.first.id],
+      );
+    }
+  });
+
+  const finished = { from: "2026-03-02", to: "2026-03-08" };
+  it.each([
+    ["overview", { report: "overview", ...finished }],
+    ["breakdown", { report: "breakdown", ...finished, dimension: "content" }],
+    ["compare", { report: "compare", ...finished, dimension: "content" }],
+    ["product", { report: "product", ...finished }],
+    ["session", { report: "session", ...finished, visitorId: timeline }],
+    ["sessions", { report: "sessions", ...finished }],
+  ])(
+    "reads %s again after a minute, however long its period has been over",
+    async (_report, args) => {
+      await ok(args);
+      vi.setSystemTime(NOW.getTime() + 59_000);
+      expect((await ok(args)).data.cache.hit).toBe(true);
+      vi.setSystemTime(NOW.getTime() + 61_000);
+      expect((await ok(args)).data.cache.hit).toBe(false);
+    },
+  );
+
+  it("keeps the longer life of a report that names no target", async () => {
+    const args = { report: "trend", ...finished };
+    await ok(args);
+    vi.setSystemTime(NOW.getTime() + 3_600_000);
+    expect((await ok(args)).data.cache.hit).toBe(true);
+  });
+
   it("does not take in a deleted work, which stays its own row with no title", async () => {
     const { data } = await ok({
       report: "breakdown",
@@ -1630,6 +1711,269 @@ describe("size", () => {
     expect(seen).toHaveLength(60);
   });
 
+  describe("across the size boundary", () => {
+    /** The real store's cursor: the row's time and id, the same length every time. */
+    const keysetOf = (index: number) =>
+      Buffer.from(
+        `2026-01-14T10:00:00.000000Z|${uuidOf(index)}`,
+        "utf8",
+      ).toString("base64url");
+    const uuidOf = (index: number) =>
+      `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+    const framed = {
+      source: "canonical",
+      asOf: NOW.toISOString(),
+      range: {
+        start: "2026-01-13T16:00:00.000Z",
+        end: "2026-01-14T16:00:00.000Z",
+        tz: "Asia/Shanghai",
+        complete: true,
+        dataFrom: "2025-11-30T16:00:00.000Z",
+      },
+      notes: [],
+    };
+    /** A Backend in the real store's order: limit + 1, then a strict keyset. */
+    const keysetBackend = (
+      total: number,
+      defaultLimit: number,
+      answer: (rows: readonly number[], more: Json) => Json,
+    ) =>
+      startBackendStub((url, response) => {
+        const limit = Number(url.searchParams.get("limit") ?? defaultLimit);
+        const cursor = url.searchParams.get("cursor");
+        const from =
+          cursor === null
+            ? 0
+            : Number(
+                Buffer.from(cursor, "base64url")
+                  .toString("utf8")
+                  .split("-")
+                  .at(-1),
+              ) + 1;
+        const rows = Array.from(
+          { length: Math.min(limit, total - from) },
+          (_, offset) => from + offset,
+        );
+        const hasMore = from + rows.length < total;
+        send(
+          response,
+          answer(rows, {
+            quality: hasMore ? { truncated: true } : {},
+            ...(hasMore ? { next: { cursor: keysetOf(rows.at(-1)!) } } : {}),
+          }),
+        );
+      });
+
+    const sessionsOf =
+      (name: (index: number) => string) =>
+      (rows: readonly number[], more: Json) => ({
+        report: "sessions",
+        ...framed,
+        ...more,
+        excluded: [],
+        rows: rows.map((index) => ({
+          sessionId: uuidOf(index),
+          visitorId: uuidOf(index),
+          distinctIds: ["d".repeat(40)],
+          account: {
+            id: `user-${"a".repeat(32)}`,
+            handle: "walker",
+            displayName: name(index),
+            status: "active",
+          },
+          firstAt: "2026-01-14T02:00:00.000Z",
+          lastAt: "2026-01-14T02:00:00.000Z",
+          events: 1,
+          pageViews: 1,
+          contentOpens: 0,
+        })),
+      });
+
+    const walk = async (
+      args: Json,
+      idsOf: (data: Json) => readonly string[],
+    ) => {
+      const seen: string[] = [];
+      let next: Json | undefined = args;
+      for (let page = 0; next !== undefined && page < 40; page += 1) {
+        const answer: Json = await ok(next);
+        seen.push(...idsOf(answer.data));
+        next = answer.next?.args as Json | undefined;
+      }
+      expect(next).toBeUndefined();
+      return seen;
+    };
+
+    const sessionIds = (data: Json) =>
+      (data.rows as Json[]).map((row) => row.sessionId as string);
+    const window = { from: "2026-01-14", to: "2026-01-14" };
+
+    it("reaches every session exactly once, whatever size an answer lands on", async () => {
+      const total = 30;
+      let length = 1;
+      const stub = await keysetBackend(
+        total,
+        10,
+        sessionsOf(() => "x".repeat(length)),
+      );
+      try {
+        vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", stub.origin);
+        const everyone = Array.from({ length: total }, (_, index) =>
+          uuidOf(index),
+        );
+        for (length = 1; length <= 100; length += 1) {
+          analyticsCache.purge();
+          const seen = await walk(
+            { report: "sessions", ...window, limit: 100 },
+            sessionIds,
+          );
+          expect(seen, `name of ${length}`).toEqual(everyone);
+        }
+      } finally {
+        await stub.close();
+      }
+    });
+
+    it("reaches every event of a timeline exactly once, whatever size an answer lands on", async () => {
+      const total = 60;
+      let length = 1;
+      const atOf = (index: number) =>
+        new Date(Date.parse("2026-01-14T02:00:00.000Z") + index * 1000);
+      const stub = await keysetBackend(total, 100, (rows, more) => ({
+        report: "session",
+        ...framed,
+        ...more,
+        excluded: ["self_only"],
+        subject: { visitorId: uuidOf(0) },
+        summary: {
+          events: total,
+          sessions: 1,
+          visitors: 1,
+          firstAt: atOf(0).toISOString(),
+          lastAt: atOf(total - 1).toISOString(),
+        },
+        accounts: [],
+        runs: rows.map((index) => ({
+          event: index % 2 === 0 ? "search" : "content_open",
+          surface: index % 2 === 0 ? "search" : "detail",
+          target:
+            index % 2 === 0
+              ? null
+              : {
+                  type: "work",
+                  id: works.first.id,
+                  title: works.first.name,
+                  authorHandle,
+                  state: "public",
+                },
+          count: 1,
+          firstAt: atOf(index).toISOString(),
+          lastAt: atOf(index).toISOString(),
+          dwellMs: null,
+          query: index % 2 === 0 ? "q".repeat(length) : null,
+        })),
+      }));
+      try {
+        vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", stub.origin);
+        const every = Array.from({ length: total }, (_, index) =>
+          atOf(index).toISOString(),
+        );
+        for (length = 1; length <= 100; length += 1) {
+          analyticsCache.purge();
+          const seen = await walk(
+            { report: "session", ...window, visitorId: uuidOf(0) },
+            (data) => (data.runs as Json[]).map((run) => run.firstAt as string),
+          );
+          expect(seen, `text of ${length}`).toEqual(every);
+        }
+      } finally {
+        await stub.close();
+      }
+    });
+
+    it("leaves room for an invisible character's flag, so its answer is not cut again", async () => {
+      const total = 30;
+      const limit = 20;
+      let pad = 1;
+      let extra = 0;
+      const stub = await keysetBackend(
+        total,
+        10,
+        sessionsOf((index) =>
+          index === 0 ? `\u200b${"y".repeat(extra)}` : "x".repeat(pad),
+        ),
+      );
+      try {
+        vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", stub.origin);
+        const args = { report: "sessions", ...window, limit };
+        const everyone = Array.from({ length: total }, (_, index) =>
+          uuidOf(index),
+        );
+        // Brought near the cap by every row, then across it one byte at a time.
+        const near = Buffer.byteLength(JSON.stringify(await ok(args)));
+        pad += Math.floor((ADMIN_MCP_TEXT_CAP_BYTES - 40 - near) / (limit - 1));
+        for (extra = 0; extra <= 60; extra += 1) {
+          analyticsCache.purge();
+          const seen = await walk(args, sessionIds);
+          expect(seen, `extra of ${extra}`).toEqual(everyone);
+        }
+      } finally {
+        await stub.close();
+      }
+    });
+
+    it("measures the answer a cut read really gave, not the room it set aside", async () => {
+      const total = 30;
+      let length = 1;
+      const plain = sessionsOf(() => "x".repeat(length));
+      // A read of fewer rows can come back with more beside them than the first had.
+      const stub = await keysetBackend(total, 10, (rows, more) => ({
+        ...plain(rows, more),
+        notes: rows.length < total ? ["N".repeat(80)] : [],
+      }));
+      try {
+        vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", stub.origin);
+        const everyone = Array.from({ length: total }, (_, index) =>
+          uuidOf(index),
+        );
+        for (length = 1; length <= 100; length += 1) {
+          analyticsCache.purge();
+          const seen = await walk(
+            { report: "sessions", ...window, limit: 100 },
+            sessionIds,
+          );
+          expect(seen, `name of ${length}`).toEqual(everyone);
+        }
+      } finally {
+        await stub.close();
+      }
+    });
+
+    it("keeps its way on when one row fills an answer to just under the cap", async () => {
+      let length = 1;
+      const stub = await keysetBackend(
+        2,
+        10,
+        sessionsOf(() => "x".repeat(length)),
+      );
+      try {
+        vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", stub.origin);
+        const args = { report: "sessions", ...window, limit: 1 };
+        const bytes = (answer: Json) =>
+          Buffer.byteLength(JSON.stringify(answer));
+        length += ADMIN_MCP_TEXT_CAP_BYTES - 8 - bytes(await ok(args));
+        analyticsCache.purge();
+        const full = await ok(args);
+        expect(bytes(full)).toBeGreaterThan(ADMIN_MCP_TEXT_CAP_BYTES - 16);
+        expect(full.next).toBeDefined();
+        analyticsCache.purge();
+        expect(await walk(args, sessionIds)).toEqual([uuidOf(0), uuidOf(1)]);
+      } finally {
+        await stub.close();
+      }
+    });
+  });
+
   it("holds the overview's whole answer under 3 KB with five titled rows and Umami's block", async () => {
     const answer = await ok({ report: "overview", range: "last_7_days" });
     expect(Buffer.byteLength(JSON.stringify(answer))).toBeLessThanOrEqual(
@@ -1758,6 +2102,46 @@ describe("Umami's path", () => {
     expect(meta.partial).toBe(true);
   });
 
+  it("divides fresh rows by no total read at another moment", async () => {
+    const args = {
+      report: "breakdown",
+      dimension: "province",
+      range: "today",
+    };
+    await ok(args);
+    vi.setSystemTime(NOW.getTime() + 61_000);
+    umamiOverride = (path) =>
+      path.endsWith("/stats") ? UMAMI_DOWN : umamiReply(path);
+    const { data, meta } = await ok(args);
+    expect(data.status).toBe("fresh");
+    expect(data.total).toBeNull();
+    expect(data.unknown).toEqual({ count: null, share: null });
+    expect(data.shareBasis).toBe("place_rows");
+    expect(data.notes).toContain("UMAMI_TOTAL_NOT_READ");
+    expect(data.quality).not.toHaveProperty("legacyShare");
+    expect(data.quality).not.toHaveProperty("unknownShare");
+    expect(data.rows[0]).toMatchObject({ key: "CN-31", visitors: 20 });
+    expect(meta.partial).toBe(true);
+    expect(meta.sources.umami).toBe("failed");
+  });
+
+  it("does not divide stale rows by a total read later either", async () => {
+    const args = {
+      report: "breakdown",
+      dimension: "province",
+      range: "today",
+    };
+    await ok(args);
+    vi.setSystemTime(NOW.getTime() + 61_000);
+    umamiOverride = (path) =>
+      path.endsWith("/metrics") ? UMAMI_DOWN : umamiReply(path);
+    const { data, meta } = await ok(args);
+    expect(data.status).toBe("stale");
+    expect(data.total).toBeNull();
+    expect(data.notes).toContain("STALE_ANSWER");
+    expect(meta.partial).toBe(true);
+  });
+
   it("refuses a range past retention before Umami can read it as empty", async () => {
     const answer = await call({
       report: "breakdown",
@@ -1878,6 +2262,9 @@ describe("Umami's path", () => {
     });
     expect(data.notes).toContain("STALE_ANSWER");
     expect(data.rows[0].key).toBe("CN-31");
+    // Both stale, so the total still divides the rows it was read with.
+    expect(data.total).toBe(40);
+    expect(data.shareBasis).toBe("total");
   });
 
   it("answers a whole Umami breakdown UMAMI_QUERY_TIMEOUT with no number when it is down", async () => {
@@ -1958,6 +2345,78 @@ describe("Umami's path", () => {
     });
   });
 
+  describe("a list of definitions", () => {
+    /** As pinned Umami pages: 20 rows unless asked, and `count` is all it holds. */
+    const definitions =
+      (held: number) => (path: string, search: URLSearchParams) =>
+        path.endsWith("/segments")
+          ? {
+              data: Array.from(
+                {
+                  length: Math.min(held, Number(search.get("pageSize") ?? 20)),
+                },
+                (_, index) => ({
+                  id: randomUUID(),
+                  type: "segment",
+                  name: `定义 ${index}`,
+                  parameters: {},
+                }),
+              ),
+              count: held,
+              page: 1,
+              pageSize: Number(search.get("pageSize") ?? 20),
+            }
+          : umamiReply(path);
+    const args = { report: "native", kind: "segment", range: "last_7_days" };
+
+    it("asks for what it needs and states what Umami holds", async () => {
+      umamiOverride = definitions(25);
+      const { data, next } = await ok(args);
+      expect(data.total).toBe(25);
+      expect(data.rows).toHaveLength(25);
+      expect(data.quality).toEqual({});
+      expect(data.notes).not.toContain("ROWS_CAPPED_AT_500");
+      expect(next).toBeUndefined();
+      expect(umamiHits.at(-1)).toContain("pageSize=500");
+    });
+
+    it("reaches every row of a list by limit, then stops", async () => {
+      umamiOverride = definitions(25);
+      const seen: string[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 10; page += 1) {
+        const answer: Json = await ok({
+          ...args,
+          limit: 10,
+          ...(cursor === undefined ? {} : { cursor }),
+        });
+        expect(answer.data.total).toBe(25);
+        seen.push(...answer.data.rows.map((row: Json) => row.name as string));
+        cursor = answer.next?.args.cursor as string | undefined;
+        if (cursor === undefined) break;
+      }
+      expect(cursor).toBeUndefined();
+      expect(new Set(seen).size).toBe(25);
+    });
+
+    it("says when the list stopped at the cap, with no way on past the rows in hand", async () => {
+      umamiOverride = definitions(501);
+      let answer: Json = await ok({ ...args, limit: 100 });
+      expect(answer.data.total).toBe(501);
+      expect(answer.data.notes).toContain("ROWS_CAPPED_AT_500");
+      let rows = answer.data.rows.length as number;
+      for (let page = 0; answer.next !== undefined && page < 12; page += 1) {
+        answer = await ok(answer.next.args);
+        rows += answer.data.rows.length as number;
+      }
+      expect(rows).toBe(500);
+      expect(answer.next).toBeUndefined();
+      expect(answer.data.total).toBe(501);
+      expect(answer.data.quality.truncated).toBe(true);
+      expect(answer.data.notes).toContain("ROWS_CAPPED_AT_500");
+    });
+  });
+
   it("answers a native report past retention with no Umami read", async () => {
     const { data } = await ok({
       report: "native",
@@ -1980,11 +2439,89 @@ describe("Umami's path", () => {
     expect(monday.umami).toEqual({ pageViews: 0, visitors: 0 });
     expect(tuesday.umami).toEqual({ pageViews: 3, visitors: 2 });
     expect(tuesday.diff.pageViews).toBe(pageViews(...YESTERDAY).length - 3);
-    expect(tuesday.explained).toContain("NOT_YET_FORWARDED");
+    expect(tuesday.explained).toContain("NEVER_FORWARDED");
     expect(tuesday.explained).toContain("LATE_EVENTS_POSSIBLE");
     for (const code of tuesday.explained as string[])
       expect(data.explanations[code]).toMatch(/\w/u);
     expect(meta.sources).toEqual({ canonical: "ok", umami: "ok" });
+  });
+
+  it("words a page view on its way apart from one that will never arrive, and no other event explains a gap", async () => {
+    const day = { report: "reconcile", from: "2026-03-10", to: "2026-03-10" };
+    const read = async () => {
+      analyticsCache.purge();
+      return (await ok(day)).data.days[0] as Json;
+    };
+    const dayViews = await setup.query<{ event_id: string }>(
+      "SELECT event_id FROM community.analytics_events WHERE event_name='page_view' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz",
+      [...YESTERDAY],
+    );
+    const held = dayViews.rows[0]!.event_id;
+    const custom = randomUUID();
+    try {
+      await setup.query(
+        "UPDATE community.analytics_events SET forwarded_at=$2::timestamptz WHERE event_id=ANY($1::uuid[])",
+        [dayViews.rows.map((row) => row.event_id), NOW],
+      );
+      await setup.query(
+        "UPDATE community.analytics_events SET forwarded_at=NULL WHERE event_id=$1",
+        [held],
+      );
+      await setup.query(
+        "INSERT INTO community.analytics_outbox(event_id,next_attempt_at) VALUES($1,$2::timestamptz)",
+        [held, NOW],
+      );
+      const queued = await read();
+      expect(queued).toMatchObject({
+        pageViewsQueued: 1,
+        pageViewsNeverForwarded: 0,
+      });
+      expect(queued.explained).toContain("NOT_YET_FORWARDED");
+      expect(queued.explained).not.toContain("NEVER_FORWARDED");
+
+      await setup.query(
+        "UPDATE community.analytics_outbox SET failed_at=$2::timestamptz WHERE event_id=$1",
+        [held, NOW],
+      );
+      const lost = await read();
+      expect(lost).toMatchObject({
+        pageViewsQueued: 0,
+        pageViewsNeverForwarded: 1,
+      });
+      expect(lost.explained).toContain("NEVER_FORWARDED");
+      expect(lost.explained).not.toContain("NOT_YET_FORWARDED");
+
+      // Every page view went, and a queued search says nothing about the gap in them.
+      await setup.query(
+        "UPDATE community.analytics_events SET forwarded_at=$2::timestamptz WHERE event_id=$1",
+        [held, NOW],
+      );
+      await setup.query("DELETE FROM community.analytics_outbox");
+      await setup.query(
+        `INSERT INTO community.analytics_events(event_id,visitor_id,session_id,distinct_id,event_name,surface,event_data,occurred_at,received_at)
+        VALUES($1,$2,$2,$3,'search','search','{"name":"search"}',$4::timestamptz,$4::timestamptz)`,
+        [custom, visitor(), "d".repeat(40), cst("2026-03-10T12:00:00")],
+      );
+      await setup.query(
+        "INSERT INTO community.analytics_outbox(event_id,next_attempt_at) VALUES($1,$2::timestamptz)",
+        [custom, NOW],
+      );
+      const gap = await read();
+      expect(gap.notForwarded).toBe(1);
+      expect(gap.pageViewsQueued).toBe(0);
+      expect(gap.diff.pageViews).toBeGreaterThan(0);
+      expect(gap.explained).toContain("CANONICAL_HIGHER");
+      expect(gap.explained).not.toContain("NOT_YET_FORWARDED");
+    } finally {
+      await setup.query("DELETE FROM community.analytics_outbox");
+      await setup.query(
+        "DELETE FROM community.analytics_events WHERE event_id=$1",
+        [custom],
+      );
+      await setup.query(
+        "UPDATE community.analytics_events SET forwarded_at=NULL WHERE forwarded_at IS NOT NULL",
+      );
+    }
   });
 
   it("keeps a reconcile's canonical days when Umami is down, and reads no difference", async () => {
@@ -2051,6 +2588,45 @@ describe("the canonical path", () => {
       }
     },
   );
+
+  it("never runs more than two canonical reads at once, however many different questions arrive", async () => {
+    let active = 0;
+    let peak = 0;
+    let hits = 0;
+    const stub = await startBackendStub((_url, response) => {
+      hits += 1;
+      active += 1;
+      peak = Math.max(peak, active);
+      setTimeout(() => {
+        active -= 1;
+        send(
+          response,
+          { error: { status: 503, code: "STORE_UNAVAILABLE" } },
+          503,
+        );
+      }, 60);
+    });
+    try {
+      vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", stub.origin);
+      const answers = await Promise.all(
+        ["01", "02", "03", "04", "05", "06"].map((day) =>
+          call({
+            report: "compare",
+            dimension: "content",
+            from: `2026-03-${day}`,
+            to: `2026-03-${day}`,
+          }),
+        ),
+      );
+      expect(answers.map(({ code }) => code)).toEqual(
+        Array.from({ length: 6 }, () => "ANALYTICS_UNAVAILABLE"),
+      );
+      expect(hits).toBe(6);
+      expect(peak).toBe(2);
+    } finally {
+      await stub.close();
+    }
+  });
 
   it("refuses a reply that breaks its contract, rather than read a number from it", async () => {
     const stub = await startBackendStub((_path, response) =>
@@ -2147,6 +2723,7 @@ describe("the canonical path", () => {
           lastEventAt: null,
           lastForwardedAt: null,
           metrics: ["pageViews"],
+          definitions: { accountVisitors: "synthetic" },
           notCollected: Object.fromEntries(
             Object.keys(ANALYTICS_NOT_COLLECTED).map((name) => [
               name,
