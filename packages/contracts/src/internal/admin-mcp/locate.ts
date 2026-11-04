@@ -332,7 +332,12 @@ export const adminMediaRegionSchema = z.strictObject({
 
 export const adminViewMediaInputSchema = z.strictObject({
   kind: z.enum(["catalog_thumb", "catalog_original"]),
-  mediaId: z.string().min(1).max(128),
+  /** PostgreSQL text cannot hold a NUL, so no record can match one. */
+  mediaId: z
+    .string()
+    .min(1)
+    .max(128)
+    .refine((value) => !value.includes("\u0000")),
   maxEdge: z.number().int().min(64).max(ADMIN_VIEW_MEDIA_MAX_EDGE).optional(),
   /** In the pixels of what is viewed; required for catalog_original. */
   region: adminMediaRegionSchema.optional(),

@@ -484,6 +484,8 @@ export const LIST_SOURCES = {
 const DEFAULT_PAGE_SIZE = 25;
 const DEFAULT_GROUP_PAGE = 200;
 const ROW_ID_PATTERN = /^[1-9]\d{0,15}$/u;
+/** A row id is an int4: past this the column cannot compare, and no `next` says it. */
+const ROW_ID_MAX = 2_147_483_647;
 const OFFSET_PATTERN = /^\d{1,9}$/u;
 
 const unknownFieldsEnvelope = (source: ListSource) =>
@@ -602,7 +604,10 @@ const rowsEnvelope = async (
   filter: Record<string, unknown>,
   read: NonNullable<AdminOpContext["read"]>,
 ): Promise<AdminMcpEnvelope> => {
-  if (read.cursor !== undefined && !ROW_ID_PATTERN.test(read.cursor))
+  if (
+    read.cursor !== undefined &&
+    (!ROW_ID_PATTERN.test(read.cursor) || Number(read.cursor) > ROW_ID_MAX)
+  )
     return inputInvalidEnvelope([{ path: ["cursor"], code: "invalid_cursor" }]);
   const asked =
     read.view === "full" ? Object.keys(source.fields) : (read.fields ?? []);

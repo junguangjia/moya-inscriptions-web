@@ -1,3 +1,5 @@
+import type { OwnerDraftPage } from "@moya/contracts/internal/editorial";
+
 import {
   editorialOperationDefinitions,
   type EditorialOperationName,
@@ -17,23 +19,53 @@ import {
 
 const bindsIdentity = "the save binds an identity not yet bound";
 
-/** A page whose route already answers in small rows, relayed as it stands. */
-const relayed =
-  (route: "owner-drafts" | "owner-history") =>
-  async (input: unknown, { req }: AdminOpContext) =>
-    okEnvelope(await editorialOperationDefinitions[route].run(req, input), [
-      "/data/docs",
-    ]);
+/** A page whose route already answers in small rows. A missing row is a miss. */
+const relayedHistory = async (input: unknown, { req }: AdminOpContext) => {
+  try {
+    return okEnvelope(
+      await editorialOperationDefinitions["owner-history"].run(req, input),
+      ["/data/docs"],
+    );
+  } catch (error) {
+    if (isMissingRecord(error)) return failedEnvelope("NOT_FOUND");
+    throw error;
+  }
+};
+
+/**
+ * A cut page keeps fewer rows than it read, so its number and page count would be a
+ * second way on, and one that skips rows. `next` is the one, whole page or cut, and
+ * a cut replaces it with a page right after the rows kept. totalDocs stays.
+ */
+const reviewPage = async (input: unknown, { req, read }: AdminOpContext) => {
+  const { docs, totalDocs, automationUsers, page, totalPages } =
+    (await editorialOperationDefinitions["owner-drafts"].run(
+      req,
+      input,
+    )) as OwnerDraftPage;
+  const envelope = okEnvelope({ docs, totalDocs, automationUsers }, [
+    "/data/docs",
+  ]);
+  return page < totalPages
+    ? {
+        ...envelope,
+        next: {
+          tool: "admin_read",
+          args: { ...read, input: { ...read?.input, page: page + 1 } },
+        },
+      }
+    : envelope;
+};
 
 const rows: Readonly<Record<EditorialOperationName, AdminOpEntry>> = {
   "owner-drafts": readOp("The review page of Catalog drafts.", {
     example: { page: 1, pageSize: 20 },
-    run: relayed("owner-drafts"),
+    run: reviewPage,
     paging: "numbered",
   }),
   "owner-history": readOp("A Catalog's version history.", {
     example: { id: 7, page: 1 },
-    run: relayed("owner-history"),
+    run: relayedHistory,
   }),
   // The whole draft would not fit one text result: its outline, and admin_get reads on.
   "read-draft": readOp("One Catalog draft's outline and its revision.", {

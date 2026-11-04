@@ -47,6 +47,8 @@ export interface ClassifiedQuery {
   readonly focusMediaId?: string;
   /** A link names records: a miss is a miss, never a text search for its URL. */
   readonly link: boolean;
+  /** A known link with no scheme, as typed: a record can hold it as its own identity. */
+  readonly literal?: string;
 }
 
 type LinkRule =
@@ -291,7 +293,11 @@ export const classifyQuery = (query: string): ClassifiedQuery => {
   const link = asLink(text);
   if (link !== undefined) {
     const { known, ...classified } = classifyLink(link.url);
-    if (link.certain || known) return classified;
+    if (link.certain) return classified;
+    if (known)
+      return BARE_HOST.test(text) && text.length <= 128
+        ? { ...classified, literal: text }
+        : classified;
   }
   if (HANDLE_SHAPE.test(text))
     return notExcluded([{ kind: "handle", handle: text.slice(1) }]);

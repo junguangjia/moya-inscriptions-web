@@ -40,7 +40,12 @@ import {
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { approveBatch, publishApproved, saveDraft } from "admin/editorial";
+import {
+  approveBatch,
+  ownerDraftPage,
+  publishApproved,
+  saveDraft,
+} from "admin/editorial";
 import { approveArticleBatch } from "admin/editorial-content";
 import { textHash, withinBudget } from "admin/admin-mcp";
 import { cmsRuntimeLogFields } from "admin/runtime-settings";
@@ -602,11 +607,30 @@ describe("the other CMS sources", () => {
 
   it("relays the review page, and gives a key an outline for read-draft", async () => {
     const { id } = await saveCatalog("relay");
-    const review = await call("admin_read", {
-      op: "list.review_page",
-      input: { page: 1, pageSize: 2 },
+    for (const op of ["list.review_page", "editorial.owner-drafts"]) {
+      const review = await call("admin_read", {
+        op,
+        input: { page: 1, pageSize: 2 },
+      });
+      expect(review.ok).toBe(true);
+      expect((review.data as { totalDocs: number }).totalDocs).toBeGreaterThan(
+        0,
+      );
+      expect(review.data).not.toHaveProperty("page");
+      expect(review.data).not.toHaveProperty("totalPages");
+    }
+    // Only this relay: the Owner's route and page keep their numbers.
+    const route = await ownerDraftPage(await ownerReq(), {
+      page: 1,
+      pageSize: 2,
     });
-    expect(review.ok).toBe(true);
+    expect(route).toMatchObject({ page: 1, totalDocs: expect.any(Number) });
+    expect(route.totalPages).toBeGreaterThan(0);
+    const history = await call("admin_read", {
+      op: "editorial.owner-history",
+      input: { id },
+    });
+    expect(history.data).toMatchObject({ id, page: 1, totalPages: 1 });
     const draft = await call("admin_read", {
       op: "editorial.read-draft",
       input: { id },
@@ -622,6 +646,31 @@ describe("the other CMS sources", () => {
       input: { id: 2_000_000_000 },
     });
     expect(missing).toMatchObject({ ok: false, code: "NOT_FOUND" });
+  });
+
+  it("answers NOT_FOUND on the history of a row that does not exist, or could not", async () => {
+    for (const id of [2_000_000_000, 99_999_999_999]) {
+      const missing = await call("admin_read", {
+        op: "editorial.owner-history",
+        input: { id },
+      });
+      expect({ id, code: missing.code }).toEqual({ id, code: "NOT_FOUND" });
+    }
+  });
+
+  it("refuses a cursor past the integer range by name, and takes the last one in it", async () => {
+    for (const op of ["list.catalogs", "list.media"]) {
+      for (const cursor of ["2147483648", "9999999999", "9999999999999999"]) {
+        const envelope = await call("admin_read", { op, cursor });
+        expect(envelope).toMatchObject({ ok: false, code: "INPUT_INVALID" });
+        expect(envelope.issues).toEqual([
+          { path: ["cursor"], code: "invalid_cursor" },
+        ]);
+      }
+      expect((await call("admin_read", { op, cursor: "2147483647" })).ok).toBe(
+        true,
+      );
+    }
   });
 
   it("refuses a NUL by name wherever a read carries one, and never echoes it", async () => {
@@ -646,6 +695,30 @@ describe("the other CMS sources", () => {
     }
   });
 
+  it("goes on from a page that fits, and stops at the last, on the numbered review page", async () => {
+    for (const suffix of ["fits-a", "fits-b"]) await saveCatalog(suffix);
+    for (const op of ["list.review_page", "editorial.owner-drafts"]) {
+      const first = await call("admin_read", {
+        op,
+        input: { page: 1, pageSize: 1 },
+      });
+      expect(first.meta.truncated).toBeUndefined();
+      expect(first.next).toEqual({
+        tool: "admin_read",
+        args: { op, input: { page: 2, pageSize: 1 } },
+      });
+      const after = await call(first.next!.tool, first.next!.args);
+      expect(after.ok).toBe(true);
+      const { totalDocs } = first.data as { totalDocs: number };
+      const last = await call("admin_read", {
+        op,
+        input: { page: totalDocs, pageSize: 1 },
+      });
+      expect(last.meta.truncated).toBeUndefined();
+      expect(last.next).toBeUndefined();
+    }
+  });
+
   it("goes on from a cut page the route numbers itself, losing no row and repeating none", async () => {
     // Two full pages of its own, so page 2 is cut on an empty database too.
     for (let index = 0; index < 100; index += 1)
@@ -653,7 +726,8 @@ describe("the other CMS sources", () => {
     const idsOf = (envelope: AdminMcpEnvelope) =>
       (envelope.data as { docs: { id: number }[] }).docs.map(({ id }) => id);
     const order: number[] = [];
-    for (let page = 1; page <= 25; page += 1) {
+    // Newest first, so these twenty pages are the rows above and nothing older.
+    for (let page = 1; page <= 20; page += 1) {
       const whole = await call("admin_read", {
         op: "list.review_page",
         input: { page, pageSize: 5 },
@@ -669,6 +743,10 @@ describe("the other CMS sources", () => {
         expect(cut.meta.truncated).toBe(true);
         const kept = idsOf(cut);
         expect(kept.length + cut.remaining!).toBe(50);
+        // `next` is the only way on: nothing here counts pages at the size asked for.
+        expect(cut.data).not.toHaveProperty("page");
+        expect(cut.data).not.toHaveProperty("totalPages");
+        expect(cut.data).toHaveProperty("totalDocs");
         expect(cut.next?.tool).toBe("admin_read");
         const after = await call(cut.next!.tool, cut.next!.args);
         expect(after.ok).toBe(true);
@@ -1810,6 +1888,50 @@ describe("admin_find: several words on the draft branch", () => {
     expect(data.items.map(({ id }) => id)).toEqual([saved.id]);
     expect(data.items[0]!.match.kind).toBe("t2s");
   });
+
+  it("counts a repeated word once, however often it is typed", async () => {
+    const word = `重复词${run}`;
+    const saved = await saveCatalog("words-repeated", { title: word });
+    const data = findData(
+      await call("admin_find", {
+        query: Array.from({ length: 50 }, () => word).join(" "),
+        type: "catalog",
+      }),
+    );
+    expect(data.items.map(({ id }) => id)).toEqual([saved.id]);
+    // 33 typed and 32 different: the limit is on different words.
+    const others = Array.from({ length: 31 }, (_, index) => `别词${index}`);
+    const envelope = await call("admin_find", {
+      query: [word, word, ...others].join(" "),
+      type: "catalog",
+    });
+    expect(envelope.ok).toBe(true);
+  });
+
+  it("searches 32 different words, and refuses 33 by the limit rather than some of them", async () => {
+    const wordsOf = (count: number) =>
+      Array.from({ length: count }, (_, index) => `词${index}`);
+    const saved = await saveCatalog("words-limit", {
+      title: `${wordsOf(32).join("")}${run}`,
+    });
+    const found = findData(
+      await call("admin_find", {
+        query: [...wordsOf(31), `词31${run}`].join(" "),
+        type: "catalog",
+      }),
+    );
+    expect(found.items.map(({ id }) => id)).toEqual([saved.id]);
+    const marker = `不回显${run}`;
+    const refused = await call("admin_find", {
+      query: [...wordsOf(32), marker].join(" "),
+      type: "catalog",
+    });
+    expect(refused).toMatchObject({ ok: false, code: "INPUT_INVALID" });
+    expect(refused.issues).toEqual([
+      { path: ["query"], code: "more_than_32_words" },
+    ]);
+    expect(JSON.stringify(refused)).not.toContain(marker);
+  });
 });
 
 describe("admin_find: simplified and traditional on the draft branch", () => {
@@ -1862,6 +1984,38 @@ describe("admin_find: simplified and traditional on the draft branch", () => {
     expect(await kindFor(`張猛龍碑${run}forms`, simplifiedTitle.id)).toBe(
       "t2s",
     );
+  });
+
+  it("claims the weakest form tried when SQL matched and no form can be placed", async () => {
+    // ILIKE folds `İ` to `i`; toLowerCase makes it `i` and a combining dot. Only a
+    // database whose locale folds it can reach this path at all.
+    const { rows: folding } = await db().execute(
+      sql`SELECT 'İ' ILIKE 'i' AS folds`,
+    );
+    if (folding[0]?.folds !== true) return;
+    const dotted = `İ${run}fold`;
+    const plain = `i${run}fold`;
+    const simplified = await saveCatalog("fold-simplified", {
+      title: `${dotted} 兰亭`,
+    });
+    const traditional = await saveCatalog("fold-traditional", {
+      title: `${dotted} 龍門`,
+    });
+    const asciiOnly = await saveCatalog("fold-ascii", {
+      title: `${dotted} ascii`,
+    });
+    for (const [query, id, kind] of [
+      [`${plain} 蘭亭`, simplified.id, "t2s"],
+      [`${plain} 龙门`, traditional.id, "s2t"],
+      [`${plain} ascii`, asciiOnly.id, "raw"],
+    ] as const) {
+      const data = findData(
+        await call("admin_find", { query, type: "catalog" }),
+      );
+      expect(data.items.map((item) => item.id)).toEqual([id]);
+      expect(data.items[0]!.match).toEqual({ field: "title", kind });
+      expect(data.resolution.uniqueIdentity).toBe(false);
+    }
   });
 
   it("still misses another traditional form of a character, as the tool says it can", async () => {
@@ -2076,6 +2230,106 @@ describe("admin_find: a query that was not looked up says so", () => {
       catalogs_draft: "ok",
     });
     expect(miss.hint).toBeUndefined();
+  });
+});
+
+describe("admin_find: a known link with no scheme that a record holds as typed", () => {
+  const otherCatalogId = `locate-${run}-bare-other`;
+  /** Statements of one find, as L0 counts them: not the door's clock-driven write. */
+  const statementsOfFind = async (query: string) =>
+    (await statementsDuring(() => call("admin_find", { query }))).filter(
+      (text) =>
+        !/^\s*UPDATE\s+payload_mcp_api_keys\s+SET\s+last_used_at\b/iu.test(
+          text,
+        ),
+    ).length;
+  let otherRow: number;
+
+  beforeAll(async () => {
+    otherRow = (await saveCatalog("bare-other")).id;
+  });
+
+  it.each([
+    ["path", () => `museum.example/catalog/${otherCatalogId}`],
+    ["absent", () => `museum.example/catalog/nobody-${run}`],
+    ["image", () => `lib.example/x?image=${otherCatalogId}`],
+    ["row", () => `lib.example/view?image=${otherRow}`],
+    ["parameter", () => `src.example/?catalogId=nobody-${run}`],
+  ])("resolves the text to the record holding it: %s", async (name, query) => {
+    const text = query();
+    const holder = await saveCatalog(`bare-holder-${name}`, { sourceId: text });
+    for (const type of [undefined, "catalog"]) {
+      const envelope = await call("admin_find", {
+        query: text,
+        ...(type === undefined ? {} : { type }),
+      });
+      const data = findData(envelope);
+      expect(data.resolution).toEqual({
+        status: "exact",
+        uniqueIdentity: true,
+        ref: { type: "catalog", id: holder.id },
+      });
+      expect(data.items[0]!.match).toEqual({
+        field: "sourceId",
+        kind: "identity",
+      });
+      expect(data.focus).toBeUndefined();
+      expect(envelope.meta.partial).toBeUndefined();
+    }
+  });
+
+  it("resolves a holder bound only in its provenance list", async () => {
+    const text = `museum.example/catalog/provenance-${run}`;
+    const holder = await saveCatalog("bare-provenance", {
+      provenance: [{ sourceId: text }],
+    });
+    const data = findData(await call("admin_find", { query: text }));
+    expect(data.resolution.ref).toEqual({ type: "catalog", id: holder.id });
+    expect(data.items[0]!.match).toEqual({
+      field: "provenance.sourceId",
+      kind: "identity",
+    });
+  });
+
+  it("reads it as the link it is when no record holds it", async () => {
+    const hit = await call("admin_find", {
+      query: `any.example/catalog/${otherCatalogId}`,
+    });
+    expect(findData(hit).resolution.ref).toEqual({
+      type: "catalog",
+      id: otherRow,
+    });
+    expect(findData(hit).items[0]!.match).toEqual({
+      field: "catalogId",
+      kind: "identity",
+    });
+    const miss = await call("admin_find", {
+      query: `any.example/catalog/absent-${run}`,
+    });
+    expect(findData(miss).resolution.status).toBe("none");
+    expect(miss.meta.sources).toEqual({ catalogs: "ok" });
+  });
+
+  it("asks for no holder when the type rules a Catalog out", async () => {
+    const text = `museum.example/catalog/typed-${run}`;
+    await saveCatalog("bare-typed", { sourceId: text });
+    const envelope = await call("admin_find", { query: text, type: "media" });
+    expect(findData(envelope).resolution.status).toBe("none");
+    expect(envelope.meta.sources).toEqual({});
+    expect(envelope.hint).toMatch(/^Nothing was looked up/u);
+  });
+
+  it("stays inside the L0 ceilings, and only a bare host pays for the lookup", async () => {
+    // STATEMENTS in admin-mcp-bench/l0.scale.ts: exact_locate 9, its miss path 13.
+    for (const query of [
+      `/catalog/${otherCatalogId}`,
+      `https://any.example/catalog/${otherCatalogId}`,
+    ])
+      expect(await statementsOfFind(query)).toBeLessThanOrEqual(9);
+    const text = `museum.example/catalog/ceiling-${run}`;
+    await saveCatalog("bare-ceiling", { sourceId: text });
+    for (const query of [`any.example/catalog/${otherCatalogId}`, text])
+      expect(await statementsOfFind(query)).toBeLessThanOrEqual(13);
   });
 });
 
@@ -3330,12 +3584,17 @@ describe("a stored link that carries a credential", () => {
       "x-goog-signature",
       "OSSAccessKeyId",
       "access%5Ftoken",
+      "accesstoken",
+      "clientsecret",
     ].map((name) => `https://source.example/item?page=2&${name}=${canary}`),
     `https://source.example/item?page=2;token=${canary}`,
+    `https://source.example/a.jsp;jsessionid=${canary}?id=1`,
+    `https://source.example/item#access_token=${canary}`,
   ];
   const clean = [
     "https://source.example/item",
     "https://source.example/book?page=3&keyword=碑&tokenize=1&monkey=2#第二章",
+    "https://source.example/a;v=2/book#page=3&keyword=碑",
   ];
   const longClean = `https://source.example/${"a".repeat(300)}`;
   const longCarrying = `https://source.example/${"a".repeat(300)}?token=${canary}`;
@@ -4359,6 +4618,25 @@ describe("admin_view_media", () => {
     expect(
       (await view({ kind: "work_media", mediaId })).envelope,
     ).toMatchObject({ ok: false, code: "INPUT_INVALID" });
+  });
+
+  it("refuses a NUL in a mediaId by name, and never echoes it", async () => {
+    const marker = `not-echoed-${run}`;
+    for (const args of [
+      { kind: "catalog_thumb", mediaId: `${marker}\u0000b` },
+      {
+        kind: "catalog_original",
+        mediaId: `${marker}\u0000b`,
+        region: { left: 0, top: 0, width: 8, height: 8 },
+      },
+    ]) {
+      const { content, envelope } = await view(args);
+      expect(envelope).toMatchObject({ ok: false, code: "INPUT_INVALID" });
+      expect(envelope.issues).toEqual([
+        expect.objectContaining({ path: ["mediaId"] }),
+      ]);
+      expect(JSON.stringify(content)).not.toContain(marker);
+    }
   });
 
   it("cuts a thumbnail to a smaller edge and reports the size it rendered", async () => {

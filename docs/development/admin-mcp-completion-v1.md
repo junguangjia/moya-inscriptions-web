@@ -1003,9 +1003,10 @@ tests/unit/backend/admin-mcp-locate.test.ts:
   it, a miss names `article_documents`.
 - A source is named only when its family was really read. A UUID or a 64-hex
   query reads `catalogs` by the text as typed, because a catalogId or sourceId
-  is exact and can hold those shapes, and `media` in lower case, as it stores
-  them. An exact hit on a plain id stops before the fuzzy step, so it names
-  `catalogs` and `media` alone.
+  is exact and can hold those shapes. It reads `media` by a 64-hex in lower
+  case, as the column stores it, and by a UUID as typed and in lower case. An
+  exact hit on a plain id stops before the fuzzy step, so it names `catalogs`
+  and `media` alone.
 - With nothing read and nothing withheld, the answer is `none`, `meta.partial`
   and a fixed hint saying nothing was looked up. That covers a scheme link or
   `?query` that names nothing this tool reads, a known link with an unreadable
@@ -1014,12 +1015,22 @@ tests/unit/backend/admin-mcp-locate.test.ts:
   meaning with parts after the id or with no scheme. A value named twice is one
   reference. Text starting `/` or `#`, or with a host-like first part, is legal
   as a sourceId and as words, so it is a link only when it names something a
-  link can; otherwise it goes on to the identity and text steps.
-- Whitespace separates words on every branch: all must be in the record, in any
-  of the searched fields. `%`, `_` and `\` in the words mean themselves, escaped
-  for Payload's `contains`, which is `ILIKE` around the value as it stands.
-- A NUL in `query` is refused as `INPUT_INVALID`, because PostgreSQL text cannot
-  hold one, and a NUL decoded from a link leaves that part of it unread.
+  link can; otherwise it goes on to the identity and text steps. A known link
+  with a host and no scheme that a Catalog holds, as typed, as its own identity
+  names that Catalog; with no such holder it reads as a link. A link with a
+  scheme, or a known one starting `/` or `#`, pays for no such lookup, so a
+  sourceId of that shape is found through `/catalog/<percent-encoded>`.
+- Whitespace separates words on every branch that matches words: all must be in
+  the record, in any of the searched fields. The trigram step is a close
+  spelling of the whole text and says so. A word repeated counts once, and more
+  than 32 different words are refused as `INPUT_INVALID` by the code
+  `more_than_32_words`, never searched on some of them, because each word costs
+  a condition and a scan of every row read. `%`, `_` and `\` in the words mean
+  themselves, escaped for Payload's `contains`, which is `ILIKE` around the
+  value as it stands.
+- A NUL in `query` or in `admin_view_media`'s `mediaId` is refused as
+  `INPUT_INVALID`, because PostgreSQL text cannot hold one, and a NUL decoded
+  from a link leaves that part of it unread.
 - Unique means one identity hit from one reference. A link naming two records,
   or a bare number that is a row in two families, answers candidates. `type`
   narrows a number to one family.
@@ -1027,13 +1038,17 @@ tests/unit/backend/admin-mcp-locate.test.ts:
   page on each branch, so a source holding more is seen to hold more. Past 200
   the answer says so with `meta.truncated` and a fixed hint, and the query needs
   narrowing.
-- `admin_read` pages a list source by its last row. `editorial.owner-drafts` and
-  `list.review_page` number their own pages, and a row there runs near 1 KB, so
-  a default page of 20 is often cut: `next` starts a page right after the rows
-  kept, at a smaller `pageSize`. `editorial.owner-history` takes no page size,
-  so a cut there has no way on and says so. An op that is no list source refuses
-  `cursor`, `pageSize`, `view`, `fields` and `groupBy` with `not_for_this_op`
-  rather than dropping them.
+- `admin_read` pages a list source by its last row, and a cursor past the
+  integer range names no row, so it is refused as `invalid_cursor`.
+  `editorial.owner-drafts` and `list.review_page` number their own pages, and a
+  row there runs near 1 KB, so a default page of 20 is often cut: `next` starts
+  a page right after the rows kept, at a smaller `pageSize`. These two answer
+  `totalDocs` with no page number or page count, because on a cut page those
+  would be a second way on that skips rows. A page that fits sets `next` to the
+  following page when more follow, and the last page sets none.
+  `editorial.owner-history` takes no page size, so a cut there has no way on and
+  says so. An op that is no list source refuses `cursor`, `pageSize`, `view`,
+  `fields` and `groupBy` with `not_for_this_op` rather than dropping them.
 - A `sourceId` bound only in a record's provenance list resolves through
   `editorial-identities`, after the indexed lookup on the main column.
 - Trigram is its own branch, `catalogs_similar`, tried only when no branch
@@ -1057,8 +1072,9 @@ tests/unit/backend/admin-mcp-locate.test.ts:
   transaction adds four statements, so the L0 ceiling on an aggregate is 10.
 - `editorial.read-draft` answers the outline for a key, because the whole draft
   would not fit a text result. `editorial.owner-drafts` and `owner-history`
-  relay their small rows. The delivery reads stay unbuilt: they call the Backend
-  on the Owner's token, and S5 owes them the AI one.
+  relay their small rows, and a missing row on `owner-history` answers
+  `NOT_FOUND`, as `read-draft` does. The delivery reads stay unbuilt: they call
+  the Backend on the Owner's token, and S5 owes them the AI one.
 - `admin_get` on a Catalog says `deepZoom: "not_available"` until the master
   routes arrive, so a missing master state never reads as no master.
 - Reading the lock row needs no change to `defaultAccess`: it admits any user,
@@ -1090,16 +1106,19 @@ tests/unit/backend/admin-mcp-locate.test.ts:
   the caller's.
 - A stored link that carries a credential does not leave:
   `provenance[].sourceUrl`, `sourceCitations[].url` and an Article's
-  `citations[].url`, when the link has userinfo or a query parameter whose name
-  has a word that says secret, key, token, password, signature or session.
+  `citations[].url`, when the link has userinfo, or a query parameter, a
+  `;name=value` in its path or a `name=value` in its fragment whose name has a
+  word that says secret, key, token, password, signature or session, written
+  apart or run together (`accesstoken`, `clientsecret`, `secretkey`).
   `view=full` puts `{state:"WITHHELD"}` where the link was, a window answers
   `fieldState:"WITHHELD"` with no text, length, hash or count, and both set
   `meta.excluded:["credential_url"]`. Outline, diff and history carry an array
-  by count and hash only, so a changed link still shows as a change. A preview
-  says `hasUrl`. Every other link stays verbatim. The name list errs towards
+  by count and hash only, so a changed link still shows as a change. A Catalog
+  preview says `hasUrl`; an Article preview carries the same `WITHHELD` as
+  `view=full`. Every other link stays verbatim. The name list errs towards
   withholding, so a harmless `?key=` link is withheld too, says so, and the
-  Owner reads it in the Admin. A link in free text, such as a citation's words,
-  and a fragment are not read.
+  Owner reads it in the Admin. A fragment with no value, such as `#token`, is an
+  anchor. Section 17 lists what is not read.
 - Codes added: `NOT_FOUND`, `NOT_AVAILABLE`, `MEDIA_UNAVAILABLE`,
   `MEDIA_TOO_LARGE`, `AI_ROUTE_FORBIDDEN`, `READ_TIMED_OUT`. `meta.sources`
   joins the envelope. `INPUT_INVALID` names the allowed keys of the object an
@@ -2062,6 +2081,13 @@ Accepted limits, recorded and not fixed:
   account could have been read before this slice deploys. Production ids were
   not checked. Whether to replace automation keys at deployment is the Owner's
   call.
+- A stored link is withheld by the names it carries, so these still leave as
+  stored: a link nested in a parameter (`?to=https%3A...%3Ftoken%3D...`), a link
+  in free text such as a citation's words, a name no rule reads (`?t=`, `?tk=`,
+  `?code=`, `?otp=`, `?sid=`), and a secret in a path segment with no name
+  (`/token/abc`). Whether Production holds any such link was not checked. Only a
+  read-only scan can answer that, and whether to run one before the AI base
+  token is placed is the Owner's call.
 
 ## 18. Reuse
 

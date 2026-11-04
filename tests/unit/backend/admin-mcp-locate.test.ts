@@ -282,6 +282,25 @@ describe("classifying a reference, with no I/O", () => {
       });
   });
 
+  it("carries a known link's text only where a record could hold it as typed", () => {
+    for (const text of [
+      "any.example/catalog/abc",
+      "localhost:3000/?catalogId=abc",
+      "lib.example/x?image=5",
+    ])
+      expect(classifyQuery(text)).toMatchObject({ link: true, literal: text });
+    for (const text of [
+      "/catalog/abc",
+      "/?catalogId=abc",
+      "#topic-abc",
+      "https://any.example/catalog/abc",
+      `any.example/catalog/${"a".repeat(128)}`,
+    ]) {
+      expect(classifyQuery(text).link).toBe(true);
+      expect(classifyQuery(text).literal).toBeUndefined();
+    }
+  });
+
   it("lets text that only looks like a link go on to identity and search", () => {
     for (const text of [
       "/about",
@@ -878,6 +897,27 @@ describe("a stored link that carries a credential", () => {
     "JSESSIONID",
     "PHPSESSID",
     "ticket",
+    "accesstoken",
+    "authtoken",
+    "sessiontoken",
+    "apitoken",
+    "APIToken",
+    "SSOToken",
+    "JWTToken",
+    "secretkey",
+    "clientsecret",
+    "appsecret",
+    "appkey",
+    "sessionkey",
+    "privatekey",
+    "passphrase",
+    "passcode",
+    "ACCESSTOKEN",
+    "AUTHTOKEN",
+    "SECRETKEY",
+    "CLIENTSECRET",
+    "SSOKey",
+    "XAuth",
   ])("reads the query parameter %s as one", (name) => {
     expect(
       linkCarriesCredential(`https://a.example/b?page=1&${name}=${value}`),
@@ -892,6 +932,14 @@ describe("a stored link that carries a credential", () => {
     `a.example/b?token=${value}`,
     `//reader:${value}@a.example/b`,
     `https://a.example/b?page=1;token=${value}`,
+    `https://a.example/a.jsp;jsessionid=${value}?id=1`,
+    `https://a.example/a;token=${value}/b`,
+    `https://a.example/a;v=1;accesstoken=${value}`,
+    `a.example/a;%74oken=${value}`,
+    `https://a.example/b#access_token=${value}`,
+    `https://a.example/b#page=1&token=${value}`,
+    `https://a.example/b#page=1;clientsecret=${value}`,
+    `https://a.example/#/callback?access_token=${value}`,
     "https://[unreadable/b",
   ])("reads %s as one", (link) => {
     expect(linkCarriesCredential(link)).toBe(true);
@@ -902,6 +950,12 @@ describe("a stored link that carries a credential", () => {
     "https://a.example/b?page=3&v=2",
     "https://a.example/b?keyword=碑&keywords=拓片",
     "https://a.example/b?tokenize=1&monkey=2&signal=3&assign=4&design=5",
+    "https://a.example/b?hockey=1&whiskey=2&passage=3&sortkey=4",
+    "https://a.example/a;v=1/b;keyword=2;tokenize=3;monkey=4",
+    "https://a.example/a;token/b",
+    "https://a.example/b#page=2&keyword=1&tokenize=3&monkey=4",
+    "https://a.example/b#token=",
+    "https://a.example/b#:~:text=token",
     "https://a.example/@handle/b",
     "https://a.example/b#token",
     "https://kns.example/detail.aspx?dbcode=CJFD&filename=X&dbname=Y",

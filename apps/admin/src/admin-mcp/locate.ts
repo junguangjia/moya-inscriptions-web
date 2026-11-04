@@ -20,7 +20,11 @@ import { actionsFor, candidateActions } from "./actions-for";
 import type { ActionScope } from "./actions-for";
 import { withinBudget } from "./budget";
 import type { BranchDb } from "./budget";
-import { CUT_WITH_NO_WAY_ON, okEnvelope } from "./envelope";
+import {
+  CUT_WITH_NO_WAY_ON,
+  inputInvalidEnvelope,
+  okEnvelope,
+} from "./envelope";
 import { classifyQuery } from "./locate-reference";
 import type { ClassifiedQuery, LocateReference } from "./locate-reference";
 import {
@@ -327,7 +331,11 @@ const exactStage = async (
 };
 
 /** Whitespace separates same-record AND parts, and punctuation stays literal. */
-const queryParts = (text: string) => text.split(/\s+/u).filter(Boolean);
+const queryParts = (text: string) => [
+  ...new Set(text.split(/\s+/u).filter(Boolean)),
+];
+/** Each word is a SQL condition and a scan of every row read, in synchronous JS. */
+const QUERY_WORDS_MAX = 32;
 const escapedLike = (part: string) => part.replace(/[\\%_]/gu, "\\$&");
 const likePattern = (part: string) => `%${escapedLike(part)}%`;
 
@@ -520,7 +528,9 @@ const containsHits = async (
       const found = locatedIn(doc, fields, queryParts(words));
       if (found) return { family, doc, kind, ...found };
     }
-    return { family, doc, field: fields[0]!, kind: "raw" };
+    // SQL and JS fold case apart (`İ`), so no form could be placed: of those tried it
+    // claims the weakest, which is raw only when raw was all there was.
+    return { family, doc, field: fields[0]!, kind: variants.at(-1)!.kind };
   });
 };
 
@@ -664,12 +674,34 @@ const UNTRUSTED = [
 const NOTHING_LOOKED_UP =
   "Nothing was looked up: this query names nothing this tool can read, or nothing of the type asked for. This none does not mean the record is missing. Try its id or title, or drop type.";
 
+/**
+ * A known link with no scheme is a legal sourceId too, and the record holding that text
+ * is what it names. Only this shape pays for the lookup: a `/catalog/<id>` is the
+ * common path, and its statements are pinned.
+ */
+const classifiedFor = async (
+  req: PayloadRequest,
+  input: AdminFindInput,
+): Promise<ClassifiedQuery> => {
+  const classified = classifyQuery(input.query);
+  const { literal } = classified;
+  return literal !== undefined &&
+    wants(familiesFor(input.type), "catalog") &&
+    (await catalogByIdentity(req, literal)).length > 0
+    ? {
+        references: [{ kind: "token", value: literal }],
+        excluded: [],
+        link: false,
+      }
+    : classified;
+};
+
 export const findEnvelope = async (
   req: PayloadRequest,
   input: AdminFindInput,
   scope: ActionScope,
 ): Promise<AdminMcpEnvelope> => {
-  const classified = classifyQuery(input.query);
+  const classified = await classifiedFor(req, input);
   const sources: Sources = {};
   const limit = input.limit ?? DEFAULT_LIMIT;
   const skip = input.skip ?? 0;
@@ -687,6 +719,14 @@ export const findEnvelope = async (
               ? [reference.value]
               : [],
         )[0];
+  // Named, never searched on some of the words: a partial AND would over-match.
+  if (
+    textToSearch !== undefined &&
+    queryParts(textToSearch).length > QUERY_WORDS_MAX
+  )
+    return inputInvalidEnvelope([
+      { path: ["query"], code: `more_than_${QUERY_WORDS_MAX}_words` },
+    ]);
   const fuzzy =
     textToSearch === undefined
       ? []

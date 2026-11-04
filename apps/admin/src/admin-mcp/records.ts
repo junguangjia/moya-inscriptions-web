@@ -530,8 +530,9 @@ const LINK_KEY_OF: Readonly<Record<string, string>> = {
   citations: "url",
 };
 
-// Whole words of a parameter's name. A harmless `?key=` link is withheld with the
-// rest: it says so, and the Owner reads it in the Admin.
+// Whole words of a parameter's name, and below the same words run together. A
+// harmless `?key=` link is withheld with the rest: it says so, and the Owner reads it
+// in the Admin.
 const CREDENTIAL_WORDS: ReadonlySet<string> = new Set([
   "accesskey",
   "accesskeyid",
@@ -561,17 +562,33 @@ const CREDENTIAL_WORDS: ReadonlySet<string> = new Set([
   "token",
 ]);
 
+// `accesstoken`, `clientsecret`, `secretkey`, whose words no split can part. Anchored,
+// so `tokenize`, `keyword` and `monkey` stay out.
+const RUN_TOGETHER_CREDENTIAL =
+  /(?:token|secret|passwd|password|passphrase|passcode|signature|sessid|sessionid)$|^(?:access|api|app|auth|client|private|secret|session|shared|signing|user)key(?:id)?$/u;
+
 const namesCredential = (name: string) =>
   name
     .replace(/([a-z0-9])([A-Z])/gu, "$1-$2")
+    .replace(/([A-Z]+)([A-Z][a-z])/gu, "$1-$2")
     .toLowerCase()
     .split(/[^a-z0-9]+/u)
-    .some((word) => CREDENTIAL_WORDS.has(word));
+    .some(
+      (word) =>
+        CREDENTIAL_WORDS.has(word) || RUN_TOGETHER_CREDENTIAL.test(word),
+    );
+
+/** Names with a value only: `#token` is an anchor, and `/a;b` no parameter. */
+const namesWithValues = (pairs: string) =>
+  [...new URLSearchParams(pairs.replaceAll(";", "&"))].flatMap(
+    ([name, value]) => (value === "" ? [] : [name]),
+  );
 
 /**
- * Userinfo, or a query parameter naming a credential or a signature. Stored links were
- * imported as they stood, so one with no scheme is read too, and one that cannot be
- * read at all is not assumed clean.
+ * Userinfo, or a query parameter, a `;name=value` in the path or a `name=value` in the
+ * fragment naming a credential or a signature. Stored links were imported as they
+ * stood, so one with no scheme is read too, and one that cannot be read at all is not
+ * assumed clean.
  */
 export const linkCarriesCredential = (link: string): boolean => {
   if (/^[^/?#]*:[^/?#]*@/u.test(link)) return true;
@@ -584,9 +601,15 @@ export const linkCarriesCredential = (link: string): boolean => {
   return (
     url.username !== "" ||
     url.password !== "" ||
-    [...new URLSearchParams(url.search.replaceAll(";", "&")).keys()].some(
-      namesCredential,
-    )
+    [
+      ...new URLSearchParams(url.search.replaceAll(";", "&")).keys(),
+      ...namesWithValues(
+        [...url.pathname.matchAll(/;([^;/]+)/gu)]
+          .map(([, pair]) => pair)
+          .join("&"),
+      ),
+      ...namesWithValues(url.hash.slice(1)),
+    ].some(namesCredential)
   );
 };
 
