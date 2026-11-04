@@ -268,7 +268,8 @@ export const ReportDialog = ({
       }}
     >
       <p className={styles.note}>
-        举报内容仅供审核人员处理，其他用户看不到举报人身份和原始证据。
+        举报内容仅供审核人员和平台使用的 AI
+        工具处理，其他用户看不到举报人身份和原始证据。
       </p>
       <label>
         举报原因
@@ -336,7 +337,8 @@ export const ReportDialog = ({
             />
           </label>
           <p className={styles.note}>
-            审核人员将审查材料，并向相关用户转送处理争议所必需的信息。请勿填写无关身份信息。
+            审核人员或 AI
+            工具将审查材料，并向相关用户转送处理争议所必需的信息。请勿填写无关身份信息。
           </p>
         </>
       )}
