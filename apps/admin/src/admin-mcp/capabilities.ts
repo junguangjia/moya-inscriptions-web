@@ -1,5 +1,11 @@
-import { ADMIN_OP_NAMES } from "@moya/contracts/internal/admin-mcp";
-import type { AdminOpName } from "@moya/contracts/internal/admin-mcp";
+import {
+  ADMIN_ANALYTICS_REPORTS,
+  ADMIN_OP_NAMES,
+} from "@moya/contracts/internal/admin-mcp";
+import type {
+  AdminAnalyticsReport,
+  AdminOpName,
+} from "@moya/contracts/internal/admin-mcp";
 
 import { adminOpMeta } from "./registry";
 import { ADMIN_SURFACES } from "./surfaces";
@@ -16,6 +22,34 @@ Scope and rules: \`docs/development/admin-mcp-completion-v1.md\`. "Built" says w
 a slice has given the op its implementation yet; an op that is not built reports
 \`not_available\`.
 `;
+
+/** A statistics read is a report on one tool, not an op (section 19). All on `base`. */
+const ANALYTICS_REPORT_FACTS: Readonly<
+  Record<
+    AdminAnalyticsReport,
+    { readonly source: string; readonly built: boolean }
+  >
+> = {
+  status: { source: "canonical, config", built: true },
+  overview: { source: "canonical, native block from Umami", built: true },
+  trend: { source: "canonical, annotations from Umami", built: true },
+  breakdown: {
+    source: "canonical; Umami for province, city, device",
+    built: true,
+  },
+  compare: { source: "canonical", built: true },
+  funnel: { source: "canonical; Umami for a saved funnel", built: true },
+  realtime: {
+    source: "canonical, geography from Umami on request",
+    built: true,
+  },
+  sessions: { source: "canonical; Umami on request or by place", built: true },
+  session: { source: "canonical, and Umami from its session id", built: true },
+  product: { source: "canonical, business tables", built: true },
+  native: { source: "Umami", built: true },
+  reconcile: { source: "canonical against Umami", built: true },
+  traffic: { source: "hourly snapshot", built: false },
+};
 
 const familyOf = (name: AdminOpName) => name.slice(0, name.indexOf("."));
 
@@ -54,6 +88,7 @@ export const renderAdminMcpCapabilities = (): string => {
     DESCRIPTION,
     `## Ops (${ADMIN_OP_NAMES.length})\n`,
     ...ops,
+    `## Reports on \`admin_analytics\` (${ADMIN_ANALYTICS_REPORTS.length})\n\nEvery report reads on the \`base\` credential and takes the same range, time zone and filter arguments. One that is not built reports \`NOT_AVAILABLE\`.\n\n| Report | Source | Built |\n| --- | --- | --- |\n${ADMIN_ANALYTICS_REPORTS.map((report) => `| \`${report}\` | ${ANALYTICS_REPORT_FACTS[report].source} | ${ANALYTICS_REPORT_FACTS[report].built ? "yes" : "no"} |`).join("\n")}\n`,
     `## Surfaces\n\nEvery route of \`community/endpoints.ts\` and \`editorial/endpoints.ts\` not listed here maps to the op of its own name.\n\n| Surface | Covered by, or why not | Note |\n| --- | --- | --- |\n${surfaces.join("\n")}\n`,
   ].join("\n");
 };

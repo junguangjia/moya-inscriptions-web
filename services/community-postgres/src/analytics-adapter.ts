@@ -120,6 +120,7 @@ export class PostgresAnalyticsAdapter implements AnalyticsPort {
     >
   > {
     return this.transaction(async (db) => {
+      await db.query("SET TRANSACTION READ ONLY");
       const row = (
         await db.query<{
           events: string;

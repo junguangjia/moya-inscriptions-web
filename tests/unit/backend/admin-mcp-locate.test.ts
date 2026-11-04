@@ -797,6 +797,7 @@ describe("what tools/list advertises", () => {
         "admin_find",
         "admin_get",
         "admin_read",
+        "admin_analytics",
         "admin_actions",
         "admin_view_media",
       ]);

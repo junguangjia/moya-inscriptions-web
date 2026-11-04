@@ -230,7 +230,22 @@ describe("OPERATOR_AI_BASE_TOKEN route table", () => {
           ["POST", "community/ai/catalog-master/set-limit", "write"],
           ["POST", "community/ai/catalog-master/detach", "write"],
           ["POST", "community/ai/catalog-master/erase", "irreversible"],
-          ["GET", "analytics/insights/*", "read"],
+          ...[
+            "status",
+            "overview",
+            "trend",
+            "breakdown",
+            "compare",
+            "funnel",
+            "realtime",
+            "sessions",
+            "session",
+            "product",
+            "native",
+            "reconcile",
+            "export",
+            "traffic",
+          ].map((report) => ["GET", `analytics/insights/${report}`, "read"]),
           ["POST", "analytics/insights/prune", "irreversible"],
           ["GET", "community/analytics/ips", "sensitive:raw_ip"],
         ] as const
@@ -244,20 +259,19 @@ describe("OPERATOR_AI_BASE_TOKEN route table", () => {
     );
   });
 
-  it("takes plain segments only under a wildcard, and each query parameter once", () => {
+  it("matches a path exactly, and each query parameter once", () => {
     const none = new URLSearchParams();
     const insights = "/internal/analytics/insights";
     expect(aiOperatorRouteFor("GET", `${insights}/sessions`, none)?.klass).toBe(
       "read",
     );
-    expect(
-      aiOperatorRouteFor("GET", `${insights}/session/abc-1`, none)?.klass,
-    ).toBe("read");
     for (const pathname of [
       insights,
       `${insights}/`,
       `${insights}//sessions`,
       `${insights}/sessions/`,
+      `${insights}/session/abc-1`,
+      `${insights}/future`,
       `${insights}/%2e%2e/ips`,
       `${insights}/../ips`,
     ])
@@ -390,7 +404,9 @@ describe("the base token on the Backend", () => {
       );
     const insights = "/internal/analytics/insights";
     expect(refusal(asking("GET", `${insights}/sessions`))).toBeNull();
-    expect(refusal(asking("GET", `${insights}/prune`))).toBeNull();
+    expect(refusal(asking("GET", `${insights}/prune`))).toBe(
+      "AI_ROUTE_FORBIDDEN",
+    );
     expect(refusal(asking("POST", `${insights}/prune`))).toBe(
       "AI_RUN_REQUIRED",
     );
@@ -415,8 +431,8 @@ describe("the base token on the Backend", () => {
   });
 });
 
-describe("the analytics routes as they stand", () => {
-  it("still accept only the Owner's token, so raw IP records stay out of reach", async () => {
+describe("the analytics routes behind the table", () => {
+  it("refuse the base token by name, so raw IP records stay out of reach", async () => {
     const port = {
       status: vi.fn(async () => ({
         last24Hours: { events: 0, visitors: 0, users: 0, sessions: 0 },
@@ -440,15 +456,22 @@ describe("the analytics routes as they stand", () => {
         },
       },
     });
-    for (const route of ["analytics/status", "analytics/ips"]) {
+    for (const [route, code] of [
+      ["analytics/status", "AI_ROUTE_FORBIDDEN"],
+      ["analytics/ips", "SENSITIVE_SWITCH_OFF"],
+    ] as const) {
       expect(
-        (await backend.send("GET", route, bearer(baseToken))).status,
+        await backend.send("GET", route, bearer(baseToken)),
         route,
-      ).toBe(401);
+      ).toEqual({ status: 403, code });
       expect(
         (await backend.send("GET", route, bearer(ownerToken))).status,
         route,
       ).toBe(200);
+      expect(
+        (await backend.send("GET", route, bearer(syntheticToken()))).status,
+        route,
+      ).toBe(401);
     }
     expect(port.status).toHaveBeenCalledTimes(1);
     expect(port.recentIps).toHaveBeenCalledTimes(1);

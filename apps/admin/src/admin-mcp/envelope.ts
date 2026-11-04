@@ -124,6 +124,22 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     hint: "This read ran out of time, so it gives no number and this is not a zero. Retry shortly, or narrow the filter.",
     retryable: true,
   },
+  ANALYTICS_UNAVAILABLE: {
+    hint: "The canonical analytics store could not be read just now, so this has no number and it is not a zero. Retry shortly.",
+    retryable: true,
+  },
+  UMAMI_QUERY_TIMEOUT: {
+    hint: "Umami did not answer in time or could not be reached, so this has no number and it is not a zero. Retry after retryAfterMs, or narrow the range.",
+    retryable: true,
+  },
+  UMAMI_NOT_CONFIGURED: {
+    hint: "The Umami connection is not configured here, so this has no number. Retrying cannot help; tell the Owner. Canonical reports do not need it.",
+    retryable: false,
+  },
+  UMAMI_REPLY_INVALID: {
+    hint: "Umami refused this read or answered in a shape this tool does not accept, so this has no number. Retrying unchanged cannot help; tell the Owner.",
+    retryable: false,
+  },
 };
 
 type EnvelopeFields = Partial<

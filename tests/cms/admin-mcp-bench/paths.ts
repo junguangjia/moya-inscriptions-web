@@ -4,6 +4,7 @@ import {
   adminReadCountDataSchema,
 } from "@moya/contracts/internal/admin-mcp";
 
+import type { AnalyticsOracle } from "./analytics-seed.ts";
 import type { BenchOracle } from "./seed.ts";
 
 // Each task's reference path, as a client with no model would replay it, and its
@@ -19,7 +20,13 @@ export const GATE_A_P95_MS = {
   aggregate: 500,
   fuzzy_locate: 800,
   media_view: 800,
+  analytics_cached: 100,
+  analytics_canonical_cold: 800,
+  analytics_umami_cold: 2000,
 } as const;
+
+/** 访问分析主要数据 in Issue #330, a direct match: over it, an analytics answer fails. */
+export const ANALYTICS_CEILING_MS = 3775;
 
 export interface ToolCall {
   readonly name: string;
@@ -104,5 +111,168 @@ export const gradeC4 = (
     failures.push(`get state ${String(record.state)}`);
   if (record.deepZoom !== "not_available")
     failures.push(`deepZoom ${String(record.deepZoom)}`);
+  return failures;
+};
+
+type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+const differs = (
+  failures: string[],
+  name: string,
+  actual: unknown,
+  expected: unknown,
+) => {
+  if (JSON.stringify(actual) !== JSON.stringify(expected))
+    failures.push(
+      `${name}: ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`,
+    );
+};
+
+/** A1: 「昨天（北京时间）的访客数、访问次数、浏览量各是多少？和前一天比变化多少？」 */
+export const A1_CALL: ToolCall = {
+  name: "admin_analytics",
+  arguments: { report: "overview", range: "yesterday" },
+};
+
+export const gradeA1 = (data: Json, oracle: AnalyticsOracle["a1"]) => {
+  const failures: string[] = [];
+  const { yesterday, dayBefore } = oracle;
+  differs(
+    failures,
+    "range",
+    [data.range?.start, data.range?.end, data.range?.tz],
+    [oracle.start, oracle.end, "Asia/Shanghai"],
+  );
+  for (const name of [
+    "pageViews",
+    "visitorsPageView",
+    "canonicalSessions",
+  ] as const) {
+    const metric = data.metrics?.[name];
+    differs(
+      failures,
+      name,
+      [metric?.v, metric?.prev, metric?.delta],
+      [yesterday[name], dayBefore[name], yesterday[name] - dayBefore[name]],
+    );
+  }
+  const visits = data.native?.metrics?.nativeVisits;
+  differs(failures, "native status", data.native?.status, "fresh");
+  differs(
+    failures,
+    "nativeVisits",
+    [visits?.v, visits?.prev, visits?.delta],
+    [
+      yesterday.nativeVisits,
+      dayBefore.nativeVisits,
+      yesterday.nativeVisits - dayBefore.nativeVisits,
+    ],
+  );
+  return failures;
+};
+
+/** A2: 「过去 7 天访问最多的 5 个页面和前 3 个省份是什么？」 */
+export const A2_CALL: ToolCall = {
+  name: "admin_analytics",
+  arguments: { report: "overview", range: "last_7_days", limit: 5 },
+};
+
+export const gradeA2 = (data: Json, oracle: AnalyticsOracle["a2"]) => {
+  const failures: string[] = [];
+  const block = data.topContent;
+  differs(
+    failures,
+    "top content",
+    block?.rows?.map((row: Json) => [
+      row.target.type,
+      row.target.id,
+      row.count,
+    ]),
+    oracle.rows.map(({ type, id, hits }) => [type, id, hits]),
+  );
+  differs(failures, "total", block?.total, oracle.total);
+  differs(failures, "withheld", block?.withheld?.count, oracle.withheld);
+  differs(failures, "unknown", block?.unknown?.count, oracle.unknown);
+  const shares =
+    Math.round(
+      (block?.rows?.reduce((sum: number, row: Json) => sum + row.share, 0) +
+        block?.other?.share +
+        block?.unknown?.share +
+        block?.withheld?.share) *
+        100,
+    ) / 100;
+  differs(failures, "shares", shares, 100);
+  differs(failures, "provinces status", data.topProvinces?.status, "fresh");
+  differs(failures, "provinces", data.topProvinces?.rows, oracle.provinces);
+  return failures;
+};
+
+/** A3: 「过去 30 天按周看浏览量，哪周最高？比最低那周高多少？」 */
+export const A3_CALL: ToolCall = {
+  name: "admin_analytics",
+  arguments: { report: "trend", range: "last_30_days", groupBy: "week" },
+};
+
+export const gradeA3 = (data: Json, oracle: AnalyticsOracle["a3"]) => {
+  const failures: string[] = [];
+  const buckets = (data.buckets ?? []) as Json[];
+  differs(
+    failures,
+    "weeks",
+    Object.fromEntries(
+      buckets
+        .map((bucket) => [bucket.label as string, bucket.pageViews as number])
+        .sort(([a], [b]) => (a! < b! ? -1 : 1)),
+    ),
+    Object.fromEntries(
+      Object.entries(oracle.weeks).sort(([a], [b]) => (a < b ? -1 : 1)),
+    ),
+  );
+  const highest = buckets.reduce<Json | undefined>(
+    (best, bucket) =>
+      best === undefined || bucket.pageViews > best.pageViews ? bucket : best,
+    undefined,
+  );
+  const lowest = buckets.reduce<Json | undefined>(
+    (best, bucket) =>
+      best === undefined || bucket.pageViews < best.pageViews ? bucket : best,
+    undefined,
+  );
+  differs(failures, "highest week", highest?.label, oracle.highest.label);
+  differs(
+    failures,
+    "difference",
+    highest?.pageViews - lowest?.pageViews,
+    oracle.highest.pageViews - oracle.lowest.pageViews,
+  );
+  return failures;
+};
+
+/** A4: 「过去 7 天访问量最高的作品是哪件？作者是谁？这件作品现在是什么状态？」 */
+export const A4_CALL: ToolCall = {
+  name: "admin_analytics",
+  arguments: {
+    report: "breakdown",
+    range: "last_7_days",
+    dimension: "content",
+    filter: { targetType: "work" },
+    limit: 1,
+  },
+};
+
+export const gradeA4 = (data: Json, oracle: AnalyticsOracle["a4"]) => {
+  const failures: string[] = [];
+  const row = data.rows?.[0];
+  differs(
+    failures,
+    "top work",
+    [
+      row?.target?.id,
+      row?.count,
+      row?.target?.authorHandle,
+      row?.target?.state,
+    ],
+    [oracle.id, oracle.hits, oracle.authorHandle, oracle.state],
+  );
   return failures;
 };

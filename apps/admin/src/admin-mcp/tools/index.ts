@@ -2,6 +2,7 @@ import {
   ADMIN_MCP_RESULT_SCHEMA,
   ADMIN_MCP_TOOL_PROFILES,
   adminActionsInputSchema,
+  adminAnalyticsInputSchema,
   adminFindInputSchema,
   adminGetInputSchema,
   adminReadInputSchema,
@@ -19,6 +20,7 @@ import type {
 import type { PayloadRequest } from "payload";
 import { z } from "zod";
 
+import { analyticsEnvelope } from "../analytics/service";
 import { controlFor } from "../control/state";
 import type { AdminMcpKey } from "../door";
 import { findEnvelope } from "../locate";
@@ -28,6 +30,11 @@ import {
   actionsContinuation,
   actionsEnvelope,
 } from "./actions";
+import {
+  ANALYTICS_DESCRIPTION,
+  ANALYTICS_TOOL_NAME,
+  analyticsListedInput,
+} from "./analytics";
 import { FIND_DESCRIPTION, FIND_TOOL_NAME, findContinuation } from "./find";
 import {
   GET_DESCRIPTION,
@@ -146,6 +153,16 @@ export const ADMIN_MCP_TOOLS: readonly AdminMcpTool[] = [
     listedInput: readListedInput,
     run: (input, { key, req }) => readEnvelope(input, { key, req }),
     continuation: readContinuation,
+  },
+  {
+    name: ANALYTICS_TOOL_NAME,
+    description: ANALYTICS_DESCRIPTION,
+    annotations: READ_ANNOTATIONS,
+    klass: "read",
+    profiles: ADMIN_MCP_TOOL_PROFILES,
+    input: adminAnalyticsInputSchema,
+    listedInput: analyticsListedInput,
+    run: (input) => analyticsEnvelope(input),
   },
   {
     name: ACTIONS_TOOL_NAME,

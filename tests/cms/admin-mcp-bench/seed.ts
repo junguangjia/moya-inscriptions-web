@@ -736,7 +736,8 @@ const COMMUNITY_TABLES = [
 
 /** What actually landed, read with plain counts, and planner statistics refreshed. */
 export const finishSeed = async (db: BenchDb, withCommunity: boolean) => {
-  await db.query("VACUUM (ANALYZE)");
+  // Not in parallel: a container's 64 MiB of /dev/shm cannot hold it at a million rows.
+  await db.query("VACUUM (ANALYZE, PARALLEL 0)");
   const counts: Record<string, number> = {};
   for (const [table, name] of [
     ...CMS_TABLES,

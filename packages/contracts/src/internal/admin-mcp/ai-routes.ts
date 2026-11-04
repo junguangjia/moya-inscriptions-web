@@ -1,3 +1,7 @@
+import {
+  ANALYTICS_INSIGHT_REPORTS,
+  ANALYTICS_INSIGHTS_PATH,
+} from "./analytics.js";
 import type { AdminOpCredential } from "./op-meta.js";
 
 /** The Backend credentials an AI operator can present. Both are labelled `ai-admin`. */
@@ -22,7 +26,7 @@ export type AiOperatorRouteClass =
 
 export interface AiOperatorRoute {
   readonly method: "GET" | "POST";
-  /** Exact, or a prefix ending in `/*` that takes plain path segments. */
+  /** Exact: a prefix would pass a future route unclassified. */
   readonly path: string;
   readonly klass: AiOperatorRouteClass;
   readonly credentials: readonly AiOperatorCredential[];
@@ -99,15 +103,18 @@ export const AI_OPERATOR_ROUTES: readonly AiOperatorRoute[] = [
     klass: "irreversible",
     credentials: base,
   },
-  {
-    method: "GET",
-    path: "/internal/analytics/insights/*",
-    klass: "read",
-    credentials: base,
-  },
+  // `export` and `traffic` have no handler yet.
+  ...[...ANALYTICS_INSIGHT_REPORTS, "export", "traffic"].map(
+    (report): AiOperatorRoute => ({
+      method: "GET",
+      path: `${ANALYTICS_INSIGHTS_PATH}/${report}`,
+      klass: "read",
+      credentials: base,
+    }),
+  ),
   {
     method: "POST",
-    path: "/internal/analytics/insights/prune",
+    path: `${ANALYTICS_INSIGHTS_PATH}/prune`,
     klass: "irreversible",
     credentials: base,
   },
@@ -119,14 +126,6 @@ export const AI_OPERATOR_ROUTES: readonly AiOperatorRoute[] = [
   },
 ];
 
-const plainSegments = /^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/u;
-
-const pathMatches = (pattern: string, pathname: string): boolean =>
-  pattern.endsWith("/*")
-    ? pathname.startsWith(pattern.slice(0, -1)) &&
-      plainSegments.test(pathname.slice(pattern.length - 1))
-    : pathname === pattern;
-
 /** The row deciding this request, or undefined, which is a refusal. */
 export const aiOperatorRouteFor = (
   method: string,
@@ -136,7 +135,7 @@ export const aiOperatorRouteFor = (
   AI_OPERATOR_ROUTES.find(
     (route) =>
       route.method === method &&
-      pathMatches(route.path, pathname) &&
+      route.path === pathname &&
       Object.entries(route.query ?? {}).every(([name, value]) => {
         const values = query.getAll(name);
         return values.length === 1 && values[0] === value;

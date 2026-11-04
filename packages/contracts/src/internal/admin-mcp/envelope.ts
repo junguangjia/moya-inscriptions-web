@@ -34,6 +34,10 @@ export const ADMIN_MCP_CODES = [
   "MEDIA_TOO_LARGE",
   "AI_ROUTE_FORBIDDEN",
   "READ_TIMED_OUT",
+  "ANALYTICS_UNAVAILABLE",
+  "UMAMI_QUERY_TIMEOUT",
+  "UMAMI_NOT_CONFIGURED",
+  "UMAMI_REPLY_INVALID",
 ] as const;
 
 export const adminMcpCodeSchema = z.enum(ADMIN_MCP_CODES);

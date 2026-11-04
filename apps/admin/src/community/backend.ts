@@ -30,7 +30,7 @@ const operatorTokenVariable = "COMMUNITY_OPERATOR_TOKEN" as const;
 const loopbackHosts = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 /** The boundary is reached over loopback only, whatever the scheme. */
-const operatorBaseUrl = (): URL => {
+export const operatorBaseUrl = (): URL => {
   const value = process.env[operatorBaseUrlVariable];
   if (value === undefined || value === "")
     throw new CommunityOperatorError("OPERATOR_NOT_CONFIGURED", 503);
@@ -70,7 +70,7 @@ export const aiCredentialConfigured = (
 ): boolean => Boolean(process.env[aiTokenVariables[credential]]);
 
 /** Never falls back to the Owner's token: an AI call without its own answers so. */
-const aiToken = (credential: AiOperatorCredential): string => {
+export const aiToken = (credential: AiOperatorCredential): string => {
   const value = process.env[aiTokenVariables[credential]];
   if (value === undefined || value === "")
     throw new CommunityOperatorError("AI_CREDENTIAL_NOT_CONFIGURED", 503);

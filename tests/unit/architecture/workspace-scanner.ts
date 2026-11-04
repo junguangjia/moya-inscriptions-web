@@ -1291,7 +1291,10 @@ export const isAuthorizedCmsServerFile = (
     /^src\/admin-mcp\/ops\/(?:cms|community|define|editorial|list|list-sources|scripts)\.ts$/.test(
       relative,
     ) ||
-    /^src\/admin-mcp\/tools\/(?:actions|find|get|index|read|view-media|whoami)\.ts$/.test(
+    /^src\/admin-mcp\/tools\/(?:actions|analytics|find|get|index|read|view-media|whoami)\.ts$/.test(
+      relative,
+    ) ||
+    /^src\/admin-mcp\/analytics\/(?:cache|service|umami-guard)\.ts$/.test(
       relative,
     ) ||
     /^src\/admin-mcp\/control\/(?:endpoints|global|page-data|state)\.ts$/.test(
