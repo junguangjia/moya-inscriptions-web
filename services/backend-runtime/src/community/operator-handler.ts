@@ -11,6 +11,7 @@ import {
   isCommunityConflictError,
   isCommunityInputError,
   isCommunityNotFoundError,
+  isCommunityReadTimedOutError,
   isCommunityStoreUnavailableError,
 } from "@moya/api";
 import {
@@ -224,6 +225,10 @@ const sendFailure = (response: ServerResponse, error: unknown): void => {
   }
   if (isCommunityStoreUnavailableError(error)) {
     sendOperatorError(response, 503, "STORE_UNAVAILABLE");
+    return;
+  }
+  if (isCommunityReadTimedOutError(error)) {
+    sendOperatorError(response, 503, "READ_TIMED_OUT");
     return;
   }
   // Unmapped: leave a diagnosable trace without private data.

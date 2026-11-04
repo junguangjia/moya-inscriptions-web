@@ -1141,11 +1141,10 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
   async operatorListForAi(
     q: OperatorReportQuery,
   ): Promise<OperatorReportAiPage> {
+    const leavesOut = operatorReportFilter.namesWithheld(q);
     const where =
       operatorReportFilter.sql +
-      (operatorReportFilter.namesWithheld(q)
-        ? ` AND NOT ${reportIsSelfOnlySql("c")}`
-        : "");
+      (leavesOut ? ` AND NOT ${reportIsSelfOnlySql("c")}` : "");
     return this.tx(async (db) => {
       const args = operatorReportFilter.values(q);
       const rows = (
@@ -1165,6 +1164,7 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
         total,
         page: q.page,
         pageSize: q.pageSize,
+        ...(leavesOut ? { leavesOutOwnerOnly: true as const } : {}),
       };
     });
   }

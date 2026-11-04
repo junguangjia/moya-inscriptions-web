@@ -101,15 +101,20 @@ export const readEnvelope = async (
   return entry.run!(parsed.data, { req, key, read });
 };
 
-/** A cut page goes on from the last whole row it kept; a cut count from its offset. */
+/**
+ * A cut page goes on from the last whole row it kept; a cut count from its offset. Rows
+ * with no paging of their own answer on the Backend's cursor, which stands past the
+ * whole page, so a cut of them has no way on: following it would skip what was cut.
+ */
 export const readContinuation = (
   rawInput: unknown,
   kept: readonly unknown[],
-): AdminMcpNext | undefined => {
+): AdminMcpNext | null | undefined => {
   const read = rawInput as AdminReadInput;
   const last = kept.at(-1) as { id?: unknown; count?: unknown } | undefined;
   if (last === undefined || !isAdminOpName(read.op)) return undefined;
   const entry: AdminOpEntry = adminOpMeta[read.op];
+  if (entry.paging === undefined && entry.readArgs !== undefined) return null;
   if (entry.paging === "numbered") {
     // A count's groups are few and closed, and a page number means nothing to them.
     if (read.view === "count") return undefined;

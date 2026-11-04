@@ -175,8 +175,9 @@ export const callCommunityOperator = operatorCallWith({});
  * The same loopback call for Admin MCP, on the AI credential and never the Owner's.
  * It keeps the Backend's status and bare code, so SELF_ONLY_OWNER_REVIEW,
  * SENSITIVE_SWITCH_OFF and READ_TIMED_OUT reach the guard as themselves. A lost
- * answer is OPERATOR_UNREACHABLE, as on the Owner's route, and one given up on at the
- * call's limit is OPERATOR_GAVE_UP, because the Backend's read then runs on.
+ * answer is OPERATOR_UNREACHABLE, as on the Owner's route, before its headers or after,
+ * and one given up on at the call's limit is OPERATOR_GAVE_UP, because the Backend's
+ * read may then run on.
  */
 export const callAiOperator =
   (credential: AiOperatorCredential) =>
@@ -188,6 +189,12 @@ export const callAiOperator =
     const token = aiToken(credential);
     const url = new URL(`internal/community/${path}`, operatorBaseUrl());
     const signal = AbortSignal.timeout(15_000);
+    // Never surface the URL, the credential or a driver message.
+    const lost = () =>
+      new CommunityOperatorError(
+        signal.aborted ? "OPERATOR_GAVE_UP" : "OPERATOR_UNREACHABLE",
+        502,
+      );
     let response: Response;
     try {
       response = await fetch(url, {
@@ -204,18 +211,18 @@ export const callAiOperator =
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
     } catch {
-      // Never surface the URL, the credential or a driver message.
-      throw new CommunityOperatorError(
-        signal.aborted ? "OPERATOR_GAVE_UP" : "OPERATOR_UNREACHABLE",
-        502,
-      );
+      throw lost();
     }
     if (!response.ok)
       throw new CommunityOperatorError(
         (await backendCode(response)) ?? operatorFailureCode(response.status),
         response.status,
       );
-    return (await response.json()) as Result;
+    try {
+      return (await response.json()) as Result;
+    } catch {
+      throw lost();
+    }
   };
 
 /**

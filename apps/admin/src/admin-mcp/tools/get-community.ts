@@ -6,10 +6,12 @@ import type {
   AdminGetInput,
   AdminMcpEnvelope,
   AdminRecordType,
+  AiLookupType,
 } from "@moya/contracts/internal/admin-mcp";
 import { operatorExactIdSchema } from "@moya/contracts/internal/community-operator";
 import type { PayloadRequest } from "payload";
 
+import { CommunityOperatorError } from "../../community/backend";
 import { communityOperationDefinitions } from "../../community/endpoints";
 import type { CommunityOperationName } from "../../community/endpoints";
 import { communityActionsFor } from "../actions-for";
@@ -84,6 +86,17 @@ const oneRecord =
       ? undefined
       : ((await askCommunity(route, parsed, req)) as CommunityItem);
   };
+
+/** What the locate route found for an id. A source that did not answer is never a miss. */
+const foundById = async (type: AiLookupType, id: string) => {
+  const { items, sources } = await askFind({ type, id });
+  const statuses = Object.values(sources);
+  if (statuses.includes("timed_out"))
+    throw new CommunityOperatorError("READ_TIMED_OUT", 503);
+  if (statuses.some((status) => status !== "ok"))
+    throw new CommunityOperatorError("STORE_UNAVAILABLE", 503);
+  return items[0];
+};
 
 const RECORDS: Readonly<Partial<Record<AdminRecordType, CommunityRecord>>> = {
   report: {
@@ -338,8 +351,7 @@ const RECORDS: Readonly<Partial<Record<AdminRecordType, CommunityRecord>>> = {
     excluded: SELF_ONLY_CATEGORY,
     fields: facts("state", "kind", "ownerId", "updatedAt"),
     read: async (id) => {
-      const { items } = await askFind({ type: "media_item", id });
-      const item = items[0];
+      const item = await foundById("media_item", id);
       return (
         item && {
           state: item.state,
@@ -360,8 +372,7 @@ const RECORDS: Readonly<Partial<Record<AdminRecordType, CommunityRecord>>> = {
       ...texts("document"),
     ],
     read: async (id, req) => {
-      const { items } = await askFind({ type: "article", id });
-      const found = items[0];
+      const found = await foundById("article", id);
       if (found === undefined) return undefined;
       const facts = {
         status: found.state,

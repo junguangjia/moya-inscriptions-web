@@ -2157,6 +2157,14 @@ describe("admin_find", () => {
     const exact = await find(`@${handles.lishu}`);
     expect(exact.meta.sources).toEqual({ users: "not_available" });
     expect(exact.meta.partial).toBe(true);
+    // No address is built, so a query too long for one has nothing to be refused for.
+    const long = await ok("admin_find", { query: `长 ${"碑".repeat(2_000)}` });
+    expect(long.meta.sources).toMatchObject({
+      users: "not_available",
+      reports: "not_available",
+      catalogs_draft: "ok",
+    });
+    expect(long.meta.partial).toBe(true);
   });
 
   it("refuses a query too long for the Backend's address by name, and what fits still reads", async () => {
@@ -2351,6 +2359,42 @@ describe("admin_read on a queue", () => {
       input: { cursor: "AAAA" },
     });
     expect(forged).toMatchObject({ ok: false, code: "INPUT_INVALID" });
+    // A cursor of the right shape holds only what the Backend writes: any other time
+    // cannot ever succeed, so it is never told to retry.
+    const cursorAt = (time: string) =>
+      Buffer.from(JSON.stringify([time, opaque("article")]), "utf8").toString(
+        "base64url",
+      );
+    for (const time of [
+      "2026-01-01T00:00:00+16:00",
+      "2026-01-01T00:00:00.000+00:00",
+      `2026-01-01T00:00:00.${"1".repeat(200)}Z`,
+      "2026-02-30T00:00:00.000Z",
+      "0000-01-01T00:00:00.000Z",
+      "+010000-01-01T00:00:00.000Z",
+      "-000001-01-01T00:00:00.000Z",
+      "2026-01-01",
+    ]) {
+      const refused = await read({
+        op: "list.article_submissions",
+        input: { cursor: cursorAt(time) },
+      });
+      expect(refused, time).toMatchObject({
+        ok: false,
+        code: "INPUT_INVALID",
+        issues: [{ path: ["input"], code: "refused" }],
+      });
+      expect(refused.retryable, time).toBeUndefined();
+    }
+    for (const time of [
+      "2026-01-01T00:00:00.000Z",
+      "0001-01-01T00:00:00.000Z",
+      "9999-12-31T23:59:59.999Z",
+    ])
+      await ok("admin_read", {
+        op: "list.article_submissions",
+        input: { cursor: cursorAt(time) },
+      });
   });
 
   it("reads at most the report page that can fit, says so in its filter, and goes on from what it read", async () => {
@@ -2428,6 +2472,49 @@ describe("admin_read on a queue", () => {
       expect(counted.hint).toBeUndefined();
       expect(counted.data).not.toHaveProperty("leavesOutOwnerOnly");
     }
+  });
+
+  it("says the same over rows, by the query alone, so it says nothing of any one case", async () => {
+    const hinted = /only the Owner reviews are not in this total/u;
+    const rowsOf = (op: string, input: Json) => ok("admin_read", { op, input });
+    const plain = await rowsOf("list.reports", {});
+    const onWorks = await rowsOf("list.reports", { targetType: "work" });
+    expect(onWorks.hint).toMatch(hinted);
+    expect(onWorks.data.total).toBeLessThan(plain.data.total);
+    expect(onWorks.data).not.toHaveProperty("leavesOutOwnerOnly");
+    expect(onWorks.data).not.toHaveProperty("about");
+    expect(JSON.stringify(onWorks)).not.toContain("leavesOutOwnerOnly");
+    for (const [op, input] of [
+      ["list.reports", { urgent: "false" }],
+      ["list.reports", { urgent: "true" }],
+      ["list.reports", { targetType: "work", targetId: ids.publicWork }],
+      ["list.reports", { reporterId: ids.reporter }],
+      ["list.reports", { affectedUserId: ids.author }],
+      ["list.appeals", { targetType: "work" }],
+      // It holds nothing at all, and says so all the same.
+      ["list.reports", { reporterId: opaque("user") }],
+    ] as const)
+      expect((await rowsOf(op, input)).hint, JSON.stringify(input)).toMatch(
+        hinted,
+      );
+    // It stays beside the way on.
+    const firstOfMany = await rowsOf("list.reports", {
+      targetType: "work",
+      pageSize: 1,
+    });
+    expect(firstOfMany.hint).toMatch(hinted);
+    expect(firstOfMany.next).toBeDefined();
+    for (const [op, input] of [
+      ["list.reports", {}],
+      ["list.reports", { status: "open" }],
+      ["list.reports", { unresolved: "true" }],
+      ["list.appeals", {}],
+      ["list.comments", {}],
+    ] as const)
+      expect(
+        (await rowsOf(op, input)).hint,
+        JSON.stringify(input),
+      ).toBeUndefined();
   });
 
   it("counts in SQL, equal to its list, with how long the oldest has waited", async () => {
@@ -2530,6 +2617,48 @@ describe("admin_read on a queue", () => {
       await holder.query("ROLLBACK");
       holder.release();
     }
+  });
+
+  it("ends an AI comment read that turns slow, by name, where the Owner's read waits as it always has", async () => {
+    let ownerAnswered = false;
+    let ownerRead: Promise<Response> | undefined;
+    const holder = await setup.connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query("LOCK TABLE community.works IN ACCESS EXCLUSIVE MODE");
+      ownerRead = fetch(
+        `${backendOrigin}internal/community/comments?pageSize=1`,
+        { headers: { authorization: `Bearer ${ownerToken}` } },
+      ).finally(() => {
+        ownerAnswered = true;
+      });
+      for (const args of [
+        { op: "list.comments" },
+        { op: "community.read-summary", input: { range: "30d" } },
+      ]) {
+        const started = Date.now();
+        const answer = await read(args);
+        expect(answer, args.op).toMatchObject({
+          ok: false,
+          code: "READ_TIMED_OUT",
+          retryable: true,
+        });
+        expect(answer, args.op).not.toHaveProperty("data");
+        // Its own limit ended it, inside the 15 s call.
+        expect(Date.now() - started, args.op).toBeGreaterThanOrEqual(3_500);
+        expect(Date.now() - started, args.op).toBeLessThan(14_000);
+      }
+      expect(ownerAnswered).toBe(false);
+      // Only the Owner's statement is left waiting behind the lock.
+      const { rows } = await setup.query(
+        "SELECT count(*)::integer AS n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'",
+      );
+      expect(rows[0]!.n).toBe(1);
+    } finally {
+      await holder.query("ROLLBACK");
+      holder.release();
+    }
+    expect((await ownerRead)?.status).toBe(200);
   });
 
   it("resolves a named range in Asia/Shanghai, echoes the instants, and refuses both ways at once", async () => {
@@ -2800,6 +2929,62 @@ describe("the AI's share of the App pool", () => {
 });
 
 describe("admin_get on a community record", () => {
+  it("never reads a source that did not answer as a miss, on an Article or a media item", async () => {
+    const lookups = [
+      ["article", ids.pendingArticle, "article_documents"],
+      ["media_item", ids.item, "media_items"],
+    ] as const;
+    for (const [type, id, table] of lookups) {
+      await ok("admin_get", { type, id });
+      const holder = await setup.connect();
+      try {
+        await holder.query("BEGIN");
+        await holder.query(
+          `LOCK TABLE community.${table} IN ACCESS EXCLUSIVE MODE`,
+        );
+        const locked = await get(type, id);
+        expect(locked, type).toMatchObject({
+          ok: false,
+          code: "READ_TIMED_OUT",
+          retryable: true,
+        });
+        expect(locked, type).not.toHaveProperty("data");
+      } finally {
+        await holder.query("ROLLBACK");
+        holder.release();
+      }
+      await withStubBackend(
+        (_request, response) => {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
+              items: [],
+              sources: { [table]: "failed" },
+              excluded: [],
+            }),
+          );
+        },
+        async () => {
+          expect(await get(type, id), type).toMatchObject({
+            ok: false,
+            code: "COMMUNITY_UNAVAILABLE",
+            retryable: true,
+          });
+        },
+      );
+      vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", backendOrigin);
+    }
+    // A source that did answer still calls a miss a miss.
+    for (const [type, id] of [
+      ["article", opaque("article")],
+      ["media_item", opaque("media-item")],
+    ] as const)
+      expect(await get(type, id), type).toMatchObject({
+        ok: false,
+        code: "NOT_FOUND",
+      });
+  });
+
   it("answers an outline with state, length and hash, and no long text", async () => {
     const work = await ok("admin_get", { type: "work", id: ids.publicWork });
     expect(work.data).toMatchObject({

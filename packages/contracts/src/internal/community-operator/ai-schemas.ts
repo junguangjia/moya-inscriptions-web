@@ -73,6 +73,8 @@ export const operatorReportAiPageSchema = z.strictObject({
   total: z.number().int().nonnegative(),
   page: z.number().int().positive(),
   pageSize: z.number().int().positive(),
+  /** Decided by the query alone, so saying it says nothing about any one case. */
+  leavesOutOwnerOnly: z.literal(true).optional(),
 });
 
 export type OperatorReportAi = z.infer<typeof operatorReportAiSchema>;

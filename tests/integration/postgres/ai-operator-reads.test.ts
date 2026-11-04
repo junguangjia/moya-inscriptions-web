@@ -1330,6 +1330,23 @@ describe("ai/count", () => {
     ).toMatchObject({ leavesOutOwnerOnly: true });
   });
 
+  it("says on the report list what it says on a count, by the query alone", async () => {
+    const listed = async (query: string) =>
+      operatorReportAiPageSchema.parse((await ai(`reports?${query}`)).json);
+    for (const query of [
+      "targetType=work",
+      "urgent=false",
+      `reporterId=user-${"0".repeat(32)}`,
+    ])
+      expect(await listed(query), query).toMatchObject({
+        leavesOutOwnerOnly: true,
+      });
+    for (const query of ["pageSize=5", "status=open", "unresolved=true"])
+      expect(await listed(query), query).not.toHaveProperty(
+        "leavesOutOwnerOnly",
+      );
+  });
+
   it("answers no number when it runs out of time", async () => {
     const blocker = await setup.connect();
     try {

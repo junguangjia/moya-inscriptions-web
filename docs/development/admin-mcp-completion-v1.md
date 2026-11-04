@@ -497,9 +497,10 @@ Recorded when built in S6, on withholding:
 - A report's target, people and urgency stay unread: an owner-only row stays in
   the list only under a `status` or `unresolved` filter, and in a count only
   grouped by kind or status. Any other filter or group leaves it out, so its
-  affected user cannot be read back by counting, and such a count says so:
-  `ai/count` answers `leavesOutOwnerOnly`, decided by the query alone, and Admin
-  turns it into a fixed hint. `reportCount` leaves it out for the same reason.
+  affected user cannot be read back by counting, and such a count or list says
+  so: `ai/count` and the AI's report list answer `leavesOutOwnerOnly`, decided
+  by the query alone, and Admin turns it into a fixed hint. `reportCount` leaves
+  it out for the same reason.
 - A comment's case still goes to the Owner once a purge has taken the comment's
   row, through the work its snapshot's `post` names.
 - A self-only work's position is left to the row that names it: an owner-only
@@ -1321,11 +1322,11 @@ tests/cms/admin-mcp-community.test.ts:
   them: the wait holds no Admin connection. With no token the sources are
   `not_available`, with the Backend out of reach they are `failed`, and a CMS
   answer still comes back. A query too long for the Backend's address, about
-  1,300 CJK characters, is refused as `too_long_for_community_search` unless
-  `type` keeps it on the CMS side, because it would fail the same way every
-  time. Candidates carry only `admin_get`; an exact hit also carries the reads
-  around the record. Community writes join those skeletons with the slice that
-  builds them.
+  1,300 CJK characters, is refused as `too_long_for_community_search` because it
+  would fail the same way every time, unless `type` keeps it on the CMS side or
+  no token is placed, when no address is built. Candidates carry only
+  `admin_get`; an exact hit also carries the reads around the record. Community
+  writes join those skeletons with the slice that builds them.
 - `read-threads`, `read-feedback` and `read-publishing-jobs` gained an additive
   `id` filter, so `admin_get` can read one by id. `includeHidden` now reads the
   text `false` as false, because a coercion read it as true; the Owner's screen
@@ -1347,6 +1348,17 @@ tests/cms/admin-mcp-community.test.ts:
   target scale over a 1 ms hop: 4 long reads at once left a public statement at
   2 ms, 5 slowed it, and 40 paced at 10 per second made some fail. A model of 2
   slots under the same load left it at 2 ms.
+- A link's community ids run in turn, each up to 20 s, a wait of 5 s and a call
+  of 15 s, and a query can name about 227 of them. So the exact stage starts no
+  new Backend call past 35 s, or once the client has gone. The remaining
+  references are named `timed_out` without a call and the answer says `partial`,
+  and the last call to start still answers inside the 60 s of Nginx and the
+  clients. CMS lookups in a link are not held to it; they make no Backend call
+  and were settled in S3.
+- A source one find asks twice keeps its worst status, so a failed lookup is not
+  overwritten by a later answered one. `admin_get` on an Article or a media item
+  reads through the same lookup, and answers `READ_TIMED_OUT` or
+  `COMMUNITY_UNAVAILABLE` when its source did not answer, never `NOT_FOUND`.
 - `list.reports` and `list.appeals` read at most 30 rows a page, because the
   Backend builds each case whole, about 7 statements, and about 32 compact rows
   fit one answer. A larger `pageSize` is named in `filter` as
@@ -1355,7 +1367,13 @@ tests/cms/admin-mcp-community.test.ts:
   self-only works per statement, not a lookup per row. At the bench's target
   scale on a laptop, the default AI list took about 1,190 ms with the lookup and
   about 350 ms with the set, beside about 300 ms for the Owner's, with the same
-  total.
+  total. Past `hash_mem` the set is no longer hashed and the plan turns
+  quadratic: at default settings the line is about 131,000 self-only works by
+  the planner's rule, and 50,000 stayed hashed. So the AI's comment queue and
+  summary run at 4 s per statement, at most three of them, and past it answer
+  `READ_TIMED_OUT`. That is 12 s inside the 15 s call, and with the pool's 5 s
+  connection wait 17 s inside the call and its 15 s hold, so the hold is a real
+  bound on these reads. The Owner's reads have no such limit, as before.
 - `listPending` compares its cursor in milliseconds. It held microseconds in the
   column and milliseconds in the cursor, so the row a page ended on came back at
   the head of the next page, on the Owner's screen too.
@@ -2548,19 +2566,25 @@ Accepted limits, recorded and not fixed:
   token is placed is the Owner's call.
 - The self-only check on one record runs just before the read, so an author's
   flip landing between them can leave one answer holding what was public a
-  moment earlier. The next call refuses.
+  moment earlier. A comment list has the same window on its titles: it reads a
+  work's title after its snapshot, by id alone, so a row can carry the title of
+  a work that has just flipped. The next call refuses or leaves the row out.
 - `community.read-account-capacity` counts the bytes of items in self-only works
   in its totals. It names no item, title or text, and the number cannot be told
   apart from drafts or public works.
 - A job row can name a subject id inside a self-only work. It holds no text.
-- AI reads share the App pool with the public site. Each Admin process takes at
-  most 2 of its connections for community calls and 2 for canonical analytics,
-  so 4 of 5 at worst, and byte reads are outside both. The Backend sets no limit
-  of its own, so a caller holding the token on its loopback address is not held.
+- AI reads share the App pool with the public site. Each Admin process makes at
+  most 2 community calls at once and 2 canonical analytics reads, so about 4 of
+  5 connections at worst, and byte reads are outside both. A slot is one call,
+  usually one connection. `list.comments` adds a short burst of per-row title
+  reads on the pool after its snapshot, and a read still running past its abort
+  and hold has no slot. The Backend sets no cap on calls of its own, so a caller
+  holding the token on its loopback address is not held.
 - A report filed on a community Article before S6 can hold a private draft's
-  title in its snapshot. AI can read and search that title until retention
-  clears the case, three years after it closes. Whether Production holds such a
-  row was not checked.
+  title in its snapshot, and one on a comment under such an Article can hold it
+  in `snapshot.post.title`. AI can read such a title until retention clears the
+  case, three years after it closes, and can search the Article report's.
+  Whether Production holds such a row was not checked.
 
 ## 18. Reuse
 

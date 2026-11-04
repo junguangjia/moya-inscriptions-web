@@ -54,12 +54,13 @@ export type CommunityItem = Readonly<Record<string, unknown>>;
 export const COMMUNITY_READ_POOL_SHARE = 2;
 /**
  * Past it the read answers READ_TIMED_OUT. Short, because one answer can make several
- * calls of up to 15 s each, and Nginx and the clients stop waiting at 60 s.
+ * calls of up to 15 s each, and Nginx and the clients stop waiting at 60 s. A link's
+ * ids stay inside that by the exact stage's own deadline.
  */
 const COMMUNITY_WAIT_MS = 5_000;
 /**
  * Our abort does not end the Backend's read, so a read given up on keeps its slot this
- * much longer. A judgement: a list's snapshot has no statement limit of its own.
+ * much longer. A judgement: not every list's snapshot has a statement limit of its own.
  */
 const COMMUNITY_OVERRUN_HOLD_MS = 15_000;
 
@@ -583,6 +584,15 @@ const withoutPaging = (query: Readonly<Record<string, unknown>>) =>
 const OWNER_ONLY_NOT_COUNTED =
   "Cases only the Owner reviews are not in this total, so it can be smaller than a plain count of the same queue.";
 
+/** Decided by the query alone, so saying it says nothing about any one case. */
+const toldOfOwnerOnly = (
+  envelope: AdminMcpEnvelope,
+  leavesOutOwnerOnly: true | undefined,
+): AdminMcpEnvelope =>
+  leavesOutOwnerOnly === true
+    ? { ...envelope, hint: OWNER_ONLY_NOT_COUNTED }
+    : envelope;
+
 const countEnvelope = async (
   source: CommunitySource,
   filter: Record<string, unknown>,
@@ -606,16 +616,16 @@ const countEnvelope = async (
   if (!checked.success)
     throw new CommunityOperatorError("OPERATOR_RESPONSE_INVALID", 502);
   const { leavesOutOwnerOnly, ...counted } = checked.data;
-  const envelope = okEnvelope(
-    adminReadCountDataSchema.parse({
-      ...counted,
-      filter: { ...filter, ...echo },
-    }),
-    ["/data/groups", "/data/filter"],
+  return toldOfOwnerOnly(
+    okEnvelope(
+      adminReadCountDataSchema.parse({
+        ...counted,
+        filter: { ...filter, ...echo },
+      }),
+      ["/data/groups", "/data/filter"],
+    ),
+    leavesOutOwnerOnly,
   );
-  return leavesOutOwnerOnly === true
-    ? { ...envelope, hint: OWNER_ONLY_NOT_COUNTED }
-    : envelope;
 };
 
 const rowsEnvelope = async (
@@ -649,8 +659,9 @@ const rowsEnvelope = async (
     readonly items: readonly CommunityItem[];
     readonly total?: number;
     readonly nextCursor?: string | null;
+    readonly leavesOutOwnerOnly?: true;
   };
-  const { items, total, nextCursor } = answer;
+  const { items, total, nextCursor, leavesOutOwnerOnly } = answer;
   // `next` is the one way on: a page number here would be a second one that skips rows.
   const about = without(answer, [
     "items",
@@ -659,6 +670,7 @@ const rowsEnvelope = async (
     "page",
     "pageSize",
     "totalPages",
+    "leavesOutOwnerOnly",
   ]);
   const rows = items.map((item) =>
     isOwnerOnly(item)
@@ -678,18 +690,21 @@ const rowsEnvelope = async (
     : items.length > 0 && total !== undefined && reached < total
       ? numberedPageAfter(page, pageSize, items.length)
       : undefined;
-  const envelope = okEnvelope(
-    adminReadRowsDataSchema.parse({
-      rows,
-      filter: {
-        ...withoutPaging(query),
-        ...echo,
-        ...(pageSize < wanted ? { pageSizeCappedAt: pageSize } : {}),
-      },
-      ...(total === undefined ? {} : { total }),
-      ...(Object.keys(about).length === 0 ? {} : { about }),
-    }),
-    ROWS_UNTRUSTED,
+  const envelope = toldOfOwnerOnly(
+    okEnvelope(
+      adminReadRowsDataSchema.parse({
+        rows,
+        filter: {
+          ...withoutPaging(query),
+          ...echo,
+          ...(pageSize < wanted ? { pageSizeCappedAt: pageSize } : {}),
+        },
+        ...(total === undefined ? {} : { total }),
+        ...(Object.keys(about).length === 0 ? {} : { about }),
+      }),
+      ROWS_UNTRUSTED,
+    ),
+    leavesOutOwnerOnly,
   );
   if (onward === undefined) return envelope;
   const next: AdminMcpNext = {
@@ -820,7 +835,8 @@ export const COMMUNITY_READ_FACTS: Readonly<
   "read-featured": source(FEATURED),
   "read-feature-catalogs": source(FEATURE_CATALOGS),
   "read-work-submissions": source(WORK_SUBMISSIONS),
-  // Pages on the Backend's own cursor, which `next` carries as it stands.
+  // Pages on the Backend's own cursor, which `next` carries as it stands. That cursor is
+  // past the whole page, so a cut of this page has no way on.
   "read-article-submissions": source(ARTICLE_SUBMISSIONS, null),
   "read-publishing-jobs": source(JOBS),
   "read-feedback": source(FEEDBACK),

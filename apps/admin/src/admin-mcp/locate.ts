@@ -104,6 +104,12 @@ const isSearchSource = (source: string | undefined): source is AiFindSource =>
 const isLookupType = (type: string): type is AiLookupType =>
   (AI_LOOKUP_TYPES as readonly string[]).includes(type);
 
+/** One source asked twice is only as answered as its worst call. */
+const noted = (sources: Sources, source: string, status: SourceStatus) => {
+  if (status !== "ok" || sources[source] === undefined)
+    sources[source] = status;
+};
+
 /** A branch not really read says so, and a failed call is every branch it asked for. */
 const askedBackend = async (
   query: Readonly<Record<string, string | number>>,
@@ -122,7 +128,8 @@ const askedBackend = async (
     for (const source of asked) sources[source] = "failed";
     return [];
   }
-  Object.assign(sources, answer.sources);
+  for (const [source, status] of Object.entries(answer.sources))
+    noted(sources, source, status);
   for (const category of answer.excluded) excluded.add(category);
   return answer.items.map((community) => ({ community }));
 };
@@ -333,11 +340,19 @@ const distinct = <Found extends AnyHit>(hits: readonly Found[]) =>
     (hit, index) => hits.findIndex((other) => sameRecord(hit, other)) === index,
   );
 
+/**
+ * A link's community ids run in turn, each up to 20 s: a wait of 5 s and a call of 15 s.
+ * Nginx and the clients stop at 60 s, so no new call starts past this, and the last to
+ * start still answers in time. The product's own links name only two or three ids.
+ */
+const EXACT_STAGE_DEADLINE_MS = 35_000;
+
 /** The one exact lookup a community reference names. Its value can name no record. */
 const communityLookup = async (
   reference: Extract<LocateReference, { kind: "community" | "handle" }>,
   sources: Sources,
   excluded: Set<string>,
+  stopped: () => boolean,
 ): Promise<readonly CommunityHit[]> => {
   const type = reference.kind === "handle" ? "user" : reference.type;
   const source = COMMUNITY_SOURCE[type]!;
@@ -348,7 +363,11 @@ const communityLookup = async (
     return [];
   }
   if (!operatorExactIdSchema.safeParse(value).success) {
-    sources[source] = "ok";
+    noted(sources, source, "ok");
+    return [];
+  }
+  if (stopped()) {
+    sources[source] = "timed_out";
     return [];
   }
   return askedBackend(
@@ -374,6 +393,9 @@ const exactStage = async (
   const families = familiesFor(input.type);
   const hits: AnyHit[] = [];
   let considered = 0;
+  const deadline = Date.now() + EXACT_STAGE_DEADLINE_MS;
+  // A client that has gone is waiting for no answer.
+  const stopped = () => Date.now() >= deadline || req.signal?.aborted === true;
   for (const reference of references) {
     if (reference.kind === "text") continue;
     if (reference.kind === "community" || reference.kind === "handle") {
@@ -389,7 +411,9 @@ const exactStage = async (
       // One id asked of two stores is one reference; its CMS twin already counted.
       if (reference.kind !== "community" || reference.type !== "article")
         considered += 1;
-      hits.push(...(await communityLookup(reference, sources, excluded)));
+      hits.push(
+        ...(await communityLookup(reference, sources, excluded, stopped)),
+      );
       continue;
     }
     considered += 1;
@@ -633,8 +657,10 @@ const wholeTitleHits = async (
     ...snippetAround(text, text),
   }));
 
+/** With no token placed no Backend address is ever built. */
 const asksBackendToSearch = ({ type }: AdminFindInput): boolean =>
-  type === undefined || isSearchSource(COMMUNITY_SOURCE[type]);
+  aiCredentialConfigured("community") &&
+  (type === undefined || isSearchSource(COMMUNITY_SOURCE[type]));
 
 /** The Backend's branches, each budgeted where its SQL runs and named per branch. */
 const communitySearch = async (

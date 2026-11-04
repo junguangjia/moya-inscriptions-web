@@ -28,6 +28,7 @@ export {
 } from "./tools";
 export type { AdminMcpTool } from "./tools";
 export { whoamiPluginTool } from "./tools/whoami";
+export { findEnvelope } from "./locate";
 export { findContinuation } from "./tools/find";
 export { readContinuation } from "./tools/read";
 export { EXECUTE_TOOL_NAME, executeEnvelope } from "./tools/execute";
