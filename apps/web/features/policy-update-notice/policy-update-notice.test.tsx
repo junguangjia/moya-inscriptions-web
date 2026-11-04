@@ -120,7 +120,7 @@ describe("PolicyUpdateNotice", () => {
   it("records following the link without stopping it", async () => {
     const container = await openPage();
     let stopped: boolean | undefined;
-    // jsdom cannot navigate; the browser check covers the real departure.
+    // jsdom cannot navigate; a one-off browser run covered the real departure.
     container.addEventListener("click", (event) => {
       stopped = event.defaultPrevented;
       event.preventDefault();

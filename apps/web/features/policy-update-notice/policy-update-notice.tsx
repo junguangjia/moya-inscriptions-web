@@ -51,7 +51,8 @@ const close = () => {
 /**
  * Tells existing users once that the policies changed, since they never see
  * the registration agreement again. It appears only after mount, so the server
- * HTML never holds it, and asks for nothing: no request, event or cookie.
+ * HTML never holds it. It sends nothing: no event, cookie or application request.
+ * Only the close icon's static file loads.
  */
 export const PolicyUpdateNotice = () => {
   const due = useSyncExternalStore(subscribe, isDue, isDueOnServer);
