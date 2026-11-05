@@ -12,7 +12,7 @@ import {
   inputInvalidEnvelope,
   issuesOfError,
 } from "../envelope";
-import { numberedPageAfter } from "../ops/define";
+import { NUMBERED_PAGE_SIZE, numberedPageAfter } from "../ops/define";
 import {
   adminOpMeta,
   isAdminOpName,
@@ -24,7 +24,7 @@ import type { PayloadRequest } from "payload";
 
 export const READ_TOOL_NAME = "admin_read";
 
-export const READ_DESCRIPTION = `Read a queue or page by op. Rows are compact; long text is only ever state, length and hash. {op:"list.catalogs",input:{filter:{missing:["transcription"]}}}. Count in SQL with no rows: {op:"list.catalogs",view:"count",groupBy:"dynasty",input:{filter:{missing:["transcription"]}}}. Project with fields:[...], continue with next. admin_actions gives each op's filter.`;
+export const READ_DESCRIPTION = `Read a queue or page by op. Rows are compact; long text is only ever state, length and hash. {op:"list.catalogs",input:{filter:{missing:["transcription"]}}}. {op:"list.reports",input:{status:"open"}}. Count in SQL with no rows: {op:"list.catalogs",view:"count",groupBy:"dynasty",input:{filter:{missing:["transcription"]}}}. {op:"list.reports",view:"count",groupBy:"kind",input:{unresolved:"true"}}. Project with fields:[...], continue with next. admin_actions gives each op's filter.`;
 
 const LIST_SOURCE_ARGS = [
   "cursor",
@@ -76,7 +76,10 @@ export const readEnvelope = async (
   // Only a list source reads these, and quietly dropping one reads as honouring it.
   if (entry.paging !== "keyset") {
     const unread = LIST_SOURCE_ARGS.filter(
-      (name) => read[name] !== undefined && read[name] !== "compact",
+      (name) =>
+        read[name] !== undefined &&
+        read[name] !== "compact" &&
+        !(entry.readArgs as readonly string[] | undefined)?.includes(name),
     );
     if (unread.length > 0)
       return inputInvalidEnvelope(
@@ -98,19 +101,28 @@ export const readEnvelope = async (
   return entry.run!(parsed.data, { req, key, read });
 };
 
-/** A cut page goes on from the last whole row it kept; a cut count from its offset. */
+/**
+ * A cut page goes on from the last whole row it kept; a cut count from its offset. Rows
+ * with no paging of their own answer on the Backend's cursor, which stands past the
+ * whole page, so a cut of them has no way on: following it would skip what was cut.
+ */
 export const readContinuation = (
   rawInput: unknown,
   kept: readonly unknown[],
-): AdminMcpNext | undefined => {
+): AdminMcpNext | null | undefined => {
   const read = rawInput as AdminReadInput;
   const last = kept.at(-1) as { id?: unknown; count?: unknown } | undefined;
   if (last === undefined || !isAdminOpName(read.op)) return undefined;
   const entry: AdminOpEntry = adminOpMeta[read.op];
+  if (entry.paging === undefined && entry.readArgs !== undefined) return null;
   if (entry.paging === "numbered") {
-    const { page, pageSize } = entry.input!.parse(read.input ?? {}) as {
-      page: number;
-      pageSize: number;
+    // A count's groups are few and closed, and a page number means nothing to them.
+    if (read.view === "count") return undefined;
+    const { page, pageSize = NUMBERED_PAGE_SIZE } = entry.input!.parse(
+      read.input ?? {},
+    ) as {
+      page?: number;
+      pageSize?: number;
     };
     return {
       tool: READ_TOOL_NAME,
@@ -118,7 +130,11 @@ export const readContinuation = (
         ...read,
         input: {
           ...read.input,
-          ...numberedPageAfter(page, pageSize, kept.length),
+          ...numberedPageAfter(
+            page ?? 1,
+            Math.min(pageSize, entry.pageMax ?? pageSize),
+            kept.length,
+          ),
         },
       },
     };

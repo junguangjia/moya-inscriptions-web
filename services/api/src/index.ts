@@ -37,10 +37,12 @@ export {
   CommunityConflictError,
   ExecutionFenceLostError,
   CommunityNotFoundError,
+  CommunityReadTimedOutError,
   isCommunityConflictError,
   isExecutionFenceLostError,
   isCommunityInputError,
   isCommunityNotFoundError,
+  isCommunityReadTimedOutError,
 } from "./modules/community/application/errors/community-request-errors.js";
 export { DisabledCommentAnalysisPort } from "./modules/community/application/ports/comment-analysis-port.js";
 export type {

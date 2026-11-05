@@ -29,6 +29,7 @@ export type { PublicUserRow } from "./row-mapper.js";
 export { PostgresAuthorCommunityAdapter } from "./author-adapter.js";
 export { PostgresCommunityDiscoveryAdapter } from "./discovery-adapter.js";
 export { PostgresCommunityContentOperatorAdapter } from "./content-operator-adapter.js";
+export { PostgresAiOperatorReader } from "./ai-operator-queries.js";
 export { PostgresWorkPublishingAdapter } from "./work-publishing-adapter.js";
 export {
   synchronizeCatalogDeliveryIntents,

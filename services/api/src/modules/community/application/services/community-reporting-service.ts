@@ -5,6 +5,7 @@ import {
   operatorReportMetadataRequestSchema,
   operatorReportForwardRequestSchema,
   operatorReportQuerySchema,
+  projectReportForAi,
 } from "@moya/contracts/internal/community-operator";
 import type {
   CommunityReportEvidenceUploadRequest,
@@ -121,6 +122,30 @@ export class CommunityReportingService {
       id,
       this.parse(operatorReportForwardRequestSchema, body),
     );
+  }
+  /**
+   * The same operator routes as `ai-admin` reaches them: no answer carries a
+   * claimant's contact or an evidence name, and a self-only case reads as the
+   * Owner's. The Owner's methods above keep their answers and their types.
+   */
+  forAiOperator() {
+    return {
+      operatorList: (query: unknown) =>
+        this.port.operatorListForAi(
+          this.parse(operatorReportQuerySchema, query),
+        ),
+      operatorRead: (id: string) => this.port.operatorReadForAi(id),
+      decide: async (id: string, body: unknown) =>
+        projectReportForAi(await this.decide(id, body)),
+      review: async (id: string, body: unknown) =>
+        projectReportForAi(await this.review(id, body)),
+      metadata: async (id: string, body: unknown) =>
+        projectReportForAi(await this.metadata(id, body)),
+      forward: async (id: string, body: unknown) =>
+        projectReportForAi(await this.forward(id, body)),
+      evidence: (actor: string | null, id: string, evidenceId: string) =>
+        this.evidence(actor, id, evidenceId),
+    };
   }
   inbox(actor: string) {
     return this.port.inbox(actor);

@@ -30,6 +30,7 @@ export {
   operatorCommentDetailSchema,
   operatorCommentKindSchema,
   operatorCommentPageSchema,
+  operatorCommentFilterSchema,
   operatorCommentQuerySchema,
   operatorCommentSchema,
   operatorCommentMediaRequestSchema,
@@ -88,6 +89,7 @@ export type {
 export {
   operatorContentQuerySchema,
   operatorWorksQuerySchema,
+  operatorWorksFilterSchema,
   operatorFeaturedQuerySchema,
   operatorUsersQuerySchema,
   operatorUserSchema,
@@ -346,6 +348,8 @@ export type {
 } from "./article-operator-schemas.ts";
 
 export * from "./reporting.ts";
+export * from "./ai-schemas.js";
+export * from "./query-filters.js";
 export {
   operatorFeedbackImageSchema,
   operatorFeedbackMediaRequestSchema,

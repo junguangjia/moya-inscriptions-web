@@ -128,6 +128,10 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     hint: "This read ran out of time, so it gives no number and this is not a zero. Retry shortly, or narrow the filter.",
     retryable: true,
   },
+  COMMUNITY_UNAVAILABLE: {
+    hint: "The community store could not be read just now, so this has no answer and it is not an empty one. Retry shortly.",
+    retryable: true,
+  },
   ANALYTICS_UNAVAILABLE: {
     hint: "The canonical analytics store could not be read just now, so this has no number and it is not a zero. Retry shortly.",
     retryable: true,
@@ -491,6 +495,15 @@ export const CUT_WITH_NO_WAY_ON =
   "This result was cut at the size limit and cannot continue from here. Narrow the request, or read it through the companion.";
 
 /**
+ * How a cut answer goes on from what it kept. Undefined leaves the answer's own `next`
+ * standing, and null drops it, because it stands past the whole page and following it
+ * would skip what was cut.
+ */
+export type CutContinuation = (
+  kept: readonly unknown[],
+) => AdminMcpNext | null | undefined;
+
+/**
  * A text result never passes the cap, and a cut says so: whole records are dropped
  * from the end of the largest array, the rest stays valid JSON, `meta.truncated` is
  * set and `next` continues from what was kept. With no way on, because not one record
@@ -499,7 +512,7 @@ export const CUT_WITH_NO_WAY_ON =
  */
 const withinCap = (
   envelope: AdminMcpEnvelope,
-  continuation?: (kept: readonly unknown[]) => AdminMcpNext | undefined,
+  continuation?: CutContinuation,
 ): AdminMcpEnvelope => {
   if (bytesOf(envelope) <= ADMIN_MCP_TEXT_CAP_BYTES) return envelope;
   const {
@@ -532,6 +545,10 @@ const withinCap = (
     (first, second) => bytesOf(at(body, second)) - bytesOf(at(body, first)),
   );
   let dropped = 0;
+  const wayOn = (kept: readonly unknown[]) => {
+    const onward = continuation?.(kept);
+    return onward === null ? undefined : (onward ?? ownNext);
+  };
   for (const [index, path] of arrays.entries()) {
     const records = at(body, path) as readonly unknown[];
     const attempt = (count: number) => {
@@ -540,9 +557,7 @@ const withinCap = (
         withRecords(body, path, head) as typeof body,
         dropped + records.length - count,
         // Past the largest array its records are all gone, so nothing continues.
-        index === 0 && count > 0
-          ? (continuation?.(head) ?? ownNext)
-          : undefined,
+        index === 0 && count > 0 ? wayOn(head) : undefined,
       );
     };
     let keep = 0;
@@ -601,7 +616,7 @@ export const imageToolResult = (
 export const toolResult = (
   scope: { readonly keyId: number; readonly tool: string },
   envelope: AdminMcpEnvelope,
-  continuation?: (kept: readonly unknown[]) => AdminMcpNext | undefined,
+  continuation?: CutContinuation,
 ) => {
   const checked = adminMcpEnvelopeSchema.parse(
     withinCap(

@@ -221,7 +221,7 @@ purge_completed_at) on `account_deletions`; `public_users` keeps no DELETE.
 Apply the migration, re-apply the runtime grants, then start the new builds (see
 [`docs/community/account-deletion-v1.md`](../community/account-deletion-v1.md)).
 
-The Home timeline (`home-timeline-v1`, community migration `20261104010000`)
+The Home timeline (`home-timeline-v1`, community migration `20261104020000`)
 adds the reference table `community.timeline_entries` and one named grant:
 `grant-runtime.sql` gives the App role `SELECT` on it and nothing else. Its rows
 are not migration data. They arrive from a private file, validated against

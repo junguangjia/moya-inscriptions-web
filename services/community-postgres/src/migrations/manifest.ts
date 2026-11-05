@@ -399,7 +399,13 @@ export const requiredCommunityMigrations: readonly RequiredCommunityMigration[] 
     }),
     Object.freeze({
       migrationId: "20261104010000",
-      filename: "20261104010000_timeline_entries.sql",
+      filename: "20261104010000_ai_operator_locate_indexes.sql",
+      checksum:
+        "f7a6ef6f04d2e26979b0729894fd66ff2295df749d4e0129d6eaa2853b74f769",
+    }),
+    Object.freeze({
+      migrationId: "20261104020000",
+      filename: "20261104020000_timeline_entries.sql",
       checksum:
         "eed46e62294b163f75b43c087201f8cad24ab7ab5f0a24d9b36de92710a36001",
     }),

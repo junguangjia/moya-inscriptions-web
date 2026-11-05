@@ -47,17 +47,17 @@ import {
   statefulValue,
 } from "../records";
 import type { CmsFamily, RecordDocument } from "../records";
+import { codePointLength, textHash } from "../text-window";
 import {
-  codePointLength,
-  FIND_DEFAULT_CONTEXT,
-  findInText,
-  textHash,
-  textWindow,
-} from "../text-window";
+  communityGetEnvelope,
+  communityFieldNames,
+  isCommunityArticleId,
+} from "./get-community";
+import { nextOf, windowOfField } from "./get-window";
 
-export const GET_TOOL_NAME = "admin_get";
+export { GET_TOOL_NAME } from "./get-window";
 
-export const GET_DESCRIPTION = `Read one record, and always say which version was read. Default outline: per-field state, length, hash, no long text. {type:"catalog",id:7}. Long text in windows, offsets in code points: {type,id,field:"transcription",offset}. Inside one field: {type,id,field:"transcription",find:{text:"..."}}. view also full, published, preview, history, diff.`;
+export const GET_DESCRIPTION = `Read one record, and always say which version was read. Default outline: per-field state, length, hash, no long text. {type:"catalog",id:7}, {type:"report",id:"report-..."}. Long text in windows, offsets in code points: {type,id,field:"transcription",offset}. Inside one field: {type,id,field:"transcription",find:{text:"..."}}. view also full, published, preview, history, diff; a community record has outline, full and field only.`;
 
 const isCms = (type: string): type is AdminCmsRecordType =>
   (ADMIN_CMS_RECORD_TYPES as readonly string[]).includes(type);
@@ -216,65 +216,8 @@ const fieldView = async (
         "/data/title",
       ]),
     );
-  const about = {
-    ...common,
-    field: input.field,
-    fieldState: located.state,
-    fieldHash: textHash(located.text),
-    totalLength: codePointLength(located.text),
-    offsetUnit: "codePoint",
-  };
-  if (input.find !== undefined) {
-    const { count, matches, more } = findInText(
-      located.text,
-      input.find.text,
-      input.find.mode ?? "raw",
-      input.find.context ?? FIND_DEFAULT_CONTEXT,
-      input.offset ?? 0,
-    );
-    const last = matches.at(-1);
-    return {
-      ...answered(
-        { ...about, mode: input.find.mode ?? "raw", count, matches },
-        [
-          "/data/title",
-          "/data/matches/*/before",
-          "/data/matches/*/match",
-          "/data/matches/*/after",
-        ],
-      ),
-      ...(more && last !== undefined
-        ? { next: nextOf(input, { offset: last.offset + 1 }) }
-        : {}),
-    };
-  }
-  const offset = input.offset ?? 0;
-  const window = textWindow(located.text, offset, input.maxChars);
-  return {
-    ...answered(
-      {
-        ...about,
-        offset,
-        ...(window.nextOffset === undefined
-          ? {}
-          : { nextOffset: window.nextOffset }),
-        text: window.text,
-      },
-      ["/data/title", "/data/text"],
-    ),
-    ...(window.nextOffset === undefined
-      ? {}
-      : { next: nextOf(input, { offset: window.nextOffset }) }),
-  };
+  return windowOfField(common, input, located, answered);
 };
-
-const nextOf = (
-  input: AdminGetInput,
-  changed: Partial<AdminGetInput>,
-): AdminMcpNext => ({
-  tool: GET_TOOL_NAME,
-  args: { ...input, ...changed },
-});
 
 const publishedView = async (
   req: PayloadRequest,
@@ -721,10 +664,18 @@ export const getEnvelope = async (
   input: AdminGetInput,
   scope: Scope,
 ): Promise<AdminMcpEnvelope> => {
-  // Withheld or unbuilt is never the same answer as nothing being there.
-  if (!isCms(input.type)) return failedEnvelope("NOT_AVAILABLE");
+  if (!isCms(input.type)) return communityGetEnvelope(req, input, scope);
   try {
-    return await readInto(req, CMS_FAMILIES[input.type], input, scope);
+    const envelope = await readInto(
+      req,
+      CMS_FAMILIES[input.type],
+      input,
+      scope,
+    );
+    // An Article id is on both sides, and a miss in the CMS settles neither.
+    return envelope.code === "NOT_FOUND" && isCommunityArticleId(input)
+      ? await communityGetEnvelope(req, input, scope)
+      : envelope;
   } catch (error) {
     if (
       isMissingRecord(error) ||
@@ -742,8 +693,10 @@ export const getContinuation = (
 ): AdminMcpNext | undefined => {
   const input = rawInput as AdminGetInput;
   const view = viewOf(input);
-  const family = isCms(input.type) ? CMS_FAMILIES[input.type] : undefined;
-  if (family === undefined || kept.length === 0) return undefined;
+  const names = isCms(input.type)
+    ? FIELD_NAMES(CMS_FAMILIES[input.type])
+    : communityFieldNames(input.type);
+  if (kept.length === 0) return undefined;
   const last = kept.at(-1) as Record<string, unknown>;
   if (view === "history")
     return nextOf(input, { cursor: last.versionId as number });
@@ -757,9 +710,7 @@ export const getContinuation = (
     view === "diff"
   ) {
     const reached = new Set(kept.map((row) => (row as { name: string }).name));
-    const rest = (input.fields ?? FIELD_NAMES(family)).filter(
-      (name) => !reached.has(name),
-    );
+    const rest = (input.fields ?? names).filter((name) => !reached.has(name));
     return rest.length === 0 ? undefined : nextOf(input, { fields: rest });
   }
   return undefined;

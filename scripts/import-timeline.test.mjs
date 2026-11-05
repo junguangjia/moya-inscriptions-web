@@ -206,7 +206,7 @@ test("apply refuses a missing ledger entry before any write", async () => {
   const { pool, statements, released } = fakePool({ ledger: false });
   await assert.rejects(
     applyImport(pool, [entry("a")]),
-    /Community migration 20261104010000 is not applied/u,
+    /Community migration 20261104020000 is not applied/u,
   );
   assert.ok(!statements.some((text) => /^(DELETE|INSERT)/u.test(text)));
   assert.equal(statements.at(-1), "ROLLBACK");

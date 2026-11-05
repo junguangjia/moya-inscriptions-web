@@ -3094,6 +3094,61 @@ describe("the delivery tools", () => {
     );
   });
 
+  it("names a proof that no longer matches, when the delivery moved while the read waited", async () => {
+    const draft = await seedDraftWithMedia();
+    const proofs = proofRoutes({ ready: false });
+    let answerRead = () => {};
+    const heldBackend = new Promise<void>((resolve) => {
+      answerRead = resolve;
+    });
+    let holding = false;
+    let waiting = 0;
+    await withOperator(
+      {
+        ...proofs,
+        catalogDeliveryReadiness: async (intentId: string) => {
+          if (holding) {
+            waiting += 1;
+            await heldBackend;
+          }
+          return proofs.catalogDeliveryReadiness(intentId);
+        },
+      },
+      async () => {
+        const intent = intentOf(await prepared(draft));
+        holding = true;
+        const held = read("editorial.read-catalog-delivery", {
+          intentId: intent.intentId,
+        });
+        try {
+          await vi.waitFor(() => expect(waiting).toBe(1), {
+            timeout: 10_000,
+            interval: 10,
+          });
+          holding = false;
+          expect(
+            await execute("editorial.cancel-catalog-delivery", {
+              intentId: intent.intentId,
+              expectedStateVersion: intent.stateVersion,
+            }),
+          ).toMatchObject({ ok: true });
+        } finally {
+          answerRead();
+        }
+        expect(await held).toMatchObject({
+          ok: false,
+          code: "CATALOG_DELIVERY_PROOF_CHANGED",
+        });
+        // Its hint says to read again, and that read tells the truth.
+        expect(
+          await read("editorial.read-catalog-delivery", {
+            intentId: intent.intentId,
+          }),
+        ).toMatchObject({ ok: true, data: { state: "cancelled" } });
+      },
+    );
+  });
+
   it("reads released as done on a replay, and ended once the record moves on", async () => {
     const draft = await seedDraftWithMedia();
     const state = { ready: false };

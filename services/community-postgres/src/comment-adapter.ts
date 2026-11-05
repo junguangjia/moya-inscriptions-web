@@ -5,7 +5,7 @@ import {
 } from "./staff-moderation-reporting.js";
 import { PostgresDiscussionStore } from "./discussion-store.js";
 import { assertExecutionFence } from "./execution-fence.js";
-import { CommunityConflictError } from "@moya/api";
+import { CommunityConflictError, CommunityReadTimedOutError } from "@moya/api";
 
 import { asCommunityOperationError } from "./availability.js";
 import {
@@ -78,7 +78,16 @@ import type {
   ModerationEventAction,
   PublicationPolicy,
 } from "@moya/contracts/internal/community-operator";
+import type { OperatorReadScope } from "@moya/contracts/internal/community-operator";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
+
+/**
+ * Per statement, and an AI read's snapshot runs at most three: 12 s, inside Admin's 15 s
+ * call. Behind the pool's 5 s connection wait it is 17 s at worst, inside that call and
+ * the 15 s it then holds its slot, so a read that turns slow ends before its slot frees.
+ */
+const AI_READ_STATEMENT_TIMEOUT = "4000ms";
+const QUERY_CANCELED = "57014";
 
 const offset = (page: number, pageSize: number): number =>
   (page - 1) * pageSize;
@@ -386,14 +395,19 @@ export class PostgresCommunityCommentAdapter
    */
   async readOperatorComments(
     query: OperatorCommentQueryInput,
+    scope?: OperatorReadScope,
   ): Promise<OperatorCommentListing> {
     const filters = [
       query.moderation ?? null,
       query.kind ?? null,
       query.catalogId ?? null,
       query.search === undefined ? null : toSearchPattern(query.search),
+      query.authorId ?? null,
+      query.from ?? null,
+      query.to ?? null,
+      scope?.withholdSelfOnly === true,
     ];
-    return this.snapshot(async (run) => {
+    return this.scopedSnapshot(scope, async (run) => {
       const totals = await run<{ total: unknown } & QueryResultRow>(
         countOperatorCommentsSql,
         filters,
@@ -429,8 +443,13 @@ export class PostgresCommunityCommentAdapter
 
   async readModerationEvents(
     query: ModerationEventQueryInput,
+    scope?: OperatorReadScope,
   ): Promise<CommentPageRecord<ModerationEvent>> {
-    const filters = [query.subjectId ?? null, query.action ?? null];
+    const filters = [
+      query.subjectId ?? null,
+      query.action ?? null,
+      scope?.withholdSelfOnly === true,
+    ];
     return this.snapshot(async (run) => {
       const totals = await run<{ total: unknown } & QueryResultRow>(
         countModerationEventsSql,
@@ -450,21 +469,34 @@ export class PostgresCommunityCommentAdapter
     });
   }
 
-  async readModerationSummary(range: {
-    readonly from: Date;
-    readonly to: Date;
-  }): Promise<ModerationSummaryRecord> {
-    return this.snapshot(async (run) => {
+  async readModerationSummary(
+    range: {
+      readonly from: Date;
+      readonly to: Date;
+    },
+    scope?: OperatorReadScope,
+  ): Promise<ModerationSummaryRecord> {
+    const withhold = scope?.withholdSelfOnly === true;
+    return this.scopedSnapshot(scope, async (run) => {
       const byState = await run<
         { moderation: unknown; total: unknown } & QueryResultRow
-      >(countOperatorCommentsByStateSql, [null, null, null, null]);
+      >(countOperatorCommentsByStateSql, [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        withhold,
+      ]);
       const byAction = await run<
         { action: unknown; total: unknown } & QueryResultRow
-      >(countModerationActionsInRangeSql, [range.from, range.to]);
-      const recent = await run<ModerationEventRow>(
-        recentModerationEventsSql,
-        [10],
-      );
+      >(countModerationActionsInRangeSql, [range.from, range.to, withhold]);
+      const recent = await run<ModerationEventRow>(recentModerationEventsSql, [
+        10,
+        withhold,
+      ]);
       const actions: Record<ModerationEventAction, number> = {
         approve: 0,
         reject: 0,
@@ -622,6 +654,30 @@ export class PostgresCommunityCommentAdapter
       "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
       read,
     );
+  }
+
+  /**
+   * The same for a read of the comment queue. The AI's also ends by itself, because the
+   * set it withholds through can turn slow past hash_mem. The Owner's is as it was.
+   */
+  private async scopedSnapshot<Result>(
+    scope: OperatorReadScope | undefined,
+    read: (run: Runner) => Promise<Result>,
+  ): Promise<Result> {
+    if (scope?.withholdSelfOnly !== true) return this.snapshot(read);
+    try {
+      return await this.snapshot(async (run) => {
+        await run(
+          `SET LOCAL statement_timeout='${AI_READ_STATEMENT_TIMEOUT}'`,
+          [],
+        );
+        return read(run);
+      });
+    } catch (error) {
+      if ((error as { code?: unknown } | null)?.code === QUERY_CANCELED)
+        throw new CommunityReadTimedOutError();
+      throw error;
+    }
   }
 
   /** A read-write transaction: a transition and its audit row commit together. */

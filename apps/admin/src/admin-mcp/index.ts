@@ -28,6 +28,7 @@ export {
 } from "./tools";
 export type { AdminMcpTool } from "./tools";
 export { whoamiPluginTool } from "./tools/whoami";
+export { findEnvelope } from "./locate";
 export { findContinuation } from "./tools/find";
 export { readContinuation } from "./tools/read";
 export { EXECUTE_TOOL_NAME, executeEnvelope } from "./tools/execute";
@@ -69,6 +70,11 @@ export {
   snappedOpenEnd,
 } from "./analytics/cache";
 export { analyticsEnvelope, CANONICAL_POOL_SHARE } from "./analytics/service";
+export {
+  communityRefusal,
+  COMMUNITY_READ_POOL_SHARE,
+  inPoolShare,
+} from "./ops/community-reads";
 export {
   createUmamiGuard,
   UMAMI_CALL_BUDGET_MS,

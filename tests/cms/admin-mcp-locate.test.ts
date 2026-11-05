@@ -346,7 +346,9 @@ describe("tools/list and the size budgets, over the wire", () => {
     };
     const read = groups.find(({ tool }) => tool === "admin_read")!;
     expect(read.ops.join(" ")).toContain("list.catalogs");
-    expect(read.unavailable?.not_available?.join(" ")).toContain("list.works");
+    expect(read.unavailable?.AI_CREDENTIAL_NOT_CONFIGURED?.join(" ")).toContain(
+      "list.works",
+    );
   });
 });
 
@@ -810,10 +812,13 @@ describe("the other CMS sources", () => {
     }
   });
 
-  it("answers NOT_AVAILABLE on a community read, never an empty page", async () => {
+  it("answers AI_CREDENTIAL_NOT_CONFIGURED on a community read with no token, never an empty page", async () => {
     for (const op of ["list.works", "list.reports", "community.read-users"]) {
       const answer = await call("admin_read", { op });
-      expect({ op, code: answer.code }).toEqual({ op, code: "NOT_AVAILABLE" });
+      expect({ op, code: answer.code }).toEqual({
+        op,
+        code: "AI_CREDENTIAL_NOT_CONFIGURED",
+      });
       expect(answer).not.toHaveProperty("data");
     }
   });
@@ -1403,7 +1408,7 @@ describe("admin_find: id, link, sourceId", () => {
     expect(findData(bare).resolution.status).toBe("none");
   });
 
-  it("reports community references as not_available, never as nothing there", async () => {
+  it("reports community references as not_available with no token, never as nothing there", async () => {
     for (const [query, source] of [
       [`user-${hex32("a")}`, "users"],
       [`work-${hex32("a")}`, "works"],
@@ -2651,13 +2656,19 @@ describe("admin_get", () => {
     expect(byIdentity.id).toBe(id);
   });
 
-  it("answers NOT_FOUND for a miss, and NOT_AVAILABLE for a community type", async () => {
+  it("answers NOT_FOUND for a miss, and a community type its own refusal with no token", async () => {
     for (const missing of [2_147_000_000, 3_000_000_000, "no-such-catalog"])
       expect(
         await call("admin_get", { type: "catalog", id: missing }),
       ).toMatchObject({ ok: false, code: "NOT_FOUND" });
     expect(
       await call("admin_get", { type: "work", id: `work-${hex32("a")}` }),
+    ).toMatchObject({ ok: false, code: "AI_CREDENTIAL_NOT_CONFIGURED" });
+    expect(
+      await call("admin_get", {
+        type: "invitation",
+        id: `invitation-${hex32("a")}`,
+      }),
     ).toMatchObject({ ok: false, code: "NOT_AVAILABLE" });
   });
 

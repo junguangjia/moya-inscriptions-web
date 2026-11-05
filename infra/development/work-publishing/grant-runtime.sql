@@ -640,7 +640,7 @@ BEGIN
   END IF;
 END $$;
 
--- home-timeline-v1 (migration 20261104010000): the Home timeline reads this
+-- home-timeline-v1 (migration 20261104020000): the Home timeline reads this
 -- reference table; only scripts/import-timeline.mjs writes it, with the
 -- migration role. The relation is optional for earlier migration phases.
 DO $$

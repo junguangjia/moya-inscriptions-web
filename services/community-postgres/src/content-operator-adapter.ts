@@ -13,6 +13,11 @@ import {
   INHERITED_FEATURED_POSITION,
 } from "./featured-content.js";
 import { asCommunityOperationError } from "./availability.js";
+import {
+  isSelfOnlyWorkSql,
+  reportIsSelfOnlySql,
+  workIsSelfOnlySql,
+} from "./self-only.js";
 import { assertExecutionFence } from "./execution-fence.js";
 import { createHash, randomUUID } from "node:crypto";
 import { CommunityConflictError, CommunityNotFoundError } from "@moya/api";
@@ -26,9 +31,11 @@ import {
   operatorWorkPageSchema,
   featuredOrderResultSchema,
   featuredPageSchema,
+  operatorUserAiPageSchema,
   operatorUserPageSchema,
 } from "@moya/contracts/internal/community-operator";
 import type {
+  OperatorReadScope,
   OperatorWorksQuery,
   OperatorFeaturedQuery,
   OperatorUsersQuery,
@@ -99,6 +106,21 @@ const commandFingerprint = (
   createHash("sha256")
     .update(JSON.stringify([action, target, input]))
     .digest("hex");
+
+/**
+ * `$1` search, `$2` author, `$3` work, `$4` and `$5` the time range, `$6` true to
+ * leave self-only works out, so a search or a total cannot reveal their text.
+ */
+export const operatorWorksWhere = ` LEFT JOIN community.work_revisions ar ON ar.id=w.author_revision_id AND ar.requested_visibility='public'
+  WHERE ($1='' OR position(lower($1) in lower(w.id||' '||w.title||' '||w.text||' '||COALESCE(ar.title,'')||' '||COALESCE(ar.body,'')||' '||u.display_name||' '||u.handle))>0)
+  AND ($2::text IS NULL OR (w.author_id=$2 AND w.deleted_at IS NULL AND EXISTS(SELECT 1 FROM community.work_revisions r WHERE r.work_id=w.id AND r.disposition<>'not_required')))
+  AND ($3::text IS NULL OR w.id=$3)
+  AND ($4::timestamptz IS NULL OR COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at)>=$4::timestamptz)
+  AND ($5::timestamptz IS NULL OR COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at)<=$5::timestamptz)
+  AND NOT ($6::boolean AND ${isSelfOnlyWorkSql("w")})`;
+
+export const operatorUsersWhere = `WHERE ($1='' OR position(lower($1) in lower(u.id||' '||u.handle||' '||u.display_name))>0)
+  AND ($2::text IS NULL OR u.id=$2)`;
 
 export class PostgresCommunityContentOperatorAdapter implements CommunityContentOperatorPort {
   constructor(
@@ -218,23 +240,26 @@ export class PostgresCommunityContentOperatorAdapter implements CommunityContent
    * (content operators already see in the submission queue); self-only
    * content stays unsearchable.
    */
-  async readWorks(query: OperatorWorksQuery): Promise<OperatorWorkPage> {
+  async readWorks(
+    query: OperatorWorksQuery,
+    scope?: OperatorReadScope,
+  ): Promise<OperatorWorkPage> {
+    const filters = [
+      query.search,
+      query.authorId ?? null,
+      query.workId ?? null,
+      query.from ?? null,
+      query.to ?? null,
+      scope?.withholdSelfOnly === true,
+    ];
     return this.transaction(async (db) => {
-      const where = ` LEFT JOIN community.work_revisions ar ON ar.id=w.author_revision_id AND ar.requested_visibility='public'
-        WHERE ($1='' OR position(lower($1) in lower(w.id||' '||w.title||' '||w.text||' '||COALESCE(ar.title,'')||' '||COALESCE(ar.body,'')||' '||u.display_name||' '||u.handle))>0)
-        AND ($2::text IS NULL OR (w.author_id=$2 AND w.deleted_at IS NULL AND EXISTS(SELECT 1 FROM community.work_revisions r WHERE r.work_id=w.id AND r.disposition<>'not_required')))`;
       const total = await db.query(
-        `SELECT COUNT(*)::integer AS total FROM community.works w JOIN community.public_users u ON u.id=w.author_id${where}`,
-        [query.search, query.authorId ?? null],
+        `SELECT COUNT(*)::integer AS total FROM community.works w JOIN community.public_users u ON u.id=w.author_id${operatorWorksWhere}`,
+        filters,
       );
       const rows = await db.query<WorkRow>(
-        `${workProjection}${where} ORDER BY COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at) DESC,w.id LIMIT $3 OFFSET $4`,
-        [
-          query.search,
-          query.authorId ?? null,
-          query.pageSize,
-          (query.page - 1) * query.pageSize,
-        ],
+        `${workProjection}${operatorWorksWhere} ORDER BY COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at) DESC,w.id LIMIT $7 OFFSET $8`,
+        [...filters, query.pageSize, (query.page - 1) * query.pageSize],
       );
       return operatorWorkPageSchema.parse({
         items: rows.rows.map(workDto),
@@ -244,27 +269,39 @@ export class PostgresCommunityContentOperatorAdapter implements CommunityContent
       });
     }, true);
   }
-  async readUsers(query: OperatorUsersQuery): Promise<OperatorUserPage> {
+  async readUsers(
+    query: OperatorUsersQuery,
+    scope?: OperatorReadScope,
+  ): Promise<OperatorUserPage> {
+    const withhold = scope?.withholdSelfOnly === true;
     return this.transaction(async (db) => {
-      const where = `WHERE ($1='' OR position(lower($1) in lower(u.id||' '||u.handle||' '||u.display_name))>0)
-        AND ($2::text IS NULL OR u.id=$2)`;
       const args = [query.search, query.userId ?? null];
       const total = (
         await db.query(
-          `SELECT COUNT(*)::integer AS total FROM community.public_users u ${where}`,
+          `SELECT COUNT(*)::integer AS total FROM community.public_users u ${operatorUsersWhere}`,
           args,
         )
       ).rows[0].total;
+      // A report on a withheld work names its author only to the Owner, so a count
+      // here cannot say which user that is.
+      const counts = withhold
+        ? `,(SELECT COUNT(*)::integer FROM community.catalog_comments c WHERE c.author_id=u.id AND NOT (c.target_type='work' AND ${workIsSelfOnlySql("c.catalog_id")}))
+          +(SELECT COUNT(*)::integer FROM community.catalog_comment_replies r JOIN community.catalog_comments c ON c.id=r.root_comment_id WHERE r.author_id=u.id AND NOT (c.target_type='work' AND ${workIsSelfOnlySql("c.catalog_id")})) AS comment_count,
+        (SELECT COUNT(*)::integer FROM community.report_cases rc WHERE rc.affected_user_id=u.id AND NOT ${reportIsSelfOnlySql("rc")}) AS report_count`
+        : "";
       const rows = await db.query(
         `SELECT u.id,u.handle,u.display_name,u.bio,u.status,u.created_at,
         COALESCE(f.enabled,FALSE) AS recommended,COALESCE(f.version,0) AS recommendation_version,
         (SELECT COUNT(*)::integer FROM community.works w WHERE w.author_id=u.id AND w.deleted_at IS NULL
-          AND EXISTS(SELECT 1 FROM community.work_revisions r WHERE r.work_id=w.id AND r.disposition<>'not_required')) AS submitted_works
-        FROM community.public_users u LEFT JOIN community.featured_users f ON f.user_id=u.id ${where}
+          AND NOT ($5::boolean AND ${isSelfOnlyWorkSql("w")})
+          AND EXISTS(SELECT 1 FROM community.work_revisions r WHERE r.work_id=w.id AND r.disposition<>'not_required')) AS submitted_works${counts}
+        FROM community.public_users u LEFT JOIN community.featured_users f ON f.user_id=u.id ${operatorUsersWhere}
         ORDER BY u.created_at DESC,u.id LIMIT $3 OFFSET $4`,
-        [...args, query.pageSize, (query.page - 1) * query.pageSize],
+        [...args, query.pageSize, (query.page - 1) * query.pageSize, withhold],
       );
-      return operatorUserPageSchema.parse({
+      return (
+        withhold ? operatorUserAiPageSchema : operatorUserPageSchema
+      ).parse({
         items: rows.rows.map((r) => ({
           id: r.id,
           handle: r.handle,
@@ -275,6 +312,9 @@ export class PostgresCommunityContentOperatorAdapter implements CommunityContent
           submittedWorks: r.submitted_works,
           recommended: r.recommended,
           recommendationVersion: r.recommendation_version,
+          ...(withhold
+            ? { commentCount: r.comment_count, reportCount: r.report_count }
+            : {}),
         })),
         total,
         page: query.page,
@@ -395,14 +435,20 @@ export class PostgresCommunityContentOperatorAdapter implements CommunityContent
       },
     );
   }
-  async readFeatured(query: OperatorFeaturedQuery): Promise<FeaturedPage> {
+  async readFeatured(
+    query: OperatorFeaturedQuery,
+    scope?: OperatorReadScope,
+  ): Promise<FeaturedPage> {
     return this.transaction(async (db) => {
       const from = `FROM effective_featured f LEFT JOIN catalog_discovery c ON f.content_type='catalog' AND c.catalog_id=f.content_id LEFT JOIN community.works w ON f.content_type='work' AND w.id=f.content_id LEFT JOIN community.public_users u ON u.id=w.author_id`;
       const eligible =
         "CASE WHEN f.content_type='catalog' THEN c.catalog_id IS NOT NULL ELSE w.id IS NOT NULL AND community.work_is_public(w) AND u.status='active' END";
       const where =
         " WHERE ($1='' OR position(lower($1) in lower(COALESCE(c.title,w.title,f.content_id)))>0)" +
-        ` AND ($2::text='all' OR (f.enabled AND ${eligible}))`;
+        ` AND ($2::text='all' OR (f.enabled AND ${eligible}))` +
+        (scope?.withholdSelfOnly === true
+          ? ` AND NOT (f.content_type='work' AND ${isSelfOnlyWorkSql("w")} IS TRUE)`
+          : "");
       const total = (
         await db.query(
           `WITH ${effectiveFeatured} SELECT COUNT(*)::integer AS total ${from}${where}`,

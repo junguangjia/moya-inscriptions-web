@@ -359,25 +359,32 @@ export class PostgresThreadAdapter implements ThreadPort {
     page: number;
     pageSize: number;
     includeHidden: boolean;
+    search?: string | undefined;
+    id?: string | undefined;
   }): Promise<OperatorThreadPage> {
     return this.run(false, async (db) => {
       const where = query.includeHidden ? "TRUE" : "t.hidden_at IS NULL";
+      const matches = (search: string) =>
+        `position(lower(${search}) in lower(t.title||' '||t.description||' '||array_to_string(t.tags,' ')))>0`;
       const total = Number(
         (
           await db.query<{ total: string }>(
-            `SELECT count(*) AS total FROM community.threads t WHERE ${where}`,
+            `SELECT count(*) AS total FROM community.threads t WHERE ${where} AND ($1::text IS NULL OR ${matches("$1")}) AND ($2::text IS NULL OR t.id=$2)`,
+            [query.search ?? null, query.id ?? null],
           )
         ).rows[0]!.total,
       );
       const rows = (
         await db.query<ThreadRow>(
-          `SELECT ${threadColumns} ${threadFrom("$1::timestamptz")} WHERE ${where}
+          `SELECT ${threadColumns} ${threadFrom("$1::timestamptz")} WHERE ${where} AND ($5::text IS NULL OR ${matches("$5")}) AND ($6::text IS NULL OR t.id=$6)
            ORDER BY t.position ASC, t.created_at DESC, t.id ASC LIMIT $3 OFFSET $4`,
           [
             new Date().toISOString(),
             null,
             query.pageSize,
             (query.page - 1) * query.pageSize,
+            query.search ?? null,
+            query.id ?? null,
           ],
         )
       ).rows;

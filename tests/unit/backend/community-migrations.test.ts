@@ -109,7 +109,8 @@ describe("community migration family", () => {
         "20261027010000_account_deletion.sql",
         "20261028010000_analytics_ip_retention_60_days.sql",
         "20261102010000_comment_inline_images.sql",
-        "20261104010000_timeline_entries.sql",
+        "20261104010000_ai_operator_locate_indexes.sql",
+        "20261104020000_timeline_entries.sql",
       ],
     );
     expect(files.every((file) => file.sql.includes("community."))).toBe(true);
@@ -123,7 +124,7 @@ describe("community migration family", () => {
       ),
     );
     const { sql } = files.find(
-      ({ filename }) => filename === "20261104010000_timeline_entries.sql",
+      ({ filename }) => filename === "20261104020000_timeline_entries.sql",
     )!;
     const listed = (constraint: string) =>
       [

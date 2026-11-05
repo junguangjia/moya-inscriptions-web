@@ -71,7 +71,7 @@ account for what else that carries.
 ## Production order
 
 1. **Migrate.** `pnpm db:migrate:community` applies
-   `20261104010000_timeline_entries.sql` with the migration authority.
+   `20261104020000_timeline_entries.sql` with the migration authority.
 2. **Grants.** Re-apply the runtime grants with the setup role, in one
    transaction:
    `psql -X -v ON_ERROR_STOP=1 --single-transaction -v app_role="$APP_RUNTIME_ROLE" -f infra/development/work-publishing/grant-runtime.sql`.
