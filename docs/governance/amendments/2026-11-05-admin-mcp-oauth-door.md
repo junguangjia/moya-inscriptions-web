@@ -1,19 +1,27 @@
 # Owner Amendment — Admin MCP login door
 
-- Status: Draft until Owner signature.
-- Effective date: on Owner signature.
+- Status: Signed under the Owner's delegation of 2026-11-05, quoted in section 1.
+- Effective date: 2026-11-05.
 - Authority: Owner instruction of 2026-11-05, quoted in section 1, on Issue
   #355.
 - Applies to: Admin and the agent authorization service, in Development and
   Production, for the `ai_operator` identity on `/api/mcp`. This amendment
   authorizes code and migrations. Each Production deployment, credential and
   configuration change stays a separate Owner approval under the 2026-08-24
-  amendment.
+  amendment; the Owner's words in section 1 give that approval for the release
+  that opens this door.
 - Record: `docs/development/admin-mcp-completion-v1.md`, section 22.
 
 ## 1. Owner instruction
 
 > 设计的太麻烦了，成熟的项目都是怎么对接的，难道不是用管理员账号一登录，获得授权就自动对接上就好了，我不想用这么麻烦的方式，很多管理人员都没有电脑知识
+
+On the amendment itself and on the release, when asked to confirm this text and
+to carry out the domain, certificate and EdgeOne settings:
+
+> 你自己判断，完整了就直接推
+
+> 这个也你来做
 
 The Owner's accompanying decisions:
 
