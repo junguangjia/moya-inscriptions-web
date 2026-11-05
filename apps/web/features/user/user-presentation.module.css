@@ -1358,6 +1358,18 @@
   width: min(100%, var(--yoyi-desktop-workspace-max));
   margin-inline: auto;
 }
+/*
+ * The identity lies on the photo, so it keeps the photo's width: its text in
+ * the dark theme has nothing behind it past the photo's edge. The editor
+ * measures a first photo's frame the same way.
+ */
+:global(html[data-device-class="desktop"][data-platform="pc"])
+  :is(
+    .coverRoot[data-cover-photo] > .profile.coverProfile,
+    .profile.coverProfile[data-cover-measure]
+  ) {
+  width: min(100%, 960px);
+}
 :global(html[data-device-class="desktop"][data-platform="pc"]) .userContent {
   padding-inline: var(--yoyi-space-7);
   padding-bottom: var(--yoyi-space-10);
