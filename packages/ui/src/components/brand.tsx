@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import type { HTMLAttributes } from "react";
 import { darkTheme, lightTheme } from "@moya/design-tokens";
 
@@ -54,12 +55,6 @@ export function Icon({
 // Direct vectors avoid the external CSS-mask paint path while a parent scales
 // continuously from zero. Other Icon consumers retain their existing renderer.
 const categoryArtwork = {
-  nearby: {
-    viewBox: "-2 0 28 24",
-    path: "M12 12.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4Zm-5.8 3.5a8 8 0 0 1 0-11.4m11.6 0a8 8 0 0 1 0 11.4M3.5 18.5a11.4 11.4 0 0 1 0-17m17 0a11.4 11.4 0 0 1 0 17",
-    strokeWidth: 1.6,
-    strokeLinejoin: undefined,
-  },
   inscriptions: {
     viewBox: "0 0 24 24",
     path: "M7 20h10M8.2 20V7.2c0-2.1 1.7-3.7 3.8-3.7s3.8 1.6 3.8 3.7V20M10.4 8.2h3.2M10.4 11.4h3.2M10.4 14.6h3.2",
@@ -76,11 +71,57 @@ const categoryArtwork = {
   },
 } as const;
 
+// The timeline glyph grows with its tab: the axis draws, then each branch and
+// its node in turn, all from `--top-tab-activation` in styles.css. pathLength
+// makes one dash unit the whole stroke of each part.
+const timelineBranches = [
+  { branch: "M12 6.5H15.4", cx: 17.6, cy: 6.5 },
+  { branch: "M12 12H8.6", cx: 6.4, cy: 12 },
+  { branch: "M12 17.5H15.4", cx: 17.6, cy: 17.5 },
+] as const;
+
+const TimelineArtwork = () => (
+  <svg
+    aria-hidden="true"
+    focusable="false"
+    width="24"
+    height="24"
+    viewBox="0 0 24 24"
+    preserveAspectRatio="xMidYMid meet"
+    data-icon="timeline"
+    data-icon-renderer="svg"
+    data-yoyi-ui="icon"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.7}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M12 3V21" pathLength={1} data-timeline-part="axis" />
+    {timelineBranches.map(({ branch, cx, cy }, index) => (
+      <Fragment key={branch}>
+        <path
+          d={branch}
+          pathLength={1}
+          data-timeline-part={`branch-${index + 1}`}
+        />
+        <circle
+          cx={cx}
+          cy={cy}
+          r={2.2}
+          data-timeline-part={`node-${index + 1}`}
+        />
+      </Fragment>
+    ))}
+  </svg>
+);
+
 export function AnimatedCategoryIcon({
   name,
 }: {
-  readonly name: keyof typeof categoryArtwork;
+  readonly name: keyof typeof categoryArtwork | "timeline";
 }) {
+  if (name === "timeline") return <TimelineArtwork />;
   const artwork = categoryArtwork[name];
   return (
     <svg

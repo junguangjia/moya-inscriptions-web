@@ -196,6 +196,7 @@ export type {
   DiscoveryCardMediaRecord,
   DiscoveryCardRecord,
   DiscoveryPageRecord,
+  TimelineRecord,
 } from "./modules/community/application/ports/community-discovery-port.js";
 export type { CommunityContentOperatorPort } from "./modules/community/application/ports/community-content-operator-port.js";
 export type {

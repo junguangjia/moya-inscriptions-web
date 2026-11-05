@@ -3,6 +3,11 @@
 Status: Owner phone acceptance complete; authorized for protected merge and
 remote delivery.
 
+Later change: home-timeline-v1 (Issue #384, 2026-11-03) replaced the Nearby feed
+with 时间轴 at the same index. Mentions of Nearby below record the feed as it
+was in these rounds. Their four-feed, motion, keyboard and reduced-motion rules
+now apply to the timeline tab.
+
 The Owner's four annotated phone screenshots on 2026-09-20 authorize these
 specific changes to the existing React application. This is a local reviewable
 preview task; it does not authorize Production deployment, a historical data

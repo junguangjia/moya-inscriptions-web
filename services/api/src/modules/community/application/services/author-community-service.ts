@@ -27,7 +27,9 @@ import type {
   ContentIdentity,
   ContentRelationUpdate,
   DiscussionTarget,
+  Timeline,
 } from "@moya/contracts";
+import { mapTimeline } from "../mappers/timeline-contract-mapper.js";
 
 const noRenditionUrls: CatalogRenditionUrls = new Map();
 
@@ -189,6 +191,36 @@ export class AuthorCommunityService {
       await this.discovery.card(target, viewer),
     ]);
     return item!;
+  }
+  /**
+   * Linked rows take their image through the card path, so its delivery rules
+   * hold here too; a row without an eligible link reaches none of it.
+   */
+  async timeline(): Promise<Timeline> {
+    if (!this.discovery) throw new CommunityNotFoundError();
+    const { entries, cards } = await this.discovery.timeline();
+    return mapTimeline(entries, await this.timelineCards(cards));
+  }
+  /**
+   * One record's unresolvable image leaves that row text-only instead of
+   * failing every other row. Nothing resolving at all is an outage.
+   */
+  private async timelineCards(
+    cards: readonly DiscoveryCardRecord[],
+  ): Promise<ContentCard[]> {
+    if (cards.length === 0) return [];
+    try {
+      return await this.cards(cards);
+    } catch (batchError) {
+      const settled = await Promise.allSettled(
+        cards.map((card) => this.cards([card])),
+      );
+      const resolved = settled.flatMap((result) =>
+        result.status === "fulfilled" ? result.value : [],
+      );
+      if (resolved.length === 0) throw batchError;
+      return resolved;
+    }
   }
   /** The adapter computes every total in one snapshot with the lists' own rules. */
   async profile(id: string, viewer: string | null) {

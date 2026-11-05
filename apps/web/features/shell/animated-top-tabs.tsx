@@ -40,6 +40,10 @@ export const AnimatedTopTabs = <Key extends string>({
   const viewport = useRef<HTMLDivElement>(null);
   const track = useRef<HTMLDivElement>(null);
   const buttons = useRef(new Map<Key, HTMLButtonElement>());
+  // Set for good once the selection has left the key it mounted with.
+  const initialKey = useRef(activeKey);
+  const selectionMoved = useRef(false);
+  if (activeKey !== initialKey.current) selectionMoved.current = true;
   const selectedIndex = Math.max(
     0,
     items.findIndex((item) => item.id === activeKey),
@@ -180,6 +184,9 @@ export const AnimatedTopTabs = <Key extends string>({
                 orientation === "vertical" && expandedKey === id
                   ? "true"
                   : undefined
+              }
+              data-selection-moved={
+                selected && selectionMoved.current ? "" : undefined
               }
               style={{ "--top-tab-activation": activation } as CSSProperties}
               onClick={() => select(id)}

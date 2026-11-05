@@ -3,8 +3,8 @@ import type { HomeFeed, HomeSurfaceData } from "../home/home-feed";
 export const homeScenarioNames = [
   "discover-visual",
   "discover-empty",
-  "nearby-demo",
-  "nearby-unavailable",
+  "timeline-demo",
+  "timeline-unavailable",
   "topics-editorial",
   "topics-catalog-collection",
   "topics-empty",

@@ -1,9 +1,9 @@
-import type { CatalogSummary, PublicMedia } from "@moya/contracts";
+import type { CatalogSummary, TimelineEntry } from "@moya/contracts";
 import type { Topic } from "../topics/topic";
 
 export const homeFeeds = [
   "discover",
-  "nearby",
+  "timeline",
   "inscriptions",
   "calligraphy",
 ] as const;
@@ -17,18 +17,16 @@ export type HomeFeedState<T> =
   | { readonly state: "unavailable" }
   | { readonly state: "unexpected-error" };
 
-export interface NearbyCard {
-  readonly id: string;
-  readonly media?: PublicMedia;
-  readonly metadata?: string;
-  readonly title: string;
-}
-
 export interface HomeSurfaceData {
   readonly discover: HomeFeedState<CatalogSummary>;
-  readonly nearby: HomeFeedState<NearbyCard>;
+  readonly timeline: HomeFeedState<TimelineEntry>;
   readonly topics: HomeFeedState<Topic>;
 }
 
-export const parseHomeFeed = (value: unknown): HomeFeed =>
-  homeFeeds.includes(value as HomeFeed) ? (value as HomeFeed) : "discover";
+export const parseHomeFeed = (value: unknown): HomeFeed => {
+  // Links shared before the timeline replaced 附近 open the timeline.
+  if (value === "nearby") return "timeline";
+  return homeFeeds.includes(value as HomeFeed)
+    ? (value as HomeFeed)
+    : "discover";
+};

@@ -1472,6 +1472,141 @@ export const inscriptionFilterOptionsSchema = z.strictObject({
   originalRegion: filterOptionSchema,
   script: filterOptionSchema,
 });
+/**
+ * home-timeline-v1: one entry of the Home timeline. A read-only reference row,
+ * not a Catalog record: most entries have no Catalog page, and `catalogId` plus
+ * `media` appear only when the row links a published Catalog record. Years are
+ * signed with no year 0 (-475 is 前475); an entry that cannot be placed
+ * precisely has `onAxis` false and lives on its chapter's shelf.
+ */
+export const TIMELINE_ENTRIES_MAXIMUM = 5_000;
+export const timelineChapterSchema = z.enum([
+  "商",
+  "西周",
+  "春秋",
+  "战国",
+  "秦",
+  "西汉",
+  "东汉",
+  "三国",
+  "两晋",
+  "南北朝",
+  "隋",
+  "唐",
+  "五代十国",
+  "宋辽金夏",
+  "元",
+  "明",
+  "清",
+  "民国",
+  "当代",
+]);
+export const timelinePrecisionSchema = z.enum([
+  "year",
+  "reign",
+  "period",
+  "multi",
+  "dynasty",
+]);
+const timelineYearSchema = z
+  .number()
+  .int()
+  .min(-3000)
+  .max(3000)
+  .refine((year) => year !== 0);
+const timelineTextSchema = z.string().trim().min(1).max(200);
+const timelineEntryFields = {
+  id: z.string().regex(/^[a-z0-9-]{1,64}$/),
+  title: timelineTextSchema,
+  fullTitle: timelineTextSchema,
+  startYear: timelineYearSchema,
+  endYear: timelineYearSchema,
+  precision: timelinePrecisionSchema,
+  dateLabel: timelineTextSchema.nullable(),
+  onAxis: z.boolean(),
+  chapter: timelineChapterSchema,
+  polity: timelineTextSchema.nullable(),
+  disputed: z.boolean(),
+  groupId: z
+    .string()
+    .regex(/^[a-z0-9-]{1,64}$/)
+    .nullable(),
+  groupTitle: timelineTextSchema.nullable(),
+  province: timelineTextSchema.nullable(),
+  holder: timelineTextSchema.nullable(),
+  catalogId: catalogIdSchema.nullable(),
+};
+const addTimelineEntryIssues = (
+  entry: {
+    readonly startYear: number;
+    readonly endYear: number;
+    readonly groupId: string | null;
+    readonly groupTitle: string | null;
+  },
+  context: z.RefinementCtx,
+) => {
+  if (entry.endYear < entry.startYear)
+    context.addIssue({
+      code: "custom",
+      message: "An entry ends no earlier than it starts",
+      path: ["endYear"],
+    });
+  if ((entry.groupId === null) !== (entry.groupTitle === null))
+    context.addIssue({
+      code: "custom",
+      message: "A group has both an id and a title",
+      path: ["groupTitle"],
+    });
+};
+export const timelineEntrySchema = z
+  .strictObject({
+    ...timelineEntryFields,
+    media: publicMediaSchema.nullable(),
+  })
+  .superRefine(addTimelineEntryIssues);
+export const timelineSchema = z.strictObject({
+  entries: z.array(timelineEntrySchema).max(TIMELINE_ENTRIES_MAXIMUM),
+});
+/**
+ * The validated bulk file behind `scripts/import-timeline.mjs`. `position`
+ * orders entries of one start year; the file itself never enters Git or the
+ * Web bundle.
+ */
+export const timelineImportEntrySchema = z
+  .strictObject({
+    ...timelineEntryFields,
+    position: z.number().int().nonnegative().max(2_000_000_000),
+  })
+  .superRefine(addTimelineEntryIssues);
+export const timelineImportFileSchema = z
+  .strictObject({
+    version: z.literal(1),
+    entries: z
+      .array(timelineImportEntrySchema)
+      .min(1)
+      .max(TIMELINE_ENTRIES_MAXIMUM),
+  })
+  .superRefine((file, context) => {
+    const ids = new Set<string>();
+    const catalogs = new Set<string>();
+    file.entries.forEach((entry, index) => {
+      if (ids.has(entry.id))
+        context.addIssue({
+          code: "custom",
+          message: "Duplicate entry id",
+          path: ["entries", index, "id"],
+        });
+      ids.add(entry.id);
+      if (entry.catalogId === null) return;
+      if (catalogs.has(entry.catalogId))
+        context.addIssue({
+          code: "custom",
+          message: "A Catalog record links one entry",
+          path: ["entries", index, "catalogId"],
+        });
+      catalogs.add(entry.catalogId);
+    });
+  });
 export const contentStateQuerySchema = z.strictObject({
   target: contentIdentitySchema,
 });
@@ -1491,6 +1626,11 @@ export type InscriptionFilters = z.infer<typeof inscriptionFiltersSchema>;
 export type InscriptionFilterOptions = z.infer<
   typeof inscriptionFilterOptionsSchema
 >;
+export type TimelineChapter = z.infer<typeof timelineChapterSchema>;
+export type TimelinePrecision = z.infer<typeof timelinePrecisionSchema>;
+export type TimelineEntry = z.infer<typeof timelineEntrySchema>;
+export type Timeline = z.infer<typeof timelineSchema>;
+export type TimelineImportFile = z.infer<typeof timelineImportFileSchema>;
 
 export const ownCommentPageSchema = pageOf(ownCommentSchema).extend({
   totalPages: z.number().int().nonnegative(),

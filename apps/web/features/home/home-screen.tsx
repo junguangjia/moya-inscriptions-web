@@ -13,8 +13,8 @@ import {
 
 import { CatalogCard } from "./catalog-card";
 import { CatalogMasonry } from "./catalog-masonry";
-import { HomeContentCard } from "./home-content-card";
 import { HomeFeedPager } from "./home-feed-pager";
+import { TimelineFeed } from "./timeline/timeline-feed";
 import { homeFeeds, parseHomeFeed } from "./home-feed";
 import styles from "./home-screen.module.css";
 import { listMediaPriority } from "../media/responsive-media";
@@ -25,16 +25,11 @@ import { AnimatedTopTabs } from "../shell/animated-top-tabs";
 import type { ReactNode } from "react";
 import type { CatalogSummary, ContentIdentity } from "@moya/contracts";
 import type { HomeFeedPagerHandle } from "./home-feed-pager";
-import type {
-  HomeFeed,
-  HomeFeedState,
-  HomeSurfaceData,
-  NearbyCard,
-} from "./home-feed";
+import type { HomeFeed, HomeFeedState, HomeSurfaceData } from "./home-feed";
 
 const feedLabels = {
   discover: "发现",
-  nearby: "附近",
+  timeline: "时间轴",
   inscriptions: "碑刻",
   calligraphy: "书帖",
 } as const satisfies Record<HomeFeed, string>;
@@ -83,11 +78,6 @@ const feedMessages = {
     unavailable: ["档案服务暂时不可用", "请稍后再试。"],
     unexpectedError: ["无法加载公开档案", "发生了未预期的错误。"],
   },
-  nearby: {
-    empty: ["附近暂无内容", "当前没有可展示的附近内容。"],
-    unavailable: ["附近内容尚未接入", "真实位置服务尚未提供。"],
-    unexpectedError: ["无法加载附近内容", "发生了未预期的错误。"],
-  },
   topics: {
     empty: ["暂无专题", "当前没有可展示的专题。"],
     unavailable: ["专题内容尚未接入", "真实策展内容服务尚未提供。"],
@@ -99,7 +89,7 @@ const FeedMessage = ({
   feed,
   state,
 }: {
-  readonly feed: "discover" | "nearby" | "topics";
+  readonly feed: "discover" | "topics";
   readonly state: "empty" | "loading" | "unavailable" | "unexpected-error";
 }) => {
   if (state === "loading") {
@@ -135,7 +125,7 @@ const FeedMessage = ({
 };
 
 const renderFeedState = <T,>(
-  feed: "discover" | "nearby" | "topics",
+  feed: "discover" | "topics",
   state: HomeFeedState<T>,
   populated: (items: readonly T[]) => ReactNode,
 ) => {
@@ -155,6 +145,7 @@ export interface HomeScreenProps {
   readonly initialFeed?: HomeFeed;
   readonly onFeedChange?: (feed: HomeFeed) => void;
   readonly renderInscriptions?: (active: boolean) => ReactNode;
+  readonly renderTimeline?: (active: boolean) => ReactNode;
   readonly calligraphy?: ReactNode;
 }
 
@@ -167,6 +158,7 @@ export const HomeScreen = ({
   initialFeed = "discover",
   onFeedChange,
   renderInscriptions,
+  renderTimeline,
   calligraphy,
 }: HomeScreenProps) => {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -178,7 +170,7 @@ export const HomeScreen = ({
   const activeFeedRef = useRef<HomeFeed>(parseHomeFeed(initialFeed));
   const scrollPositionsRef = useRef<Record<HomeFeed, number>>({
     discover: 0,
-    nearby: 0,
+    timeline: 0,
     inscriptions: 0,
     calligraphy: 0,
   });
@@ -268,21 +260,13 @@ export const HomeScreen = ({
           />
         ),
       ),
-    nearby: renderFeedState(
-      "nearby",
-      data.nearby,
-      (items: readonly NearbyCard[]) => (
-        <CatalogMasonry
-          feedLayout={feedLayout}
-          getKey={(item) => item.id}
-          spanAtAlignedRows
-          items={items}
-          platform={platform}
-          renderItem={(item, onMediaSettled) => (
-            <HomeContentCard item={item} onMediaSettled={onMediaSettled} />
-          )}
-        />
-      ),
+    timeline: renderTimeline?.(
+      activeFeed === "timeline" && activeDestination === "home",
+    ) ?? (
+      <TimelineFeed
+        active={activeFeed === "timeline" && activeDestination === "home"}
+        state={data.timeline}
+      />
     ),
     inscriptions: renderInscriptions?.(
       activeFeed === "inscriptions" && activeDestination === "home",

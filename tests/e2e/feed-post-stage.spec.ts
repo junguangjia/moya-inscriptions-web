@@ -195,7 +195,7 @@ test("a rightward swipe on the stage pages the post, not the Home tabs", async (
     { x: title.box.x + title.box.width * 0.85, y: title.y },
     -title.box.width * 0.6,
   );
-  await expect(feed.home).toHaveAttribute("data-active-home-feed", "nearby");
+  await expect(feed.home).toHaveAttribute("data-active-home-feed", "timeline");
   await expect(feed.strip).toHaveAttribute("data-feed-stage-index", "1");
   await feed.context?.close();
 });

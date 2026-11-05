@@ -221,6 +221,20 @@ purge_completed_at) on `account_deletions`; `public_users` keeps no DELETE.
 Apply the migration, re-apply the runtime grants, then start the new builds (see
 [`docs/community/account-deletion-v1.md`](../community/account-deletion-v1.md)).
 
+The Home timeline (`home-timeline-v1`, community migration `20261104010000`)
+adds the reference table `community.timeline_entries` and one named grant:
+`grant-runtime.sql` gives the App role `SELECT` on it and nothing else. Its rows
+are not migration data. They arrive from a private file, validated against
+`timelineImportFileSchema`, through `scripts/import-timeline.mjs` with the
+migration role (`APP_MIGRATION_DATABASE_URL`). Build `@moya/contracts` and
+`@moya/catalog-postgres` first, then run
+`node scripts/import-timeline.mjs --file <absolute path>`, a dry run that opens
+no connection and prints counts only, and add `--apply` once those counts are
+approved. `--apply` refuses when the ledger lacks the migration and replaces
+every row in one transaction, so it can run again. The order is: apply the
+migration, re-apply the runtime grants, import, then start the new builds. With
+an empty table the feed reads as unavailable.
+
 ## Readiness and verification
 
 Community startup validates every required ledger filename/checksum read-only;

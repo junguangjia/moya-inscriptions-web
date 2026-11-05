@@ -604,7 +604,7 @@ describe("QaProductUtilities", () => {
         ),
       );
     };
-    for (const feed of ["discover", "nearby", "calligraphy"] as const) {
+    for (const feed of ["discover", "timeline", "calligraphy"] as const) {
       renderFeed(feed);
       expect(container.querySelector("[data-filter-trigger]")).toBeNull();
     }

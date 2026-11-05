@@ -667,8 +667,8 @@ for (const surface of ["home", "discussion"] as const) {
         await discussion.click();
       }
       const home = page.locator(`[data-${surface}-surface]`);
-      const incomingKey = surface === "home" ? "nearby" : "threads";
-      const incomingLabel = surface === "home" ? "附近" : "话题";
+      const incomingKey = surface === "home" ? "timeline" : "threads";
+      const incomingLabel = surface === "home" ? "时间轴" : "话题";
       const pager = home.locator("[data-horizontal-pager-scroll-owner]");
       await expect(pager).toHaveAttribute(
         "data-category-pager-engine",
@@ -813,12 +813,12 @@ for (const width of [320, 390]) {
     await page.goto("/");
     await expect(page.locator("[data-product-boot]")).toHaveCount(0);
     const home = page.locator("[data-home-surface]");
-    await home.getByRole("tab", { name: "附近", exact: true }).click();
-    await expect(home).toHaveAttribute("data-active-home-feed", "nearby");
+    await home.getByRole("tab", { name: "时间轴", exact: true }).click();
+    await expect(home).toHaveAttribute("data-active-home-feed", "timeline");
     await expect
       .poll(async () =>
         home
-          .locator('[data-tab-key="nearby"] [aria-hidden="true"]')
+          .locator('[data-tab-key="timeline"] [aria-hidden="true"]')
           .first()
           .evaluate((node) => Number(getComputedStyle(node).opacity)),
       )
@@ -826,7 +826,7 @@ for (const width of [320, 390]) {
     for (const [key, label, index] of [
       ["inscriptions", "碑刻", 2],
       ["calligraphy", "书帖", 3],
-      ["nearby", "附近", 1],
+      ["timeline", "时间轴", 1],
     ] as const) {
       const capture = home.evaluate(async (element, target) => {
         const button = element.querySelector<HTMLElement>(
@@ -912,17 +912,24 @@ for (const width of [320, 390]) {
       expect(
         await glyph.evaluate((node) => node instanceof SVGSVGElement),
       ).toBe(true);
-      const outline = glyph.locator('path[stroke="currentColor"]');
-      await expect(outline).toHaveCount(1);
-      await expect(outline).toHaveAttribute("fill", "none");
-      // The canonical Calligraphy artwork also includes a filled ink shape.
-      // Check both paint roles without assuming every glyph has one path.
-      await expect(glyph.locator('path[fill="currentColor"]')).toHaveCount(
-        key === "calligraphy" ? 1 : 0,
-      );
-      await expect(glyph.locator("path")).toHaveCount(
-        key === "calligraphy" ? 2 : 1,
-      );
+      if (key === "timeline") {
+        // The timeline glyph builds in seven parts that share the svg's stroke.
+        await expect(glyph).toHaveAttribute("stroke", "currentColor");
+        await expect(glyph).toHaveAttribute("fill", "none");
+        await expect(glyph.locator("[data-timeline-part]")).toHaveCount(7);
+      } else {
+        const outline = glyph.locator('path[stroke="currentColor"]');
+        await expect(outline).toHaveCount(1);
+        await expect(outline).toHaveAttribute("fill", "none");
+        // The canonical Calligraphy artwork also includes a filled ink shape.
+        // Check both paint roles without assuming every glyph has one path.
+        await expect(glyph.locator('path[fill="currentColor"]')).toHaveCount(
+          key === "calligraphy" ? 1 : 0,
+        );
+        await expect(glyph.locator("path")).toHaveCount(
+          key === "calligraphy" ? 2 : 1,
+        );
+      }
       // DOM/CSS consistency alone missed the phone symptom. Also exercise
       // the actual vector paint in both themes; device acceptance stays separate.
       for (const theme of ["light", "dark"] as const) {

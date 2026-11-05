@@ -639,3 +639,15 @@ BEGIN
       current_setting('moya.runtime_app_role'));
   END IF;
 END $$;
+
+-- home-timeline-v1 (migration 20261104010000): the Home timeline reads this
+-- reference table; only scripts/import-timeline.mjs writes it, with the
+-- migration role. The relation is optional for earlier migration phases.
+DO $$
+BEGIN
+  IF to_regclass('community.timeline_entries') IS NOT NULL THEN
+    EXECUTE format(
+      'GRANT SELECT ON TABLE community.timeline_entries TO %I',
+      current_setting('moya.runtime_app_role'));
+  END IF;
+END $$;

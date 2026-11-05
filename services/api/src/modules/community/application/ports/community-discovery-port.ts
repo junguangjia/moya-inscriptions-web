@@ -8,6 +8,7 @@ import type {
   MediaFeedFraming,
   MediaId,
   MediaRendition,
+  TimelineEntry,
 } from "@moya/contracts";
 import type { CatalogMediaRenditionProjection } from "../../../catalog/application/catalog-read-projections.js";
 import type { AuthorPage } from "./author-community-port.js";
@@ -78,6 +79,13 @@ export interface DiscoveryPageRecord {
   readonly nextAfter: number;
   readonly hasMore: boolean;
 }
+/** The timeline in its order, before the service resolves Catalog images. */
+export interface TimelineRecord {
+  /** `catalogId` is set only when its record is published right now. */
+  readonly entries: readonly Omit<TimelineEntry, "media">[];
+  /** One card per linked entry, each without a gallery: rows show one image. */
+  readonly cards: readonly DiscoveryCardRecord[];
+}
 export interface CommunityDiscoveryPort {
   browse(
     viewer: string | null,
@@ -95,4 +103,5 @@ export interface CommunityDiscoveryPort {
   ): Promise<DiscoveryCardRecord>;
   state(target: ContentIdentity, actor: string | null): Promise<ContentState>;
   filterOptions(): Promise<InscriptionFilterOptions>;
+  timeline(): Promise<TimelineRecord>;
 }

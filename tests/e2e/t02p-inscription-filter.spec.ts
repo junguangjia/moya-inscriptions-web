@@ -23,8 +23,8 @@ const openQa = async (page: Page) => {
 const selectHomeFeed = async (
   surface: Locator,
   shell: Locator,
-  label: "发现" | "附近" | "碑刻" | "书帖",
-  feed: "discover" | "nearby" | "inscriptions" | "calligraphy",
+  label: "发现" | "时间轴" | "碑刻" | "书帖",
+  feed: "discover" | "timeline" | "inscriptions" | "calligraphy",
 ) => {
   await expect(shell).toHaveAttribute("data-active-destination", "home");
   const home = surface.locator("[data-home-surface]");

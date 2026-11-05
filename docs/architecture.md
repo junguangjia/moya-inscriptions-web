@@ -72,7 +72,7 @@ readFormalRequestContext()
 +
 loadProductionProductStates()
   ├── Home Discover
-  ├── Nearby unavailable
+  ├── Timeline loading (its rows load in the client when the feed first opens)
   ├── Topics unavailable
   ├── inscription page 1
   └── calligraphy page 1

@@ -398,6 +398,7 @@ describe("task routing follows the complete changed-path set", () => {
   it("routes the registered password and invitation operator scripts to full Web checks", () => {
     for (const script of [
       "scripts/provision-password-account.mjs",
+      "scripts/import-timeline.mjs",
       "scripts/manage-registration-invitations.mjs",
     ]) {
       for (const event of ["pull_request", "push", "local"]) {

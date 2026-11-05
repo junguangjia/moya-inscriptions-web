@@ -78,8 +78,8 @@ const expectBrowseOnly = async (page: Page, browseOnly: boolean) => {
 
 const selectHomeFeed = async (
   page: Page,
-  name: "发现" | "附近" | "碑刻" | "书帖",
-  feed: "discover" | "nearby" | "inscriptions" | "calligraphy",
+  name: "发现" | "时间轴" | "碑刻" | "书帖",
+  feed: "discover" | "timeline" | "inscriptions" | "calligraphy",
 ) => {
   // Reading may minimize navigation while Home is already selected. Re-clicking
   // its hidden label adds no navigation behavior and blocks the actual tab.
@@ -280,9 +280,15 @@ test("Formal root composes truthful runtime list states", async ({ page }) => {
       ),
     )
     .toBe(true);
-  await expect(home.locator('[data-home-feed-panel="nearby"]')).toContainText(
-    "附近内容尚未接入",
-  );
+
+  // The timeline asks for its rows only once its feed has opened.
+  await selectHomeFeed(page, "时间轴", "timeline");
+  const timeline = home.locator('[data-home-feed-panel="timeline"]');
+  await expect(timeline.locator("[data-timeline-feed]")).toBeVisible();
+  await expect(
+    timeline.locator(`[data-catalog-id="${runtimeIds.multiMedia}"]`).first(),
+  ).toContainText("运行时多图碑刻");
+  await expect(timeline).not.toContainText("时间轴暂时不可用");
 
   await selectPrimaryDestination(page, "讨论", "discussion");
   const discussion = shell.locator("[data-discussion-surface]");
@@ -331,6 +337,35 @@ test("Formal root composes truthful runtime list states", async ({ page }) => {
     calligraphy.locator("[data-calligraphy-category-panel]"),
   ).toHaveCount(0);
   await expect(calligraphy).not.toContainText("视觉 QA 合成");
+});
+
+test("Formal timeline says it is unavailable when its rows cannot load", async ({
+  page,
+}) => {
+  await page.route("**/api/community/timeline", (route) =>
+    route.fulfill({ status: 503 }),
+  );
+  const { shell } = await openFormalRoot(page);
+  await selectHomeFeed(page, "时间轴", "timeline");
+  const timeline = shell.locator('[data-home-feed-panel="timeline"]');
+  await expect(timeline).toContainText("时间轴暂时不可用");
+  await expect(timeline).toContainText("请稍后再试。");
+  await selectHomeFeed(page, "发现", "discover");
+  await expect(
+    shell.locator(
+      `[data-home-feed-panel="discover"] [data-catalog-id="${runtimeIds.multiMedia}"]`,
+    ),
+  ).toContainText("运行时多图碑刻");
+});
+
+test("Formal links shared before the timeline replaced 附近 open the timeline", async ({
+  page,
+}) => {
+  const { shell } = await openFormalRoot(page, "/?feed=nearby");
+  await expect(shell.locator("[data-home-surface]")).toHaveAttribute(
+    "data-active-home-feed",
+    "timeline",
+  );
 });
 
 test("Formal Home, Inscriptions, and Calligraphy reuse one Detail and Viewer journey", async ({

@@ -13,6 +13,7 @@ import type {
   MediaRendition,
   PublicMedia,
   ThreadPage,
+  TimelineEntry,
 } from "@moya/contracts";
 import type { ServerResponse } from "node:http";
 
@@ -265,6 +266,85 @@ const baseSummaries: readonly CatalogSummary[] = [
     summary: "用于验证书帖运行时身份。",
     title: "运行时书帖",
   },
+];
+
+/** A small fictional timeline in read order: rows, a linked row, a group, a shelf. */
+const timelineEntry = (
+  id: string,
+  title: string,
+  chapter: TimelineEntry["chapter"],
+  startYear: number,
+  overrides: Partial<TimelineEntry> = {},
+): TimelineEntry => ({
+  id,
+  title,
+  fullTitle: `${chapter}${title}`,
+  startYear,
+  endYear: startYear,
+  precision: "year",
+  dateLabel: null,
+  onAxis: true,
+  chapter,
+  polity: null,
+  disputed: false,
+  groupId: null,
+  groupTitle: null,
+  province: "运行时省",
+  holder: null,
+  catalogId: null,
+  media: null,
+  ...overrides,
+});
+const timelineGroup = { groupId: "runtime-group", groupTitle: "运行时石经" };
+const timelineEntries: readonly TimelineEntry[] = [
+  timelineEntry("runtime-warring-shelf", "运行时战国石", "战国", -300, {
+    precision: "dynasty",
+    onAxis: false,
+  }),
+  timelineEntry("runtime-tang-shelf", "运行时唐代石", "唐", 618, {
+    precision: "dynasty",
+    onAxis: false,
+    endYear: 907,
+  }),
+  timelineEntry("runtime-tang-disputed", "运行时异说碑", "唐", 650, {
+    disputed: true,
+    dateLabel: "运行时纪年",
+    polity: "唐",
+  }),
+  timelineEntry("runtime-tang-linked", "运行时多图碑刻", "唐", 650, {
+    catalogId: catalogId("runtime-inscription-multi-media"),
+    media: inscriptionFront,
+  }),
+  timelineEntry(
+    "runtime-tang-group-1",
+    "运行时石经一",
+    "唐",
+    700,
+    timelineGroup,
+  ),
+  timelineEntry(
+    "runtime-tang-group-2",
+    "运行时石经二",
+    "唐",
+    700,
+    timelineGroup,
+  ),
+  timelineEntry(
+    "runtime-tang-group-3",
+    "运行时石经三",
+    "唐",
+    700,
+    timelineGroup,
+  ),
+  timelineEntry("runtime-tang-reign", "运行时年号碑", "唐", 742, {
+    endYear: 756,
+    precision: "reign",
+    dateLabel: "运行时年号",
+  }),
+  timelineEntry("runtime-song-multi", "运行时多期题刻", "宋辽金夏", 1100, {
+    precision: "multi",
+    endYear: 1200,
+  }),
 ];
 
 const pagingSummary = (
@@ -616,6 +696,10 @@ const server = createServer((request, response) => {
       nextAfter: Math.min(items.length, after + size),
       hasMore: after + size < items.length,
     });
+    return;
+  }
+  if (communityPath === "/v1/community/timeline") {
+    sendJson(response, 200, { entries: timelineEntries });
     return;
   }
   if (communityPath === "/v1/community/filter-options") {

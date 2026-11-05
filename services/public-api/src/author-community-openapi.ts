@@ -140,7 +140,9 @@ const operation = (
 ) => ({
   operationId: name,
   description:
-    "Phase 4 Development only; absent in Production. Optional sessions personalize eligibility; malformed supplied credentials reject. All reads are private, no-store with Vary: Authorization. Unknown or duplicate query fields reject. JSON writes accept no query. RequestIdentity commands are replay-safe for their actor; comment submissions do not have a replay receipt. Removing an own work moves it to the recycle bin.",
+    path === "/v1/community/timeline"
+      ? "Read-only reference rows of the Home timeline, the same for every viewer; a row links a Catalog record and its image only while that record is published. Private and no-store."
+      : "Phase 4 Development only; absent in Production. Optional sessions personalize eligibility; malformed supplied credentials reject. All reads are private, no-store with Vary: Authorization. Unknown or duplicate query fields reject. JSON writes accept no query. RequestIdentity commands are replay-safe for their actor; comment submissions do not have a replay receipt. Removing an own work moves it to the recycle bin.",
   security: privateOnly ? [{ session: [] }] : [{}, { session: [] }],
   parameters: [
     ...[...path.matchAll(/\{([^}]+)\}/g)].map((m) => ({
@@ -232,6 +234,7 @@ const routes: readonly [
     null,
     false,
   ],
+  ["/v1/community/timeline", "get", "readTimeline", "Timeline", null, false],
   [
     "/v1/community/content/{type}/{id}/card",
     "get",

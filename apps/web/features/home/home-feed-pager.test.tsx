@@ -17,7 +17,7 @@ let time = 0,
 let offsets = [0, 400, 800, 1200];
 let heights: Record<HomeFeed, number> = {
   discover: 600,
-  nearby: 900,
+  timeline: 900,
   inscriptions: 700,
   calligraphy: 800,
 };
@@ -106,7 +106,7 @@ const setup = (
           onProgress={progress}
           panels={{
             discover: <button type="button">Discover</button>,
-            nearby: <button type="button">Nearby</button>,
+            timeline: <button type="button">Timeline</button>,
             inscriptions: <button type="button">Inscriptions</button>,
             calligraphy: <button type="button">Calligraphy</button>,
           }}
@@ -162,7 +162,7 @@ describe("HomeFeedPager category engine integration", () => {
     offsets = [0, 400, 800, 1200];
     heights = {
       discover: 600,
-      nearby: 900,
+      timeline: 900,
       inscriptions: 700,
       calligraphy: 800,
     };
@@ -264,7 +264,7 @@ describe("HomeFeedPager category engine integration", () => {
     expect(v.progress.mock.calls.at(-1)![0]).toBeGreaterThan(0.3);
     expect(v.commits).not.toHaveBeenCalled();
     touch(v.frame, "touchend");
-    expect(v.commits).toHaveBeenCalledExactlyOnceWith("nearby");
+    expect(v.commits).toHaveBeenCalledExactlyOnceWith("timeline");
     expect(v.panels.map((p) => p.hasAttribute("inert"))).toEqual([
       true,
       false,
@@ -288,7 +288,7 @@ describe("HomeFeedPager category engine integration", () => {
     v.drag();
     touch(v.frame, "touchend");
     advance(180);
-    expect(v.commits).toHaveBeenCalledExactlyOnceWith("nearby");
+    expect(v.commits).toHaveBeenCalledExactlyOnceWith("timeline");
   });
   it("keeps a vertical gesture vertical, permits a new horizontal gesture, and ignores implicit pointer capture changes", () => {
     const v = setup();
@@ -303,7 +303,7 @@ describe("HomeFeedPager category engine integration", () => {
       ),
     );
     touch(v.frame, "touchend");
-    expect(v.commits).toHaveBeenCalledExactlyOnceWith("nearby");
+    expect(v.commits).toHaveBeenCalledExactlyOnceWith("timeline");
   });
   it("returns a small stationary release to the same page without a commit", () => {
     const v = setup();
@@ -317,16 +317,16 @@ describe("HomeFeedPager category engine integration", () => {
   });
   it("keeps Phone height fixed and retains the PC document-flow model and exact offsets", () => {
     const phone = setup();
-    act(() => phone.handle.current?.scrollToFeed("nearby"));
+    act(() => phone.handle.current?.scrollToFeed("timeline"));
     expect(phone.frame.style.height).toBe("");
     offsets = [0, 412, 830];
     const pc = setup("pc");
     expect(pc.frame.style.height).toBe("600px");
-    act(() => pc.handle.current?.scrollToFeed("nearby"));
+    act(() => pc.handle.current?.scrollToFeed("timeline"));
     act(() => pc.frame.dispatchEvent(new Event("scrollend")));
     expect(pc.frame.scrollLeft).toBe(412);
     expect(pc.frame.style.height).toBe("900px");
-    expect(pc.commits).toHaveBeenCalledExactlyOnceWith("nearby");
+    expect(pc.commits).toHaveBeenCalledExactlyOnceWith("timeline");
     expect(pc.frame.hasAttribute("data-category-pager-engine")).toBe(false);
   });
   it("registers the selected panel and preserves the actual panel nodes and scroll positions", () => {
@@ -338,7 +338,7 @@ describe("HomeFeedPager category engine integration", () => {
     });
     v.panels[0]!.scrollTop = 137;
     v.panels[1]!.scrollTop = 88;
-    v.render("nearby");
+    v.render("timeline");
     expect(registered).toEqual([v.panels[0], v.panels[1]]);
     expect(release).toHaveBeenCalledOnce();
     expect(v.panels.map((p) => p.scrollTop)).toEqual([137, 88, 0, 0]);
@@ -415,7 +415,7 @@ describe("HomeFeedPager category engine integration", () => {
     advance(180);
     expect(v.progress).toHaveBeenLastCalledWith(expect.closeTo(3, 2));
     reduce = true;
-    act(() => v.handle.current?.scrollToFeed("nearby"));
+    act(() => v.handle.current?.scrollToFeed("timeline"));
     expect(v.progress).toHaveBeenLastCalledWith(expect.closeTo(1, 4));
   });
   it("does not reset the moving engine or its panels during its internal commit render", () => {
@@ -425,12 +425,12 @@ describe("HomeFeedPager category engine integration", () => {
     touch(v.frame, "touchend");
     expect(v.track.style.transform).toBe(before);
     expect([...v.track.children]).toEqual(v.panels);
-    v.render("nearby");
+    v.render("timeline");
     expect(v.track.style.transform).toBe(before);
   });
   it("lets a new reverse touch replace a pending programmatic animation", () => {
     const v = setup();
-    act(() => v.handle.current?.scrollToFeed("nearby"));
+    act(() => v.handle.current?.scrollToFeed("timeline"));
     advance(4);
     const before = v.track.style.transform;
     touch(v.frame, "touchstart", 100, 300);
@@ -442,7 +442,7 @@ describe("HomeFeedPager category engine integration", () => {
     touch(v.frame, "touchend");
     advance(180);
     expect(v.commits.mock.calls.map((c) => c[0])).toEqual([
-      "nearby",
+      "timeline",
       "discover",
     ]);
   });
@@ -472,7 +472,7 @@ describe("HomeFeedPager category engine integration", () => {
         ),
       );
     act(() => v.frame.dispatchEvent(new Event("scrollend")));
-    expect(v.commits).toHaveBeenCalledExactlyOnceWith("nearby");
+    expect(v.commits).toHaveBeenCalledExactlyOnceWith("timeline");
   });
   it("defers PC height changes and never writes a queued height after unmount", () => {
     const v = setup("pc");

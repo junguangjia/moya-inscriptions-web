@@ -63,7 +63,7 @@ export const HomeFeedPager = forwardRef<
       {...props}
       panels={{
         discover: withFilingFooter(props.panels.discover),
-        nearby: withFilingFooter(props.panels.nearby),
+        timeline: withFilingFooter(props.panels.timeline),
         inscriptions: withFilingFooter(props.panels.inscriptions),
         calligraphy: withFilingFooter(props.panels.calligraphy),
       }}

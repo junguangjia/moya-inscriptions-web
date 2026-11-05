@@ -16,6 +16,7 @@ export const iconNames = [
   "category",
   "location",
   "nearby",
+  "timeline",
   "image",
   "loading",
   "error",
