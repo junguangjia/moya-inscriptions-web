@@ -365,6 +365,14 @@ describe("HomeFeedPager category engine integration", () => {
     expect(v.panels.map((p) => p.scrollTop)).toEqual(positions);
     expect([...v.track.children]).toEqual(v.panels);
   });
+  it("keeps watching a panel's content for reflow under the policy notice", () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-20T00:00:00Z"));
+    const [notice, content] = setup().panels[0]!.children;
+    expect(notice!.hasAttribute("data-panel-preface")).toBe(true);
+    expect(observers.some((observer) => observer.observed.has(content!))).toBe(
+      true,
+    );
+  });
   it.each([false, true])(
     "restores a resize-clamped reading position unless the reader moves (%s)",
     (readWhileClamped) => {

@@ -3,6 +3,7 @@ import { forwardRef, useImperativeHandle, useRef } from "react";
 import { HorizontalPager } from "../shell/horizontal-pager";
 import { homeFeeds } from "./home-feed";
 import styles from "./home-screen.module.css";
+import { PolicyUpdateNotice } from "../policy-update-notice/policy-update-notice";
 import type { ReactNode } from "react";
 import type { HorizontalPagerHandle } from "../shell/horizontal-pager";
 import type { PresentationPlatform } from "../shell/device-platform";
@@ -14,6 +15,7 @@ export interface HomeFeedPagerHandle {
 
 const withFilingFooter = (content: ReactNode) => (
   <>
+    <PolicyUpdateNotice />
     {content}
     <footer className={styles.filingFooter}>
       <a

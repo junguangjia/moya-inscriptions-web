@@ -189,6 +189,103 @@ describe("Production auth source admission before pools", () => {
     ).rejects.toThrow("DATABASE_URL is required");
     expect(createPostgresPool).not.toHaveBeenCalled();
   });
+  it.each([
+    ["short", "x".repeat(31)],
+    ["long", "x".repeat(513)],
+    ["padded", ` ${"x".repeat(40)}`],
+  ])(
+    "refuses a %s AI base credential before opening any pool",
+    async (_name, value) => {
+      await expect(
+        prepareProductionBackend({
+          ...productionEnvironment,
+          OPERATOR_AI_BASE_TOKEN: value,
+        }),
+      ).rejects.toThrow("OPERATOR_AI_BASE_TOKEN must be 32 to 512 characters");
+      expect(createPostgresPool).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    "COMMUNITY_OPERATOR_TOKEN",
+    "COMMUNITY_OPERATOR_AI_TOKEN",
+    "AUTH_SOURCE_RELAY_TOKEN",
+    "ANALYTICS_RELAY_TOKEN",
+    "ANALYTICS_HMAC_KEY",
+    "AUTH_LOOKUP_KEY",
+  ])(
+    "refuses an AI base credential equal to %s before opening any pool",
+    async (other) => {
+      const credential = randomBytes(32).toString("base64url");
+      await expect(
+        prepareProductionBackend({
+          ...productionEnvironment,
+          OPERATOR_AI_BASE_TOKEN: credential,
+          [other]: credential,
+        }),
+      ).rejects.toThrow("must be separate from every other credential");
+      expect(createPostgresPool).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    "COMMUNITY_OPERATOR_TOKEN",
+    "OPERATOR_AI_BASE_TOKEN",
+    "AUTH_SOURCE_RELAY_TOKEN",
+    "ANALYTICS_RELAY_TOKEN",
+    "ANALYTICS_HMAC_KEY",
+    "AUTH_LOOKUP_KEY",
+  ])(
+    "refuses an AI community credential equal to %s before opening any pool",
+    async (other) => {
+      const credential = randomBytes(32).toString("base64url");
+      await expect(
+        prepareProductionBackend({
+          ...productionEnvironment,
+          COMMUNITY_OPERATOR_AI_TOKEN: credential,
+          [other]: credential,
+        }),
+      ).rejects.toThrow("must be separate from every other credential");
+      expect(createPostgresPool).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    ["short", "x".repeat(31)],
+    ["long", "x".repeat(513)],
+    ["padded", ` ${"x".repeat(40)}`],
+  ])(
+    "refuses a %s AI community credential before opening any pool",
+    async (_name, value) => {
+      await expect(
+        prepareProductionBackend({
+          ...productionEnvironment,
+          COMMUNITY_OPERATOR_AI_TOKEN: value,
+        }),
+      ).rejects.toThrow(
+        "COMMUNITY_OPERATOR_AI_TOKEN must be 32 to 512 characters",
+      );
+      expect(createPostgresPool).not.toHaveBeenCalled();
+    },
+  );
+  it.each([undefined, ""])(
+    "treats an AI base credential of %j as absent and moves on",
+    async (value) => {
+      await expect(
+        prepareProductionBackend({
+          ...productionEnvironment,
+          OPERATOR_AI_BASE_TOKEN: value,
+        }),
+      ).rejects.toThrow("DATABASE_URL is required");
+    },
+  );
+  it("accepts a distinct AI base credential and proceeds only to the next configuration gate", async () => {
+    await expect(
+      prepareProductionBackend({
+        ...productionEnvironment,
+        OPERATOR_AI_BASE_TOKEN: randomBytes(32).toString("base64url"),
+        COMMUNITY_OPERATOR_TOKEN: randomBytes(32).toString("base64url"),
+      }),
+    ).rejects.toThrow("DATABASE_URL is required");
+    expect(createPostgresPool).not.toHaveBeenCalled();
+  });
   it("does not require forwarding credentials while public auth is disabled", async () => {
     await expect(
       prepareProductionBackend({

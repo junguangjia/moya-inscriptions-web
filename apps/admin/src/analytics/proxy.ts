@@ -1,5 +1,12 @@
 import { UMAMI_WORKSPACE_PATH } from "./config";
-import { umamiUpstream } from "./upstream";
+import {
+  pick,
+  publicIdentity,
+  publicPage,
+  publicTeam,
+  publicWebsite,
+  umamiUpstream,
+} from "./upstream";
 
 const privateHeaders = {
   "cache-control": "private, no-store",
@@ -31,40 +38,6 @@ const teamPage = new RegExp(
   `^/teams/${id}(?:/(?:websites|boards|links|pixels)(?:/[^/]+)*)?/?$`,
   "iu",
 );
-const pick = (value: unknown, keys: readonly string[]) =>
-  Object.fromEntries(
-    keys.flatMap((key) =>
-      value && typeof value === "object" && key in value
-        ? [[key, (value as Record<string, unknown>)[key]]]
-        : [],
-    ),
-  );
-const publicTeam = (value: unknown) => pick(value, ["id", "name", "logoUrl"]);
-const publicWebsite = (value: unknown) =>
-  pick(value, [
-    "id",
-    "name",
-    "domain",
-    "createdAt",
-    "resetAt",
-    "deletedAt",
-    "userId",
-    "teamId",
-  ]);
-const publicPage = (value: unknown, project: (row: unknown) => unknown) => {
-  if (Array.isArray(value)) return value.map(project);
-  const page = pick(value, ["count", "page", "pageSize", "orderBy", "search"]);
-  return {
-    ...page,
-    data:
-      value &&
-      typeof value === "object" &&
-      "data" in value &&
-      Array.isArray(value.data)
-        ? value.data.map(project)
-        : [],
-  };
-};
 
 /** Read-only native workspace, including assets, RSC and config, is Owner-gated. */
 export const createAnalyticsProxy =
@@ -209,27 +182,9 @@ export const createAnalyticsProxy =
       // Native /api/me returns its server auth context, including the bearer.
       // Project only public identity fields; never stream that context out.
       if (suffix === "/api/me" && request.method === "GET" && response.ok) {
-        const context = (await response.json()) as {
-          user?: Record<string, unknown>;
-          authType?: unknown;
-        };
-        const user = Object.fromEntries(
-          ["id", "username", "role", "isAdmin"].flatMap((key) => {
-            const value = context.user?.[key];
-            return typeof value === "string" || typeof value === "boolean"
-              ? [[key, value]]
-              : [];
-          }),
-        );
-        return Response.json(
-          {
-            user,
-            ...(typeof context.authType === "string"
-              ? { authType: context.authType }
-              : {}),
-          },
-          { headers: { ...privateHeaders, vary: "Cookie" } },
-        );
+        return Response.json(publicIdentity(await response.json()), {
+          headers: { ...privateHeaders, vary: "Cookie" },
+        });
       }
       const outgoing = new Headers(privateHeaders);
       if (

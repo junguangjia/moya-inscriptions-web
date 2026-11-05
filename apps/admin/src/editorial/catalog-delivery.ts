@@ -20,7 +20,12 @@ import {
 import { sql } from "@payloadcms/db-postgres";
 import type { PayloadRequest } from "payload";
 
-import { canEditCatalog, actsAsOwner, requireActor } from "./access";
+import {
+  canEditCatalog,
+  actsAsOwner,
+  isAiOperator,
+  requireActor,
+} from "./access";
 import {
   catalogDeliveryReadiness,
   catalogRenderBacklog,
@@ -391,31 +396,40 @@ export const readCatalogDelivery = async (
   requireActor(req);
   requireStandaloneTransaction(req);
   const parsed = parse(readCatalogDeliverySchema, input);
-  return withEditorialTransaction(req, async () => {
-    const row = await lockedIntent(req, parsed.intentId);
-    const result = resultFor(row, false);
+  const row = await withEditorialTransaction(
+    req,
+    async (): Promise<IntentRow> => {
+      // A read writes nothing: it says what time has decided, and the next command
+      // records it.
+      const stored = await intentByID(req, parsed.intentId);
+      return ["prepared", "release_requested"].includes(stored.state) &&
+        new Date(stored.expires_at).getTime() <= Date.now()
+        ? { ...stored, state: "expired" }
+        : stored;
+    },
+  );
+  const result = resultFor(row, false);
+  if (
+    row.recipe_manifest_sha256 &&
+    ["prepared", "release_requested"].includes(row.state)
+  ) {
+    // Past the transaction: the Backend can take 15 s, and a read that waits for it
+    // holds none of the connections the Owner's requests need.
+    const proof = await readCatalogReadiness(row.id);
     if (
-      row.recipe_manifest_sha256 &&
-      ["prepared", "release_requested"].includes(row.state)
-    ) {
-      const proof = await readCatalogReadiness(row.id);
-      if (
-        proof.intentId !== row.id ||
-        proof.manifestSha256 !== row.media_manifest_sha256 ||
-        proof.recipeManifestSha256 !== row.recipe_manifest_sha256 ||
-        proof.stateVersion !== row.state_version ||
-        proof.mediaCount !== row.media_manifest.length
-      )
-        throw new EditorialError("CATALOG_DELIVERY_PROOF_CHANGED", 409);
-      return {
-        ...result,
-        readiness: proof.publicReady
-          ? ("READY" as const)
-          : ("PENDING" as const),
-      };
-    }
-    return result;
-  });
+      proof.intentId !== row.id ||
+      proof.manifestSha256 !== row.media_manifest_sha256 ||
+      proof.recipeManifestSha256 !== row.recipe_manifest_sha256 ||
+      proof.stateVersion !== row.state_version ||
+      proof.mediaCount !== row.media_manifest.length
+    )
+      throw new EditorialError("CATALOG_DELIVERY_PROOF_CHANGED", 409);
+    return {
+      ...result,
+      readiness: proof.publicReady ? ("READY" as const) : ("PENDING" as const),
+    };
+  }
+  return result;
 };
 
 const expectState = (row: IntentRow, version: number) => {
@@ -580,13 +594,14 @@ export const invalidateCatalogDelivery = async (
 /** Editorial originals are published by the release path, or when every one
  * of them already has its complete, current and published rendition set (a
  * text-only edit of a live record). Anything less still needs preparation,
- * unless CMS_CATALOG_DIRECT_PUBLISH is on.
+ * unless CMS_CATALOG_DIRECT_PUBLISH is on. That switch never covers an AI key:
+ * its answer would report success while the images are unavailable.
  */
 export const assertCatalogDeliveryPublication = async (
   content: EditorialDraft,
   req?: PayloadRequest,
 ) => {
-  if (catalogDirectPublishEnabled()) return;
+  if (catalogDirectPublishEnabled() && !(req && isAiOperator(req))) return;
   if (
     req &&
     catalogDeliveryPublishProof(req)?.fingerprint ===

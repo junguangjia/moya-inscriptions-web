@@ -4,11 +4,13 @@ import type { CommunityReportingService } from "@moya/api";
 import { handleNotificationRequest } from "../community/notification-handler.js";
 import { handleAnalyticsRequest } from "../analytics/analytics-handler.js";
 import type { AnalyticsRouteDependencies } from "../analytics/analytics-handler.js";
+import { handleAnalyticsInsights } from "../analytics/insights-handler.js";
 import { handleArticleAuthoringRequest } from "../community/article-authoring-handler.js";
 import { handleArticleDelegationHttpRequest } from "../community/article-delegation-handler.js";
 import type { BackendApplicationOptions } from "../application.js";
 import type { NotificationStreams } from "../community/notification-stream.js";
 import type { NotificationService } from "@moya/api";
+import { ANALYTICS_INSIGHTS_PATH } from "@moya/contracts/internal/admin-mcp";
 import type { RequestListener, ServerResponse } from "node:http";
 
 import {
@@ -34,7 +36,10 @@ import { handleFeedbackRequest } from "../community/feedback-handler.js";
 import { handleAuthorRequest } from "../community/author-handler.js";
 import { handleDevelopmentCatalogRendition } from "../community/development-catalog-rendition-handler.js";
 import type { DevelopmentCatalogRenditions } from "../community/development-catalog-rendition-handler.js";
-import { handleOperatorRequest } from "../community/operator-handler.js";
+import {
+  handleOperatorRequest,
+  type OperatorAiCredentials,
+} from "../community/operator-handler.js";
 import { healthHandler } from "../health/health-handler.js";
 import { sendJson } from "./json-response.js";
 import { sendApiError } from "./api-error-response.js";
@@ -131,6 +136,7 @@ export interface CommunityRouterDependencies {
    * subpath unreachable, so it is never accidentally open.
    */
   readonly operatorCredential: string;
+  readonly aiCredentials?: OperatorAiCredentials;
 }
 
 export interface RouterDependencies {
@@ -169,8 +175,25 @@ export const createRouter =
     ) {
       containRequest(
         response,
-        handleAnalyticsRequest(request, response, pathname, analytics),
+        handleAnalyticsRequest(request, response, pathname, {
+          ...analytics,
+          aiCredentials: community?.aiCredentials,
+        }),
         apiFailure,
+      );
+      return;
+    }
+    if (
+      analytics !== undefined &&
+      pathname.startsWith(`${ANALYTICS_INSIGHTS_PATH}/`)
+    ) {
+      containRequest(
+        response,
+        handleAnalyticsInsights(request, response, pathname, {
+          ...analytics,
+          aiCredentials: community?.aiCredentials,
+        }),
+        operatorFailure,
       );
       return;
     }
@@ -530,6 +553,7 @@ export const createRouter =
           feedbackService: community?.feedbackService,
           directMessageService: community?.directMessageService,
           operatorCredential: community?.operatorCredential ?? "",
+          aiCredentials: community?.aiCredentials,
         }),
         operatorFailure,
       );

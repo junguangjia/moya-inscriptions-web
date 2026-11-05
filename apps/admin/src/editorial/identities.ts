@@ -40,6 +40,27 @@ export const EditorialIdentities: CollectionConfig = {
   },
 };
 
+/** Which of these no record has bound yet. Bindings only ever grow. */
+export const unboundEditorialIdentities = (
+  req: PayloadRequest,
+  values: readonly string[],
+): Promise<readonly string[]> =>
+  withIdentityAccess(req, async () => {
+    const { docs } = await req.payload.find({
+      collection: "editorial-identities",
+      where: { identityValue: { in: [...values] } },
+      select: { identityValue: true },
+      limit: values.length,
+      pagination: false,
+      depth: 0,
+      req,
+      user: req.user,
+      overrideAccess: false,
+    });
+    const bound = new Set(docs.map(({ identityValue }) => identityValue));
+    return values.filter((value) => !bound.has(value));
+  });
+
 export const claimEditorialIdentities = async (
   req: PayloadRequest,
   content: EditorialDraft,

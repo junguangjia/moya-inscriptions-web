@@ -52,6 +52,8 @@ export const parseAnalyticsConfiguration = (
       environment.ANALYTICS_RELAY_TOKEN,
       environment.ANALYTICS_HMAC_KEY,
       environment.COMMUNITY_OPERATOR_TOKEN,
+      environment.OPERATOR_AI_BASE_TOKEN,
+      environment.COMMUNITY_OPERATOR_AI_TOKEN,
       environment.AUTH_SOURCE_RELAY_TOKEN,
     ].filter((value): value is string => Boolean(value));
     if (new Set(credentials).size !== credentials.length)

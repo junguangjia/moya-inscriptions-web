@@ -735,6 +735,11 @@ function HorizontalPagerImplementation<Key extends string>(
       // A fixed-height panel's border box does not report content reflow.
       if (scrollOwner === "panel" && panel.firstElementChild !== null) {
         observer.observe(panel.firstElementChild);
+        // A notice drawn above the content must not stand in for it.
+        const content = panel.querySelector(
+          ":scope > [data-panel-preface] + *",
+        );
+        if (content !== null) observer.observe(content);
       }
     }
     return () => {

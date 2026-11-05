@@ -103,17 +103,30 @@ export const withEditorialTransaction = async <T>(
 };
 
 // numeric_value_out_of_range and invalid_text_representation: an id the integer
-// column cannot hold, such as 3000000000 or "12.5", so no such record can exist.
+// column cannot hold, such as 3000000000 or "12.5". character_not_in_repertoire: an
+// id holding a NUL, which no text column can hold. So no such record can exist.
 const IMPOSSIBLE_ID_SQLSTATES: ReadonlySet<unknown> = new Set([
   "22003",
   "22P02",
+  "22021",
 ]);
 
-/** A read that truly found nothing. Any other failure stays what it is. */
+/**
+ * No such record for this caller: a miss, a refusal that reads as one, or an id
+ * no column can hold, so no record can have it. Any other failure stays what it is.
+ */
 export const isMissingRecord = (error: unknown): boolean =>
   error instanceof NotFound ||
   error instanceof Forbidden ||
   IMPOSSIBLE_ID_SQLSTATES.has(sqlState(error));
+
+/**
+ * foreign_key_violation on a statement of the write: it stops there, and its whole
+ * transaction rolls back, so nothing committed. One raised by the COMMIT itself never
+ * reaches here: assertCommitted reads that as unknown.
+ */
+export const isMissingReference = (error: unknown): boolean =>
+  sqlState(error) === "23503";
 
 /** Answered from a stored rejected receipt, not from a new attempt. */
 export class ReplayedEditorialError extends EditorialError {
@@ -127,9 +140,10 @@ export class ReplayedEditorialError extends EditorialError {
 // Refusals the same command can get past once something else changes: the key,
 // the Owner's open document, the account's scope, the images, the record or what
 // it references. Payload refusals, which are not EditorialError, write no receipt
-// either.
+// either. An effect found already in place holds only until the record moves again.
 const RETRYABLE_REFUSALS: ReadonlySet<string> = new Set([
   "ALREADY_PUBLISHED",
+  "ALREADY_WITHDRAWN",
   "CATALOG_DELIVERY_PREPARATION_REQUIRED",
   "CATALOG_OUT_OF_SCOPE",
   "CONCURRENT_OPERATION_BUSY",

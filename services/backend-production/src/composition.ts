@@ -7,7 +7,10 @@ import {
 import { PostgresCommunityReportingAdapter } from "@moya/community-postgres";
 import { parseAnalyticsConfiguration } from "./analytics/config.js";
 import { AnalyticsWorker } from "./analytics/worker.js";
-import { PostgresAnalyticsAdapter } from "@moya/community-postgres";
+import {
+  PostgresAnalyticsAdapter,
+  PostgresAnalyticsInsights,
+} from "@moya/community-postgres";
 import path from "node:path";
 
 import { PostgresNotificationAdapter } from "@moya/community-postgres";
@@ -225,6 +228,32 @@ const parseOperatorCredential = (environment: RuntimeEnvironment): string => {
   return value;
 };
 
+/**
+ * An AI credential, validated like the Owner's and as optional: without it its AI
+ * routes refuse. Compared with the whole environment rather than a list, so no later
+ * token can share its value and blur who acted.
+ */
+const parseAiCredential = (
+  environment: RuntimeEnvironment,
+  variable: "OPERATOR_AI_BASE_TOKEN" | "COMMUNITY_OPERATOR_AI_TOKEN",
+): string => {
+  const value = environment[variable];
+  if (value === undefined || value === "") return "";
+  if (value.trim() !== value || value.length < 32 || value.length > 512)
+    throw new Error(
+      `${variable} must be 32 to 512 characters without surrounding whitespace`,
+    );
+  if (
+    Object.entries(environment).some(
+      ([name, other]) => name !== variable && other === value,
+    )
+  )
+    throw new Error(
+      `${variable}: must be separate from every other credential`,
+    );
+  return value;
+};
+
 /** Code-only low-level dependencies for isolated acceptance; main uses real transports. */
 export interface ProductionBackendDependencies {
   readonly publishingCosTransport?: PublishingCosTransport;
@@ -247,6 +276,12 @@ export const prepareProductionBackend = async (
     environment,
     runtimeConfig.nodeEnv,
   );
+  const operatorAiBaseCredential = parseAiCredential(
+    environment,
+    "OPERATOR_AI_BASE_TOKEN",
+  );
+  // No route takes it yet, but a value shared with any other token still stops here.
+  parseAiCredential(environment, "COMMUNITY_OPERATOR_AI_TOKEN");
   if (
     runtimeConfig.nodeEnv !== "production" &&
     runtimeConfig.nodeEnv !== "development"
@@ -869,6 +904,9 @@ export const prepareProductionBackend = async (
         analytics: {
           port: analyticsPort,
           policy: analyticsConfiguration.policy,
+          insights: new PostgresAnalyticsInsights(communityPool, {
+            retentionDays: analyticsConfiguration.policy.eventRetentionDays,
+          }),
           ...(analyticsConfiguration.source
             ? { source: analyticsConfiguration.source }
             : {}),
@@ -1025,6 +1063,7 @@ export const prepareProductionBackend = async (
             (await catalogQueryPort.getById(catalogId))?.title ?? null,
         },
         communityOperatorCredential: parseOperatorCredential(environment),
+        operatorAiBaseCredential,
       }),
     ),
     closeResources,

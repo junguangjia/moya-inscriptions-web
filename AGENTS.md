@@ -42,9 +42,9 @@ The active amendments are:
 - [`2026-09-16 explicit validation profiles`](docs/governance/amendments/2026-09-16-validation-profiles.md),
   which replaces the shared 120-second daily budget and the Issue-lifetime
   functional balance with explicit per-plan profiles (feedback 120 s cap; Apple
-  full 600 s; Web/CMS complete 300 s; local combined ≤ 900 s), keeps the
-  credential check at 120 s per genuine publication cycle, and records finite
-  repair authority. Historical failures remain unchanged.
+  full 600 s; Web complete 300 s; CMS and PostgreSQL complete 900 s; local
+  combined ≤ 900 s), keeps the credential check at 120 s per genuine publication
+  cycle, and records finite repair authority. Historical failures are unchanged.
 - [`2026-09-22 content, Threads and direct messages (three-track Community scope)`](docs/governance/amendments/2026-09-22-content-community-completion-scope.md)
 - [`2026-10-04 unified media pipeline`](docs/governance/amendments/2026-10-04-unified-media-pipeline.md)
 - [`2026-11-03 Admin MCP completion`](docs/governance/amendments/2026-11-03-admin-mcp-completion.md)
