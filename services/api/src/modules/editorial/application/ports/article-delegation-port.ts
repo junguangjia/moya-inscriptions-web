@@ -30,6 +30,12 @@ export interface ArticleConsentPort {
     readonly expiresAt: Date;
   }): Promise<ArticleConsentInteraction>;
   read(uid: string): Promise<ArticleConsentInteraction | null>;
+  readForResume(
+    uid: string,
+    resumeSecret: string,
+  ): Promise<ArticleConsentInteraction | null>;
+  /** True only when this secret was current; a wrong secret changes nothing. */
+  voidResume(uid: string, resumeSecret: string): Promise<boolean>;
   prepareReview(
     ownerId: PublicUserId,
     uid: string,
@@ -45,9 +51,10 @@ export interface ArticleConsentPort {
       readonly scopes: readonly ArticleAuthoringScope[];
     },
     now: Date,
-  ): Promise<ArticleConsentInteraction>;
+  ): Promise<{ interaction: ArticleConsentInteraction; resumeSecret: string }>;
   finalizeGrant(
     uid: string,
+    resumeSecret: string,
     grantId: string,
     now: Date,
   ): Promise<ArticleConsentInteraction>;

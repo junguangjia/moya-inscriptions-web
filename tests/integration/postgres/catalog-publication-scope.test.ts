@@ -340,7 +340,8 @@ describe("App migration A1, its grants and the startup checks", () => {
         "20261028010000",
         "20261102010000",
         "20261104010000",
-        "20261104020000",
+        "20261105010000",
+        "20261105020000",
       ]);
       expect(await runCommunityMigrations(upgraded.setup, migrations)).toEqual(
         [],

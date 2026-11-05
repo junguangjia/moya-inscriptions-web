@@ -173,7 +173,7 @@ export const handleArticleDelegationRequest = async (
         sendApiError(response, "INVALID_INPUT", "INVALID_INPUT");
         return;
       }
-      await runtime.consents.decide(
+      const { resumeSecret } = await runtime.consents.decide(
         viewer,
         { ...parsed.data, decision: action },
         new Date(),
@@ -181,13 +181,18 @@ export const handleArticleDelegationRequest = async (
       const resumeUrl = new URL(
         `/article-authoring/consent/${encodeURIComponent(id)}/resume`,
         runtime.issuer,
-      ).href;
-      // This ordinary interaction name only resumes with the provider's
-      // host/path-bound interaction cookie; no authorizing token is in a URL.
+      );
+      // The one-time secret goes only to the browser that clicked, and grants
+      // nothing alone: resume also needs the provider's host/path-bound
+      // interaction cookie, and the secret without that cookie voids the consent.
+      resumeUrl.searchParams.set("secret", resumeSecret);
       sendJson(
         response,
         200,
-        articleConsentDecisionSchema.parse({ decision: action, resumeUrl }),
+        articleConsentDecisionSchema.parse({
+          decision: action,
+          resumeUrl: resumeUrl.href,
+        }),
         privateHeaders,
       );
       return;

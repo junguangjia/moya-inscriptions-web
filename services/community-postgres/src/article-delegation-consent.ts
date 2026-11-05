@@ -100,6 +100,25 @@ export const createArticleConsentStore = (
       ).rows[0];
       return row === undefined ? null : toInteraction(row);
     },
+    async readForResume(uid: string, resumeSecret: string) {
+      const digest = await hashSessionToken(resumeSecret);
+      const row = (
+        await pool.query<InteractionRow>(
+          `${select} WHERE interaction_uid=$1 AND resume_secret_digest=$2`,
+          [uid, digest],
+        )
+      ).rows[0];
+      return row === undefined ? null : toInteraction(row);
+    },
+    async voidResume(uid: string, resumeSecret: string) {
+      const digest = await hashSessionToken(resumeSecret);
+      const voided = await pool.query(
+        `UPDATE community.article_authoring_consents SET resume_secret_digest=NULL
+        WHERE interaction_uid=$1 AND resume_secret_digest=$2`,
+        [uid, digest],
+      );
+      return voided.rowCount === 1;
+    },
     async prepareReview(ownerId: PublicUserId, uid: string, now: Date) {
       // This short-lived proof is returned only to the authenticated same-origin
       // consent page; no token-bearing URL is constructed or stored.
@@ -141,6 +160,9 @@ export const createArticleConsentStore = (
     ) {
       const digest = await hashSessionToken(input.consentTicket);
       const scopes = assertArticleScopes(input.scopes);
+      // Returned only to the browser that clicked; resume also needs its cookie.
+      const resumeSecret = generateSessionToken();
+      const resumeDigest = await hashSessionToken(resumeSecret);
       return actorTransaction(pool, ownerId, async (db) => {
         const row = (
           await db.query<
@@ -164,8 +186,17 @@ export const createArticleConsentStore = (
             row.decision_request_id === input.requestId &&
             row.decision === decision &&
             row.owner_id === ownerId
-          )
-            return toInteraction(row);
+          ) {
+            // The lost answer's secret was never kept, so its receipt retires
+            // it for a new one. A spent or voided consent has none to replace.
+            const replaced = await db.query(
+              `UPDATE community.article_authoring_consents SET resume_secret_digest=$2
+              WHERE interaction_uid=$1 AND resume_secret_digest IS NOT NULL`,
+              [input.interactionUid, resumeDigest],
+            );
+            if (replaced.rowCount === 1)
+              return { interaction: toInteraction(row), resumeSecret };
+          }
           throw new CommunityConflictError("ARTICLE_CONSENT_ALREADY_DECIDED");
         }
         if (
@@ -207,7 +238,7 @@ export const createArticleConsentStore = (
           await db.query<InteractionRow>(
             `UPDATE community.article_authoring_consents
         SET decision=$2,owner_id=$3,connection_id=$4,granted_generation=$5,
-          decided_at=$6,decision_request_id=$7
+          decided_at=$6,decision_request_id=$7,resume_secret_digest=$8
         WHERE interaction_uid=$1 RETURNING interaction_uid,oauth_client_id,resource,scopes,
           expires_at,decision,owner_id,connection_id,granted_generation,resumed_at`,
             [
@@ -218,18 +249,26 @@ export const createArticleConsentStore = (
               generation,
               now.toISOString(),
               input.requestId,
+              resumeDigest,
             ],
           )
         ).rows[0]!;
-        return toInteraction(updated);
+        return { interaction: toInteraction(updated), resumeSecret };
       });
     },
-    async finalizeGrant(uid: string, grantId: string, now: Date) {
+    async finalizeGrant(
+      uid: string,
+      resumeSecret: string,
+      grantId: string,
+      now: Date,
+    ) {
+      const digest = await hashSessionToken(resumeSecret);
       return writeTransaction(pool, async (db) => {
+        // Rechecked under the row lock: a void in flight wins over this resume.
         const row = (
           await db.query<InteractionRow>(
-            `${select} WHERE interaction_uid=$1 FOR UPDATE`,
-            [uid],
+            `${select} WHERE interaction_uid=$1 AND resume_secret_digest=$2 FOR UPDATE`,
+            [uid, digest],
           )
         ).rows[0];
         if (
@@ -277,7 +316,7 @@ export const createArticleConsentStore = (
           [row.connection_id, grantId],
         );
         await db.query(
-          "UPDATE community.article_authoring_consents SET resumed_at=$2,provider_grant_id=$3 WHERE interaction_uid=$1",
+          "UPDATE community.article_authoring_consents SET resumed_at=$2,provider_grant_id=$3,resume_secret_digest=NULL WHERE interaction_uid=$1",
           [uid, now.toISOString(), grantId],
         );
         return toInteraction(row);
