@@ -1,6 +1,7 @@
 import {
   requireHumanModerationReason,
   isCommunityConflictError,
+  isCommunityIdempotencyConflictError,
   isCommunityInputError,
   isCommunityNotFoundError,
   isCommunityStoreUnavailableError,
@@ -634,6 +635,8 @@ export const handlePublishingOperatorRequest = async (
       sendOperatorError(response, 400, "INVALID_COMMAND");
     else if (isCommunityNotFoundError(error))
       sendOperatorError(response, 404, "NOT_FOUND");
+    else if (isCommunityIdempotencyConflictError(error))
+      sendOperatorError(response, 409, "IDEMPOTENCY_CONFLICT");
     else if (isCommunityConflictError(error))
       sendOperatorError(response, 409, "STATE_CONFLICT");
     else if (isCommunityInputError(error))

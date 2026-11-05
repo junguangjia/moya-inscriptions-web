@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import { performance } from "node:perf_hooks";
@@ -26,6 +26,7 @@ import {
   ADMIN_MCP_TEXT_CAP_BYTES,
   ADMIN_MCP_TOKEN_BUDGET,
   ADMIN_VIEW_MEDIA_MAX_BYTES,
+  adminExecuteDataSchema,
   adminFindDataSchema,
   adminMcpEnvelopeSchema,
   adminReadRowsDataSchema,
@@ -57,12 +58,22 @@ import {
   gradeC3,
   gradeC4,
   gradeM1,
+  gradeM3,
+  gradeTold,
   gradeU1,
+  gradeU3,
   M1_CALL,
+  M3_REASON,
+  m3HideCall,
+  m3ListCall,
   u1FindCall,
   u1ReadCall,
+  U3_REASON,
+  u3FindCall,
+  u3Outcome,
+  u3SuspendCall,
 } from "./paths.ts";
-import type { ToolCall } from "./paths.ts";
+import type { ToldRow, ToolCall } from "./paths.ts";
 import {
   BENCH_FIXTURE_RECORDS,
   BENCH_SCALE,
@@ -103,6 +114,8 @@ const { oracle, communityOracle, rows } = JSON.parse(
 const DESCRIPTION_MAX_CHARS = 1_024;
 /** Enough to read a p95 off, cheap enough for CI. */
 const TIMING_SAMPLES = 20;
+/** One account's public assets, so a suspension's cost per asset has a ceiling. */
+const SUSPENDED_LIVE_ASSETS = 5;
 
 /**
  * Statements one call may run, audit row and transaction control included: reads
@@ -125,6 +138,16 @@ const STATEMENTS = {
   m1_count: 10,
   u1_find: 10,
   u1_read: 12,
+  m3_list: 23,
+  // Per target: the Backend's transaction with its time limit, its case and receipt, a
+  // pause read and an audit row.
+  m3_hide_12: 275,
+  // The same, and a suspension's settlement: a read's own transaction, five statements.
+  u3_suspend_14: 360,
+  // One target, whose publication sync costs statements per live asset.
+  suspend_live_assets_5: 45,
+  // The Admin's door and audit row, and the settlement's transaction on the Backend.
+  job_read: 10,
 } as const;
 
 /**
@@ -239,7 +262,7 @@ const seqScansOf = (plan: Record<string, unknown>): string[] => [
 const largeSeqScans = async (statements: readonly Statement[]) => {
   const found = new Set<string>();
   for (const { text, values } of statements) {
-    if (!/^\s*select/iu.test(text)) continue;
+    if (!/^\s*(?:select|with)\b/iu.test(text)) continue;
     const { rows: plan } = await pool.query(
       `EXPLAIN (FORMAT JSON) ${text}`,
       values,
@@ -775,8 +798,11 @@ describe("C3 reference path", () => {
 // The real Backend's AI routes in this process, so their statements count on the same
 // row as the Admin's. As the owner of the tables here: the App role's grants have their
 // own suite, tests/cms/admin-mcp-community.test.ts.
+const md5 = (text: string) => createHash("md5").update(text).digest("hex");
+
 describe("the community reference paths", () => {
   const communityToken = randomBytes(32).toString("base64url");
+  const baseToken = randomBytes(32).toString("base64url");
   let backend: Server;
   let communityPool: ReturnType<typeof createPostgresPool>;
   let restoreBackendCapture: () => void;
@@ -800,6 +826,7 @@ describe("the community reference paths", () => {
         ),
         reportingPort: new PostgresCommunityReportingAdapter(communityPool),
         aiOperatorReader: new PostgresAiOperatorReader(communityPool),
+        operatorAiBaseCredential: baseToken,
         operatorAiCommunityCredential: communityToken,
         storageUrlResolver: new MappedStorageUrlResolver(new Map()),
       }),
@@ -810,6 +837,7 @@ describe("the community reference paths", () => {
       `http://127.0.0.1:${address.port}/`,
     );
     vi.stubEnv("COMMUNITY_OPERATOR_AI_TOKEN", communityToken);
+    vi.stubEnv("OPERATOR_AI_BASE_TOKEN", baseToken);
     vi.stubEnv("COMMUNITY_OPERATOR_TOKEN", "");
   });
 
@@ -819,6 +847,74 @@ describe("the community reference paths", () => {
     backend?.closeAllConnections();
     if (backend) await stopServer(backend);
     await communityPool?.end();
+  });
+
+  it("reads a settlement on any subject at scale, with no scan of a large table", async () => {
+    expect(largeTables).toContain("publishing_jobs");
+    expect(largeTables).toContain("media_items");
+    const refs = [
+      (at: number) => ({
+        type: "user",
+        id: `user-${md5(`bench-user-${1 + (at % BENCH_SCALE.users)}`)}`,
+        intent: "withdraw",
+      }),
+      (at: number) => ({
+        type: "work",
+        id: `work-${md5(`bench-work-${1 + (at % 49)}`)}`,
+        intent: "withdraw",
+      }),
+      (at: number) => ({
+        type: "item",
+        id: `media-item-${md5(`bench-item-${1 + at}`)}`,
+        intent: "withdraw",
+      }),
+    ];
+    await checkClass(
+      "job_read",
+      GATE_A_P95_MS.job_read,
+      STATEMENTS.job_read,
+      (index) => ({
+        name: "admin_job",
+        arguments: {
+          kind: "settlement",
+          refs: [refs[index % refs.length]!(index)],
+        },
+      }),
+    );
+  });
+
+  it("reads past a stop on the state index, one statement more", async () => {
+    const item = `media-item-${md5("bench-item-1")}`;
+    const job = `publishing-job-${md5(`bench-stop-${randomUUID()}`)}`;
+    await communityPool.query(
+      "INSERT INTO community.media_public_assets (id, item_id, desired_at, created_at, updated_at) VALUES ($1, $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+      [md5(job), item],
+    );
+    await communityPool.query(
+      "INSERT INTO community.publishing_jobs (id, kind, subject_id, state, run_after, created_at, updated_at, finished_at) VALUES ($1, 'withdraw_media', $2, 'failed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+      [job, item],
+    );
+    const { envelope, statements } = await callOn({
+      name: "admin_job",
+      arguments: {
+        kind: "settlement",
+        refs: [{ type: "item", id: item, intent: "withdraw" }],
+      },
+    });
+    expect(envelope).toMatchObject({
+      code: "MEDIA_JOB_FAILED",
+      data: { refs: [{ state: "failed", failed: 1, jobs: [job] }] },
+    });
+    expect(statements.length).toBeLessThanOrEqual(STATEMENTS.job_read + 1);
+    expect(await largeSeqScans(statements)).toEqual([]);
+    await communityPool.query(
+      "DELETE FROM community.publishing_jobs WHERE id = $1",
+      [job],
+    );
+    await communityPool.query(
+      "DELETE FROM community.media_public_assets WHERE item_id = $1",
+      [item],
+    );
   });
 
   it("M1: counts what still waits, by kind, and how long the oldest has, in one read", async () => {
@@ -869,6 +965,377 @@ describe("the community reference paths", () => {
       ms: [found.ms + listed.ms],
       statements: found.statements.length + listed.statements.length,
       bytes: Math.max(found.bytes, listed.bytes),
+      seqScans,
+    });
+    expect(seqScans).toEqual([]);
+  });
+
+  const moderationStates = async (ids: readonly string[]) =>
+    Object.fromEntries(
+      (
+        await pool.query(
+          "SELECT id,moderation FROM community.catalog_comments WHERE id=ANY($1)",
+          [[...ids]],
+        )
+      ).rows.map(({ id, moderation }) => [id, moderation]),
+    );
+  const toldOf = async (subjects: readonly string[]) =>
+    (
+      await pool.query(
+        `SELECT c.target_id, c.kind, c.status, d.reason, d.operator_label,
+           m.recipient_id, m.kind AS message_kind, m.text
+         FROM community.report_cases c
+         JOIN community.report_decisions d ON d.id = c.decision_id
+         LEFT JOIN community.report_messages m ON m.case_id = c.id
+         WHERE c.target_id = ANY($1)`,
+        [[...subjects]],
+      )
+    ).rows as ToldRow[];
+
+  it("M3: hides exactly what the request names, and a repeat moves nothing", async () => {
+    const m3 = communityOracle.m3;
+    const found = await callOn(u1FindCall(m3.handle));
+    const { resolution } = adminFindDataSchema.parse(found.envelope.data);
+    expect(resolution).toEqual({
+      status: "exact",
+      uniqueIdentity: true,
+      ref: { type: "user", id: m3.id },
+    });
+    const list = await callOn(m3ListCall(resolution.ref!.id, m3.phrase));
+    expect(list.envelope.ok).toBe(true);
+    const { rows: listed, filter } = adminReadRowsDataSchema.parse(
+      list.envelope.data,
+    );
+    expect(filter).toMatchObject({
+      authorId: m3.id,
+      search: m3.phrase,
+      range: "last_7_days",
+      tz: "Asia/Shanghai",
+    });
+    const ids = listed.map((row) => String(row.id));
+    expect(await moderationStates(ids)).toEqual(
+      Object.fromEntries(m3.matching.map((id) => [id, "visible"])),
+    );
+    const untouched = await moderationStates(m3.untouched);
+    expect(Object.keys(untouched)).toHaveLength(m3.untouched.length);
+    // Any extra row is a hard failure, wherever it is: every comment in the seed counts.
+    const movedAnywhere = async () =>
+      Number(
+        (
+          await pool.query(
+            "SELECT count(*)::int AS n FROM community.catalog_comments WHERE moderation <> 'visible'",
+          )
+        ).rows[0]!.n,
+      );
+    const movedBefore = await movedAnywhere();
+
+    const requestId = randomUUID();
+    const hide = await callOn(m3HideCall(requestId, ids), "full");
+    expect(hide.envelope).toMatchObject({ ok: true, code: "OK" });
+    expect(await movedAnywhere()).toBe(movedBefore + m3.matching.length);
+    expect(
+      gradeM3(ids, adminExecuteDataSchema.parse(hide.envelope.data), m3),
+    ).toEqual([]);
+    expect(await moderationStates(m3.matching)).toEqual(
+      Object.fromEntries(m3.matching.map((id) => [id, "hidden"])),
+    );
+    expect(await moderationStates(m3.untouched)).toEqual(untouched);
+    expect(
+      gradeTold(await toldOf(m3.matching), m3.matching, M3_REASON, () => m3.id),
+    ).toEqual([]);
+    expect(await toldOf(m3.untouched)).toEqual([]);
+
+    const eventsOf = async () =>
+      Number(
+        (
+          await pool.query(
+            "SELECT count(*)::int AS n FROM community.moderation_events WHERE subject_id=ANY($1) AND operator_label='ai-admin'",
+            [[...m3.matching]],
+          )
+        ).rows[0]!.n,
+      );
+    expect(await eventsOf()).toBe(m3.matching.length);
+    const replay = await callOn(m3HideCall(requestId, ids), "full");
+    expect(replay.envelope).toMatchObject({
+      ok: true,
+      meta: { replayed: true },
+    });
+    expect(
+      [
+        ...(adminExecuteDataSchema.parse(replay.envelope.data)
+          .already_applied ?? []),
+      ].sort(),
+    ).toEqual([...m3.matching].sort());
+    expect(await eventsOf()).toBe(m3.matching.length);
+    expect(await moderationStates(m3.untouched)).toEqual(untouched);
+    expect(await movedAnywhere()).toBe(movedBefore + m3.matching.length);
+    expect(await toldOf(m3.matching)).toHaveLength(m3.matching.length);
+
+    expect(list.statements.length).toBeLessThanOrEqual(STATEMENTS.m3_list);
+    expect(hide.statements.length).toBeLessThanOrEqual(STATEMENTS.m3_hide_12);
+    const seqScans = await largeSeqScans([
+      ...found.statements,
+      ...list.statements,
+      ...hide.statements,
+    ]);
+    report({
+      name: "M3",
+      budgetMs:
+        GATE_A_P95_MS.exact_locate +
+        GATE_A_P95_MS.list_page +
+        m3.matching.length * GATE_A_P95_MS.batch_write_per_target,
+      ms: [found.ms + list.ms + hide.ms],
+      statements:
+        found.statements.length +
+        list.statements.length +
+        hide.statements.length,
+      bytes: Math.max(found.bytes, list.bytes, hide.bytes),
+      seqScans,
+    });
+    // list.comments leaves out what a self-only work withholds through one hashed set
+    // of them, read once per statement, and that set asks what holds an emptied row's
+    // text. Reported above; nothing else may join them, and the writes go by id.
+    const inTheSet = ["works", "work_revisions"];
+    expect(seqScans.filter((table) => !inTheSet.includes(table))).toEqual([]);
+    expect(await largeSeqScans(hide.statements)).toEqual([]);
+  });
+
+  it("prices a read past a stop days old, over every finished job since", async () => {
+    // Before every seeded job, so the bound on the state index holds the whole range.
+    const { before } = (
+      await communityPool.query<{ before: Date }>(
+        "SELECT min(updated_at) - interval '6 days' AS before FROM community.publishing_jobs",
+      )
+    ).rows[0]!;
+    const item = `media-item-${md5(`bench-old-stop-${randomUUID()}`)}`;
+    const job = `publishing-job-${md5(`bench-old-stop-${randomUUID()}`)}`;
+    await communityPool.query(
+      "INSERT INTO community.media_items (id, owner_id, kind, quality_mode, source, state, presentation, ready_at) VALUES ($1, $2, 'static', 'standard', 'upload', 'ready', '{\"width\":512,\"height\":384}', CURRENT_TIMESTAMP)",
+      [item, `user-${md5("bench-user-1")}`],
+    );
+    await communityPool.query(
+      "INSERT INTO community.media_public_assets (id, item_id, desired_at, created_at, updated_at) VALUES ($1, $2, $3, $3, $3)",
+      [md5(job), item, before],
+    );
+    await communityPool.query(
+      "INSERT INTO community.publishing_jobs (id, kind, subject_id, state, run_after, created_at, updated_at, finished_at) VALUES ($1, 'withdraw_media', $2, 'failed', $3, $3, $3, $3)",
+      [job, item, before],
+    );
+    const { envelope, statements, ms, bytes } = await callOn({
+      name: "admin_job",
+      arguments: {
+        kind: "settlement",
+        refs: [{ type: "item", id: item, intent: "withdraw" }],
+      },
+    });
+    expect(envelope).toMatchObject({
+      code: "MEDIA_JOB_FAILED",
+      data: { refs: [{ state: "failed", failed: 1, jobs: [job] }] },
+    });
+    expect(statements.length).toBeLessThanOrEqual(STATEMENTS.job_read + 1);
+    const seqScans = await largeSeqScans(statements);
+    report({
+      name: "job_read_old_stop",
+      budgetMs: GATE_A_P95_MS.job_read,
+      ms: [ms],
+      statements: statements.length,
+      bytes,
+      seqScans,
+    });
+    // A range this wide reads the whole table, within its branch's 2 s statement limit
+    // (section 17). Nothing else may join it, and a read past a recent stop has none.
+    expect(seqScans.filter((name) => name !== "publishing_jobs")).toEqual([]);
+    expect(ms).toBeLessThan(2_000);
+    await communityPool.query(
+      "DELETE FROM community.publishing_jobs WHERE id = $1",
+      [job],
+    );
+    await communityPool.query(
+      "DELETE FROM community.media_public_assets WHERE item_id = $1",
+      [item],
+    );
+    await communityPool.query(
+      "DELETE FROM community.media_items WHERE id = $1",
+      [item],
+    );
+  });
+
+  it("prices a suspension of an account with live assets, per asset", async () => {
+    const user = `user-${md5(`bench-media-user-${randomUUID()}`)}`;
+    await communityPool.query(
+      "INSERT INTO community.public_users (id, handle, display_name) VALUES ($1, $2, 'Bench media account')",
+      [user, `bench-media-${md5(user).slice(0, 12)}`],
+    );
+    const hex = () => randomUUID().replaceAll("-", "");
+    for (let index = 0; index < SUSPENDED_LIVE_ASSETS; index += 1) {
+      const item = `media-item-${md5(`${user}-${index}`)}`;
+      const blob = `media-blob-${md5(`${user}-${index}`)}`;
+      const rendition = `media-rendition-${md5(`${user}-${index}`)}`;
+      const asset = hex();
+      const token = hex();
+      const key = hex();
+      const hash = randomBytes(32).toString("hex");
+      await communityPool.query(
+        "INSERT INTO community.media_items (id, owner_id, kind, quality_mode, source, state, presentation, ready_at) VALUES ($1, $2, 'static', 'standard', 'upload', 'ready', '{\"width\":512,\"height\":384}', CURRENT_TIMESTAMP)",
+        [item, user],
+      );
+      await communityPool.query(
+        "INSERT INTO community.media_blobs (id, owner_id, purpose, storage_key, byte_size, sha256, content_type, created_at) VALUES ($1, $2, 'derivative', $3, 128, $4, 'image/webp', CURRENT_TIMESTAMP)",
+        [
+          blob,
+          user,
+          `blobs/${key.slice(0, 2)}/${key.slice(2, 4)}/${key}`,
+          hash,
+        ],
+      );
+      await communityPool.query(
+        "INSERT INTO community.media_renditions (id, item_id, edit_key, role, recipe_version, recipe_digest, blob_id, width, height, content_type, created_at) VALUES ($1, $2, 'base', 'display', 1, '1111111111111111', $3, 512, 384, 'image/webp', CURRENT_TIMESTAMP)",
+        [rendition, item, blob],
+      );
+      await communityPool.query(
+        "INSERT INTO community.media_public_assets (id, item_id, desired_at, created_at, updated_at) VALUES ($1, $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        [asset, item],
+      );
+      await communityPool.query(
+        `INSERT INTO community.media_publications (id, public_asset_id, rendition_id, generation_token, object_key, storage_key, content_type, purpose, byte_size, sha256, role, edit_key, state, created_at, published_at)
+         VALUES ($1, $2, $3, $4, $5, $6, 'image/webp', 'derivative', 128, $7, 'display', 'base', 'published', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [
+          `media-publication-${md5(`${user}-${index}`)}`,
+          asset,
+          rendition,
+          token,
+          `v1/${asset}/${token}/base/display.r1.webp`,
+          `blobs/${key.slice(0, 2)}/${key.slice(2, 4)}/${key}`,
+          hash,
+        ],
+      );
+    }
+    const { envelope, statements, ms, bytes } = await callOn(
+      {
+        name: "admin_execute",
+        arguments: {
+          requestId: randomUUID(),
+          op: "community.moderate-user",
+          input: { id: user, action: "suspend", reason: U3_REASON },
+        },
+      },
+      "full",
+    );
+    expect(envelope).toMatchObject({
+      code: "QUEUED",
+      state: "media_jobs_open",
+    });
+    expect(statements.length).toBeLessThanOrEqual(
+      STATEMENTS.suspend_live_assets_5,
+    );
+    const seqScans = await largeSeqScans(statements);
+    report({
+      name: "suspend_live_assets",
+      budgetMs: GATE_A_P95_MS.batch_write_per_target,
+      ms: [ms],
+      statements: statements.length,
+      bytes,
+      seqScans,
+    });
+    expect(seqScans).toEqual([]);
+  });
+
+  it("U3: suspends the ones it can, and says which it changed, skipped and could not find", async () => {
+    const u3 = communityOracle.u3;
+    const statusOf = async (ids: readonly string[]) =>
+      Object.fromEntries(
+        (
+          await pool.query(
+            "SELECT id,status FROM community.public_users WHERE id=ANY($1)",
+            [[...ids]],
+          )
+        ).rows.map(({ id, status }) => [id, status]),
+      );
+    const finds: Awaited<ReturnType<typeof callOn>>[] = [];
+    for (const handle of u3.handles)
+      finds.push(await callOn(u3FindCall(handle)));
+    const resolved = finds.map(
+      ({ envelope }) => adminFindDataSchema.parse(envelope.data).resolution,
+    );
+    const known = resolved.flatMap(({ ref }) =>
+      ref === undefined ? [] : [ref.id],
+    );
+    // One handle names no account, and the locate says so before anything runs: every
+    // source answered, because one that did not is never a miss.
+    expect(
+      u3.handles.filter((_, at) => resolved[at]!.status === "none"),
+    ).toEqual([u3.missingHandle]);
+    expect(
+      u3.handles.filter((_, at) => resolved[at]!.ref === undefined),
+    ).toEqual([u3.missingHandle]);
+    const sourcesOfTheMiss = Object.values(
+      finds[u3.handles.indexOf(u3.missingHandle)]!.envelope.meta?.sources ?? {},
+    );
+    expect(sourcesOfTheMiss.length).toBeGreaterThan(0);
+    expect(sourcesOfTheMiss.filter((status) => status !== "ok")).toEqual([]);
+    const all = [...u3.changed, ...u3.skipped];
+    expect([...known].map(String).sort()).toEqual([...all].sort());
+
+    const requestId = randomUUID();
+    const suspend = await callOn(u3SuspendCall(requestId, known), "full");
+    const first = adminExecuteDataSchema.parse(suspend.envelope.data);
+    expect(gradeU3(first, u3)).toEqual([]);
+    // No account here has media, so nothing is left to wait for.
+    expect(suspend.envelope).toMatchObject({ ok: true, code: "OK" });
+    expect(first.queued).toBeUndefined();
+    expect(await statusOf(all)).toEqual(
+      Object.fromEntries(all.map((id) => [id, "suspended"])),
+    );
+    expect(
+      gradeTold(await toldOf(u3.changed), u3.changed, U3_REASON, (id) => id),
+    ).toEqual([]);
+    expect(await toldOf(u3.skipped)).toEqual([]);
+    const eventsOf = async () =>
+      Number(
+        (
+          await pool.query(
+            "SELECT count(*)::int AS n FROM community.moderation_events WHERE subject_id=ANY($1) AND operator_label='ai-admin'",
+            [[...all]],
+          )
+        ).rows[0]!.n,
+      );
+    const casesOf = async () =>
+      Number(
+        (
+          await pool.query(
+            "SELECT count(*)::int AS n FROM community.report_cases WHERE target_id=ANY($1)",
+            [[...all]],
+          )
+        ).rows[0]!.n,
+      );
+    expect(await eventsOf()).toBe(u3.changed.length);
+    expect(await casesOf()).toBe(u3.changed.length);
+
+    const replay = await callOn(u3SuspendCall(requestId, known), "full");
+    const again = adminExecuteDataSchema.parse(replay.envelope.data);
+    expect(u3Outcome(again).changed).toEqual([]);
+    expect(u3Outcome(again).skipped).toEqual([...all].sort());
+    expect(again.moderationCases).toBeUndefined();
+    expect(await eventsOf()).toBe(u3.changed.length);
+    expect(await casesOf()).toBe(u3.changed.length);
+
+    expect(suspend.statements.length).toBeLessThanOrEqual(
+      STATEMENTS.u3_suspend_14,
+    );
+    const seqScans = await largeSeqScans([
+      ...finds.flatMap(({ statements }) => statements),
+      ...suspend.statements,
+    ]);
+    report({
+      name: "U3",
+      budgetMs:
+        u3.handles.length * GATE_A_P95_MS.exact_locate +
+        known.length * GATE_A_P95_MS.batch_write_per_target,
+      ms: [finds.reduce((sum, { ms }) => sum + ms, 0) + suspend.ms],
+      statements:
+        finds.reduce((sum, { statements }) => sum + statements.length, 0) +
+        suspend.statements.length,
+      bytes: Math.max(...finds.map(({ bytes }) => bytes), suspend.bytes),
       seqScans,
     });
     expect(seqScans).toEqual([]);

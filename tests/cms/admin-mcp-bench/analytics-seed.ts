@@ -688,7 +688,14 @@ export const seedAnalyticsTargets = async (db: {
   query(text: string, values?: readonly unknown[]): Promise<unknown>;
 }) => {
   await db.query(
-    "UPDATE community.works SET visibility='self', title='', text='', deleted_at=now() WHERE id=$1",
+    "UPDATE community.works SET visibility='self', title='', text='', media_ids='{}', public_revision_id=NULL, author_revision_id=NULL, deleted_at=now() WHERE id=$1",
     [workId(DELETED_HOT_WORK)],
   );
+  await db.query(
+    "DELETE FROM community.work_revision_items WHERE revision_id IN (SELECT id FROM community.work_revisions WHERE work_id=$1)",
+    [workId(DELETED_HOT_WORK)],
+  );
+  await db.query("DELETE FROM community.work_revisions WHERE work_id=$1", [
+    workId(DELETED_HOT_WORK),
+  ]);
 };

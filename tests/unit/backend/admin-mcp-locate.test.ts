@@ -874,7 +874,7 @@ describe("a search cut at the size cap", () => {
 });
 
 describe("what tools/list advertises", () => {
-  it("lists find, get, read and view_media on every profile, in the contract's order", () => {
+  it("lists find, get, read, view_media and job on every profile, in the contract's order", () => {
     for (const profile of ["read", "operate", "full"] as const)
       expect(toolListingFor(profile, false).map(({ name }) => name)).toEqual([
         "admin_whoami",
@@ -884,6 +884,7 @@ describe("what tools/list advertises", () => {
         "admin_analytics",
         "admin_actions",
         "admin_view_media",
+        "admin_job",
         ...(profile === "read" ? [] : ["admin_execute"]),
       ]);
   });

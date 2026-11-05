@@ -123,7 +123,6 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
       "properties": {
         "cursor": {
           "exclusiveMinimum": 0,
-          "maximum": 9007199254740991,
           "type": "integer",
         },
         "field": {
@@ -171,7 +170,6 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
           "anyOf": [
             {
               "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
               "type": "integer",
             },
             {
@@ -187,7 +185,6 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
           "anyOf": [
             {
               "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
               "type": "integer",
             },
             {
@@ -199,11 +196,9 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
         },
         "maxChars": {
           "exclusiveMinimum": 0,
-          "maximum": 9007199254740991,
           "type": "integer",
         },
         "offset": {
-          "maximum": 9007199254740991,
           "minimum": 0,
           "type": "integer",
         },
@@ -211,7 +206,6 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
           "anyOf": [
             {
               "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
               "type": "integer",
             },
             {
@@ -315,10 +309,6 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
           "type": "string",
         },
         "input": {
-          "additionalProperties": {},
-          "propertyNames": {
-            "type": "string",
-          },
           "type": "object",
         },
         "op": {
@@ -606,22 +596,18 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
           "properties": {
             "height": {
               "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
               "type": "integer",
             },
             "left": {
-              "maximum": 9007199254740991,
               "minimum": 0,
               "type": "integer",
             },
             "top": {
-              "maximum": 9007199254740991,
               "minimum": 0,
               "type": "integer",
             },
             "width": {
               "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
               "type": "integer",
             },
           },
@@ -647,6 +633,58 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
       "destructiveHint": false,
       "idempotentHint": true,
       "openWorldHint": false,
+      "readOnlyHint": true,
+    },
+    "description": "How far the media work an op queued has got, without repeating the op. Copy {kind:"settlement",refs} from a QUEUED answer's next. ok:true once no job is open or failed; else QUEUED or MEDIA_JOB_FAILED.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "settlement",
+          "type": "string",
+        },
+        "refs": {
+          "items": {
+            "type": "object",
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "type": "array",
+        },
+      },
+      "required": [
+        "kind",
+        "refs",
+      ],
+      "type": "object",
+    },
+    "name": "admin_job",
+    "outputSchema": {
+      "properties": {
+        "code": {
+          "type": "string",
+        },
+        "next": {
+          "type": "object",
+        },
+        "ok": {
+          "type": "boolean",
+        },
+      },
+      "required": [
+        "ok",
+        "code",
+        "untrusted",
+        "meta",
+      ],
+      "type": "object",
+    },
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
       "readOnlyHint": false,
     },
     "description": "Run one reversible write, or the same one on up to 100 targets, in order, each with its own outcome. One: {requestId,op:"editorial.save-draft",input:{id,expectedRevision,content}}. Many: {requestId,op:"editorial.publish-approved",input:{approvalId},targets:[{id:7},{id:8}]}; each target merges over input. A new requestId per intention: the same requestId replays and never repeats, and it is what to retry after OUTCOME_UNKNOWN. ok:true means every target's whole effect completed. Anything else names each target's state in data and gives next when you can go on. admin_actions gives each op's input.",
@@ -654,8 +692,6 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
       "additionalProperties": false,
       "properties": {
         "input": {
-          "additionalProperties": {},
-          "properties": {},
           "type": "object",
         },
         "op": {
@@ -675,14 +711,11 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
         },
         "startAt": {
           "description": "Run from this target on. The answer covers only these: done is this call's own count.",
-          "maximum": 9007199254740991,
           "minimum": 0,
           "type": "integer",
         },
         "targets": {
           "items": {
-            "additionalProperties": {},
-            "properties": {},
             "type": "object",
           },
           "maxItems": 100,
@@ -844,7 +877,6 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
       "properties": {
         "cursor": {
           "exclusiveMinimum": 0,
-          "maximum": 9007199254740991,
           "type": "integer",
         },
         "field": {
@@ -892,7 +924,6 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
           "anyOf": [
             {
               "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
               "type": "integer",
             },
             {
@@ -908,7 +939,6 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
           "anyOf": [
             {
               "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
               "type": "integer",
             },
             {
@@ -920,11 +950,9 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
         },
         "maxChars": {
           "exclusiveMinimum": 0,
-          "maximum": 9007199254740991,
           "type": "integer",
         },
         "offset": {
-          "maximum": 9007199254740991,
           "minimum": 0,
           "type": "integer",
         },
@@ -932,7 +960,6 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
           "anyOf": [
             {
               "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
               "type": "integer",
             },
             {
@@ -1036,10 +1063,6 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
           "type": "string",
         },
         "input": {
-          "additionalProperties": {},
-          "propertyNames": {
-            "type": "string",
-          },
           "type": "object",
         },
         "op": {
@@ -1327,22 +1350,18 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
           "properties": {
             "height": {
               "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
               "type": "integer",
             },
             "left": {
-              "maximum": 9007199254740991,
               "minimum": 0,
               "type": "integer",
             },
             "top": {
-              "maximum": 9007199254740991,
               "minimum": 0,
               "type": "integer",
             },
             "width": {
               "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
               "type": "integer",
             },
           },
@@ -1368,6 +1387,58 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
       "destructiveHint": false,
       "idempotentHint": true,
       "openWorldHint": false,
+      "readOnlyHint": true,
+    },
+    "description": "How far the media work an op queued has got, without repeating the op. Copy {kind:"settlement",refs} from a QUEUED answer's next. ok:true once no job is open or failed; else QUEUED or MEDIA_JOB_FAILED.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "settlement",
+          "type": "string",
+        },
+        "refs": {
+          "items": {
+            "type": "object",
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "type": "array",
+        },
+      },
+      "required": [
+        "kind",
+        "refs",
+      ],
+      "type": "object",
+    },
+    "name": "admin_job",
+    "outputSchema": {
+      "properties": {
+        "code": {
+          "type": "string",
+        },
+        "next": {
+          "type": "object",
+        },
+        "ok": {
+          "type": "boolean",
+        },
+      },
+      "required": [
+        "ok",
+        "code",
+        "untrusted",
+        "meta",
+      ],
+      "type": "object",
+    },
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
       "readOnlyHint": false,
     },
     "description": "Run one reversible write, or the same one on up to 100 targets, in order, each with its own outcome. One: {requestId,op:"editorial.save-draft",input:{id,expectedRevision,content}}. Many: {requestId,op:"editorial.publish-approved",input:{approvalId},targets:[{id:7},{id:8}]}; each target merges over input. A new requestId per intention: the same requestId replays and never repeats, and it is what to retry after OUTCOME_UNKNOWN. ok:true means every target's whole effect completed. Anything else names each target's state in data and gives next when you can go on. admin_actions gives each op's input.",
@@ -1375,8 +1446,6 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
       "additionalProperties": false,
       "properties": {
         "input": {
-          "additionalProperties": {},
-          "properties": {},
           "type": "object",
         },
         "op": {
@@ -1396,14 +1465,11 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
         },
         "startAt": {
           "description": "Run from this target on. The answer covers only these: done is this call's own count.",
-          "maximum": 9007199254740991,
           "minimum": 0,
           "type": "integer",
         },
         "targets": {
           "items": {
-            "additionalProperties": {},
-            "properties": {},
             "type": "object",
           },
           "maxItems": 100,
@@ -1565,7 +1631,6 @@ exports[`tool table > matches the checked-in tools/list for the read profile 1`]
       "properties": {
         "cursor": {
           "exclusiveMinimum": 0,
-          "maximum": 9007199254740991,
           "type": "integer",
         },
         "field": {
@@ -1613,7 +1678,6 @@ exports[`tool table > matches the checked-in tools/list for the read profile 1`]
           "anyOf": [
             {
               "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
               "type": "integer",
             },
             {
@@ -1629,7 +1693,6 @@ exports[`tool table > matches the checked-in tools/list for the read profile 1`]
           "anyOf": [
             {
               "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
               "type": "integer",
             },
             {
@@ -1641,11 +1704,9 @@ exports[`tool table > matches the checked-in tools/list for the read profile 1`]
         },
         "maxChars": {
           "exclusiveMinimum": 0,
-          "maximum": 9007199254740991,
           "type": "integer",
         },
         "offset": {
-          "maximum": 9007199254740991,
           "minimum": 0,
           "type": "integer",
         },
@@ -1653,7 +1714,6 @@ exports[`tool table > matches the checked-in tools/list for the read profile 1`]
           "anyOf": [
             {
               "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
               "type": "integer",
             },
             {
@@ -1757,10 +1817,6 @@ exports[`tool table > matches the checked-in tools/list for the read profile 1`]
           "type": "string",
         },
         "input": {
-          "additionalProperties": {},
-          "propertyNames": {
-            "type": "string",
-          },
           "type": "object",
         },
         "op": {
@@ -2048,22 +2104,18 @@ exports[`tool table > matches the checked-in tools/list for the read profile 1`]
           "properties": {
             "height": {
               "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
               "type": "integer",
             },
             "left": {
-              "maximum": 9007199254740991,
               "minimum": 0,
               "type": "integer",
             },
             "top": {
-              "maximum": 9007199254740991,
               "minimum": 0,
               "type": "integer",
             },
             "width": {
               "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
               "type": "integer",
             },
           },
@@ -2083,6 +2135,58 @@ exports[`tool table > matches the checked-in tools/list for the read profile 1`]
       "type": "object",
     },
     "name": "admin_view_media",
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+    },
+    "description": "How far the media work an op queued has got, without repeating the op. Copy {kind:"settlement",refs} from a QUEUED answer's next. ok:true once no job is open or failed; else QUEUED or MEDIA_JOB_FAILED.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "settlement",
+          "type": "string",
+        },
+        "refs": {
+          "items": {
+            "type": "object",
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "type": "array",
+        },
+      },
+      "required": [
+        "kind",
+        "refs",
+      ],
+      "type": "object",
+    },
+    "name": "admin_job",
+    "outputSchema": {
+      "properties": {
+        "code": {
+          "type": "string",
+        },
+        "next": {
+          "type": "object",
+        },
+        "ok": {
+          "type": "boolean",
+        },
+      },
+      "required": [
+        "ok",
+        "code",
+        "untrusted",
+        "meta",
+      ],
+      "type": "object",
+    },
   },
 ]
 `;

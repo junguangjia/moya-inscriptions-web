@@ -1068,7 +1068,10 @@ export const prepareProductionBackend = async (
         communityOperatorCredential: parseOperatorCredential(environment),
         operatorAiBaseCredential,
         operatorAiCommunityCredential,
-        aiOperatorReader: new PostgresAiOperatorReader(communityPool),
+        aiOperatorReader: new PostgresAiOperatorReader(communityPool, {
+          allowPublish,
+          isPublic,
+        }),
       }),
     ),
     closeResources,

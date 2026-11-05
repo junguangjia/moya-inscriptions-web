@@ -12,21 +12,28 @@ import {
   effectiveFeatured,
   INHERITED_FEATURED_POSITION,
 } from "./featured-content.js";
+import { limitAiWrite } from "./ai-write-limit.js";
 import { asCommunityOperationError } from "./availability.js";
 import {
+  isSelfOnlyWorkInScanSql,
   isSelfOnlyWorkSql,
   reportIsSelfOnlySql,
   workIsSelfOnlySql,
 } from "./self-only.js";
 import { assertExecutionFence } from "./execution-fence.js";
 import { createHash, randomUUID } from "node:crypto";
-import { CommunityConflictError, CommunityNotFoundError } from "@moya/api";
+import {
+  CommunityConflictError,
+  CommunityIdempotencyConflictError,
+  CommunityNotFoundError,
+} from "@moya/api";
 import type {
   CommunityContentOperatorPort,
   ExecutionFence,
   PublicUserStatus,
 } from "@moya/api";
 import {
+  markForAiOperator,
   operatorWorkSchema,
   operatorWorkPageSchema,
   featuredOrderResultSchema,
@@ -117,7 +124,7 @@ export const operatorWorksWhere = ` LEFT JOIN community.work_revisions ar ON ar.
   AND ($3::text IS NULL OR w.id=$3)
   AND ($4::timestamptz IS NULL OR COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at)>=$4::timestamptz)
   AND ($5::timestamptz IS NULL OR COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at)<=$5::timestamptz)
-  AND NOT ($6::boolean AND ${isSelfOnlyWorkSql("w")})`;
+  AND NOT ($6::boolean AND ${isSelfOnlyWorkInScanSql("w")})`;
 
 export const operatorUsersWhere = `WHERE ($1='' OR position(lower($1) in lower(u.id||' '||u.handle||' '||u.display_name))>0)
   AND ($2::text IS NULL OR u.id=$2)`;
@@ -166,6 +173,7 @@ export class PostgresCommunityContentOperatorAdapter implements CommunityContent
     fence?: ExecutionFence,
   ): Promise<T> {
     return this.transaction(async (db) => {
+      await limitAiWrite(operator, (sql) => db.query(sql));
       await db.query(
         "SELECT pg_advisory_xact_lock(hashtextextended('phase4-content-operator',0))",
       );
@@ -181,10 +189,12 @@ export class PostgresCommunityContentOperatorAdapter implements CommunityContent
       // confusion this work exists to remove.
       if (old.rows[0]) {
         if (old.rows[0].fingerprint !== fingerprint)
-          throw new CommunityConflictError("Request identity already used");
+          throw new CommunityIdempotencyConflictError(
+            "Request identity already used",
+          );
         if (old.rows[0].result?.permanentlyDeleted === true)
           throw new CommunityNotFoundError();
-        return old.rows[0].result as T;
+        return markForAiOperator(operator, old.rows[0].result as T, "replayed");
       }
       // Only a NEW effect needs the right to execute, and it is checked after
       // the lock wait, never before it: whoever waited here may have lost that
@@ -219,7 +229,9 @@ export class PostgresCommunityContentOperatorAdapter implements CommunityContent
         "INSERT INTO community.content_operator_receipts(operator_label,request_id,fingerprint,result) VALUES($1,$2,$3,$4)",
         [operator, requestId, fingerprint, JSON.stringify(result)],
       );
-      return result;
+      return audit
+        ? result
+        : markForAiOperator(operator, result, "alreadyInPlace");
     });
   }
   async readWorkTitle(id: string): Promise<string | null> {

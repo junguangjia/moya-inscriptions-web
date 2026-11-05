@@ -57,7 +57,7 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     retryable: true,
   },
   MEDIA_JOB_FAILED: {
-    hint: "The state committed but a media job failed. Read the job before retrying it.",
+    hint: "The state committed but a media job stopped; jobs names it. Read it with list.jobs before retrying it with community.retry-publishing-job.",
     retryable: false,
   },
   MCP_PAUSED: {
@@ -69,7 +69,15 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     retryable: false,
   },
   SELF_ONLY_OWNER_REVIEW: {
-    hint: "This case concerns a self-only work and stays in the Owner's queue.",
+    hint: "This concerns a self-only work, or a deleted one that still holds its text, and stays in the Owner's queue.",
+    retryable: false,
+  },
+  PERSONAL_INFO_OWNER_REVIEW: {
+    hint: "This case is a person's own request about their personal information. Read it if you need to; it stays in the Owner's queue, and the Owner verifies and answers it.",
+    retryable: false,
+  },
+  URGENT_OWNER_ONLY: {
+    hint: "Urgent is one-way here: only the Owner clears it. Setting urgent:true works.",
     retryable: false,
   },
   IDEMPOTENCY_CONFLICT: {
@@ -85,7 +93,7 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     retryable: false,
   },
   PREVIEW_REQUIRED: {
-    hint: "This save binds a new identity, which is irreversible. Call admin_preview first.",
+    hint: "This input makes the op irreversible: a save binding a new identity, or a legal hold's release. Call admin_preview first.",
     retryable: false,
   },
   INPUT_INVALID: {

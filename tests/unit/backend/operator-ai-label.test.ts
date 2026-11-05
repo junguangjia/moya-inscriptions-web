@@ -8,6 +8,7 @@ import {
   startServer,
   stopServer,
 } from "@moya/backend-runtime";
+import { AI_OPERATOR_REQUEST_ID_HEADER } from "@moya/contracts/internal/admin-mcp";
 import { MappedStorageUrlResolver } from "@moya/image";
 import { handleOperatorRequest } from "@moya/backend-runtime/internal/community-operator";
 import type { OperatorRouteDependencies } from "@moya/backend-runtime/internal/community-operator";
@@ -166,6 +167,8 @@ describe("the service factory per label", () => {
         headers: {
           authorization: `Bearer ${token}`,
           "content-type": "application/json",
+          // The Owner's routes read no key, and AI's keyed ones need one.
+          [AI_OPERATOR_REQUEST_ID_HEADER]: randomUUID(),
         },
         body: JSON.stringify(body),
       });

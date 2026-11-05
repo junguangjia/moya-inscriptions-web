@@ -507,7 +507,16 @@ export const communityGetEnvelope = async (
     answered(
       {
         ...common,
-        actions: [...communityActionsFor(input.type, id.data, scope)],
+        // Every case allows `retain`: none says this one's actions are the Owner's.
+        actions: [
+          ...communityActionsFor(
+            input.type,
+            id.data,
+            scope,
+            (doc as { allowedActions?: readonly unknown[] }).allowedActions
+              ?.length === 0,
+          ),
+        ],
         lengthUnit: "codePoint",
         fields: specs.map((spec) =>
           view === "full" ? fullFieldOf(spec, doc) : factsOf(spec, doc),

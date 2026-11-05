@@ -1,8 +1,13 @@
 import { staffAuditCommand } from "../staff-moderation-reporting.js";
 import { createHash, randomUUID } from "node:crypto";
 
-import { CommunityConflictError, CommunityNotFoundError } from "@moya/api";
 import {
+  CommunityConflictError,
+  CommunityIdempotencyConflictError,
+  CommunityNotFoundError,
+} from "@moya/api";
+import {
+  markForAiOperator,
   operatorAccountCapacitySchema,
   workPublishingSettingsSchema,
 } from "@moya/contracts/internal/community-operator";
@@ -14,6 +19,7 @@ import type {
 import { WORK_ITEMS_CONFIGURABLE_MAXIMUM } from "@moya/contracts/schemas";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
+import { limitAiWrite } from "../ai-write-limit.js";
 import { asCommunityOperationError } from "../availability.js";
 
 /**
@@ -354,6 +360,7 @@ export const operatorCommand = <T>(
   const at = nowParam(spec.now);
   const fingerprint = commandFingerprint(spec.action, spec.target, spec.input);
   return writeTransaction(pool, async (db) => {
+    await limitAiWrite(spec.operator, (sql) => db.query(sql));
     await db.query(
       "SELECT pg_advisory_xact_lock(hashtextextended('phase4-content-operator',0))",
     );
@@ -365,8 +372,10 @@ export const operatorCommand = <T>(
     ).rows[0];
     if (old !== undefined) {
       if (old.fingerprint !== fingerprint)
-        throw new CommunityConflictError("Request identity already used");
-      return old.result;
+        throw new CommunityIdempotencyConflictError(
+          "Request identity already used",
+        );
+      return markForAiOperator(spec.operator, old.result, "replayed");
     }
     const result = await change(db);
     await db.query(

@@ -5,6 +5,7 @@ import {
   adminReadRowsDataSchema,
   aiCountResultSchema,
   aiFindResultSchema,
+  aiSettlementResultSchema,
   resolveAnalyticsRange,
 } from "@moya/contracts/internal/admin-mcp";
 import type {
@@ -13,6 +14,8 @@ import type {
   AdminMcpNext,
   AiCountSource,
   AiFindResult,
+  AiSettlementQuery,
+  AiSettlementResult,
   AnalyticsInsightQuery,
 } from "@moya/contracts/internal/admin-mcp";
 import type { PayloadRequest } from "payload";
@@ -61,6 +64,8 @@ const COMMUNITY_WAIT_MS = 5_000;
 /**
  * Our abort does not end the Backend's read, so a read given up on keeps its slot this
  * much longer. A judgement: not every list's snapshot has a statement limit of its own.
+ * A write's statements end themselves inside the abort (ai-write-limit.ts), so one with
+ * several lock waits outlives its abort by less than this.
  */
 const COMMUNITY_OVERRUN_HOLD_MS = 15_000;
 
@@ -68,6 +73,8 @@ export interface CommunityReadLimits {
   readonly slots: PoolSlots;
   readonly waitMs: number;
   readonly holdMs: number;
+  /** What a call says when no slot came in time. A read answers READ_TIMED_OUT. */
+  readonly busyCode?: string;
 }
 
 /** A slot within the wait, or false. A turn that comes later goes straight back. */
@@ -96,7 +103,10 @@ export const inPoolShare =
   (backend: OperatorCall, limits: CommunityReadLimits): OperatorCall =>
   async <Result>(...call: Parameters<OperatorCall>): Promise<Result> => {
     if (!(await slotWithin(limits)))
-      throw new CommunityOperatorError("READ_TIMED_OUT", 503);
+      throw new CommunityOperatorError(
+        limits.busyCode ?? "READ_TIMED_OUT",
+        503,
+      );
     let overran = false;
     try {
       return await backend<Result>(...call);
@@ -109,11 +119,30 @@ export const inPoolShare =
     }
   };
 
-const community = inPoolShare(callAiOperator("community"), {
+const COMMUNITY_LIMITS: CommunityReadLimits = {
   slots: createPoolSlots(COMMUNITY_READ_POOL_SHARE),
   waitMs: COMMUNITY_WAIT_MS,
   holdMs: COMMUNITY_OVERRUN_HOLD_MS,
-});
+};
+
+const community = inPoolShare(callAiOperator("community"), COMMUNITY_LIMITS);
+// A job's own subject needs no community state, so Catalog work never needs that token.
+const baseShare = inPoolShare(callAiOperator("base"), COMMUNITY_LIMITS);
+
+/**
+ * A write takes the same slots: the App pool holds 5 connections by default
+ * (DATABASE_POOL_MAX), and these 2 and analytics' 2 are what leave one free for the
+ * public site and sign-in. A write's transaction holds a connection as a read does, so
+ * a share of its own would make 6. Refused in turn, it has not started. Its statements
+ * end themselves, so it cannot keep a connection after its slot comes free.
+ */
+export const communityWriteCall = (
+  headers: Readonly<Record<string, string>> = {},
+): OperatorCall =>
+  inPoolShare(callAiOperator("community", headers), {
+    ...COMMUNITY_LIMITS,
+    busyCode: "EXECUTE_BUSY",
+  });
 
 export const SELF_ONLY_CATEGORY = "self_only";
 
@@ -206,13 +235,29 @@ const naming = (
         },
       };
 
+/** The Backend's settlement route: what is left of the media work behind a subject. */
+export const askSettlement = async (
+  query: AiSettlementQuery,
+): Promise<AiSettlementResult> => {
+  const call = query.type === "item" ? baseShare : community;
+  const checked = aiSettlementResultSchema.safeParse(
+    await call(
+      "GET",
+      `ai/settlement?${new URLSearchParams({ ...query }).toString()}`,
+    ),
+  );
+  if (!checked.success)
+    throw new CommunityOperatorError("OPERATOR_RESPONSE_INVALID", 502);
+  return checked.data;
+};
+
 /** State, length and hash: what a row says of long text. */
 export const textFacts = (value: unknown) =>
   typeof value === "string" && value !== ""
     ? { state: "VALUE", length: codePointLength(value), hash: textHash(value) }
     : { state: "ABSENT" };
 
-const shortOrFacts = (value: unknown) =>
+export const shortOrFacts = (value: unknown) =>
   typeof value === "string" && codePointLength(value) > INLINE_TEXT_CHARS
     ? textFacts(value)
     : value;
@@ -551,7 +596,7 @@ const resolvedFilter = (
   const { range, ...rest } = input;
   const query = { ...defaults, ...rest };
   if (typeof range !== "string") return { query, echo: {} };
-  const { start, requestedEnd, tz } = resolveAnalyticsRange(
+  const { start, requestedEnd, tz, complete } = resolveAnalyticsRange(
     { range } as AnalyticsInsightQuery,
     new Date(),
   );
@@ -561,7 +606,7 @@ const resolvedFilter = (
   };
   return {
     query: { ...query, ...instants },
-    echo: { range, tz },
+    echo: { range, tz, ...(complete ? { excludes: "today" } : {}) },
   };
 };
 
@@ -593,6 +638,18 @@ const toldOfOwnerOnly = (
     ? { ...envelope, hint: OWNER_ONLY_NOT_COUNTED }
     : envelope;
 
+const RANGE_LEAVES_OUT_TODAY =
+  "This range holds finished days, so today is not in it. To reach now, send from with no to.";
+
+/** Only comments and works take a range, and they never leave out an owner-only case. */
+const toldOfRange = (
+  envelope: AdminMcpEnvelope,
+  echo: Readonly<Record<string, unknown>>,
+): AdminMcpEnvelope =>
+  echo.excludes === undefined
+    ? envelope
+    : { ...envelope, hint: RANGE_LEAVES_OUT_TODAY };
+
 const countEnvelope = async (
   source: CommunitySource,
   filter: Record<string, unknown>,
@@ -616,15 +673,18 @@ const countEnvelope = async (
   if (!checked.success)
     throw new CommunityOperatorError("OPERATOR_RESPONSE_INVALID", 502);
   const { leavesOutOwnerOnly, ...counted } = checked.data;
-  return toldOfOwnerOnly(
-    okEnvelope(
-      adminReadCountDataSchema.parse({
-        ...counted,
-        filter: { ...filter, ...echo },
-      }),
-      ["/data/groups", "/data/filter"],
+  return toldOfRange(
+    toldOfOwnerOnly(
+      okEnvelope(
+        adminReadCountDataSchema.parse({
+          ...counted,
+          filter: { ...filter, ...echo },
+        }),
+        ["/data/groups", "/data/filter"],
+      ),
+      leavesOutOwnerOnly,
     ),
-    leavesOutOwnerOnly,
+    echo,
   );
 };
 
@@ -690,21 +750,24 @@ const rowsEnvelope = async (
     : items.length > 0 && total !== undefined && reached < total
       ? numberedPageAfter(page, pageSize, items.length)
       : undefined;
-  const envelope = toldOfOwnerOnly(
-    okEnvelope(
-      adminReadRowsDataSchema.parse({
-        rows,
-        filter: {
-          ...withoutPaging(query),
-          ...echo,
-          ...(pageSize < wanted ? { pageSizeCappedAt: pageSize } : {}),
-        },
-        ...(total === undefined ? {} : { total }),
-        ...(Object.keys(about).length === 0 ? {} : { about }),
-      }),
-      ROWS_UNTRUSTED,
+  const envelope = toldOfRange(
+    toldOfOwnerOnly(
+      okEnvelope(
+        adminReadRowsDataSchema.parse({
+          rows,
+          filter: {
+            ...withoutPaging(query),
+            ...echo,
+            ...(pageSize < wanted ? { pageSizeCappedAt: pageSize } : {}),
+          },
+          ...(total === undefined ? {} : { total }),
+          ...(Object.keys(about).length === 0 ? {} : { about }),
+        }),
+        ROWS_UNTRUSTED,
+      ),
+      leavesOutOwnerOnly,
     ),
-    leavesOutOwnerOnly,
+    echo,
   );
   if (onward === undefined) return envelope;
   const next: AdminMcpNext = {

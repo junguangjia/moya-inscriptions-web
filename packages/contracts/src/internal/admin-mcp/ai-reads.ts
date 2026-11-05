@@ -13,6 +13,7 @@ import { operatorCommentFilterSchema } from "../community-operator/schemas.js";
 import {
   operatorPublishingJobQuerySchema,
   operatorWorkSubmissionQuerySchema,
+  publishingJobIdSchema,
 } from "../community-operator/work-publishing-schemas.js";
 
 /**
@@ -171,15 +172,56 @@ export const aiCountResultSchema = z.strictObject({
 });
 export type AiCountResult = z.infer<typeof aiCountResultSchema>;
 
+/**
+ * What a settlement names (admin-mcp-completion-v1 section 9). `item` is a job's own
+ * subject, a media item or a Catalog asset, so it needs no community state and passes
+ * on the base credential. The others name the record whose items an operation moved.
+ */
+export const AI_SETTLEMENT_TYPES = ["work", "article", "user", "item"] as const;
+export type AiSettlementType = (typeof AI_SETTLEMENT_TYPES)[number];
+
+export const aiSettlementQuerySchema = z.strictObject({
+  type: z.enum(AI_SETTLEMENT_TYPES),
+  id: operatorExactIdSchema,
+  /** What the operation asked of the media. Withdrawal runs whatever the gates say. */
+  intent: z.enum(["publish", "withdraw"]),
+});
+export type AiSettlementQuery = z.infer<typeof aiSettlementQuerySchema>;
+
+export const aiSettlementResultSchema = z.strictObject({
+  /** Jobs still to run, or running: the operation's media work is not done. */
+  open: z.number().int().nonnegative(),
+  /** Jobs that stopped since the operation, with no later one that succeeded. */
+  failed: z.number().int().nonnegative(),
+  /** The newest of those, for reading and retrying: content-free ids. */
+  failedJobs: z.array(publishingJobIdSchema).max(3),
+  /** Asked to publish with a gate shut: no job exists, and none will. */
+  mediaGate: z.literal("off").optional(),
+});
+export type AiSettlementResult = z.infer<typeof aiSettlementResultSchema>;
+
 /** The records a route can name by its first parameter, for the self-only check. */
 export type AiOperatorSubject =
-  "work" | "comment" | "work_revision" | "article";
+  | "work"
+  | "comment"
+  | "work_revision"
+  | "article"
+  | "report"
+  | "publishing_job";
 
 /** The Backend's AI-only reads, implemented in services/community-postgres. */
 export interface AiOperatorReader {
   find(query: AiFindQuery): Promise<AiFindResult>;
   /** `timed_out`: no number, and the same call is worth repeating. */
   count(query: AiCountQuery): Promise<AiCountResult | "timed_out">;
+  /** A subject that did not answer is `timed_out` or a throw, and never a settled one. */
+  settlement(
+    query: AiSettlementQuery,
+  ): Promise<AiSettlementResult | "timed_out" | "not_found" | "self_only">;
   /** Reads current visibility, so a flip is seen by the next call. */
   isSelfOnly(subject: AiOperatorSubject, id: string): Promise<boolean>;
+  /** A `privacy` report on the reporter's own profile, as its columns stand now. */
+  isPersonalInfoRequest(reportId: string): Promise<boolean>;
+  /** This comment write's key has committed, so its route answers from the receipt. */
+  hasCommentReceipt(requestId: string): Promise<boolean>;
 }

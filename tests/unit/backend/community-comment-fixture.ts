@@ -7,6 +7,7 @@ import { fixtureUsers } from "./community-identity-fixture.js";
 
 import type {
   CommandReceipt,
+  PublicationPolicyWrite,
   CatalogCommentReplyRecord,
   CatalogCommentRecord,
   CatalogCommentWithReplies,
@@ -484,9 +485,16 @@ export class InMemoryCommunityCommentPort implements CommunityCommentPort {
     operatorLabel: string,
     at: Date,
     audit?: ModerationEventDraft,
-  ): Promise<void> {
+    receipt?: CommandReceipt,
+  ): Promise<PublicationPolicyWrite | null> {
     this.assertAvailable();
-    if (this.policy === policy) return;
+    const state = () => ({
+      policy: this.policy,
+      updatedAt: this.policyUpdatedAt,
+      updatedBy: this.policyUpdatedBy,
+    });
+    if (this.policy === policy)
+      return receipt === undefined ? null : { ...state(), unchanged: true };
     if (audit !== undefined) {
       if (this.failNextAudit) {
         this.failNextAudit = false;
@@ -501,6 +509,7 @@ export class InMemoryCommunityCommentPort implements CommunityCommentPort {
     this.policy = policy;
     this.policyUpdatedBy = operatorLabel;
     this.policyUpdatedAt = at;
+    return receipt === undefined ? null : state();
   }
 
   async recordModerationEvent(event: ModerationEvent): Promise<void> {

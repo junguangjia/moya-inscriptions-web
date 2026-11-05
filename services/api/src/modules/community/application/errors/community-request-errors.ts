@@ -86,3 +86,19 @@ export class ExecutionFenceLostError extends CommunityConflictError {
 export const isExecutionFenceLostError = (
   error: unknown,
 ): error is ExecutionFenceLostError => error instanceof ExecutionFenceLostError;
+
+/**
+ * A command's identity was used before with other content. It is a conflict, so every
+ * caller keeps treating it as one, and a distinguishable one: the subject did not move,
+ * and reading it again would not help.
+ */
+export class CommunityIdempotencyConflictError extends CommunityConflictError {
+  constructor(message = "Command identity was used with other content") {
+    super(message);
+  }
+}
+
+export const isCommunityIdempotencyConflictError = (
+  error: unknown,
+): error is CommunityIdempotencyConflictError =>
+  error instanceof CommunityIdempotencyConflictError;

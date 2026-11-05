@@ -21,6 +21,8 @@ export const ADMIN_MCP_CODES = [
   "MCP_PAUSED",
   "SENSITIVE_SWITCH_OFF",
   "SELF_ONLY_OWNER_REVIEW",
+  "PERSONAL_INFO_OWNER_REVIEW",
+  "URGENT_OWNER_ONLY",
   "IDEMPOTENCY_CONFLICT",
   "USE_EXECUTE_IRREVERSIBLE",
   "USE_PREVIEW",
@@ -114,6 +116,8 @@ export const adminMcpMetaSchema = z.strictObject({
   sources: z
     .record(z.string(), z.enum(["ok", "timed_out", "failed", "not_available"]))
     .optional(),
+  /** The op asked to publish with a publish gate shut, so no job exists to wait for. */
+  mediaGate: z.literal("off").optional(),
 });
 
 export const adminMcpEnvelopeSchema = z

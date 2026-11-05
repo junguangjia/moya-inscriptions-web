@@ -8,6 +8,7 @@ import {
   endArticleDraft,
   eraseEndedArticleDraft,
 } from "../article-authoring/postgres-article-authoring-adapter.js";
+import { deletedWorkHoldsContentSql } from "../self-only.js";
 import { nowParam, writeTransaction, type PublishingDb } from "./db.js";
 import { eraseDraft } from "./drafts.js";
 import { cancelItems, releaseHolderRefs } from "./media.js";
@@ -68,17 +69,8 @@ export const ACCOUNT_PURGE_LIMITS: AccountPurgeLimits = Object.freeze({
 
 const RECEIPT_TOMBSTONE = '{"permanentlyDeleted":true}';
 
-/**
- * SQL: work alias `w` still holds content an erasure removes. A trash
- * purge marks a work deleted but keeps its title, text, media list and
- * revisions; an erased work keeps none of them.
- */
-const workHoldsContentSql = `(w.deleted_at IS NULL OR w.title<>'' OR w.text<>''
-  OR cardinality(w.media_ids)>0 OR w.public_revision_id IS NOT NULL OR w.author_revision_id IS NOT NULL
-  OR EXISTS (SELECT 1 FROM community.work_revisions r WHERE r.work_id=w.id)
-  OR EXISTS (SELECT 1 FROM community.work_drafts d WHERE d.work_id=w.id)
-  OR EXISTS (SELECT 1 FROM community.work_draft_snapshots s WHERE s.work_id=w.id)
-  OR EXISTS (SELECT 1 FROM community.work_edit_drafts e WHERE e.work_id=w.id))`;
+/** SQL: work alias `w` still holds content an erasure removes. */
+const workHoldsContentSql = `(w.deleted_at IS NULL OR ${deletedWorkHoldsContentSql("w")})`;
 
 interface PurgeContext {
   readonly db: PublishingDb;

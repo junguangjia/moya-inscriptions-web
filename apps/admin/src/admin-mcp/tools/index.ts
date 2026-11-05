@@ -6,6 +6,7 @@ import {
   adminExecuteInputSchema,
   adminFindInputSchema,
   adminGetInputSchema,
+  adminJobInputSchema,
   adminReadInputSchema,
   adminViewMediaInputSchema,
 } from "@moya/contracts/internal/admin-mcp";
@@ -51,6 +52,13 @@ import {
   getContinuation,
   getEnvelope,
 } from "./get";
+import {
+  JOB_DESCRIPTION,
+  JOB_TOOL_NAME,
+  jobContinuation,
+  jobEnvelope,
+  jobListedInput,
+} from "./job";
 import {
   READ_DESCRIPTION,
   READ_TOOL_NAME,
@@ -209,6 +217,17 @@ export const ADMIN_MCP_TOOLS: readonly AdminMcpTool[] = [
     run: (input, { req }) => viewMediaAnswer(req, input as AdminViewMediaInput),
   },
   {
+    name: JOB_TOOL_NAME,
+    description: JOB_DESCRIPTION,
+    annotations: READ_ANNOTATIONS,
+    klass: "read",
+    profiles: ADMIN_MCP_TOOL_PROFILES,
+    input: adminJobInputSchema,
+    listedInput: jobListedInput,
+    run: (input, { req }) => jobEnvelope(input, req),
+    continuation: jobContinuation,
+  },
+  {
     name: EXECUTE_TOOL_NAME,
     description: EXECUTE_DESCRIPTION,
     annotations: EXECUTE_ANNOTATIONS,
@@ -222,6 +241,38 @@ export const ADMIN_MCP_TOOLS: readonly AdminMcpTool[] = [
   },
 ];
 
+const isEmptyObject = (value: unknown) =>
+  typeof value === "object" &&
+  value !== null &&
+  Object.keys(value).length === 0;
+
+/**
+ * What changes no call, and keeps tools/list inside its budget: Zod's safe-integer
+ * bounds and the empty keys of an open object. A closed object stays closed, because a
+ * model reads that.
+ */
+const withoutNoise = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(withoutNoise);
+  if (value === null || typeof value !== "object") return value;
+  const source = value as Record<string, unknown>;
+  const open = isEmptyObject(source.additionalProperties);
+  return Object.fromEntries(
+    Object.entries(source)
+      .filter(
+        ([key, item]) =>
+          !(
+            ((key === "maximum" || key === "minimum") &&
+              Math.abs(item as number) === Number.MAX_SAFE_INTEGER) ||
+            (open &&
+              (key === "additionalProperties" ||
+                key === "propertyNames" ||
+                (key === "properties" && isEmptyObject(item))))
+          ),
+      )
+      .map(([key, item]) => [key, withoutNoise(item)]),
+  );
+};
+
 /** 2020-12 is the default dialect when a schema names none: 52 bytes a tool saved. */
 const inputSchemaOf = (input: z.ZodObject) => {
   const schema = z.toJSONSchema(input, {
@@ -230,7 +281,7 @@ const inputSchemaOf = (input: z.ZodObject) => {
     unrepresentable: "any",
   });
   delete schema.$schema;
-  return schema;
+  return withoutNoise(schema) as typeof schema;
 };
 
 export const listingTable = (tools: readonly AdminMcpTool[]) =>

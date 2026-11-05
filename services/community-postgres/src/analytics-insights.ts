@@ -27,6 +27,7 @@ import type {
 import type { Pool, PoolClient } from "pg";
 
 import { asCommunityOperationError } from "./availability.js";
+import { isSelfOnlyWorkSql } from "./self-only.js";
 
 const QUERY_CANCELED = "57014";
 const INVALID_PARAMETER_VALUE = "22023";
@@ -114,9 +115,9 @@ const scanSql = (
     FROM community.analytics_events e WHERE ${where}`;
 };
 
-/** Exactly section 6's definition. A permanently deleted work is not self-only. */
+/** Section 6's definition: an erased work is not self-only, one still holding its text is. */
 const selfOnly = (type: string, id: string): string =>
-  `(${type} = 'work' AND EXISTS (SELECT 1 FROM community.works w WHERE w.id = ${id} AND w.visibility = 'self' AND w.deleted_at IS NULL))`;
+  `(${type} = 'work' AND EXISTS (SELECT 1 FROM community.works w WHERE w.id = ${id} AND ${isSelfOnlyWorkSql("w")}))`;
 
 const DIMENSION_KEYS: Readonly<
   Record<AnalyticsCanonicalDimension, readonly string[]>
@@ -415,7 +416,7 @@ export class PostgresAnalyticsInsights implements AnalyticsInsightsReader {
   ): Promise<void> {
     if (query.targetType !== "work" || query.targetId === undefined) return;
     const found = await db.query(
-      "SELECT 1 FROM community.works WHERE id = $1 AND visibility = 'self' AND deleted_at IS NULL",
+      `SELECT 1 FROM community.works w WHERE w.id = $1 AND ${isSelfOnlyWorkSql("w")}`,
       [query.targetId],
     );
     if (found.rows.length > 0)
@@ -485,7 +486,7 @@ export class PostgresAnalyticsInsights implements AnalyticsInsightsReader {
       }>(
         `SELECT w.id, w.title, u.handle, w.deleted_at, w.trashed_at, w.operator_state, w.public_revision_id
         FROM community.works w LEFT JOIN community.public_users u ON u.id = w.author_id
-        WHERE w.id = ANY($1::text[]) AND NOT (w.visibility = 'self' AND w.deleted_at IS NULL)`,
+        WHERE w.id = ANY($1::text[]) AND NOT ${isSelfOnlyWorkSql("w")}`,
         [works],
       );
       for (const row of rows.rows)

@@ -180,7 +180,10 @@ export const callCommunityOperator = operatorCallWith({});
  * read may then run on.
  */
 export const callAiOperator =
-  (credential: AiOperatorCredential) =>
+  (
+    credential: AiOperatorCredential,
+    extraHeaders: Readonly<Record<string, string>> = {},
+  ) =>
   async <Result>(
     method: "GET" | "POST" | "PUT",
     path: string,
@@ -205,6 +208,7 @@ export const callAiOperator =
         headers: {
           Accept: "application/json",
           Authorization: `Bearer ${token}`,
+          ...extraHeaders,
           [COMMENT_IMAGE_CAPABILITY_HEADER]: COMMENT_IMAGE_CAPABILITY_VERSION,
           ...(body === undefined ? {} : { "Content-Type": "application/json" }),
         },

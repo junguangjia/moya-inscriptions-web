@@ -1,5 +1,6 @@
 import {
   isCommunityConflictError,
+  isCommunityIdempotencyConflictError,
   isCommunityInputError,
   isCommunityNotFoundError,
   isCommunityStoreUnavailableError,
@@ -223,6 +224,8 @@ export const handleThreadOperatorRequest = async (
       sendOperatorError(response, 404, "NOT_FOUND");
     else if (isCommunityInputError(error))
       sendOperatorError(response, 400, "INVALID_COMMAND");
+    else if (isCommunityIdempotencyConflictError(error))
+      sendOperatorError(response, 409, "IDEMPOTENCY_CONFLICT");
     else if (isCommunityConflictError(error))
       sendOperatorError(response, 409, "STATE_CONFLICT");
     else if (isCommunityStoreUnavailableError(error))

@@ -19,10 +19,27 @@ export const AI_OPERATOR_LABEL = "ai-admin";
 export const SELF_ONLY_OWNER_REVIEW = "SELF_ONLY_OWNER_REVIEW";
 
 /**
+ * A person's own request about their personal information: a `privacy` report on their
+ * own profile. AI reads it, and every AI write on the case answers this, because the
+ * public policy has the Owner verify and handle it.
+ */
+export const PERSONAL_INFO_OWNER_REVIEW = "PERSONAL_INFO_OWNER_REVIEW";
+
+/** Urgent is one-way for AI: it can raise a case and not lower it. */
+export const URGENT_OWNER_ONLY = "URGENT_OWNER_ONLY";
+
+/**
  * Set only by the run engine. This does not stop a compromised Admin; it makes a
  * misclassified op fail instead of skipping preview.
  */
 export const AI_OPERATOR_RUN_HEADER = "x-admin-mcp-run";
+
+/**
+ * This target's key on a write whose body has no `requestId`: the comment, user and
+ * policy routes, whose receipt the route builds from it, so a retry replays and never
+ * moderates twice.
+ */
+export const AI_OPERATOR_REQUEST_ID_HEADER = "x-operator-request-id";
 
 export type AiOperatorRouteClass =
   | "read"
@@ -33,7 +50,7 @@ export type AiOperatorRouteClass =
   | "sensitive:evidence";
 
 export interface AiOperatorRoute {
-  readonly method: "GET" | "POST";
+  readonly method: "GET" | "POST" | "PUT";
   /**
    * Exact, but for whole `:name` segments: a prefix would pass a future route
    * unclassified.
@@ -45,10 +62,17 @@ export interface AiOperatorRoute {
   readonly query?: Readonly<Record<string, string>>;
   /**
    * The route's `:id` names this record: while it is self-only, or for an Article
-   * while it uses an item of a self-only work, the route answers
-   * SELF_ONLY_OWNER_REVIEW, and withheld never reads as not found.
+   * while it uses an item of a self-only work, or for a job while its subject is a
+   * self-only work, the route answers SELF_ONLY_OWNER_REVIEW, and withheld never reads
+   * as not found.
    */
-  readonly selfOnly?: "work" | "comment" | "work_revision" | "article";
+  readonly selfOnly?:
+    | "work"
+    | "comment"
+    | "work_revision"
+    | "article"
+    | "report"
+    | "publishing_job";
 }
 
 const base = ["base"] as const;
@@ -67,12 +91,24 @@ const communityRead = (
   ...(selfOnly === undefined ? {} : { selfOnly }),
 });
 
+const communityWrite = (
+  method: "POST" | "PUT",
+  path: string,
+  selfOnly?: AiOperatorRoute["selfOnly"],
+): AiOperatorRoute => ({
+  method,
+  path: `${internal}/${path}`,
+  klass: "write",
+  credentials: community,
+  ...(selfOnly === undefined ? {} : { selfOnly }),
+});
+
 /**
  * Where an AI credential may go on the Backend (admin-mcp-completion-v1 section 2).
  * Default deny: a method and path with no row answers 403, binary routes included,
  * and so do `agent/*`, delegations and principals. The base credential's routes are
- * apart, so Catalog work and analytics never need the community token. Community
- * writes join with the slice that builds them.
+ * apart, so Catalog work and analytics never need the community token. The
+ * irreversible community writes join with the run engine, which sets their header.
  */
 export const AI_OPERATOR_ROUTES: readonly AiOperatorRoute[] = [
   {
@@ -81,15 +117,23 @@ export const AI_OPERATOR_ROUTES: readonly AiOperatorRoute[] = [
     klass: "read",
     credentials: base,
   },
-  // Job subjects are media item or Catalog asset ids. Settling a work, an article
-  // or a user reads community state, so those are not on this credential.
+  // Job subjects are media item or Catalog asset ids, so Catalog work settles without
+  // the community token. Settling a work, an article or a user reads community state,
+  // so those are on that credential alone.
   {
     method: "GET",
     path: "/internal/community/ai/settlement",
     klass: "read",
-    credentials: base,
+    credentials: ["base", "community"],
     query: { type: "item" },
   },
+  ...(["work", "article", "user"] as const).map((type): AiOperatorRoute => ({
+    method: "GET",
+    path: "/internal/community/ai/settlement",
+    klass: "read",
+    credentials: community,
+    query: { type },
+  })),
   {
     method: "GET",
     path: `${master}/candidates`,
@@ -195,6 +239,28 @@ export const AI_OPERATOR_ROUTES: readonly AiOperatorRoute[] = [
     klass: "sensitive:dm",
     credentials: community,
   })),
+  communityWrite("POST", "reports/:id/decisions", "report"),
+  communityWrite("POST", "reports/:id/review", "report"),
+  communityWrite("POST", "reports/:id/metadata", "report"),
+  communityWrite("POST", "comments/:id/moderation", "comment"),
+  communityWrite("POST", "users/:id/status"),
+  communityWrite("PUT", "users/recommendation"),
+  communityWrite("POST", "works/:id/moderation", "work"),
+  // Names its work in the body, so the route's handler asks the self-only question.
+  communityWrite("PUT", "featured"),
+  communityWrite("PUT", "featured/settings"),
+  communityWrite("PUT", "publication-policy"),
+  communityWrite("POST", "threads"),
+  communityWrite("POST", "threads/:id"),
+  communityWrite("PUT", "publishing/settings"),
+  communityWrite(
+    "POST",
+    "publishing/submissions/:id/moderation",
+    "work_revision",
+  ),
+  communityWrite("PUT", "publishing/accounts/:id/capacity"),
+  communityWrite("POST", "publishing/jobs/:id/retry", "publishing_job"),
+  communityWrite("POST", "articles/:id/moderation", "article"),
 ];
 
 const segmentsMatch = (pattern: string, pathname: string): boolean => {
