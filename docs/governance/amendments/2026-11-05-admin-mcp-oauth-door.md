@@ -1,6 +1,7 @@
 # Owner Amendment — Admin MCP login door
 
-- Status: Signed under the Owner's delegation of 2026-11-05, quoted in section 1.
+- Status: Signed under the Owner's delegation of 2026-11-05, quoted in
+  section 1.
 - Effective date: 2026-11-05.
 - Authority: Owner instruction of 2026-11-05, quoted in section 1, on Issue
   #355.
