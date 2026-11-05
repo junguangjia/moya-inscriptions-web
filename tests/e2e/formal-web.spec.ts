@@ -342,8 +342,14 @@ test("Formal root composes truthful runtime list states", async ({ page }) => {
 test("Formal timeline keeps the policy notice readable and closable", async ({
   page,
 }) => {
-  // The notice ends itself on 2026-12-05; this case stays inside its window.
-  await page.clock.setFixedTime(new Date("2026-11-10T00:00:00+08:00"));
+  // The notice ends itself on 2026-12-05, so this case stays inside its window.
+  // It shifts Date.now and leaves time running: a frozen clock never lets the
+  // pager's motion settle, so the click would wait for ever on WebKit.
+  await page.addInitScript(() => {
+    const realNow = Date.now.bind(Date);
+    const offset = Date.parse("2026-11-10T00:00:00+08:00") - realNow();
+    Date.now = () => realNow() + offset;
+  });
   const { shell } = await openFormalRoot(page);
   await selectHomeFeed(page, "时间轴", "timeline");
   const timeline = shell.locator('[data-home-feed-panel="timeline"]');
