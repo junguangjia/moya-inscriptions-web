@@ -206,7 +206,7 @@ const rows: Readonly<Record<CommunityOpRoute, AdminOpEntry>> = {
   "read-policy": readOp("The comment publication policy.", { example: {} }),
   "set-policy": reversibleOp(
     "Change the comment publication policy.",
-    "cas_read_back",
+    "receipt",
     { example: { policy: "PRE_MODERATION" } },
   ),
   "read-comments": readOp("Comments by moderation state, kind or Catalog.", {
@@ -227,14 +227,10 @@ const rows: Readonly<Record<CommunityOpRoute, AdminOpEntry>> = {
       },
     },
   ),
-  "moderate-user": reversibleOp(
-    "Suspend or reinstate a user.",
-    "cas_read_back",
-    {
-      completion: asynchronous,
-      example: { id: example.user, action: "suspend", reason: example.reason },
-    },
-  ),
+  "moderate-user": reversibleOp("Suspend or reinstate a user.", "receipt", {
+    completion: asynchronous,
+    example: { id: example.user, action: "suspend", reason: example.reason },
+  }),
   "read-events": readOp("The moderation history of a subject.", {
     example: { subjectId: example.comment },
   }),

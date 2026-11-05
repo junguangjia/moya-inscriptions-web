@@ -202,7 +202,12 @@ export type AiSettlementResult = z.infer<typeof aiSettlementResultSchema>;
 
 /** The records a route can name by its first parameter, for the self-only check. */
 export type AiOperatorSubject =
-  "work" | "comment" | "work_revision" | "article" | "report";
+  | "work"
+  | "comment"
+  | "work_revision"
+  | "article"
+  | "report"
+  | "publishing_job";
 
 /** The Backend's AI-only reads, implemented in services/community-postgres. */
 export interface AiOperatorReader {
@@ -215,4 +220,8 @@ export interface AiOperatorReader {
   ): Promise<AiSettlementResult | "timed_out" | "not_found" | "self_only">;
   /** Reads current visibility, so a flip is seen by the next call. */
   isSelfOnly(subject: AiOperatorSubject, id: string): Promise<boolean>;
+  /** A `privacy` report on the reporter's own profile, as its columns stand now. */
+  isPersonalInfoRequest(reportId: string): Promise<boolean>;
+  /** This comment write's key has committed, so its route answers from the receipt. */
+  hasCommentReceipt(requestId: string): Promise<boolean>;
 }

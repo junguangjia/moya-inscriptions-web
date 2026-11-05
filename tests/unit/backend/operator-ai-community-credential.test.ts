@@ -1,7 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { createServer } from "node:http";
 import type { Server } from "node:http";
+import type { AddressInfo } from "node:net";
 
 import {
+  AI_OPERATOR_REQUEST_ID_HEADER,
   AI_OPERATOR_ROUTES,
   aiOperatorRouteFor,
   aiOperatorRouteId,
@@ -16,6 +19,7 @@ import {
 import type { BackendApplicationOptions } from "@moya/backend-runtime";
 import {
   callAiOperator,
+  callCommunityOperator,
   openCommunityAiEvidence,
   openCommunityAiMedia,
 } from "admin/community-backend";
@@ -67,14 +71,21 @@ const startBackend = async (
   const origin = `http://127.0.0.1:${address.port}`;
   return {
     origin,
-    send: async (method: string, route: string, token: string) => {
+    send: async (
+      method: string,
+      route: string,
+      token: string,
+      body: unknown = {},
+      headers: Readonly<Record<string, string>> = {},
+    ) => {
       const response = await fetch(`${origin}/internal/community/${route}`, {
         method,
         headers: {
           authorization: `Bearer ${token}`,
           ...(method === "GET" ? {} : { "content-type": "application/json" }),
+          ...headers,
         },
-        ...(method === "GET" ? {} : { body: "{}" }),
+        ...(method === "GET" ? {} : { body: JSON.stringify(body) }),
       });
       const text = await response.text();
       let code: string | undefined;
@@ -88,7 +99,10 @@ const startBackend = async (
   };
 };
 
-const reader = (selfOnly: boolean): AiOperatorReader => ({
+const reader = (
+  selfOnly: boolean,
+  { personal = false, receipt = false } = {},
+): AiOperatorReader => ({
   find: vi.fn(async () => ({
     items: [],
     sources: {},
@@ -97,6 +111,8 @@ const reader = (selfOnly: boolean): AiOperatorReader => ({
   count: vi.fn(async () => ({ total: 0, oldestAt: null })),
   settlement: vi.fn(async () => ({ open: 0, failed: 0, failedJobs: [] })),
   isSelfOnly: vi.fn(async () => selfOnly),
+  isPersonalInfoRequest: vi.fn(async () => personal),
+  hasCommentReceipt: vi.fn(async () => receipt),
 });
 
 describe("the route table's community rows", () => {
@@ -155,7 +171,7 @@ describe("the route table's community rows", () => {
         "work_revision",
       ],
       ["PUT", "publishing/accounts/:id/capacity", "write", undefined],
-      ["POST", "publishing/jobs/:id/retry", "write", undefined],
+      ["POST", "publishing/jobs/:id/retry", "write", "publishing_job"],
       ["POST", "articles/:id/moderation", "write", "article"],
     ]);
   });
@@ -415,6 +431,12 @@ describe("the two AI credentials", () => {
         "work",
         `work-${"a".repeat(32)}`,
       ],
+      [
+        "POST",
+        `publishing/jobs/publishing-job-${"a".repeat(32)}/retry`,
+        "publishing_job",
+        `publishing-job-${"a".repeat(32)}`,
+      ],
     ] as const) {
       expect(await backend.send(method, route, communityToken), route).toEqual({
         status: 403,
@@ -430,6 +452,114 @@ describe("the two AI credentials", () => {
     await backend.send("POST", `comments/${comment}/moderation`, ownerToken);
     await backend.send("POST", `reports/${id}/decisions`, ownerToken);
     expect(answers.isSelfOnly).not.toHaveBeenCalled();
+    expect(answers.isPersonalInfoRequest).not.toHaveBeenCalled();
+    expect(answers.hasCommentReceipt).not.toHaveBeenCalled();
+  });
+
+  it("lets the Owner's featuring of a work through, and asks AI's before it runs", async () => {
+    const answers = reader(true);
+    const setFeatured = vi.fn(async () => ({ version: 2 }));
+    const backend = await startBackend({
+      aiOperatorReader: answers,
+      contentOperatorPort: { setFeatured } as never,
+    });
+    const command = {
+      requestId: randomUUID(),
+      target: { type: "work", id: `work-${"a".repeat(32)}` },
+      enabled: false,
+      position: 1,
+      expectedVersion: 1,
+    };
+    expect(
+      await backend.send("PUT", "featured", ownerToken, command),
+    ).toMatchObject({ status: 200 });
+    expect(setFeatured).toHaveBeenCalledTimes(1);
+    expect(answers.isSelfOnly).not.toHaveBeenCalled();
+    expect(
+      await backend.send("PUT", "featured", communityToken, command),
+    ).toEqual({ status: 403, code: "SELF_ONLY_OWNER_REVIEW" });
+    expect(setFeatured).toHaveBeenCalledTimes(1);
+    expect(answers.isSelfOnly).toHaveBeenCalledWith("work", command.target.id);
+  });
+
+  it("refuses every write on a person's own request, and no read", async () => {
+    const answers = reader(false, { personal: true });
+    const backend = await startBackend({ aiOperatorReader: answers });
+    for (const leaf of ["decisions", "review", "metadata"])
+      expect(
+        await backend.send("POST", `reports/${id}/${leaf}`, communityToken),
+        leaf,
+      ).toEqual({ status: 403, code: "PERSONAL_INFO_OWNER_REVIEW" });
+    expect(answers.isPersonalInfoRequest).toHaveBeenLastCalledWith(id);
+    const reads = vi.mocked(answers.isPersonalInfoRequest).mock.calls.length;
+    await backend.send("GET", `reports/${id}`, communityToken);
+    expect(answers.isPersonalInfoRequest).toHaveBeenCalledTimes(reads);
+  });
+
+  it("refuses to clear urgent by name on the AI credential, before the body reaches a service", async () => {
+    const metadata = vi.fn();
+    const backend = await startBackend({
+      aiOperatorReader: reader(false),
+      reportingPort: { metadata } as never,
+    });
+    expect(
+      await backend.send("POST", `reports/${id}/metadata`, communityToken, {
+        expectedVersion: 1,
+        urgent: false,
+      }),
+    ).toEqual({ status: 403, code: "URGENT_OWNER_ONLY" });
+    expect(metadata).not.toHaveBeenCalled();
+  });
+
+  it("passes a self-only check only for a comment write whose own key has a receipt", async () => {
+    const key = randomUUID();
+    const header = { [AI_OPERATOR_REQUEST_ID_HEADER]: key };
+    const body = { action: "hide", reason: "Synthetic" };
+    const held = reader(true, { receipt: true });
+    const backend = await startBackend({ aiOperatorReader: held });
+    // Past the check it reaches the real route, which has no store here.
+    const past = await backend.send(
+      "POST",
+      `comments/${comment}/moderation`,
+      communityToken,
+      body,
+      header,
+    );
+    expect(past.code).not.toBe("SELF_ONLY_OWNER_REVIEW");
+    expect(held.hasCommentReceipt).toHaveBeenCalledWith(key);
+    // A read of that comment, any other write, and a key that is no uuid do not pass.
+    expect(
+      await backend.send("GET", `comments/${comment}`, communityToken),
+    ).toEqual({ status: 403, code: "SELF_ONLY_OWNER_REVIEW" });
+    expect(
+      await backend.send(
+        "POST",
+        `works/work-${"a".repeat(32)}/moderation`,
+        communityToken,
+        body,
+        header,
+      ),
+    ).toEqual({ status: 403, code: "SELF_ONLY_OWNER_REVIEW" });
+    expect(
+      await backend.send(
+        "POST",
+        `comments/${comment}/moderation`,
+        communityToken,
+        body,
+        { [AI_OPERATOR_REQUEST_ID_HEADER]: "not-a-uuid" },
+      ),
+    ).toEqual({ status: 403, code: "SELF_ONLY_OWNER_REVIEW" });
+    const none = reader(true);
+    const refused = await startBackend({ aiOperatorReader: none });
+    expect(
+      await refused.send(
+        "POST",
+        `comments/${comment}/moderation`,
+        communityToken,
+        body,
+        header,
+      ),
+    ).toEqual({ status: 403, code: "SELF_ONLY_OWNER_REVIEW" });
   });
 
   it("fails closed when a self-only check has nothing to ask", async () => {
@@ -481,6 +611,42 @@ describe("ai/find's time", () => {
     });
     expect(answer.items).toEqual([]);
     expect(answer.excluded).toEqual(["self_only"]);
+  });
+});
+
+describe("the Owner's Admin client", () => {
+  it("narrows any 409 to STATE_CONFLICT, so a changed Backend code never reaches a page", async () => {
+    const stub = createServer((_request, response) => {
+      response.writeHead(409, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          error: { status: 409, code: "IDEMPOTENCY_CONFLICT" },
+        }),
+      );
+    });
+    await new Promise<void>((resolve) =>
+      stub.listen(0, "127.0.0.1", () => resolve()),
+    );
+    vi.stubEnv(
+      "COMMUNITY_OPERATOR_BASE_URL",
+      `http://127.0.0.1:${(stub.address() as AddressInfo).port}/`,
+    );
+    vi.stubEnv("COMMUNITY_OPERATOR_TOKEN", ownerToken);
+    try {
+      const error = await callCommunityOperator("POST", "threads", {
+        requestId: randomUUID(),
+        title: "Synthetic",
+      }).then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      expect(error).toBeInstanceOf(CommunityOperatorError);
+      expect((error as CommunityOperatorError).code).toBe("STATE_CONFLICT");
+      expect((error as CommunityOperatorError).status).toBe(409);
+    } finally {
+      stub.closeAllConnections();
+      await new Promise((resolve) => stub.close(resolve));
+    }
   });
 });
 

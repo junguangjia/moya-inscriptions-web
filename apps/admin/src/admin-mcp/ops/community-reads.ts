@@ -64,6 +64,8 @@ const COMMUNITY_WAIT_MS = 5_000;
 /**
  * Our abort does not end the Backend's read, so a read given up on keeps its slot this
  * much longer. A judgement: not every list's snapshot has a statement limit of its own.
+ * A write's statements end themselves inside the abort (ai-write-limit.ts), so one with
+ * several lock waits outlives its abort by less than this.
  */
 const COMMUNITY_OVERRUN_HOLD_MS = 15_000;
 
@@ -131,7 +133,8 @@ const baseShare = inPoolShare(callAiOperator("base"), COMMUNITY_LIMITS);
  * A write takes the same slots: the App pool holds 5 connections by default
  * (DATABASE_POOL_MAX), and these 2 and analytics' 2 are what leave one free for the
  * public site and sign-in. A write's transaction holds a connection as a read does, so
- * a share of its own would make 6. Refused in turn, it has not started.
+ * a share of its own would make 6. Refused in turn, it has not started. Its statements
+ * end themselves, so it cannot keep a connection after its slot comes free.
  */
 export const communityWriteCall = (
   headers: Readonly<Record<string, string>> = {},
@@ -593,7 +596,7 @@ const resolvedFilter = (
   const { range, ...rest } = input;
   const query = { ...defaults, ...rest };
   if (typeof range !== "string") return { query, echo: {} };
-  const { start, requestedEnd, tz } = resolveAnalyticsRange(
+  const { start, requestedEnd, tz, complete } = resolveAnalyticsRange(
     { range } as AnalyticsInsightQuery,
     new Date(),
   );
@@ -603,7 +606,7 @@ const resolvedFilter = (
   };
   return {
     query: { ...query, ...instants },
-    echo: { range, tz },
+    echo: { range, tz, ...(complete ? { excludes: "today" } : {}) },
   };
 };
 
@@ -635,6 +638,18 @@ const toldOfOwnerOnly = (
     ? { ...envelope, hint: OWNER_ONLY_NOT_COUNTED }
     : envelope;
 
+const RANGE_LEAVES_OUT_TODAY =
+  "This range holds finished days, so today is not in it. To reach now, send from with no to.";
+
+/** Only comments and works take a range, and they never leave out an owner-only case. */
+const toldOfRange = (
+  envelope: AdminMcpEnvelope,
+  echo: Readonly<Record<string, unknown>>,
+): AdminMcpEnvelope =>
+  echo.excludes === undefined
+    ? envelope
+    : { ...envelope, hint: RANGE_LEAVES_OUT_TODAY };
+
 const countEnvelope = async (
   source: CommunitySource,
   filter: Record<string, unknown>,
@@ -658,15 +673,18 @@ const countEnvelope = async (
   if (!checked.success)
     throw new CommunityOperatorError("OPERATOR_RESPONSE_INVALID", 502);
   const { leavesOutOwnerOnly, ...counted } = checked.data;
-  return toldOfOwnerOnly(
-    okEnvelope(
-      adminReadCountDataSchema.parse({
-        ...counted,
-        filter: { ...filter, ...echo },
-      }),
-      ["/data/groups", "/data/filter"],
+  return toldOfRange(
+    toldOfOwnerOnly(
+      okEnvelope(
+        adminReadCountDataSchema.parse({
+          ...counted,
+          filter: { ...filter, ...echo },
+        }),
+        ["/data/groups", "/data/filter"],
+      ),
+      leavesOutOwnerOnly,
     ),
-    leavesOutOwnerOnly,
+    echo,
   );
 };
 
@@ -732,21 +750,24 @@ const rowsEnvelope = async (
     : items.length > 0 && total !== undefined && reached < total
       ? numberedPageAfter(page, pageSize, items.length)
       : undefined;
-  const envelope = toldOfOwnerOnly(
-    okEnvelope(
-      adminReadRowsDataSchema.parse({
-        rows,
-        filter: {
-          ...withoutPaging(query),
-          ...echo,
-          ...(pageSize < wanted ? { pageSizeCappedAt: pageSize } : {}),
-        },
-        ...(total === undefined ? {} : { total }),
-        ...(Object.keys(about).length === 0 ? {} : { about }),
-      }),
-      ROWS_UNTRUSTED,
+  const envelope = toldOfRange(
+    toldOfOwnerOnly(
+      okEnvelope(
+        adminReadRowsDataSchema.parse({
+          rows,
+          filter: {
+            ...withoutPaging(query),
+            ...echo,
+            ...(pageSize < wanted ? { pageSizeCappedAt: pageSize } : {}),
+          },
+          ...(total === undefined ? {} : { total }),
+          ...(Object.keys(about).length === 0 ? {} : { about }),
+        }),
+        ROWS_UNTRUSTED,
+      ),
+      leavesOutOwnerOnly,
     ),
-    leavesOutOwnerOnly,
+    echo,
   );
   if (onward === undefined) return envelope;
   const next: AdminMcpNext = {

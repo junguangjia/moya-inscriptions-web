@@ -48,6 +48,9 @@ import {
 import {
   aiCommentReceipt,
   aiInputRefusal,
+  aiPolicyReceipt,
+  aiRecordRefusal,
+  aiUserReceipt,
   featuringSelfOnly,
   handleAiOperatorRead,
 } from "./ai-operator.js";
@@ -391,11 +394,12 @@ export const handleOperatorRequest = async (
           return;
         }
         const id = decodeSegment(aiOperatorRouteId(route, pathname) ?? "");
-        if (
-          id !== undefined &&
-          (await aiOperatorReader.isSelfOnly(route.selfOnly, id))
-        ) {
-          sendOperatorError(response, 403, SELF_ONLY_OWNER_REVIEW);
+        const refusal =
+          id === undefined
+            ? null
+            : await aiRecordRefusal(request, route, id, aiOperatorReader);
+        if (refusal !== null) {
+          sendOperatorError(response, 403, refusal);
           return;
         }
       }
@@ -768,11 +772,15 @@ export const handleOperatorRequest = async (
         return;
       }
       if (method === "PUT") {
+        const command = await readJsonBody(request);
         sendJson(
           response,
           200,
           await moderationService.setPublicationPolicy(
-            await readJsonBody(request),
+            command,
+            actor.label === AI_OPERATOR_LABEL
+              ? aiPolicyReceipt(request, command)
+              : undefined,
           ),
         );
         return;
@@ -938,12 +946,16 @@ export const handleOperatorRequest = async (
         sendOperatorError(response, 404, "NOT_FOUND");
         return;
       }
+      const command = requireHumanModerationReason(await readJsonBody(request));
       sendJson(
         response,
         200,
         await moderationService.moderateUser(
           id.data,
-          requireHumanModerationReason(await readJsonBody(request)),
+          command,
+          actor.label === AI_OPERATOR_LABEL
+            ? aiUserReceipt(request, id.data, command)
+            : undefined,
         ),
       );
       return;

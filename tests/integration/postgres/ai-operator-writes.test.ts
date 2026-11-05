@@ -74,6 +74,7 @@ let createdDatabase = false;
 let createdRole = false;
 let reader: PostgresAiOperatorReader;
 let reporting: PostgresCommunityReportingAdapter;
+let appUrl = "";
 
 const send = async (
   token: string,
@@ -199,7 +200,8 @@ beforeAll(async () => {
   reporting = new PostgresCommunityReportingAdapter(setup);
   url.username = role;
   url.password = password;
-  app = poolFor(url.toString());
+  appUrl = url.toString();
+  app = poolFor(appUrl);
   reader = new PostgresAiOperatorReader(app);
   server = createBackendServer(
     createBackendApplication({
@@ -355,11 +357,12 @@ describe("what only ai-admin is told of a write", () => {
     const user = await newUser();
     const body = { action: "suspend", reason: REASON };
     const route = `users/${user}/status`;
+    const key = () => ({ [AI_OPERATOR_REQUEST_ID_HEADER]: randomUUID() });
     expect(
-      (await send(communityToken, "POST", route, body)).json,
+      (await send(communityToken, "POST", route, body, key())).json,
     ).not.toHaveProperty("alreadyInPlace");
     expect(
-      (await send(communityToken, "POST", route, body)).json,
+      (await send(communityToken, "POST", route, body, key())).json,
     ).toMatchObject({ alreadyInPlace: true });
     expect(
       (await send(ownerToken, "POST", route, body)).json,
@@ -430,6 +433,120 @@ describe("what only ai-admin is told of a write", () => {
     ).toMatchObject({ status: 409, code: "STATE_CONFLICT" });
   });
 
+  it("turns the header into a receipt on a user's status too, which holds no name", async () => {
+    const user = await newUser();
+    const key = randomUUID();
+    const route = `users/${user}/status`;
+    const body = { action: "suspend", reason: REASON };
+    const header = { [AI_OPERATOR_REQUEST_ID_HEADER]: key };
+    const first = await send(communityToken, "POST", route, body, header);
+    expect(first.json).toEqual({
+      id: user,
+      status: "suspended",
+      revokedSessions: 0,
+    });
+    const replay = await send(communityToken, "POST", route, body, header);
+    expect(replay.json).toEqual({
+      id: user,
+      status: "suspended",
+      revokedSessions: 0,
+      replayed: true,
+    });
+    const { rows } = await setup.query(
+      "SELECT actor_label,result FROM community.discussion_command_receipts WHERE request_id=$1",
+      [key],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.actor_label).toBe(AI);
+    expect(rows[0]!.result).toEqual({
+      id: user,
+      status: "suspended",
+      revokedSessions: 0,
+    });
+    expect(
+      await send(
+        communityToken,
+        "POST",
+        route,
+        { action: "reinstate", reason: REASON },
+        header,
+      ),
+    ).toMatchObject({ status: 409, code: "IDEMPOTENCY_CONFLICT" });
+
+    // The Owner's route reads no header: the same key is two commands, and it keeps none.
+    const other = await newUser();
+    const owners = await send(
+      ownerToken,
+      "POST",
+      `users/${other}/status`,
+      body,
+      header,
+    );
+    expect(owners.json).toEqual({
+      id: other,
+      status: "suspended",
+      revokedSessions: 0,
+    });
+    // Another command under that key reaches the route's own guard, and no receipt.
+    expect(
+      await send(
+        ownerToken,
+        "POST",
+        `users/${other}/status`,
+        { action: "reinstate", reason: REASON },
+        header,
+      ),
+    ).toMatchObject({ status: 409, code: "STATE_CONFLICT" });
+  });
+
+  it("answers concurrent repeats of one key with one effect", async () => {
+    const user = await newUser();
+    const header = { [AI_OPERATOR_REQUEST_ID_HEADER]: randomUUID() };
+    const body = { action: "suspend", reason: REASON };
+    const answers = await Promise.all(
+      [0, 1, 2].map(() =>
+        send(communityToken, "POST", `users/${user}/status`, body, header),
+      ),
+    );
+    expect(answers.map(({ status }) => status)).toEqual([200, 200, 200]);
+    expect(answers.filter(({ json }) => json.replayed !== true)).toHaveLength(
+      1,
+    );
+    const { rows } = await setup.query(
+      "SELECT id FROM community.moderation_events WHERE subject_id=$1 AND action='suspend'",
+      [user],
+    );
+    expect(rows).toHaveLength(1);
+  });
+
+  it("repeats nothing of the Owner's create-thread: the same key on it is a conflict, and one row", async () => {
+    const title = `Owner's thread ${run} ${randomUUID()}`;
+    const command = { requestId: randomUUID(), title };
+    expect((await send(ownerToken, "POST", "threads", command)).status).toBe(
+      200,
+    );
+    expect(await send(ownerToken, "POST", "threads", command)).toMatchObject({
+      status: 409,
+    });
+    const { rows } = await setup.query(
+      "SELECT id FROM community.threads WHERE title=$1",
+      [title],
+    );
+    expect(rows).toHaveLength(1);
+
+    // The same two calls on AI's credential are one thread and its replay.
+    const aiTitle = `AI's thread ${run} ${randomUUID()}`;
+    const aiCommand = { requestId: randomUUID(), title: aiTitle };
+    const first = await send(communityToken, "POST", "threads", aiCommand);
+    const replay = await send(communityToken, "POST", "threads", aiCommand);
+    expect(replay.json).toMatchObject({ id: first.json.id, replayed: true });
+    const { rows: aiRows } = await setup.query(
+      "SELECT id FROM community.threads WHERE title=$1",
+      [aiTitle],
+    );
+    expect(aiRows).toHaveLength(1);
+  });
+
   it("names a reused key on every receipt the writes keep", async () => {
     const user = await newUser();
     const key = randomUUID();
@@ -483,6 +600,231 @@ describe("what only ai-admin is told of a write", () => {
         retry,
       ),
     ).toMatchObject({ status: 409, code: "IDEMPOTENCY_CONFLICT" });
+  });
+});
+
+describe("how long an AI write can wait", () => {
+  it("ends every AI write transaction at its limit, and the Owner's same write keeps waiting", async () => {
+    const pool = createPostgresPool(
+      parsePostgresConfig({ DATABASE_URL: appUrl, DATABASE_POOL_MAX: "16" }),
+    );
+    const identity = new PostgresCommunityIdentityAdapter(pool);
+    const comments = new PostgresCommunityCommentAdapter(pool);
+    const content = new PostgresCommunityContentOperatorAdapter(pool);
+    const threads = new PostgresThreadAdapter(pool);
+    const publishing = new PostgresPublishingOperatorAdapter(pool);
+    const { rows: settings } = await setup.query(
+      "SELECT policy FROM community.publication_setting",
+    );
+    const policy = settings[0]!.policy as string;
+    const otherPolicy =
+      policy === "PRE_MODERATION" ? "DIRECT_PUBLICATION" : "PRE_MODERATION";
+    const draftBy = (operatorLabel: string, action: string) => ({
+      id: opaque("moderation"),
+      occurredAt: new Date(),
+      operatorLabel,
+      action: action as never,
+      reason: REASON,
+    });
+    const account = await newUser();
+    const user = await newUser();
+    const comment = await newComment(
+      await newWork(await newUser()),
+      await newUser(),
+    );
+    const works = {
+      [AI]: await newWork(await newUser()),
+      owner: await newWork(await newUser()),
+    };
+    const accounts = { [AI]: account, owner: await newUser() };
+    const writes = async (operator: typeof AI | "owner") => ({
+      mutate: content.moderateWork(works[operator], operator, {
+        requestId: randomUUID(),
+        state: "hidden",
+        expectedVersion: await workVersion(works[operator]),
+        reason: REASON,
+      }),
+      operatorCommand: publishing.setCapacity(
+        accounts[operator],
+        operator,
+        {
+          requestId: randomUUID(),
+          capacityClass: "owner",
+          expectedVersion: 0,
+        },
+        new Date(),
+      ),
+      thread: threads.operatorCreateThread(operator, {
+        requestId: randomUUID(),
+        title: `Waiting ${run}`,
+        description: "",
+        tags: [],
+        position: 0,
+      }),
+      userStatus: identity.setUserStatus(
+        user as never,
+        "suspended",
+        new Date(),
+        draftBy(operator, "suspend"),
+      ),
+      comment: comments.applyCommentModeration(
+        comment as never,
+        "hidden",
+        ["visible"],
+        operator,
+        new Date(),
+        draftBy(operator, "hide"),
+      ),
+      policy: comments.writePublicationPolicy(
+        otherPolicy as never,
+        operator,
+        new Date(),
+        draftBy(operator, "set_publication_policy"),
+      ),
+    });
+    const holder = await setup.connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('phase4-content-operator',0))",
+      );
+      await holder.query(
+        "SELECT 1 FROM community.public_users WHERE id=$1 FOR UPDATE",
+        [user],
+      );
+      await holder.query(
+        "SELECT 1 FROM community.catalog_comments WHERE id=$1 FOR UPDATE",
+        [comment],
+      );
+      await holder.query(
+        "SELECT 1 FROM community.publication_setting FOR UPDATE",
+      );
+      const owners = await writes("owner");
+      let ownersAnswered = 0;
+      for (const write of Object.values(owners))
+        void (write as Promise<unknown>).then(
+          () => {
+            ownersAnswered += 1;
+          },
+          () => {
+            ownersAnswered += 1;
+          },
+        );
+      const started = performance.now();
+      const ais = await writes(AI);
+      const names = Object.keys(ais);
+      // A write with no limit would wait as long as this lock is held, so this gives up.
+      const settled = await Promise.race([
+        Promise.allSettled(Object.values(ais)),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 13_000)),
+      ]);
+      expect(settled, "a write outlived its limit").not.toBeNull();
+      const elapsed = performance.now() - started;
+      expect(elapsed).toBeGreaterThan(7_000);
+      settled!.forEach((outcome, index) => {
+        expect(outcome.status, names[index]).toBe("rejected");
+        expect(["57014", "55P03"], names[index]).toContain(
+          ((outcome as PromiseRejectedResult).reason as Json).code,
+        );
+      });
+      expect(ownersAnswered).toBe(0);
+      await holder.query("ROLLBACK");
+      const ownerOutcomes = await Promise.allSettled(Object.values(owners));
+      expect(ownerOutcomes.map(({ status }) => status)).toEqual(
+        names.map(() => "fulfilled"),
+      );
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      holder.release();
+      await setup.query("UPDATE community.publication_setting SET policy=$1", [
+        policy,
+      ]);
+      // Whatever a failed run left waiting has just been let go.
+      await Promise.race([
+        pool.end(),
+        new Promise((resolve) => setTimeout(resolve, 5_000)),
+      ]);
+    }
+    // Nothing of AI's stayed: each transaction rolled back.
+    const { rows: labels } = await setup.query(
+      "SELECT operator_label FROM community.content_operator_events WHERE operator_label=$1 AND content_id=ANY($2)",
+      [AI, [works[AI], accounts[AI]]],
+    );
+    expect(labels).toEqual([]);
+  }, 40_000);
+});
+
+describe("a person's own request about their personal information", () => {
+  const report = (reporter: string, target: string, reason: string) =>
+    reporting
+      .create(reporter, {
+        kind: "standard",
+        target: { type: "user", id: target },
+        reason: reason as never,
+        description: `Please delete my data ${run}`,
+        requestId: randomUUID(),
+      })
+      .then(({ id }) => id);
+
+  it("is a privacy report on the reporter's own profile, and nothing else", async () => {
+    const self = await newUser();
+    const other = await newUser();
+    expect(
+      await reader.isPersonalInfoRequest(await report(self, self, "privacy")),
+    ).toBe(true);
+    expect(
+      await reader.isPersonalInfoRequest(await report(other, self, "privacy")),
+    ).toBe(false);
+    const another = await newUser();
+    expect(
+      await reader.isPersonalInfoRequest(
+        await report(another, another, "other"),
+      ),
+    ).toBe(false);
+    expect(
+      await reader.isPersonalInfoRequest(
+        await workReport(await newWork(await newUser()), self),
+      ),
+    ).toBe(false);
+    expect(await reader.isPersonalInfoRequest(opaque("report"))).toBe(false);
+  });
+
+  it("refuses every AI write by name and answers every read, on the Backend itself", async () => {
+    const self = await newUser();
+    const id = await report(self, self, "privacy");
+    const version = async () =>
+      (
+        await setup.query(
+          "SELECT version FROM community.report_cases WHERE id=$1",
+          [id],
+        )
+      ).rows[0]!.version as number;
+    const expectedVersion = await version();
+    for (const [leaf, body] of [
+      ["decisions", { expectedVersion, action: "retain", reason: REASON }],
+      ["review", { expectedVersion, outcome: "overturn", reason: REASON }],
+      ["metadata", { expectedVersion, urgent: true }],
+    ] as const)
+      expect(
+        await send(communityToken, "POST", `reports/${id}/${leaf}`, body),
+        leaf,
+      ).toMatchObject({ status: 403, code: "PERSONAL_INFO_OWNER_REVIEW" });
+    expect(await version()).toBe(expectedVersion);
+    const read = await send(communityToken, "GET", `reports/${id}`);
+    expect(read.status).toBe(200);
+    expect(read.json).toMatchObject({
+      description: `Please delete my data ${run}`,
+      allowedActions: [],
+    });
+    const owners = await send(ownerToken, "GET", `reports/${id}`);
+    expect(owners.json.allowedActions.length).toBeGreaterThan(0);
+    expect(
+      await send(ownerToken, "POST", `reports/${id}/decisions`, {
+        expectedVersion,
+        action: "retain",
+        reason: REASON,
+      }),
+    ).toMatchObject({ status: 200 });
   });
 });
 

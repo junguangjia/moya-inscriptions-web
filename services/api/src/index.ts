@@ -144,6 +144,7 @@ export type {
   OperatorCommentQueryInput,
   OperatorCommentRecord,
   OperatorQueueCountsRecord,
+  PublicationPolicyWrite,
   ReplyInsert,
   ReplyPageQuery,
 } from "./modules/community/application/ports/community-comment-port.js";

@@ -1,14 +1,16 @@
 /**
- * Self-only works are exactly `visibility='self' AND deleted_at IS NULL`
- * (admin-mcp-completion-v1 section 6). Permanent deletion also sets visibility to
- * self and empties the work, so the second condition keeps reports and appeals on
- * deleted works with AI. Comments and replies under such a work are withheld with
- * it, because the flip to self leaves them untouched. Each reads current state, so
- * a flip is seen by the next statement. Arguments are SQL expressions from this
- * package, never caller text.
+ * What AI does not read (admin-mcp-completion-v1 section 6): a live work with
+ * `visibility='self'`, and a deleted work that still holds content. Erasing a work
+ * also sets visibility to self, but it empties the row and clears `trashed_at`, so
+ * reports and appeals on it stay with AI. A trash purge only sets `deleted_at`, so
+ * that row keeps its title, text and revisions, and `trashed_at` says so whatever its
+ * visibility was. Comments and replies under such a work are withheld with it, because
+ * the flip to self leaves them untouched. Each reads current state, so a flip is seen
+ * by the next statement. Arguments are SQL expressions from this package, never caller
+ * text.
  */
 export const isSelfOnlyWorkSql = (work: string): string =>
-  `(${work}.visibility='self' AND ${work}.deleted_at IS NULL)`;
+  `((${work}.visibility='self' AND ${work}.deleted_at IS NULL) OR (${work}.deleted_at IS NOT NULL AND ${work}.trashed_at IS NOT NULL))`;
 
 export const workIsSelfOnlySql = (workId: string): string =>
   `EXISTS(SELECT 1 FROM community.works so_w
@@ -44,6 +46,23 @@ export const reportIsSelfOnlySql = (report: string): string =>
 export const caseIsSelfOnlySql = (reportId: string): string =>
   `EXISTS(SELECT 1 FROM community.report_cases so_case
     WHERE so_case.id=${reportId} AND ${reportIsSelfOnlySql("so_case")})`;
+
+/**
+ * A job can name the work itself, as a trash purge does, and retrying it runs on that
+ * work. A job on a media item is no write on the item's work, and its subject matches
+ * no row here.
+ */
+export const jobSubjectIsSelfOnlySql = (jobId: string): string =>
+  `EXISTS(SELECT 1 FROM community.publishing_jobs so_j
+    JOIN community.works so_w ON so_w.id=so_j.subject_id
+    WHERE so_j.id=${jobId} AND ${isSelfOnlyWorkSql("so_w")})`;
+
+/**
+ * A person's own request about their personal information, as far as columns can say:
+ * a `privacy` report on the reporter's own profile. Section 12 says what this misses.
+ */
+export const reportAsksOfOwnProfileSql = (report: string): string =>
+  `(${report}.reason='privacy' AND ${report}.target_type='user' AND ${report}.target_id=${report}.reporter_id)`;
 
 export const revisionIsSelfOnlySql = (revisionId: string): string =>
   `EXISTS(SELECT 1 FROM community.work_revisions so_rev

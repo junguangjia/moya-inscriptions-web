@@ -32,6 +32,7 @@ import {
   PostgresFeedbackAdapter,
   PostgresPublishingOperatorAdapter,
   PostgresThreadAdapter,
+  PostgresWorkPublishingAdapter,
   runCommunityMigrations,
 } from "@moya/community-postgres";
 import {
@@ -1601,4 +1602,98 @@ describe("a bad input on the AI path", () => {
     );
     expect((await ai("publishing/submissions/nosuch")).code).toBe("NOT_FOUND");
   });
+});
+
+// Last, because its rows stay: the totals above count this database's comments and cases.
+describe("a deleted work that still holds its text", () => {
+  /** A work its author made self-only or not, then trashed, then the trash purge ran. */
+  const trashPurged = async (visibility: "self" | "public") => {
+    const canary = `purged${visibility}canary${randomBytes(4).toString("hex")}`;
+    const work = opaque("work");
+    const revision = opaque("work-revision");
+    const comment = opaque("comment");
+    await setup.query(
+      "INSERT INTO community.works(id,author_id,title,text,first_published_at) VALUES($1,$2,$3,$3,CURRENT_TIMESTAMP)",
+      [work, ids.author, canary],
+    );
+    await setup.query(
+      `INSERT INTO community.work_revisions(id,work_id,author_id,sequence,origin,title,body,authorship_kind,requested_visibility,content_sha256,disposition,submitted_at)
+       VALUES($1,$2,$3,50,'submission',$4,$4,'original','public',$5,'pending',CURRENT_TIMESTAMP)`,
+      [revision, work, ids.author, canary, "a".repeat(64)],
+    );
+    await setup.query(
+      "INSERT INTO community.catalog_comments(id,catalog_id,target_type,author_id,text,moderation) VALUES($1,$2,'work',$3,$4,'visible')",
+      [comment, work, ids.reporter, canary],
+    );
+    const { id: report } = await new PostgresCommunityReportingAdapter(
+      setup,
+    ).create(ids.reporter, {
+      kind: "standard",
+      target: { type: "work", id: work },
+      reason: "other",
+      description: canary,
+      requestId: randomUUID(),
+    });
+    await setup.query(
+      "UPDATE community.works SET visibility=$2,trashed_at=CURRENT_TIMESTAMP-interval '31 days',trash_purge_after=CURRENT_TIMESTAMP-interval '1 day' WHERE id=$1",
+      [work, visibility],
+    );
+    expect(
+      await new PostgresWorkPublishingAdapter(app).purgeTrashedWork(
+        work,
+        new Date(),
+      ),
+    ).toBe("purged");
+    return { canary, work, revision, comment, report };
+  };
+
+  it.each(["self", "public"] as const)(
+    "withholds a work trashed and purged as %s, which still holds its text, on every read",
+    async (visibility) => {
+      const { canary, work, revision, comment, report } =
+        await trashPurged(visibility);
+      const { rows } = await setup.query(
+        "SELECT title,text,deleted_at FROM community.works WHERE id=$1",
+        [work],
+      );
+      expect(rows[0]!.title).toBe(canary);
+      expect(rows[0]!.deleted_at).not.toBeNull();
+      for (const route of [
+        `ai/find?${query({ text: canary })}`,
+        `ai/find?${query({ text: canary, source: "works" })}`,
+        `ai/find?${query({ text: canary, source: "comments" })}`,
+        `ai/find?${query({ text: canary, source: "reports" })}`,
+        `ai/find?${query({ type: "work", id: work })}`,
+        `ai/find?${query({ type: "comment", id: comment })}`,
+        `ai/find?${query({ type: "work_revision", id: revision })}`,
+        `ai/find?${query({ type: "report", id: report })}`,
+        `ai/count?${query({ source: "works", search: canary })}`,
+        `ai/count?${query({ source: "comments", search: canary })}`,
+        `works?${query({ search: canary })}`,
+        `works?${query({ workId: work })}`,
+        `featured?${query({ search: canary })}`,
+        `comments?${query({ search: canary })}`,
+        `comments?${query({ catalogId: work })}`,
+        `comments/${comment}`,
+        `reports/${report}`,
+        "reports?pageSize=100",
+        `publishing/submissions/${revision}`,
+        `publishing/submissions?${query({ workId: work })}`,
+      ]) {
+        const read = await ai(route);
+        expect(read.status, route).not.toBe(500);
+        expect(read.text, route).not.toContain(canary);
+      }
+      expect((await ai(`comments/${comment}`)).code).toBe(
+        "SELF_ONLY_OWNER_REVIEW",
+      );
+      expect((await ai(`reports/${report}`)).json).toMatchObject({
+        ownerOnly: true,
+      });
+      // Not blind: the row is there, and the Owner reads it as ever.
+      expect((await owner(`works?${query({ workId: work })}`)).text).toContain(
+        canary,
+      );
+    },
+  );
 });

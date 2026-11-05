@@ -1,7 +1,10 @@
 import type { PublicUserId } from "@moya/contracts";
 
 import type { PublicUserRecord } from "../../domain/public-user.js";
-import type { ModerationEventDraft } from "./community-comment-port.js";
+import type {
+  CommandReceipt,
+  ModerationEventDraft,
+} from "./community-comment-port.js";
 
 /** A session row as the Backend stores it: the raw token never reaches the port. */
 export interface SessionRecordInput {
@@ -37,17 +40,22 @@ export interface CommunityIdentityPort {
    * transaction, and only when the status actually changed: a repeated
    * transition returns the unchanged user and records nothing. A deleted
    * account is terminal: nothing is written and the unchanged user (status
-   * `deleted`) is returned.
+   * `deleted`) is returned. `receipt` is the AI path's: it commits in the same
+   * transaction, an unchanged status included, so a repeat of the command answers
+   * what it stored and changes nothing, even after someone else undid its effect.
    */
   setUserStatus(
     id: PublicUserId,
     status: Exclude<PublicUserRecord["status"], "deleted">,
     at: Date,
     audit?: ModerationEventDraft,
+    receipt?: CommandReceipt,
   ): Promise<{
-    readonly user: PublicUserRecord;
+    readonly user: Pick<PublicUserRecord, "id" | "status">;
     readonly revokedSessions: number;
     /** The account was already in this status, so nothing was recorded. */
     readonly unchanged?: true;
+    /** This command's receipt answered, so nothing ran. */
+    readonly replayed?: true;
   } | null>;
 }

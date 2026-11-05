@@ -30,8 +30,8 @@ import type { AdminOpContext, AdminOpEntry } from "./define";
  * The community's reversible writes on admin_execute (admin-mcp-completion-v1 section
  * 7), through the route each human page already uses, on the AI credential, so the
  * Backend's services do the work and label it `ai-admin`. A write with a receipt
- * replays by its key. One guarded by a version or a state has none, so a repeat that
- * conflicts reads the record and asks whether this command is what moved it.
+ * replays by its key. One guarded by a version has none, so a repeat that conflicts
+ * reads the record and asks whether this command is what moved it.
  */
 
 /** Nothing ran on these, whatever their status says. */
@@ -39,7 +39,6 @@ const NOTHING_RAN: ReadonlySet<string> = new Set([
   "AI_CREDENTIAL_NOT_CONFIGURED",
   "OPERATOR_NOT_CONFIGURED",
   "EXECUTE_BUSY",
-  "READ_TIMED_OUT",
 ]);
 
 /**
@@ -236,27 +235,6 @@ const reportWrite =
       return okEnvelope({ ...reportEcho(report), replayed: true });
     }
   };
-
-/** Choosing the mode in force records nothing, so asking first tells the two apart. */
-const setPolicy = async (raw: unknown, context: AdminOpContext) => {
-  const { policy } = raw as { policy: unknown };
-  try {
-    const current = (await askCommunity(
-      "read-policy",
-      undefined,
-      context.req,
-    )) as CommunityItem;
-    if (current.policy === policy) throw new Error("ALREADY_SET");
-    const { answer } = await sendWrite("set-policy", raw, context);
-    return okEnvelope({
-      state: answer.policy,
-      updatedBy: answer.updatedBy,
-      updatedAt: answer.updatedAt,
-    });
-  } catch (error) {
-    throw writeFailure(error);
-  }
-};
 
 const withoutKey = (route: CommunityOperationName) => {
   const { input } = communityOperationDefinitions[route];
@@ -549,7 +527,11 @@ export const COMMUNITY_WRITE_FACTS: Readonly<
   "set-policy": write(
     "set-policy",
     () => ({ type: "comment_policy" }),
-    setPolicy,
+    written("set-policy", ({ policy, updatedBy, updatedAt }) => ({
+      state: policy,
+      updatedBy,
+      updatedAt,
+    })),
   ),
   "set-work-publishing-settings": write(
     "set-work-publishing-settings",

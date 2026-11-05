@@ -1231,6 +1231,125 @@ describe("a retried job", () => {
     expect((await follow(retried)).code).toBe("OK");
     expect((await job([workRef(work)])).code).toBe("OK");
   });
+
+  it("waits for the verification a retried withdrawal leaves open, and never reads as done past its stop", async () => {
+    const { work, item } = await publicWork();
+    await hide(work);
+    const failed = await stop(item, "withdraw_media");
+    const requestId = randomUUID();
+    const retried = await execute(
+      "community.retry-publishing-job",
+      { id: failed },
+      requestId,
+    );
+    expect(retried.code).toBe("QUEUED");
+    // What the worker does once a purge is submitted: it queues the verification, and
+    // the withdrawal has succeeded with the bytes not yet proven gone.
+    await enqueue(item, "verify_withdrawal");
+    await succeed(item, "withdraw_media");
+    expect(
+      (await jobsOf(item)).map(({ kind, state }) => [kind, state]),
+    ).toEqual(
+      expect.arrayContaining([
+        ["withdraw_media", "succeeded"],
+        ["verify_withdrawal", "queued"],
+      ]),
+    );
+    expect(await follow(retried)).toMatchObject({
+      ok: false,
+      code: "QUEUED",
+      data: { refs: [{ type: "publishing_job", id: failed, state: "open" }] },
+    });
+    expect(
+      await execute(
+        "community.retry-publishing-job",
+        { id: failed },
+        requestId,
+      ),
+    ).toMatchObject({ ok: false, code: "QUEUED", meta: { replayed: true } });
+
+    const stopped = await stop(item, "verify_withdrawal");
+    expect(await follow(retried)).toMatchObject({
+      ok: false,
+      code: "MEDIA_JOB_FAILED",
+      data: { refs: [{ state: "failed", jobs: [stopped] }] },
+    });
+    expect(
+      await execute(
+        "community.retry-publishing-job",
+        { id: failed },
+        requestId,
+      ),
+    ).toMatchObject({
+      ok: false,
+      code: "MEDIA_JOB_FAILED",
+      data: { failed: [{ id: failed, jobs: [stopped] }] },
+    });
+  });
+
+  it("reads as done when the retried withdrawal's verification has passed, or none was needed", async () => {
+    const { work, item } = await publicWork();
+    await hide(work);
+    const failed = await stop(item, "withdraw_media");
+    const retried = await execute("community.retry-publishing-job", {
+      id: failed,
+    });
+    await enqueue(item, "verify_withdrawal");
+    await succeed(item, "withdraw_media");
+    await succeed(item, "verify_withdrawal");
+    expect((await follow(retried)).code).toBe("OK");
+
+    const quiet = await publicWork();
+    await hide(quiet.work);
+    const again = await stop(quiet.item, "withdraw_media");
+    const plain = await execute("community.retry-publishing-job", {
+      id: again,
+    });
+    await succeed(quiet.item, "withdraw_media");
+    expect((await follow(plain)).code).toBe("OK");
+  });
+
+  it("reads a retried withdrawal on an item its work has since withheld as refused, and never as done", async () => {
+    const { work, item } = await publicWork();
+    await hide(work);
+    const failed = await stop(item, "withdraw_media");
+    const requestId = randomUUID();
+    const retried = await execute(
+      "community.retry-publishing-job",
+      { id: failed },
+      requestId,
+    );
+    await succeed(item, "withdraw_media");
+    await makeSelfOnly(work);
+    expect(await follow(retried)).toMatchObject({
+      ok: false,
+      code: "SELF_ONLY_OWNER_REVIEW",
+    });
+    const replay = await execute(
+      "community.retry-publishing-job",
+      { id: failed },
+      requestId,
+    );
+    expect(replay).toMatchObject({
+      ok: false,
+      code: "QUEUED",
+      state: "settlement_unread",
+    });
+  });
+
+  it("reads a retried verification's own success as real, and leaves other kinds to themselves", async () => {
+    const { work, item } = await publicWork();
+    await hide(work);
+    await enqueue(item, "verify_withdrawal");
+    await succeed(item, "withdraw_media");
+    const failed = await stop(item, "verify_withdrawal");
+    const retried = await execute("community.retry-publishing-job", {
+      id: failed,
+    });
+    expect(retried.code).toBe("QUEUED");
+    await succeed(item, "verify_withdrawal");
+    expect((await follow(retried)).code).toBe("OK");
+  });
 });
 
 describe("a lost answer, on an op with media work", () => {
@@ -1305,7 +1424,7 @@ describe("a lost answer, on an op with media work", () => {
   });
 });
 
-describe("a lost answer, on the ops with no receipt", () => {
+describe("a lost answer, on a suspension and on a case", () => {
   /** Delivers the one write and loses its answer, as the first call's way of ending. */
   const losing = async <T>(attempt: () => Promise<T>): Promise<T> => {
     let losses = 1;
@@ -1339,7 +1458,7 @@ describe("a lost answer, on the ops with no receipt", () => {
     }, attempt);
   };
 
-  it("applies a suspension once, by the state it finds, and waits on what it queued", async () => {
+  it("applies a suspension once, through its receipt, and waits on what it queued", async () => {
     const { item, author } = await publicWork();
     const requestId = randomUUID();
     const input = { id: author, action: "suspend", reason: REASON };
@@ -1350,6 +1469,7 @@ describe("a lost answer, on the ops with no receipt", () => {
     expect(retried).toMatchObject({
       code: "QUEUED",
       data: { queued: [{ id: author, alreadyApplied: true }] },
+      meta: { replayed: true },
     });
     expect(retried.data.moderationCases).toBeUndefined();
     expect(await jobsOf(item)).toHaveLength(1);
@@ -1358,6 +1478,161 @@ describe("a lost answer, on the ops with no receipt", () => {
       await execute("community.moderate-user", input, requestId),
     ).toMatchObject({ ok: true, data: { already_applied: [author] } });
     expect(await jobsOf(item)).toHaveLength(1);
+  });
+
+  /** A suspension, the Owner's reversal of it, and how many of each the user has had. */
+  const overturnedSuspension = async (user: string) => {
+    const { id: reportId } = await one(
+      "SELECT id FROM community.report_cases WHERE target_id=$1 AND kind='moderation'",
+      [user],
+    );
+    const overturned = await owner("POST", `reports/${reportId}/review`, {
+      expectedVersion: await versionOfReport(reportId as string),
+      outcome: "overturn",
+      reason: "The Owner reinstated this user",
+    });
+    expect(overturned.status).toBe(200);
+    expect(
+      (
+        await one("SELECT status FROM community.public_users WHERE id=$1", [
+          user,
+        ])
+      ).status,
+    ).toBe("active");
+    return counts(user);
+  };
+  const counts = async (user: string) => {
+    const { cases, suspends, messages } = await one(
+      `SELECT
+        (SELECT count(*)::integer FROM community.report_cases WHERE target_id=$1) AS cases,
+        (SELECT count(*)::integer FROM community.moderation_events WHERE subject_id=$1 AND action='suspend') AS suspends,
+        (SELECT count(*)::integer FROM community.report_messages WHERE recipient_id=$1) AS messages`,
+      [user],
+    );
+    return { cases, suspends, messages };
+  };
+  /** Nothing moved: the Owner's reversal stands, and no second case or message exists. */
+  const reversalStands = async (user: string, before: Json) => {
+    expect(
+      (
+        await one("SELECT status FROM community.public_users WHERE id=$1", [
+          user,
+        ])
+      ).status,
+    ).toBe("active");
+    expect(await counts(user)).toEqual(before);
+  };
+
+  it("keeps the Owner's reversal when a lost answer is retried", async () => {
+    const user = await newUser();
+    const requestId = randomUUID();
+    const input = { id: user, action: "suspend", reason: REASON };
+    expect(
+      await losing(() => execute("community.moderate-user", input, requestId)),
+    ).toMatchObject({ code: "OUTCOME_UNKNOWN" });
+    const before = await overturnedSuspension(user);
+    const retried = await execute("community.moderate-user", input, requestId);
+    expect(retried).toMatchObject({
+      ok: true,
+      data: { already_applied: [user] },
+      meta: { replayed: true },
+    });
+    expect(retried.data.moderationCases).toBeUndefined();
+    await reversalStands(user, before);
+  });
+
+  it("keeps it when next is the same write because a settlement could not be read", async () => {
+    const { author: user, item } = await publicWork();
+    const requestId = randomUUID();
+    const input = { id: user, action: "suspend", reason: REASON };
+    const first = await withBackendFailing(
+      (url) => url.startsWith(SETTLEMENT),
+      () => execute("community.moderate-user", input, requestId),
+    );
+    expect(first).toMatchObject({
+      code: "QUEUED",
+      state: "settlement_unread",
+      next: { tool: "admin_execute", args: { requestId } },
+    });
+    const before = await overturnedSuspension(user);
+    const followed = await send(
+      client,
+      first.next.tool as string,
+      first.next.args as Json,
+    );
+    expect(followed.meta.replayed).toBe(true);
+    await reversalStands(user, before);
+    await succeedAll(item);
+  });
+
+  it("keeps it when next is the same write because its refs do not fit", async () => {
+    const accounts = [];
+    for (let index = 0; index < 18; index += 1)
+      accounts.push(await publicWork());
+    const targets = accounts.map(({ author }) => ({ id: author }));
+    const requestId = randomUUID();
+    const body = { action: "suspend", reason: REASON };
+    const first = await executeAll(
+      "community.moderate-user",
+      body,
+      targets,
+      requestId,
+    );
+    expect(first).toMatchObject({
+      code: "QUEUED",
+      next: { tool: "admin_execute", args: { requestId } },
+    });
+    expect(first.data.moderationCases).toBe(18);
+    const user = accounts[0]!.author;
+    const before = await overturnedSuspension(user);
+    const followed = await send(
+      client,
+      first.next.tool as string,
+      first.next.args as Json,
+    );
+    expect(followed.meta.replayed).toBe(true);
+    expect(followed.data.moderationCases).toBeUndefined();
+    await reversalStands(user, before);
+    for (const { item } of accounts) await succeedAll(item);
+  });
+
+  it("keeps it when the first call found the user already suspended", async () => {
+    const user = await newUser();
+    const requestId = randomUUID();
+    const input = { id: user, action: "suspend", reason: REASON };
+    await setup.query(
+      "UPDATE community.public_users SET status='suspended' WHERE id=$1",
+      [user],
+    );
+    expect(
+      await execute("community.moderate-user", input, requestId),
+    ).toMatchObject({ ok: true, data: { already_applied: [user] } });
+    await setup.query(
+      "UPDATE community.public_users SET status='active' WHERE id=$1",
+      [user],
+    );
+    const before = await counts(user);
+    expect(
+      await execute("community.moderate-user", input, requestId),
+    ).toMatchObject({ ok: true, meta: { replayed: true } });
+    await reversalStands(user, before);
+  });
+
+  it("still suspends again under a new requestId, as a new intention", async () => {
+    const user = await newUser();
+    const input = { id: user, action: "suspend", reason: REASON };
+    await execute("community.moderate-user", input);
+    const before = await overturnedSuspension(user);
+    const fresh = await execute("community.moderate-user", input);
+    expect(fresh.data.moderationCases).toBe(1);
+    expect(
+      (
+        await one("SELECT status FROM community.public_users WHERE id=$1", [
+          user,
+        ])
+      ).status,
+    ).toBe("suspended");
+    expect((await counts(user)).suspends).toBe(before.suspends + 1);
   });
 
   it("applies a decision once, by the record it reads, and waits on what it queued", async () => {

@@ -36,25 +36,39 @@ The Owner and the operator AI receive and review complaints and appeals,
 including rights-holder disputes and appeals against the AI's own decisions, and
 either may judge the necessity of a forward. The Owner owns urgent on-call
 handling. Urgent unlawful-content cases have a separate priority queue and
-durable SES notification, including a visible delivery failure. The Owner
-preserves necessary evidence, applies appropriate protective measures, and makes
+durable SES notification, including a visible delivery failure. The Owner makes
 legally required reports to the competent authority through its official
-channel; no tool exists for these. Staff must not publish complaint evidence or
-forward identity documents indiscriminately. Ordinary service targets are not
-statutory deadlines. Rights-holder disputes require judgment, forwarding notices
-and counter-statements, delivery tracking, follow-up and a reasoned restoration
-decision.
+channel. No tool exists for on-call handling, SES delivery or those reports.
+Preserving evidence and protective measures are not the Owner's alone: the
+operator AI can set a legal hold and can apply protective measures through a
+decision or a moderation write, and the history shows `ai-admin`. Releasing a
+legal hold goes through its preview. The AI can set `urgent` and cannot clear
+it: `urgent:false` from its credential answers `URGENT_OWNER_ONLY`. Staff must
+not publish complaint evidence or forward identity documents indiscriminately.
+Ordinary service targets are not statutory deadlines. Rights-holder disputes
+require judgment, forwarding notices and counter-statements, delivery tracking,
+follow-up and a reasoned restoration decision.
 
 A case on a self-only work or on a comment under one stays with the Owner: the
 AI sees that it exists and every write on it answers `SELF_ONLY_OWNER_REVIEW`.
+So does a case on a deleted work that still holds its text, which is what the
+trash purge leaves. A work erased by its author holds none, and its cases stay
+with the AI.
 
-A request to read, correct or delete personal information reaches this queue as
-an ordinary report: the public policy sends it through the same complaint entry.
-Nothing marks it. It has no kind or reason of its own, `privacy` also means that
-a post exposes someone, and only its description says what is asked. So the
-system does not recognise such a request, and neither reads nor writes refuse it
-for the AI. Leaving it to the Owner, as the policy says, rests on whoever reads
-the description: this is an accepted limit, recorded in
+A request to read, correct or delete personal information stays with the Owner,
+as the public policy promises. The system treats a report with reason `privacy`
+that a user files on their own profile as such a request. The AI may read it,
+and every write it attempts on that case, decision, review or metadata, answers
+`PERSONAL_INFO_OWNER_REVIEW`, with a fixed hint that it stays in the Owner's
+queue. A `privacy` report about someone else is an ordinary case.
+
+This cannot catch a request filed some other way, because nothing else marks
+one: under another reason, on someone else's profile, on a work or a comment, as
+feedback, or in a description alone. Nor one made while the same user has
+another open report on their own profile, which joins that case and keeps its
+reason, or one a rights notice later turned into `copyright`. The AI can read
+and decide those, and leaving them to the Owner rests on whoever reads the
+description. This is an accepted limit, recorded in
 `docs/development/admin-mcp-completion-v1.md` section 17.
 
 ## Retention

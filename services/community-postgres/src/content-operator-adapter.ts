@@ -12,6 +12,7 @@ import {
   effectiveFeatured,
   INHERITED_FEATURED_POSITION,
 } from "./featured-content.js";
+import { limitAiWrite } from "./ai-write-limit.js";
 import { asCommunityOperationError } from "./availability.js";
 import {
   isSelfOnlyWorkSql,
@@ -171,6 +172,7 @@ export class PostgresCommunityContentOperatorAdapter implements CommunityContent
     fence?: ExecutionFence,
   ): Promise<T> {
     return this.transaction(async (db) => {
+      await limitAiWrite(operator, (sql) => db.query(sql));
       await db.query(
         "SELECT pg_advisory_xact_lock(hashtextextended('phase4-content-operator',0))",
       );

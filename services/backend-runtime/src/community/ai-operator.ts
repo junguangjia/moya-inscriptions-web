@@ -4,12 +4,16 @@ import { CommunityInputError } from "@moya/api";
 import type { CommandReceipt } from "@moya/api";
 import {
   AI_OPERATOR_REQUEST_ID_HEADER,
+  PERSONAL_INFO_OWNER_REVIEW,
   SELF_ONLY_OWNER_REVIEW,
   aiCountQuerySchema,
   aiFindQuerySchema,
   aiSettlementQuerySchema,
 } from "@moya/contracts/internal/admin-mcp";
-import type { AiOperatorReader } from "@moya/contracts/internal/admin-mcp";
+import type {
+  AiOperatorReader,
+  AiOperatorRoute,
+} from "@moya/contracts/internal/admin-mcp";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 
@@ -49,27 +53,95 @@ export const aiInputRefusal = (
 const requestIdSchema = z.uuid();
 
 /**
- * The comment route's receipt on the AI path. Its body has no `requestId`, and the
- * Owner's route takes none, so the key arrives in a header and binds the exact command:
- * a repeat replays, and the same key on another command is a conflict.
+ * A route's receipt on the AI path, where the command's body has no `requestId` and the
+ * Owner's route takes none. The key arrives in a header and binds the exact command: a
+ * repeat replays, and the same key on another command is a conflict.
  */
-export const aiCommentReceipt = (
+const aiReceipt = (
   request: IncomingMessage,
-  id: string,
-  command: unknown,
+  command: readonly unknown[],
 ): CommandReceipt => {
   const requestId = requestIdSchema.safeParse(
     request.headers[AI_OPERATOR_REQUEST_ID_HEADER],
   );
   if (!requestId.success)
     throw new CommunityInputError("A request identity is required");
-  const { action, reason } = command as { action?: unknown; reason?: unknown };
   return {
     requestId: requestId.data,
     fingerprint: createHash("sha256")
-      .update(JSON.stringify(["comment.moderate", id, action, reason]))
+      .update(JSON.stringify(command))
       .digest("hex"),
   };
+};
+
+type Moderation = { action?: unknown; reason?: unknown };
+
+export const aiCommentReceipt = (
+  request: IncomingMessage,
+  id: string,
+  command: unknown,
+): CommandReceipt => {
+  const { action, reason } = command as Moderation;
+  return aiReceipt(request, ["comment.moderate", id, action, reason]);
+};
+
+export const aiUserReceipt = (
+  request: IncomingMessage,
+  id: string,
+  command: unknown,
+): CommandReceipt => {
+  const { action, reason } = command as Moderation;
+  return aiReceipt(request, ["user.moderate", id, action, reason]);
+};
+
+export const aiPolicyReceipt = (
+  request: IncomingMessage,
+  command: unknown,
+): CommandReceipt =>
+  aiReceipt(request, [
+    "policy.set",
+    (command as { policy?: unknown } | null)?.policy,
+  ]);
+
+/**
+ * Past the self-only check, the comment write whose key has a receipt: it committed
+ * before the flip, and its transaction answers from that receipt and writes nothing, or
+ * says IDEMPOTENCY_CONFLICT. Its stored answer holds no text, and the same table and
+ * header decide here and there, so this lets no new write through. No other route
+ * passes: see section 17.
+ */
+const answersFromReceipt = async (
+  request: IncomingMessage,
+  route: AiOperatorRoute,
+  reader: AiOperatorReader,
+): Promise<boolean> => {
+  if (route.klass !== "write" || route.selfOnly !== "comment") return false;
+  const key = requestIdSchema.safeParse(
+    request.headers[AI_OPERATOR_REQUEST_ID_HEADER],
+  );
+  return key.success && reader.hasCommentReceipt(key.data);
+};
+
+/**
+ * What a route's `:id` refuses to AI, before anything runs: a self-only record, and a
+ * write on a case that is a person's own request about their personal information.
+ */
+export const aiRecordRefusal = async (
+  request: IncomingMessage,
+  route: AiOperatorRoute,
+  id: string,
+  reader: AiOperatorReader,
+): Promise<string | null> => {
+  if (
+    route.selfOnly !== undefined &&
+    (await reader.isSelfOnly(route.selfOnly, id)) &&
+    !(await answersFromReceipt(request, route, reader))
+  )
+    return SELF_ONLY_OWNER_REVIEW;
+  // Only a case's writes name `report`: its reads answer `ownerOnly` themselves.
+  return route.selfOnly === "report" && (await reader.isPersonalInfoRequest(id))
+    ? PERSONAL_INFO_OWNER_REVIEW
+    : null;
 };
 
 /**

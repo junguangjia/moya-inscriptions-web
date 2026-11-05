@@ -19,14 +19,25 @@ export const AI_OPERATOR_LABEL = "ai-admin";
 export const SELF_ONLY_OWNER_REVIEW = "SELF_ONLY_OWNER_REVIEW";
 
 /**
+ * A person's own request about their personal information: a `privacy` report on their
+ * own profile. AI reads it, and every AI write on the case answers this, because the
+ * public policy has the Owner verify and handle it.
+ */
+export const PERSONAL_INFO_OWNER_REVIEW = "PERSONAL_INFO_OWNER_REVIEW";
+
+/** Urgent is one-way for AI: it can raise a case and not lower it. */
+export const URGENT_OWNER_ONLY = "URGENT_OWNER_ONLY";
+
+/**
  * Set only by the run engine. This does not stop a compromised Admin; it makes a
  * misclassified op fail instead of skipping preview.
  */
 export const AI_OPERATOR_RUN_HEADER = "x-admin-mcp-run";
 
 /**
- * This target's key on a write whose body has no `requestId`: the comment route, whose
- * receipt the route builds from it, so a retry replays and never moderates twice.
+ * This target's key on a write whose body has no `requestId`: the comment, user and
+ * policy routes, whose receipt the route builds from it, so a retry replays and never
+ * moderates twice.
  */
 export const AI_OPERATOR_REQUEST_ID_HEADER = "x-operator-request-id";
 
@@ -51,11 +62,17 @@ export interface AiOperatorRoute {
   readonly query?: Readonly<Record<string, string>>;
   /**
    * The route's `:id` names this record: while it is self-only, or for an Article
-   * while it uses an item of a self-only work, the route answers
-   * SELF_ONLY_OWNER_REVIEW, and withheld never reads as not found.
+   * while it uses an item of a self-only work, or for a job while its subject is a
+   * self-only work, the route answers SELF_ONLY_OWNER_REVIEW, and withheld never reads
+   * as not found.
    */
   readonly selfOnly?:
-    "work" | "comment" | "work_revision" | "article" | "report";
+    | "work"
+    | "comment"
+    | "work_revision"
+    | "article"
+    | "report"
+    | "publishing_job";
 }
 
 const base = ["base"] as const;
@@ -242,7 +259,7 @@ export const AI_OPERATOR_ROUTES: readonly AiOperatorRoute[] = [
     "work_revision",
   ),
   communityWrite("PUT", "publishing/accounts/:id/capacity"),
-  communityWrite("POST", "publishing/jobs/:id/retry"),
+  communityWrite("POST", "publishing/jobs/:id/retry", "publishing_job"),
   communityWrite("POST", "articles/:id/moderation", "article"),
 ];
 

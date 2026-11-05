@@ -19,6 +19,7 @@ import type {
 import { WORK_ITEMS_CONFIGURABLE_MAXIMUM } from "@moya/contracts/schemas";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
+import { limitAiWrite } from "../ai-write-limit.js";
 import { asCommunityOperationError } from "../availability.js";
 
 /**
@@ -359,6 +360,7 @@ export const operatorCommand = <T>(
   const at = nowParam(spec.now);
   const fingerprint = commandFingerprint(spec.action, spec.target, spec.input);
   return writeTransaction(pool, async (db) => {
+    await limitAiWrite(spec.operator, (sql) => db.query(sql));
     await db.query(
       "SELECT pg_advisory_xact_lock(hashtextextended('phase4-content-operator',0))",
     );

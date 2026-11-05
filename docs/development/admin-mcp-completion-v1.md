@@ -510,10 +510,11 @@ Recorded when built in S6, on withholding:
   Its media route answers `SELF_ONLY_OWNER_REVIEW` for all of that Article's
   media while it does, because the reference, not the route, names the item. The
   Article's text stays readable, with that item's id in its `references`.
-- A deleted work is not self-only, so a case on it keeps the snapshot its
+- An erased work is not self-only, so a case on it keeps the snapshot its
   reporter saw and a comment under it stays readable, even if the author made
   the work self-only before deleting it. Both were public when written. The work
-  itself holds no text.
+  itself holds no text. A work the trash purge deleted does hold it, so it is
+  withheld (section 6).
 - `operatorReadScopeFor` withholds for `ai-admin` always. The selfOnly switch
   reaches the Backend with the slice that builds `x-ai-sensitive`; until then
   the switch can open nothing here, which fails safe.
@@ -545,13 +546,24 @@ tests/integration/postgres/ai-operator-writes.test.ts:
   `abandon` still answer `AI_ROUTE_FORBIDDEN`.
 - `PUT featured` names its record in the body, so its handler asks the self-only
   question itself.
+- `publishing/jobs/:id/retry` carries `selfOnly: "publishing_job"`, which asks
+  whether the job's subject is a self-only work. A job on a media item matches
+  nothing there.
+- A case's write also asks whether the case is a person's own request about
+  their personal information, and answers `PERSONAL_INFO_OWNER_REVIEW` (section
+  12). A read of it does not ask.
+- A comment write whose key already has a receipt passes the self-only check,
+  and no other route does (section 17). It reads the same table and the same
+  header the write's transaction reads, so this lets no new write through.
 - `articles/:id/moderation` carries `selfOnly: "article"`: AI cannot open the
   media of an Article using a self-only work's item, and it is not asked to
   approve what it cannot read. This reads the row's own rule, not a line of the
   Matrix.
 - `metadata` with `legalHold:false` is the one write a route row cannot class,
   because the class is in the body. Its handler answers `AI_RUN_REQUIRED`
-  without `x-admin-mcp-run`, as an irreversible row does.
+  without `x-admin-mcp-run`, as an irreversible row does. `urgent:false` is
+  decided there too and answers `URGENT_OWNER_ONLY`, run header or not: urgent
+  is one-way for AI, by the lead's decision, and no preview or run changes that.
 - `reporting-adapter.ts` wrote `moderated_by='owner'` whoever decided. A
   decision or a correction moving a comment or a reply now records its operator.
 - Only `ai-admin` is told `replayed: true` (a receipt answered) or
@@ -564,8 +576,10 @@ tests/integration/postgres/ai-operator-writes.test.ts:
   unchanged.
 - A key used before on other content answers `IDEMPOTENCY_CONFLICT` on the
   comment, content, thread and publishing receipts. It is a subclass of the
-  conflict, so every other caller treats it as one, and the Owner's route still
-  narrows a 409 to `STATE_CONFLICT`.
+  conflict, so every other caller treats it as one. The Owner's route now
+  answers that code too, and the Owner's Admin client narrows every 409 to
+  `STATE_CONFLICT`, so its pages read what they always read. A unit test holds
+  that narrowing.
 
 Recorded when built in S7, on settlement, tests in
 tests/unit/backend/operator-ai-base-credential.test.ts,
@@ -1157,14 +1171,18 @@ published row (plugin dist/mcp/tools/schemas.js:20).
   (payload.config.ts:254).
 - `preview`: section 10.
 
-Self-only works are exactly `visibility='self' AND deleted_at IS NULL`
+Self-only works are `visibility='self' AND deleted_at IS NULL`
 (apps/web/features/publishing/ui/editor/visibility-field.tsx:20). The second
-condition matters: permanent deletion also sets visibility to self and empties
-the work (services/community-postgres/src/publishing/works.ts:395-400), so
-reports and appeals on deleted works stay with AI. Self-only works are withheld
-from AI while their switch is off (section 12). Carriers, each with a test:
-read-works and find, `read-report` snapshot (reporting-adapter.ts:468),
-`latestSubmission.title`, submission title and body
+condition matters: erasing a work also sets visibility to self and empties the
+work (services/community-postgres/src/publishing/works.ts:395-400), so reports
+and appeals on erased works stay with AI. A trash purge only sets `deleted_at`
+(works.ts:532): it keeps the title, text and revisions, and `trashed_at`, which
+erasing clears. So for AI a deleted work with `trashed_at` set counts as
+self-only too, whatever its visibility, by the lead's decision of S7. That is
+`isSelfOnlyWorkSql`, the one definition every carrier below and analytics use.
+Self-only works are withheld from AI while their switch is off (section 12).
+Carriers, each with a test: read-works and find, `read-report` snapshot
+(reporting-adapter.ts:468), `latestSubmission.title`, submission title and body
 (work-publishing-schemas.ts:167-168), `read-featured` with `filter=all`
 (content-operator-adapter.ts:400-412), read-comments, read-comment and comment
 report snapshots, analytics title resolution (section 19), selector sources, and
@@ -1458,9 +1476,10 @@ request id derived from requestId and index.
   (community-moderation-service.ts:281-285; port
   community-comment-port.ts:75-85). For the AI actor, the route turns a new
   `x-operator-request-id` header into a `CommandReceipt`.
-- CAS or state-guarded ops (decide-report, review-report, metadata,
-  moderate-user, set-policy) use `verify`: on a lost answer, read the subject
-  and compare history or state.
+- CAS ops (decide-report, review-report, metadata) use `verify`: on a lost
+  answer, read the subject and compare its history. moderate-user and set-policy
+  were meant to, by state, and take the same header receipt instead (recorded
+  below).
 
 Outcomes per target: applied, already_applied, conflict, failed, unknown. Only
 all applied or already_applied, with settlement done, gives `ok:true`. Budget
@@ -1569,18 +1588,17 @@ Recorded when built in S7, the community writes, tests in
 tests/cms/admin-mcp-community-writes.test.ts:
 
 - A community op's `input` leaves out the route's `requestId`, as an editorial
-  op leaves out `idempotencyKey`. moderate-comment has no such field, so its key
-  goes in `x-operator-request-id`. The route requires one on the AI path, a
-  uuid, and answers 400 without it: a target with no key has nothing to replay.
-  The Owner's route reads no header.
+  op leaves out `idempotencyKey`. moderate-comment, moderate-user and set-policy
+  have no such field, so their key goes in `x-operator-request-id`. Each route
+  requires one on the AI path, a uuid, and answers 400 without it: a target with
+  no key has nothing to replay. The Owner's routes read no header.
 - `results` holds a small echo, never the record: a report or a work can pass
   the text cap, and `admin_get` reads the whole. An echo's title goes by length
   and hash past `INLINE_TEXT_CHARS`, and is the only person's word it holds.
 - A Backend 5xx or a lost answer is OUTCOME_UNKNOWN, since the write may have
   committed. The exceptions are the codes that say nothing ran, by name:
-  AI_CREDENTIAL_NOT_CONFIGURED, OPERATOR_NOT_CONFIGURED, EXECUTE_BUSY and, on
-  the one write that reads first, READ_TIMED_OUT. A refused body keeps its bare
-  code on the row, under OPERATION_REFUSED.
+  AI_CREDENTIAL_NOT_CONFIGURED, OPERATOR_NOT_CONFIGURED and EXECUTE_BUSY. A
+  refused body keeps its bare code on the row, under OPERATION_REFUSED.
 - A case's three ops have no receipt. A repeat whose version has moved answers
   409, and the op then reads the case and asks whether this command is what
   moved it. A decision: the case's decision is that action, not reversed, and
@@ -1590,10 +1608,16 @@ tests/cms/admin-mcp-community-writes.test.ts:
   so it is the very one. A same-worded decision someone overturned, or the
   Owner's, stays STATE_CONFLICT. A read that fails there says OUTCOME_UNKNOWN,
   since it was the one thing that could tell.
-- `moderate-user` is idempotent by state, and `set-policy` reads the mode first
-  because the Backend records nothing for the one in force. Each answers
-  `already_applied` on a repeat, through ALREADY_SET. Hiding a comment already
-  hidden stays a conflict under a new requestId, as on the human route.
+- `moderate-user` and `set-policy` keep a receipt on the AI path, in
+  `discussion_command_receipts`, as moderate-comment does, with no migration. It
+  commits in the write's own transaction on both paths, the state already in
+  place included, so a repeat of that key answers what it stored whatever has
+  happened since: a retry, or following `next`, cannot re-suspend a user the
+  Owner reinstated. A user's receipt holds id, status and revoked sessions and
+  no name, because it outlives an account's deletion. A new requestId is a new
+  intention and acts on the state it finds: `already_applied`, through
+  ALREADY_SET, when nothing was left to change. Hiding a comment already hidden
+  stays a conflict under a new requestId, as on the human route.
 - `data.moderationCases` counts the subjects this call moderated, each with its
   own case, user message and appeal path. A replay or a state already in place
   opens none. A row of `queued` carries `alreadyApplied` when this call changed
@@ -1608,14 +1632,25 @@ tests/cms/admin-mcp-community-writes.test.ts:
   turn up to 5 s and then answers EXECUTE_BUSY, having run nothing, and a read's
   long list can so delay a write. `admin_execute`'s own share stays 2 calls per
   process.
+- The slots bound connections only if a write ends by itself, because the
+  Backend does not stop on Admin's abort. So every AI write transaction starts
+  by setting `lock_timeout` and `statement_timeout` to 8 s, on the `ai-admin`
+  label alone, before any lock: `mutate`, `operatorCommand`, the thread command,
+  `setUserStatus`, a comment's moderation and the policy write. A report's
+  transaction has had its 8 s all along. Past the limit the transaction rolls
+  back, the route answers 500 and the client reads OUTCOME_UNKNOWN, which is
+  true and safe to retry. The Owner's writes take no limit and wait as they
+  always have. tests/cms/admin-mcp-community-writes.test.ts counts this on the
+  real Backend behind a held lock, and
+  tests/integration/postgres/ai-operator-writes ends every one of these
+  transactions. The limit is per statement, because PostgreSQL 16 has no
+  `transaction_timeout`: a write with two long lock waits can run past the 15 s
+  abort, and the 15 s slot hold covers that up to 30 s.
 - A CAS op's requestId binds nothing it can compare, because there is no run
   table and no receipt: the same requestId with other arguments runs if its
   version still matches. A receipt op answers IDEMPOTENCY_CONFLICT. Comment
   receipts, content receipts and CMS receipts are looked up apart, like the
   families above.
-- `moderate-user` and `set-policy` hold no version either, so a repeat after
-  someone else undid the effect applies it again. It records a new case, under
-  its own operator, and never reads as a replay.
 - `PREVIEW_REQUIRED`'s hint now names a legal hold's release beside a new
   identity. Only `set-report-metadata` with `legalHold:false` meets it here.
 
@@ -1843,9 +1878,13 @@ tests/integration/postgres/ai-operator-settlement.test.ts under the App role:
   author flips to self-only between the commit and the read: `admin_job` names
   that one SELF_ONLY_OWNER_REVIEW.
 - `community.retry-publishing-job` settles on the job itself, of whatever kind,
-  through `read-publishing-jobs`, so ok:true is the job's own `succeeded`. Its
-  echo holds only what stays true of the job, because a replay's stored answer
-  still says `queued`.
+  through `read-publishing-jobs`, so ok:true is the job's own `succeeded`. The
+  one exception is a `withdraw_media` that has succeeded: that success leaves
+  its verification to come, so the answer is its item's read, with the
+  verification open reading QUEUED and stopped reading MEDIA_JOB_FAILED, as on
+  every other path. A verification's own success is real and reads as itself.
+  Its echo holds only what stays true of the job, because a replay's stored
+  answer still says `queued`.
 - A decision settles on what the adapter's `subject` acts on: `retain`, `warn`
   and `restrict_comments` move no media and answer at once, `suspend` reads the
   affected user, a work and a community Article read themselves, and an official
@@ -2401,6 +2440,25 @@ comment answers `SELF_ONLY_OWNER_REVIEW`. The comment part is a reading the
 Owner signed in the amendment. The Owner's Admin queue is unchanged. The check
 reads current visibility at read and write time.
 
+Personal-information requests, decided by the lead in S7. content.ts:77 sends a
+request to read, correct or delete personal information through the complaint
+entry and says the Owner verifies identity and handles it, so it stays with the
+Owner. A report with reason `privacy` filed by a user on their own profile is
+treated as such a request, identified from existing columns with no migration:
+`reason='privacy' AND target_type='user' AND target_id=reporter_id`. AI may read
+it, as the policy says: list, get and find hold its text, its `allowedActions`
+is empty, and an exact `admin_find` offers no write. Every AI write on the case,
+decision, review or metadata, answers `PERSONAL_INFO_OWNER_REVIEW`, whose fixed
+hint says it stays in the Owner's queue. A route row asks this through
+`selfOnly: "report"`, so a case's write added with the run engine takes the same
+property to get it. The Owner's route is unchanged. A `privacy` report about
+someone else is an ordinary case. What this cannot catch is in section 17.
+
+Urgent is one-way for AI, decided by the lead in S7. `urgent:true` works, and
+`urgent:false` from the AI credential answers `URGENT_OWNER_ONLY`, so AI cannot
+move a case out of the urgent-first order the Owner's on-call handling reads.
+The Owner clears it as before.
+
 Policy constant.
 `AI_POLICY_DISCLOSURE = { dm:false, evidence:false, rawIp:false, selfOnly:false }`
 in contracts is tied by a test to apps/web/app/policies/content.ts and
@@ -2781,24 +2839,55 @@ Accepted limits, recorded and not fixed:
   case, three years after it closes, and can search the Article report's.
   Whether Production holds such a row was not checked.
 
-- A request to read, correct or delete personal information has no marking. The
-  policy sends it through the complaint entry and says the Owner verifies
-  identity and handles it, but it arrives as an ordinary report, `privacy` also
-  means a post exposes someone, and only its description says what is asked. The
-  Matrix is silent and nothing here invents a mechanism: AI can read and decide
-  such a case like any other, and leaving it to the Owner rests on whoever reads
-  the description. docs/community/community-reporting-appeals-v1.md says so.
-- The self-only check on a write runs just before the write, in its own
-  statement, so an author's flip landing between them can let one write through
-  on what was public a moment earlier. The next call refuses.
-- `community.retry-publishing-job` asks no self-only question: a job names a
-  media item, holds no text, and a retry moves no visibility.
+- A personal-information request is recognised only as a `privacy` report on the
+  reporter's own profile (section 12). AI can read and decide one filed any
+  other way, because nothing in its columns says what it asks: another reason on
+  the same profile, a report on someone else's profile or on a work or comment,
+  feedback, or a description alone. So can it one made while the same user has
+  another open report on their own profile, which joins that case and keeps its
+  reason, or one a rights notice then turned into `copyright`. For those,
+  leaving it to the Owner rests on whoever reads the description. The other way
+  round, a `privacy` report on one's own profile that asks for something else
+  still waits for the Owner.
+- The self-only check on a write runs before the write, in its own statement, so
+  the window lasts as long as the write waits. An author's flip landing inside
+  it, for up to the 8 s limit behind a lock, can let one write through on what
+  was public a moment earlier, and the next call refuses. This applies to
+  comment and case writes. A work's moderation conflicts because the flip bumps
+  its version, a submission's conflicts because the flip withdraws it, and
+  featuring re-reads `work_is_public` in its transaction.
+- After a lost answer and a flip, a comment's retry answers from its receipt.
+  The other writes still answer SELF_ONLY_OWNER_REVIEW for a write that
+  committed, so a client can read a committed write as refused, short of the
+  Matrix row "Lost answer or timeout". It takes two independent events and
+  nothing applies twice. A case's three ops have no receipt to answer from. A
+  work's, a submission's and an Article's have one, but their settlement then
+  reads the withheld work and could only answer QUEUED unread on every repeat, a
+  work's stored answer holds its title, and their key is in a body the route has
+  not read at this check.
+- `community.retry-publishing-job` answers SELF_ONLY_OWNER_REVIEW when the job's
+  subject is a self-only work, as a trash purge's is, since running it would end
+  that work's self-only status. A job on a media item still retries whatever the
+  item's work: it holds no text and moves no visibility, and a job's row can
+  name such an item, as this list says above. A retry also undoes an Owner's
+  abandon of a job, which the Owner's own page allows too.
+
+- A work the trash purge deleted counts as self-only for AI, so a case on it
+  goes to the Owner, and SELF_ONLY_OWNER_REVIEW's hint says so. Nothing at this
+  head sets `trashed_at`: the only rows of this shape come from `trashWork`,
+  removed by #155. Whether Production holds any was not read, and this holds
+  either way.
 
 - A decision on an official record reads whether it is still published inside
-  the case's transaction, holding an App connection while the Catalog or
-  editorial read answers, as the human route always has. It is under the
-  transaction's 8 s limit and one of AI's 2 slots. Only an official record's
-  hide or overturn does this.
+  the case's transaction, holding an App connection and the case's row lock
+  while the Catalog or editorial read answers, as the human route always has. It
+  is not under the transaction's 8 s limit, which ends a statement only while it
+  runs, and an Article's read can take a second connection from the same pool,
+  waiting at most 5 s for it (`connectionTimeoutMillis`). No statement or idle
+  limit is set on those reads, so nothing on the Backend ends a slow one. What
+  bounds it is how many there can be: one of AI's 2 slots, freed about 30 s in,
+  by Admin's 15 s abort and the 15 s hold. Only an official record's hide or
+  overturn does this.
 
 - `ok:true` on media work means no publish, withdraw or verification job is open
   and none has stopped, as of that read. It does not prove bytes moved. A
@@ -2814,19 +2903,22 @@ Accepted limits, recorded and not fixed:
   did not cause, until the job is retried or a later one succeeds.
 - A retried job read back after its row left, which only a `succeeded` job does
   and only after 7 days, answers NOT_FOUND on `admin_job` and QUEUED unread on a
-  replay.
+  replay. A retried withdrawal whose item has gone reads the same, and one whose
+  item's work has since become self-only reads SELF_ONLY_OWNER_REVIEW on
+  `admin_job` and QUEUED unread on a replay. None reads as done.
 - A later operation that fences the same asset moves `desired_at`, so an earlier
   stop stops counting. If that operation queued nothing, because no copy is
   live, there is nothing left to withdraw.
 - `meta.mediaGate` reads the gates when asked. A gate that has since opened or
   shut does not change what was queued at the time, and settlement reports the
   jobs as they stand.
-- A named range holds finished days, so `list.comments` with `last_7_days` does
-  not hold what was posted today. A client that hides a user's ads of "the last
-  7 days" that way leaves today's visible, and its `ok:true` is true only of the
-  rows it sent. The answer's `filter` names both instants and `from` with no
-  `to` reaches the present, but no description tells a client to look. Section 6
-  asks for finished days, so this stays.
+- A named range holds finished days, as section 6 asks, so `list.comments` with
+  `last_7_days` does not hold what was posted today. Its answer says so: the
+  `filter` echo carries `excludes: "today"`, a fixed hint says how to reach now,
+  and the `range` field says the same in `admin_actions`. tools/list holds none
+  of it, so a client that ignores the hint can still hide a user's ads of "the
+  last 7 days" and leave today's visible, and its `ok:true` is true only of the
+  rows it sent.
 
 ## 18. Reuse
 
@@ -3760,10 +3852,10 @@ Recorded when built in S7, the community writes, in tests/cms/admin-mcp-bench/.
   locates scan none, its miss included. `list.comments` leaves out what a
   self-only work withholds through one hashed set of them, read once per
   statement, so `works` is on M3's row, reported and asserted alone.
-- Statements per target on these rows are about 21 for a comment, with its
-  receipt, and about 22 for a suspension, five of them its settlement.
-  `list.comments` costs a title read per row, so M3's list is about twice U1's.
-  M3's and U3's rows report the whole path, locates included.
+- Statements per target on these rows are about 22 for a comment, with its
+  receipt and time limit, and about 25 for a suspension, five of them its
+  settlement. `list.comments` costs a title read per row, so M3's list is about
+  twice U1's. M3's and U3's rows report the whole path, locates included.
 - The sample request, find a user's recent ad comments and hide them, is M3 at
   scale. tests/cms/admin-mcp-community-writes.test.ts takes it end to end on a
   real Backend under the App role: the account by `@handle`, the comments
@@ -3774,6 +3866,16 @@ Recorded when built in S7, the community writes, in tests/cms/admin-mcp-bench/.
 - L1 still times no community class. The only numbers on these writes are L0's
   single samples, which Gate A's 200 do not count, and they say nothing about
   TencentDB until L4.
+- A suspension's cost grows with its account's live assets, and a read past a
+  stop with the finished jobs since that stop. L0 prices each once.
+  `suspend_live_assets` is one account with five, about 3 statements per asset,
+  under a statement ceiling of its own and with no scan of a large table.
+  `job_read_old_stop` is a stop dated before every seeded job, where the bound
+  on the state index holds the whole table and the plan falls to a scan of
+  `publishing_jobs`, one statement more and inside the branch's 2 s statement
+  limit. Past that limit the answer is unread, never settled. Both are single
+  samples at seeded scale: they fail on a new statement or scan, and they say
+  nothing about TencentDB.
 
 Recorded when built in S7, on settlement, in tests/cms/admin-mcp-bench/.
 

@@ -1410,13 +1410,14 @@ describe("a lost answer, retried with the same requestId", () => {
     ).toBe(1);
   });
 
-  it("applies a suspension once, by the state it finds", async () => {
+  it("applies a suspension once, through its receipt", async () => {
     const user = await newUser();
     const retried = await loseThenRetry("community.moderate-user", {
       id: user,
       action: "suspend",
       reason: REASON,
     });
+    expect(retried.meta.replayed).toBe(true);
     expect(retried.data.moderationCases).toBeUndefined();
     expect(
       await countOf("community.report_cases", "target_id=$1", [user]),
@@ -1547,34 +1548,160 @@ describe("a lost answer, retried with the same requestId", () => {
     },
   );
 
-  it("applies a policy change once, by the mode it finds", async () => {
-    const { policy } = await one(
-      "SELECT policy FROM community.publication_setting",
+  const policyNow = async () =>
+    String(
+      (await one("SELECT policy FROM community.publication_setting")).policy,
     );
-    const eventsBefore = await countOf(
+  const otherPolicy = (policy: string) =>
+    policy === "PRE_MODERATION" ? "DIRECT_PUBLICATION" : "PRE_MODERATION";
+  const policyEvents = () =>
+    countOf(
       "community.moderation_events",
       "action='set_publication_policy'",
       [],
     );
-    const input = {
-      policy:
-        policy === "PRE_MODERATION" ? "DIRECT_PUBLICATION" : "PRE_MODERATION",
-    };
+
+  it("applies a policy change once, through its receipt", async () => {
+    const eventsBefore = await policyEvents();
+    const input = { policy: otherPolicy(await policyNow()) };
     const requestId = randomUUID();
     const lost = await withLostWrite(() =>
       execute("community.set-policy", input, requestId),
     );
     expect(lost).toMatchObject({ ok: false, code: "OUTCOME_UNKNOWN" });
     const retried = await execute("community.set-policy", input, requestId);
-    expect(retried).toMatchObject({ ok: true, code: "OK" });
+    expect(retried).toMatchObject({
+      ok: true,
+      code: "OK",
+      meta: { replayed: true },
+    });
     expect(retried.data.already_applied).toHaveLength(1);
+    expect(retried.data.results[0]).toMatchObject({
+      state: input.policy,
+      updatedBy: AI,
+    });
+    expect(await policyEvents()).toBe(eventsBefore + 1);
+  });
+
+  it("keeps the Owner's mode when a lost policy change is retried", async () => {
+    const before = await policyNow();
+    const input = { policy: otherPolicy(before) };
+    const requestId = randomUUID();
+    await withLostWrite(() =>
+      execute("community.set-policy", input, requestId),
+    );
     expect(
-      await countOf(
-        "community.moderation_events",
-        "action='set_publication_policy'",
-        [],
+      (await owner("PUT", "publication-policy", { policy: before })).status,
+    ).toBe(200);
+    const eventsBefore = await policyEvents();
+    expect(
+      await execute("community.set-policy", input, requestId),
+    ).toMatchObject({ ok: true, meta: { replayed: true } });
+    expect(await policyNow()).toBe(before);
+    expect(await policyEvents()).toBe(eventsBefore);
+  });
+
+  it("keeps a receipt when the mode was already in force, so a repeat cannot move it later", async () => {
+    const before = await policyNow();
+    const requestId = randomUUID();
+    const first = await execute(
+      "community.set-policy",
+      { policy: before },
+      requestId,
+    );
+    expect(first).toMatchObject({ ok: true });
+    expect(first.data.already_applied).toHaveLength(1);
+    expect(first.meta.replayed).toBeUndefined();
+    const other = otherPolicy(before);
+    expect(
+      (await owner("PUT", "publication-policy", { policy: other })).status,
+    ).toBe(200);
+    expect(
+      await execute("community.set-policy", { policy: before }, requestId),
+    ).toMatchObject({ ok: true, meta: { replayed: true } });
+    expect(await policyNow()).toBe(other);
+    expect(
+      await execute("community.set-policy", { policy: other }, requestId),
+    ).toMatchObject({ ok: false, code: "IDEMPOTENCY_CONFLICT" });
+    expect(
+      (await owner("PUT", "publication-policy", { policy: before })).status,
+    ).toBe(200);
+  });
+
+  it("answers another command on a suspension's key as IDEMPOTENCY_CONFLICT, with no second effect", async () => {
+    const user = await newUser();
+    const requestId = randomUUID();
+    const input = { id: user, action: "suspend", reason: REASON };
+    await execute("community.moderate-user", input, requestId);
+    expect(
+      await execute(
+        "community.moderate-user",
+        { ...input, action: "reinstate" },
+        requestId,
       ),
-    ).toBe(eventsBefore + 1);
+    ).toMatchObject({ ok: false, code: "IDEMPOTENCY_CONFLICT" });
+    expect(
+      await execute(
+        "community.moderate-user",
+        { ...input, id: await newUser() },
+        requestId,
+      ),
+    ).toMatchObject({ ok: false, code: "IDEMPOTENCY_CONFLICT" });
+    expect(
+      (
+        await one("SELECT status FROM community.public_users WHERE id=$1", [
+          user,
+        ])
+      ).status,
+    ).toBe("suspended");
+  });
+
+  it("refuses an AI suspension or policy change with no key at all, on the Backend itself", async () => {
+    const user = await newUser();
+    const before = await policyNow();
+    const post = (method: string, route: string, body: Json) =>
+      fetch(`${backendOrigin}internal/community/${route}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${communityToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+    expect(
+      (
+        await post("POST", `users/${user}/status`, {
+          action: "suspend",
+          reason: REASON,
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await post("PUT", "publication-policy", {
+          policy: otherPolicy(before),
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await one("SELECT status FROM community.public_users WHERE id=$1", [
+          user,
+        ])
+      ).status,
+    ).toBe("active");
+    expect(await policyNow()).toBe(before);
+    // The Owner's routes have never taken one, and answer as they did.
+    const { status, body } = await owner("POST", `users/${user}/status`, {
+      action: "suspend",
+      reason: REASON,
+    });
+    expect(status).toBe(200);
+    expect(Object.keys(body).sort()).toEqual([
+      "id",
+      "revokedSessions",
+      "status",
+    ]);
   });
 
   it("answers a stale decision someone else made as a conflict, and never as done", async () => {
@@ -2004,6 +2131,169 @@ describe("a self-only work, and everything under it", () => {
     ).toMatchObject({ ok: true });
   });
 
+  const stoppedPurgeJob = async (subject: string, state: string) => {
+    const id = opaque("publishing-job");
+    await setup.query(
+      "INSERT INTO community.publishing_jobs(id,kind,subject_id,state,run_after) VALUES($1,'purge_trashed_work',$2,$3,CURRENT_TIMESTAMP)",
+      [id, subject, state],
+    );
+    return id;
+  };
+  const stateOfJob = async (id: string) =>
+    (await one("SELECT state FROM community.publishing_jobs WHERE id=$1", [id]))
+      .state;
+
+  it.each(["failed", "abandoned"])(
+    "refuses a retry of a %s job whose subject is a self-only work, and says so",
+    async (state) => {
+      const work = await newWork(await newUser());
+      const job = await stoppedPurgeJob(work, state);
+      await makeSelfOnly(work);
+      const answer = await execute("community.retry-publishing-job", {
+        id: job,
+      });
+      expect(answer).toMatchObject({
+        ok: false,
+        code: "SELF_ONLY_OWNER_REVIEW",
+        data: { failed: [{ id: job, code: "SELF_ONLY_OWNER_REVIEW" }] },
+      });
+      expect(await stateOfJob(job)).toBe(state);
+      // Back to public, the same retry goes through: it asks each time.
+      await makePublic(work);
+      expect(
+        await execute("community.retry-publishing-job", { id: job }),
+      ).toMatchObject({ ok: false, code: "QUEUED" });
+      expect(await stateOfJob(job)).toBe("queued");
+    },
+  );
+
+  it("retries a job on a public work, and a job on a media item whatever the item's work", async () => {
+    const work = await newWork(await newUser());
+    const onWork = await stoppedPurgeJob(work, "failed");
+    expect(
+      await execute("community.retry-publishing-job", { id: onWork }),
+    ).toMatchObject({ ok: false, code: "QUEUED" });
+    const onItem = opaque("publishing-job");
+    await setup.query(
+      "INSERT INTO community.publishing_jobs(id,kind,subject_id,state,run_after) VALUES($1,'purge_item',$2,'failed',CURRENT_TIMESTAMP)",
+      [onItem, opaque("media-item")],
+    );
+    expect(
+      await execute("community.retry-publishing-job", { id: onItem }),
+    ).toMatchObject({ ok: false, code: "QUEUED" });
+    // The Owner's route asks nothing of the kind.
+    const selfOnlyWork = await newWork(await newUser());
+    const owners = await stoppedPurgeJob(selfOnlyWork, "failed");
+    await makeSelfOnly(selfOnlyWork);
+    expect(
+      (
+        await owner("POST", `publishing/jobs/${owners}/retry`, {
+          requestId: randomUUID(),
+        })
+      ).status,
+    ).toBe(200);
+  });
+
+  describe("a lost answer on a comment, then a flip", () => {
+    const committedThenFlipped = async () => {
+      const work = await newWork(await newUser());
+      const comment = await newComment(work, await newUser());
+      const requestId = randomUUID();
+      const input = { id: comment, action: "hide", reason: REASON };
+      expect(
+        await withLostWrite(() =>
+          execute("community.moderate-comment", input, requestId),
+        ),
+      ).toMatchObject({ code: "OUTCOME_UNKNOWN" });
+      await makeSelfOnly(work);
+      return { comment, requestId, input };
+    };
+    const casesOn = (comment: string) =>
+      countOf("community.report_cases", "target_id=$1", [comment]);
+
+    it("answers from the receipt, as what committed, and writes nothing", async () => {
+      const { comment, requestId, input } = await committedThenFlipped();
+      const before = await casesOn(comment);
+      const retried = await execute(
+        "community.moderate-comment",
+        input,
+        requestId,
+      );
+      expect(retried).toMatchObject({
+        ok: true,
+        data: { already_applied: [comment] },
+        meta: { replayed: true },
+      });
+      expect(retried.data.results[0]).toEqual({
+        index: 0,
+        id: comment,
+        state: "hidden",
+      });
+      expect(await casesOn(comment)).toBe(before);
+    });
+
+    it("still refuses a new key, and a key that committed anything else", async () => {
+      const { requestId, input } = await committedThenFlipped();
+      expect(await execute("community.moderate-comment", input)).toMatchObject({
+        code: "SELF_ONLY_OWNER_REVIEW",
+      });
+      expect(
+        await execute(
+          "community.moderate-comment",
+          { ...input, reason: "Another reason" },
+          requestId,
+        ),
+      ).toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+      // A key another route's receipt holds lets no write through on this comment.
+      const work = await newWork(await newUser());
+      const other = await newComment(work, await newUser());
+      await makeSelfOnly(work);
+      const shared = randomUUID();
+      expect(
+        committedIds(
+          await execute(
+            "community.moderate-user",
+            { id: await newUser(), action: "suspend", reason: REASON },
+            shared,
+          ),
+        ),
+      ).toHaveLength(1);
+      expect(
+        await execute(
+          "community.moderate-comment",
+          { id: other, action: "hide", reason: REASON },
+          shared,
+        ),
+      ).toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+      expect(
+        (
+          await one(
+            "SELECT moderation FROM community.catalog_comments WHERE id=$1",
+            [other],
+          )
+        ).moderation,
+      ).toBe("visible");
+    });
+
+    it("refuses a work's own receipt after a flip: its answer would hold the title", async () => {
+      const work = await newWork(await newUser());
+      const requestId = randomUUID();
+      const input = {
+        id: work,
+        state: "hidden",
+        expectedVersion: await versionOfWork(work),
+        reason: REASON,
+      };
+      await withLostWrite(() =>
+        execute("community.moderate-work", input, requestId),
+      );
+      await makeSelfOnly(work);
+      expect(
+        await execute("community.moderate-work", input, requestId),
+      ).toMatchObject({ ok: false, code: "SELF_ONLY_OWNER_REVIEW" });
+    });
+  });
+
   it("keeps an Article using a self-only work's item with the Owner", async () => {
     const author = await newUser();
     const work = await newWork(author);
@@ -2143,6 +2433,250 @@ describe("a rights notice, with the evidence switch off", () => {
   });
 });
 
+describe("a person's own request about their personal information", () => {
+  const ownRequest = async (description = `Delete my data ${run}`) => {
+    const user = await newUser();
+    const report = (
+      await reporting.create(user, {
+        kind: "standard",
+        target: { type: "user", id: user },
+        reason: "privacy",
+        description,
+        requestId: randomUUID(),
+      })
+    ).id;
+    return { user, report, description };
+  };
+  const HINT = "stays in the Owner's queue";
+
+  it("answers a named refusal to every AI write, with a fixed hint, and changes nothing", async () => {
+    const { report } = await ownRequest();
+    const expectedVersion = await versionOfReport(report);
+    for (const [op, input] of [
+      [
+        "community.decide-report",
+        { action: "retain", reason: REASON, expectedVersion },
+      ],
+      [
+        "community.decide-report",
+        { action: "suspend", reason: REASON, expectedVersion },
+      ],
+      [
+        "community.review-report",
+        { outcome: "overturn", reason: REASON, expectedVersion },
+      ],
+      ["community.set-report-metadata", { urgent: true, expectedVersion }],
+      [
+        "community.set-report-metadata",
+        { status: "reviewing", expectedVersion },
+      ],
+    ] as const) {
+      const answer = await execute(op, { id: report, ...input });
+      expect(answer, op).toMatchObject({
+        ok: false,
+        code: "PERSONAL_INFO_OWNER_REVIEW",
+        data: { failed: [{ id: report, code: "PERSONAL_INFO_OWNER_REVIEW" }] },
+      });
+      expect(answer.hint, op).toContain(HINT);
+      expect(answer.retryable, op).toBeUndefined();
+    }
+    expect(await versionOfReport(report)).toBe(expectedVersion);
+    expect(
+      await countOf("community.report_decisions", "case_id=$1", [report]),
+    ).toBe(0);
+    expect(
+      await countOf(
+        "community.report_audit",
+        "case_id=$1 AND operator_label=$2",
+        [report, AI],
+      ),
+    ).toBe(0);
+  });
+
+  it("lets AI read it whole, offers it no write and no action, and leaves it in the Owner's queue", async () => {
+    const { report, description, user } = await ownRequest();
+    const read1 = await read({
+      op: "community.read-report",
+      input: { id: report },
+    });
+    expect(read1).toMatchObject({ ok: true });
+    expect(read1.data).toMatchObject({
+      description,
+      reason: "privacy",
+      allowedActions: [],
+    });
+    const listed = await read({
+      op: "list.reports",
+      input: { reporterId: user },
+      fields: ["description", "allowedActions"],
+    });
+    expect(listed.data.rows).toHaveLength(1);
+    expect(listed.data.rows[0]).toMatchObject({
+      id: report,
+      reason: "privacy",
+      allowedActions: [],
+    });
+    const found = (await send(client, "admin_find", { query: report })).envelope
+      .data.items[0];
+    expect(
+      found.actions.filter(({ tool }: Json) => tool === "admin_execute"),
+    ).toEqual([]);
+    expect(found.actions).toContainEqual({
+      tool: "admin_get",
+      args: { type: "report", id: report },
+    });
+    const got = (
+      await send(client, "admin_get", { type: "report", id: report })
+    ).envelope;
+    expect(
+      got.data.actions.filter(({ tool }: Json) => tool === "admin_execute"),
+    ).toEqual([]);
+    const { status, body } = await owner(
+      "GET",
+      "reports?status=open&pageSize=100",
+    );
+    expect(status).toBe(200);
+    expect(body.items.map(({ id }: Json) => id)).toContain(report);
+  });
+
+  it("leaves the Owner's route as it was", async () => {
+    const { report } = await ownRequest();
+    const { status, body } = await owner(
+      "POST",
+      `reports/${report}/decisions`,
+      {
+        expectedVersion: await versionOfReport(report),
+        action: "retain",
+        reason: REASON,
+      },
+    );
+    expect(status).toBe(200);
+    expect(body.allowedActions.length).toBeGreaterThan(0);
+    expect(body.history.at(-1).operator).toBe("owner");
+  });
+
+  it("treats a privacy report about someone else, or another reason on one's own profile, as any other case", async () => {
+    const other = await newUser();
+    const someoneElse = (
+      await reporting.create(await newUser(), {
+        kind: "standard",
+        target: { type: "user", id: other },
+        reason: "privacy",
+        description: `Exposes me ${run}`,
+        requestId: randomUUID(),
+      })
+    ).id;
+    const self = await newUser();
+    const anotherReason = (
+      await reporting.create(self, {
+        kind: "standard",
+        target: { type: "user", id: self },
+        reason: "other",
+        description: `Something else ${run}`,
+        requestId: randomUUID(),
+      })
+    ).id;
+    for (const id of [someoneElse, anotherReason])
+      expect(
+        committedIds(
+          await execute("community.decide-report", {
+            id,
+            expectedVersion: await versionOfReport(id),
+            action: "retain",
+            reason: REASON,
+          }),
+        ),
+      ).toEqual([id]);
+    const onWork = await newStandardReport(
+      await newWork(await newUser()),
+      await newUser(),
+    );
+    const found = (await send(client, "admin_find", { query: onWork })).envelope
+      .data.items[0];
+    expect(
+      found.actions.filter(({ tool }: Json) => tool === "admin_execute"),
+    ).toHaveLength(3);
+    const got = (
+      await send(client, "admin_get", { type: "report", id: onWork })
+    ).envelope;
+    expect(
+      got.data.actions.filter(({ tool }: Json) => tool === "admin_execute"),
+    ).toHaveLength(3);
+  });
+});
+
+describe("urgent, from the AI credential", () => {
+  it("refuses to clear it by name, and changes nothing", async () => {
+    const report = (
+      await reporting.create(await newUser(), {
+        kind: "standard",
+        target: { type: "work", id: await newWork(await newUser()) },
+        reason: "illegal_harmful",
+        description: `Urgent ${run}`,
+        requestId: randomUUID(),
+      })
+    ).id;
+    const urgent = async () =>
+      (
+        await one("SELECT urgent FROM community.report_cases WHERE id=$1", [
+          report,
+        ])
+      ).urgent;
+    expect(await urgent()).toBe(true);
+    const expectedVersion = await versionOfReport(report);
+    const answer = await execute("community.set-report-metadata", {
+      id: report,
+      expectedVersion,
+      urgent: false,
+    });
+    expect(answer).toMatchObject({
+      ok: false,
+      code: "URGENT_OWNER_ONLY",
+      data: { failed: [{ id: report, code: "URGENT_OWNER_ONLY" }] },
+    });
+    expect(answer.hint).toContain("only the Owner clears it");
+    expect(await urgent()).toBe(true);
+    expect(await versionOfReport(report)).toBe(expectedVersion);
+    // The same refusal on the Backend itself, whatever a client calls it.
+    const direct = await fetch(
+      `${backendOrigin}internal/community/reports/${report}/metadata`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${communityToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ expectedVersion, urgent: false }),
+      },
+    );
+    expect(direct.status).toBe(403);
+    expect(((await direct.json()) as Json).error.code).toBe(
+      "URGENT_OWNER_ONLY",
+    );
+    // The Owner clears it as ever.
+    expect(
+      (
+        await owner("POST", `reports/${report}/metadata`, {
+          expectedVersion,
+          urgent: false,
+        })
+      ).status,
+    ).toBe(200);
+    expect(await urgent()).toBe(false);
+    // And AI can raise it again.
+    expect(
+      committedIds(
+        await execute("community.set-report-metadata", {
+          id: report,
+          expectedVersion: await versionOfReport(report),
+          urgent: true,
+        }),
+      ),
+    ).toEqual([report]);
+    expect(await urgent()).toBe(true);
+  });
+});
+
 describe("appeals, of any origin", () => {
   it("lets AI review an appeal against its own decision, and the history shows ai-admin", async () => {
     const author = await newUser();
@@ -2270,6 +2804,8 @@ describe("the sample request: find a user's recent ad comments and hide them", (
   };
   const idsIn = ({ data }: Json): string[] =>
     data.rows.map(({ id }: Json) => id as string).sort();
+  const RANGE_HINT =
+    "This range holds finished days, so today is not in it. To reach now, send from with no to.";
 
   it("hides exactly those, and a replay changes nothing", async () => {
     const lishu = await newUser();
@@ -2409,9 +2945,14 @@ describe("the sample request: find a user's recent ad comments and hide them", (
       input: { authorId: lishu, search: ad, range: "last_7_days" },
     });
     expect(idsIn(named)).toEqual([earlier]);
-    // Its filter names both instants, so a client can see where the period ends.
-    const { from, to, range, tz } = named.data.filter;
-    expect([range, tz]).toEqual(["last_7_days", "Asia/Shanghai"]);
+    // Its filter names both instants, and says outright what the range leaves out.
+    const { from, to, range, tz, excludes } = named.data.filter;
+    expect([range, tz, excludes]).toEqual([
+      "last_7_days",
+      "Asia/Shanghai",
+      "today",
+    ]);
+    expect(named.hint).toBe(RANGE_HINT);
     const { created_at: posted } = await one(
       "SELECT created_at FROM community.catalog_comments WHERE id=$1",
       [today],
@@ -2423,6 +2964,39 @@ describe("the sample request: find a user's recent ad comments and hide them", (
     });
     expect(idsIn(open)).toEqual([earlier, today].sort());
     expect(open.data.filter).not.toHaveProperty("to");
+    expect(open.data.filter).not.toHaveProperty("excludes");
+    expect(open.hint).toBeUndefined();
+    const counted = await read({
+      op: "list.comments",
+      view: "count",
+      input: { authorId: lishu, search: ad, range: "last_7_days" },
+    });
+    expect(counted.data).toMatchObject({
+      total: 1,
+      filter: { range: "last_7_days", excludes: "today" },
+    });
+    expect(counted.hint).toBe(RANGE_HINT);
+    // A range that reaches the present holds today, and says nothing of the kind.
+    const reaching = await read({
+      op: "list.comments",
+      input: { authorId: lishu, search: ad, range: "today" },
+    });
+    expect(idsIn(reaching)).toEqual([today]);
+    expect(reaching.data.filter).not.toHaveProperty("excludes");
+    expect(reaching.hint).toBeUndefined();
+    const works = await read({
+      op: "list.works",
+      input: { authorId: lishu, range: "yesterday" },
+    });
+    expect(works.data.filter.excludes).toBe("today");
+    expect(works.hint).toBe(RANGE_HINT);
+    // And a client that reads the op first is told before it asks.
+    const { data } = (
+      await send(client, "admin_actions", { ops: ["list.comments"] })
+    ).envelope;
+    expect(data.details[0].input.properties.range.description).toContain(
+      "today is not in it",
+    );
     const hidden = await executeAll(
       "community.moderate-comment",
       { action: "hide", reason: "批量广告" },
@@ -2493,6 +3067,113 @@ describe("the sample request: find a user's recent ad comments and hide them", (
 });
 
 describe("a write's share of the App pool", () => {
+  it("ends at its own limit behind a held lock, so retries cannot take the App pool", async () => {
+    const work = await newWork(await newUser());
+    const user = await newUser();
+    const input = {
+      id: work,
+      state: "hidden",
+      expectedVersion: await versionOfWork(work),
+      reason: REASON,
+    };
+    const requestId = randomUUID();
+    const waiting = async () =>
+      Number(
+        (
+          await one(
+            "SELECT count(*)::integer AS n FROM pg_stat_activity WHERE usename=$1 AND wait_event_type='Lock'",
+            [role],
+          )
+        ).n,
+      );
+    const holder = await setup.connect();
+    let released = false;
+    const release = async () => {
+      if (released) return;
+      released = true;
+      await holder.query("ROLLBACK");
+      holder.release();
+    };
+    let mostWaiting = 0;
+    let mostConnections = 0;
+    const sampling = setInterval(() => {
+      void waiting().then((n) => {
+        mostWaiting = Math.max(mostWaiting, n);
+        mostConnections = Math.max(mostConnections, app.totalCount);
+      });
+    }, 250);
+    try {
+      await holder.query("BEGIN");
+      await holder.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('phase4-content-operator',0))",
+      );
+      await holder.query(
+        "SELECT 1 FROM community.public_users WHERE id=$1 FOR UPDATE",
+        [user],
+      );
+      // One client following OUTCOME_UNKNOWN: its connection has gone by each answer.
+      const started = performance.now();
+      expect(
+        await execute("community.moderate-work", input, requestId),
+      ).toMatchObject({ ok: false, code: "OUTCOME_UNKNOWN", retryable: true });
+      expect(performance.now() - started).toBeLessThan(15_000);
+      expect(await waiting()).toBe(0);
+      expect(mostWaiting).toBeLessThanOrEqual(1);
+
+      // Then both of AI's slots at once, and the Owner's same route beside them.
+      const owners = owner("POST", `users/${user}/status`, {
+        action: "suspend",
+        reason: REASON,
+      });
+      let ownerAnswered = false;
+      void owners.then(() => {
+        ownerAnswered = true;
+      });
+      const [work2, user2] = await Promise.all([
+        execute("community.moderate-work", input, requestId),
+        execute("community.moderate-user", {
+          id: user,
+          action: "suspend",
+          reason: REASON,
+        }),
+      ]);
+      expect(work2).toMatchObject({ code: "OUTCOME_UNKNOWN" });
+      expect(user2).toMatchObject({ code: "OUTCOME_UNKNOWN" });
+      expect(mostWaiting).toBeLessThanOrEqual(3);
+      expect(mostConnections).toBeLessThanOrEqual(4);
+
+      // Past the limit the Owner's write is still there and only it, and the pool
+      // still serves a visitor.
+      expect(await waiting()).toBe(1);
+      expect(ownerAnswered).toBe(false);
+      const visitor = await fetch(
+        `${backendOrigin}v1/community/discussion/work/${work}`,
+      );
+      expect(visitor.status).toBe(200);
+
+      await release();
+      expect((await owners).status).toBe(200);
+    } finally {
+      clearInterval(sampling);
+      await release();
+    }
+    // Nothing of the rolled-back writes stayed, and the same key now applies once.
+    expect(
+      committedIds(await execute("community.moderate-work", input, requestId)),
+    ).toEqual([work]);
+    expect(
+      await countOf(
+        "community.content_operator_events",
+        "content_id=$1 AND action='work.moderate'",
+        [work],
+      ),
+    ).toBe(1);
+    expect(
+      await execute("community.moderate-work", input, requestId),
+    ).toMatchObject({ meta: { replayed: true } });
+    expect(await labelsOf([moderationEvents(user)])).toEqual(["owner"]);
+  }, 60_000);
+
   it("waits for the same two slots the reads hold, then runs", async () => {
     let reached = 0;
     const held: ServerResponse[] = [];

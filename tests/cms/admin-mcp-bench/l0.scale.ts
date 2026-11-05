@@ -114,6 +114,8 @@ const { oracle, communityOracle, rows } = JSON.parse(
 const DESCRIPTION_MAX_CHARS = 1_024;
 /** Enough to read a p95 off, cheap enough for CI. */
 const TIMING_SAMPLES = 20;
+/** One account's public assets, so a suspension's cost per asset has a ceiling. */
+const SUSPENDED_LIVE_ASSETS = 5;
 
 /**
  * Statements one call may run, audit row and transaction control included: reads
@@ -137,11 +139,13 @@ const STATEMENTS = {
   u1_find: 10,
   u1_read: 12,
   m3_list: 23,
-  // Per target: the Backend's transaction, its case and receipt, a pause read and an
-  // audit row.
-  m3_hide_12: 260,
+  // Per target: the Backend's transaction with its time limit, its case and receipt, a
+  // pause read and an audit row.
+  m3_hide_12: 275,
   // The same, and a suspension's settlement: a read's own transaction, five statements.
-  u3_suspend_14: 315,
+  u3_suspend_14: 360,
+  // One target, whose publication sync costs statements per live asset.
+  suspend_live_assets_5: 45,
   // The Admin's door and audit row, and the settlement's transaction on the Backend.
   job_read: 10,
 } as const;
@@ -1093,6 +1097,146 @@ describe("the community reference paths", () => {
     // the writes themselves go by id.
     expect(seqScans.filter((table) => table !== "works")).toEqual([]);
     expect(await largeSeqScans(hide.statements)).toEqual([]);
+  });
+
+  it("prices a read past a stop days old, over every finished job since", async () => {
+    // Before every seeded job, so the bound on the state index holds the whole range.
+    const { before } = (
+      await communityPool.query<{ before: Date }>(
+        "SELECT min(updated_at) - interval '6 days' AS before FROM community.publishing_jobs",
+      )
+    ).rows[0]!;
+    const item = `media-item-${md5(`bench-old-stop-${randomUUID()}`)}`;
+    const job = `publishing-job-${md5(`bench-old-stop-${randomUUID()}`)}`;
+    await communityPool.query(
+      "INSERT INTO community.media_items (id, owner_id, kind, quality_mode, source, state, presentation, ready_at) VALUES ($1, $2, 'static', 'standard', 'upload', 'ready', '{\"width\":512,\"height\":384}', CURRENT_TIMESTAMP)",
+      [item, `user-${md5("bench-user-1")}`],
+    );
+    await communityPool.query(
+      "INSERT INTO community.media_public_assets (id, item_id, desired_at, created_at, updated_at) VALUES ($1, $2, $3, $3, $3)",
+      [md5(job), item, before],
+    );
+    await communityPool.query(
+      "INSERT INTO community.publishing_jobs (id, kind, subject_id, state, run_after, created_at, updated_at, finished_at) VALUES ($1, 'withdraw_media', $2, 'failed', $3, $3, $3, $3)",
+      [job, item, before],
+    );
+    const { envelope, statements, ms, bytes } = await callOn({
+      name: "admin_job",
+      arguments: {
+        kind: "settlement",
+        refs: [{ type: "item", id: item, intent: "withdraw" }],
+      },
+    });
+    expect(envelope).toMatchObject({
+      code: "MEDIA_JOB_FAILED",
+      data: { refs: [{ state: "failed", failed: 1, jobs: [job] }] },
+    });
+    expect(statements.length).toBeLessThanOrEqual(STATEMENTS.job_read + 1);
+    const seqScans = await largeSeqScans(statements);
+    report({
+      name: "job_read_old_stop",
+      budgetMs: GATE_A_P95_MS.job_read,
+      ms: [ms],
+      statements: statements.length,
+      bytes,
+      seqScans,
+    });
+    // A range this wide reads the whole table, within its branch's 2 s statement limit
+    // (section 17). Nothing else may join it, and a read past a recent stop has none.
+    expect(seqScans.filter((name) => name !== "publishing_jobs")).toEqual([]);
+    expect(ms).toBeLessThan(2_000);
+    await communityPool.query(
+      "DELETE FROM community.publishing_jobs WHERE id = $1",
+      [job],
+    );
+    await communityPool.query(
+      "DELETE FROM community.media_public_assets WHERE item_id = $1",
+      [item],
+    );
+    await communityPool.query(
+      "DELETE FROM community.media_items WHERE id = $1",
+      [item],
+    );
+  });
+
+  it("prices a suspension of an account with live assets, per asset", async () => {
+    const user = `user-${md5(`bench-media-user-${randomUUID()}`)}`;
+    await communityPool.query(
+      "INSERT INTO community.public_users (id, handle, display_name) VALUES ($1, $2, 'Bench media account')",
+      [user, `bench-media-${md5(user).slice(0, 12)}`],
+    );
+    const hex = () => randomUUID().replaceAll("-", "");
+    for (let index = 0; index < SUSPENDED_LIVE_ASSETS; index += 1) {
+      const item = `media-item-${md5(`${user}-${index}`)}`;
+      const blob = `media-blob-${md5(`${user}-${index}`)}`;
+      const rendition = `media-rendition-${md5(`${user}-${index}`)}`;
+      const asset = hex();
+      const token = hex();
+      const key = hex();
+      const hash = randomBytes(32).toString("hex");
+      await communityPool.query(
+        "INSERT INTO community.media_items (id, owner_id, kind, quality_mode, source, state, presentation, ready_at) VALUES ($1, $2, 'static', 'standard', 'upload', 'ready', '{\"width\":512,\"height\":384}', CURRENT_TIMESTAMP)",
+        [item, user],
+      );
+      await communityPool.query(
+        "INSERT INTO community.media_blobs (id, owner_id, purpose, storage_key, byte_size, sha256, content_type, created_at) VALUES ($1, $2, 'derivative', $3, 128, $4, 'image/webp', CURRENT_TIMESTAMP)",
+        [
+          blob,
+          user,
+          `blobs/${key.slice(0, 2)}/${key.slice(2, 4)}/${key}`,
+          hash,
+        ],
+      );
+      await communityPool.query(
+        "INSERT INTO community.media_renditions (id, item_id, edit_key, role, recipe_version, recipe_digest, blob_id, width, height, content_type, created_at) VALUES ($1, $2, 'base', 'display', 1, '1111111111111111', $3, 512, 384, 'image/webp', CURRENT_TIMESTAMP)",
+        [rendition, item, blob],
+      );
+      await communityPool.query(
+        "INSERT INTO community.media_public_assets (id, item_id, desired_at, created_at, updated_at) VALUES ($1, $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        [asset, item],
+      );
+      await communityPool.query(
+        `INSERT INTO community.media_publications (id, public_asset_id, rendition_id, generation_token, object_key, storage_key, content_type, purpose, byte_size, sha256, role, edit_key, state, created_at, published_at)
+         VALUES ($1, $2, $3, $4, $5, $6, 'image/webp', 'derivative', 128, $7, 'display', 'base', 'published', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [
+          `media-publication-${md5(`${user}-${index}`)}`,
+          asset,
+          rendition,
+          token,
+          `v1/${asset}/${token}/base/display.r1.webp`,
+          `blobs/${key.slice(0, 2)}/${key.slice(2, 4)}/${key}`,
+          hash,
+        ],
+      );
+    }
+    const { envelope, statements, ms, bytes } = await callOn(
+      {
+        name: "admin_execute",
+        arguments: {
+          requestId: randomUUID(),
+          op: "community.moderate-user",
+          input: { id: user, action: "suspend", reason: U3_REASON },
+        },
+      },
+      "full",
+    );
+    expect(envelope).toMatchObject({
+      code: "QUEUED",
+      state: "media_jobs_open",
+    });
+    expect(statements.length).toBeLessThanOrEqual(
+      STATEMENTS.suspend_live_assets_5,
+    );
+    const seqScans = await largeSeqScans(statements);
+    report({
+      name: "suspend_live_assets",
+      budgetMs: GATE_A_P95_MS.batch_write_per_target,
+      ms: [ms],
+      statements: statements.length,
+      bytes,
+      seqScans,
+    });
+    expect(seqScans).toEqual([]);
   });
 
   it("U3: suspends the ones it can, and says which it changed, skipped and could not find", async () => {

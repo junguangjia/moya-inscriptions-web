@@ -40,7 +40,7 @@ import type {
 } from "@moya/contracts/internal/community-operator";
 import type { Pool, PoolClient } from "pg";
 import { asCommunityOperationError } from "./availability.js";
-import { reportIsSelfOnlySql } from "./self-only.js";
+import { reportAsksOfOwnProfileSql, reportIsSelfOnlySql } from "./self-only.js";
 import {
   beginWorkPublicationSync,
   syncWorkHolds,
@@ -1126,17 +1126,22 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
   /** Reads no text for an owner-only case, so none of it can reach a model. */
   private async aiAnswer(
     db: PoolClient,
-    row: CaseRow & { readonly owner_only: boolean },
+    row: CaseRow & {
+      readonly owner_only: boolean;
+      readonly owner_decides: boolean;
+    },
   ): Promise<OperatorReportAiAnswer> {
-    return row.owner_only
-      ? {
-          id: row.id,
-          kind: row.kind,
-          status: row.status,
-          ownerOnly: true,
-          code: SELF_ONLY_OWNER_REVIEW,
-        }
-      : projectReportForAi(await this.operatorDto(db, row));
+    if (row.owner_only)
+      return {
+        id: row.id,
+        kind: row.kind,
+        status: row.status,
+        ownerOnly: true,
+        code: SELF_ONLY_OWNER_REVIEW,
+      };
+    const report = projectReportForAi(await this.operatorDto(db, row));
+    // A person's own request: AI reads it, and no action on it is AI's to take.
+    return row.owner_decides ? { ...report, allowedActions: [] } : report;
   }
   async operatorListForAi(
     q: OperatorReportQuery,
@@ -1148,8 +1153,10 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
     return this.tx(async (db) => {
       const args = operatorReportFilter.values(q);
       const rows = (
-        await db.query<CaseRow & { owner_only: boolean }>(
-          `SELECT c.*,${reportIsSelfOnlySql("c")} AS owner_only FROM community.report_cases c WHERE ${where} ORDER BY c.urgent DESC,c.created_at,c.id LIMIT $8 OFFSET $9`,
+        await db.query<
+          CaseRow & { owner_only: boolean; owner_decides: boolean }
+        >(
+          `SELECT c.*,${reportIsSelfOnlySql("c")} AS owner_only,${reportAsksOfOwnProfileSql("c")} AS owner_decides FROM community.report_cases c WHERE ${where} ORDER BY c.urgent DESC,c.created_at,c.id LIMIT $8 OFFSET $9`,
           [...args, q.pageSize, (q.page - 1) * q.pageSize],
         )
       ).rows;
@@ -1171,8 +1178,10 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
   async operatorReadForAi(id: string): Promise<OperatorReportAiAnswer> {
     return this.tx(async (db) => {
       const row = (
-        await db.query<CaseRow & { owner_only: boolean }>(
-          `SELECT c.*,${reportIsSelfOnlySql("c")} AS owner_only FROM community.report_cases c WHERE c.id=$1`,
+        await db.query<
+          CaseRow & { owner_only: boolean; owner_decides: boolean }
+        >(
+          `SELECT c.*,${reportIsSelfOnlySql("c")} AS owner_only,${reportAsksOfOwnProfileSql("c")} AS owner_decides FROM community.report_cases c WHERE c.id=$1`,
           [id],
         )
       ).rows[0];

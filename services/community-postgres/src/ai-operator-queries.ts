@@ -2,6 +2,8 @@ import {
   aiCountResultSchema,
   aiFindResultSchema,
   aiSettlementResultSchema,
+  AI_OPERATOR_LABEL,
+  PERSONAL_INFO_OWNER_REVIEW,
   SELF_ONLY_OWNER_REVIEW,
 } from "@moya/contracts/internal/admin-mcp";
 import type {
@@ -42,6 +44,8 @@ import {
   caseIsSelfOnlySql,
   commentIsSelfOnlySql,
   isSelfOnlyWorkSql,
+  jobSubjectIsSelfOnlySql,
+  reportAsksOfOwnProfileSql,
   reportIsSelfOnlySql,
   revisionIsSelfOnlySql,
   workInSelfOnlySetSql,
@@ -405,25 +409,38 @@ const LOOKUPS: Readonly<
   // The one record a withheld answer still names: its case exists, and it is the Owner's.
   report: async (db, id) =>
     (
-      await db.query<ReportRow & { owner_only: boolean }>(
-        `SELECT ${reportColumns},${reportIsSelfOnlySql("c")} AS owner_only FROM community.report_cases c WHERE c.id=$1`,
+      await db.query<
+        ReportRow & { owner_only: boolean; owner_decides: boolean }
+      >(
+        `SELECT ${reportColumns},${reportIsSelfOnlySql("c")} AS owner_only,${reportAsksOfOwnProfileSql("c")} AS owner_decides FROM community.report_cases c WHERE c.id=$1`,
         [id],
       )
-    ).rows.map((row) =>
-      row.owner_only
+    ).rows.map((row) => {
+      if (row.owner_only)
+        return {
+          type: "report" as const,
+          id: row.id,
+          state: row.status,
+          disambiguators: {
+            kind: row.kind,
+            ownerOnly: true,
+            code: SELF_ONLY_OWNER_REVIEW,
+          },
+          match: identity("id"),
+        };
+      const item = reportItem(row, identity("id"));
+      // AI reads this one, and only its writes are the Owner's, so none is offered.
+      return row.owner_decides
         ? {
-            type: "report" as const,
-            id: row.id,
-            state: row.status,
+            ...item,
             disambiguators: {
-              kind: row.kind,
+              ...item.disambiguators,
               ownerOnly: true,
-              code: SELF_ONLY_OWNER_REVIEW,
+              code: PERSONAL_INFO_OWNER_REVIEW,
             },
-            match: identity("id"),
           }
-        : reportItem(row, identity("id")),
-    ),
+        : item;
+    }),
   feedback: async (db, id) =>
     (
       await db.query<{ id: string; user_id: string; created_at: Date }>(
@@ -916,12 +933,34 @@ export class PostgresAiOperatorReader implements AiOperatorReader {
       work_revision: revisionIsSelfOnlySql,
       article: articleUsesSelfOnlyMediaSql,
       report: caseIsSelfOnlySql,
+      publishing_job: jobSubjectIsSelfOnlySql,
     }[subject]("$1::text");
+    return this.holds(`SELECT ${check} AS held`, [id]);
+  }
+
+  isPersonalInfoRequest(reportId: string): Promise<boolean> {
+    return this.holds(
+      `SELECT EXISTS(SELECT 1 FROM community.report_cases c WHERE c.id=$1::text AND ${reportAsksOfOwnProfileSql("c")}) AS held`,
+      [reportId],
+    );
+  }
+
+  hasCommentReceipt(requestId: string): Promise<boolean> {
+    return this.holds(
+      "SELECT EXISTS(SELECT 1 FROM community.discussion_command_receipts WHERE actor_label=$1 AND request_id=$2) AS held",
+      [AI_OPERATOR_LABEL, requestId],
+    );
+  }
+
+  private async holds(
+    statement: string,
+    values: readonly string[],
+  ): Promise<boolean> {
     const answer = await this.pool
-      .query<{ withheld: boolean }>(`SELECT ${check} AS withheld`, [id])
+      .query<{ held: boolean }>(statement, [...values])
       .catch((error: unknown) => {
         throw asCommunityOperationError(error, "query");
       });
-    return answer.rows[0]!.withheld;
+    return answer.rows[0]!.held;
   }
 }

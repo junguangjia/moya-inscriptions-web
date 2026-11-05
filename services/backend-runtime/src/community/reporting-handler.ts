@@ -4,7 +4,10 @@ import {
   communityReportAppealRequestSchema,
   communityReportEvidenceUploadRequestSchema,
 } from "@moya/contracts/schemas";
-import { AI_OPERATOR_RUN_HEADER } from "@moya/contracts/internal/admin-mcp";
+import {
+  AI_OPERATOR_RUN_HEADER,
+  URGENT_OWNER_ONLY,
+} from "@moya/contracts/internal/admin-mcp";
 import {
   CommunityInputError,
   isCommunityConflictError,
@@ -315,6 +318,17 @@ export async function handleReportingOperatorRequest(
   }
   if (request.method === "POST" && !m[3]) {
     const body = await readJsonBody(request, 65536);
+    // Urgent is one-way for AI: no preview or run changes this one.
+    if (
+      aiOperator &&
+      action === "metadata" &&
+      (body as { urgent?: unknown } | null)?.urgent === false
+    ) {
+      sendJson(response, 403, {
+        error: { status: 403, code: URGENT_OWNER_ONLY },
+      });
+      return;
+    }
     // The route table cannot read a body, and only this input makes the route
     // irreversible. As on an irreversible row, a misclassified op fails here.
     if (

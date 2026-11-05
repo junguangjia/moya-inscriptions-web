@@ -27,7 +27,11 @@ export const settlementNext = (refs: readonly AdminJobRef[]): AdminMcpNext => ({
   afterMs: SETTLEMENT_POLL_MS,
 });
 
-/** A retried job answers for itself, and it may be of any kind. */
+/**
+ * A retried job answers for itself, and it may be of any kind. A withdrawal that
+ * submitted its purge succeeds with its verification still to come, so its success says
+ * only that its item's read now decides, as it does on every other path.
+ */
 const readJob = async (
   id: string,
   req: PayloadRequest,
@@ -36,9 +40,21 @@ const readJob = async (
     "read-publishing-jobs",
     { id, page: 1, pageSize: 1 },
     req,
-  )) as { readonly items: readonly { readonly state: string }[] };
+  )) as {
+    readonly items: readonly {
+      readonly state: string;
+      readonly kind: string;
+      readonly subjectId: string;
+    }[];
+  };
   const job = page.items[0];
   if (job === undefined) throw new CommunityOperatorError("NOT_FOUND", 404);
+  if (job.kind === "withdraw_media" && job.state === "succeeded")
+    return askSettlement({
+      type: "item",
+      id: job.subjectId,
+      intent: "withdraw",
+    });
   const stopped = job.state === "failed" || job.state === "abandoned";
   return {
     open: job.state === "queued" || job.state === "running" ? 1 : 0,

@@ -163,10 +163,35 @@ export class CommunityModerationService {
 
   /**
    * Switching affects new submissions only: no existing row is rewritten, and
-   * no bulk publication or takedown is part of the setting.
+   * no bulk publication or takedown is part of the setting. Only the AI path
+   * passes a `receipt`, and it is told what the Owner's answer never says.
    */
-  async setPublicationPolicy(body: unknown): Promise<PublicationPolicyState> {
+  async setPublicationPolicy(
+    body: unknown,
+    receipt?: CommandReceipt,
+  ): Promise<PublicationPolicyState> {
     const command = this.parse(setPublicationPolicyCommandSchema, body);
+    if (receipt !== undefined) {
+      const at = this.clock();
+      const written = await this.commentPort.writePublicationPolicy(
+        command.policy,
+        this.operatorLabel,
+        at,
+        this.draft("set_publication_policy", at, { detail: command.policy }),
+        receipt,
+      );
+      if (written === null) throw new Error("The store kept no receipt");
+      const answer = publicationPolicyStateSchema.parse({
+        policy: written.policy,
+        updatedAt: isoUtc(written.updatedAt),
+        updatedBy: written.updatedBy,
+      });
+      if (written.replayed === true)
+        return markForAiOperator(this.operatorLabel, answer, "replayed");
+      return written.unchanged === true
+        ? markForAiOperator(this.operatorLabel, answer, "alreadyInPlace")
+        : answer;
+    }
     // Choosing the mode already in force changes nothing and records nothing.
     const current = await this.readPublicationPolicy();
     if (current.policy === command.policy) return current;
@@ -373,11 +398,14 @@ export class CommunityModerationService {
    * state. The audit row commits with the status change, and only when the
    * status actually changed, so a retried command never records twice. A
    * deleted account (account-deletion-v1) is terminal: the port changes
-   * nothing for it and the command is refused as a conflict.
+   * nothing for it and the command is refused as a conflict. A `receipt` is
+   * the AI path's, as on a comment: a repeat answers what it stored, whatever
+   * has happened to the user since.
    */
   async moderateUser(
     id: PublicUserId,
     body: unknown,
+    receipt?: CommandReceipt,
   ): Promise<UserModerationResult & { readonly alreadyInPlace?: true }> {
     const { action, reason } = this.parse(moderateUserCommandSchema, body);
     const at = this.clock();
@@ -386,6 +414,7 @@ export class CommunityModerationService {
       action === "suspend" ? "suspended" : "active",
       at,
       this.draft(action, at, { ...(reason === undefined ? {} : { reason }) }),
+      receipt,
     );
     if (result === null) throw new CommunityNotFoundError("User was not found");
     if (result.user.status === "deleted")
@@ -397,6 +426,8 @@ export class CommunityModerationService {
       status: result.user.status,
       revokedSessions: result.revokedSessions,
     };
+    if (result.replayed === true)
+      return markForAiOperator(this.operatorLabel, answer, "replayed");
     return result.unchanged === true
       ? markForAiOperator(this.operatorLabel, answer, "alreadyInPlace")
       : answer;

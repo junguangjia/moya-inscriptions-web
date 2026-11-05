@@ -18,6 +18,7 @@ import {
   operatorThreadSchema,
 } from "@moya/contracts/internal/community-operator";
 
+import { limitAiWrite } from "./ai-write-limit.js";
 import { asCommunityOperationError } from "./availability.js";
 import { workColumns, workDtos, workVisibleTo } from "./work-dto.js";
 
@@ -411,6 +412,7 @@ export class PostgresThreadAdapter implements ThreadPort {
     named: string = subject,
   ): Promise<T> {
     return this.run(true, async (db) => {
+      await limitAiWrite(operator, (sql) => db.query(sql));
       await db.query(
         "SELECT pg_advisory_xact_lock(hashtextextended('phase4-content-operator',0))",
       );

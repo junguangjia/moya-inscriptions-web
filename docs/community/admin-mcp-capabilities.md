@@ -39,11 +39,11 @@ reports `not_available`.
 | `community.update-thread`                 | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | yes   |
 | `community.read-feature-catalogs`         | read                                                    | `admin_read`                 | sync       | state_idempotent | none       |        | yes   |
 | `community.read-policy`                   | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
-| `community.set-policy`                    | reversible                                              | `admin_execute`              | sync       | cas_read_back    | community  |        | yes   |
+| `community.set-policy`                    | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | yes   |
 | `community.read-comments`                 | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.read-comment`                  | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.moderate-comment`              | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | yes   |
-| `community.moderate-user`                 | reversible                                              | `admin_execute`              | async      | cas_read_back    | community  |        | yes   |
+| `community.moderate-user`                 | reversible                                              | `admin_execute`              | async      | receipt          | community  |        | yes   |
 | `community.read-events`                   | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.read-summary`                  | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.read-work-publishing-settings` | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |

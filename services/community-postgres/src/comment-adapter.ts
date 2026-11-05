@@ -10,6 +10,7 @@ import {
   CommunityReadTimedOutError,
 } from "@moya/api";
 
+import { limitAiWrite } from "./ai-write-limit.js";
 import { asCommunityOperationError } from "./availability.js";
 import {
   applyCommentModerationSql,
@@ -72,6 +73,7 @@ import type {
   OperatorCommentRecord,
   OperatorQueueCountsRecord,
   CommandReceipt,
+  PublicationPolicyWrite,
   ReplyInsert,
   ReplyPageQuery,
 } from "@moya/api";
@@ -110,6 +112,29 @@ const toQueueCounts = (
       counts[row.moderation] = parseCommentTotal(row.total);
   }
   return { ...counts, all: counts.pending + counts.visible + counts.hidden };
+};
+
+type PublicationSettingRow = {
+  policy: unknown;
+  updated_at: unknown;
+  updated_by: unknown;
+} & QueryResultRow;
+
+const publicationStateOf = (
+  row: PublicationSettingRow | undefined,
+): PublicationPolicyWrite => {
+  if (
+    row === undefined ||
+    (row.policy !== "PRE_MODERATION" && row.policy !== "DIRECT_PUBLICATION") ||
+    !(row.updated_at instanceof Date) ||
+    typeof row.updated_by !== "string"
+  )
+    throw new Error("Invalid PostgreSQL publication setting row");
+  return {
+    policy: row.policy,
+    updatedAt: row.updated_at,
+    updatedBy: row.updated_by,
+  };
 };
 
 /** Runs one parameterized statement on whichever connection the caller holds. */
@@ -270,6 +295,7 @@ export class PostgresCommunityCommentAdapter
     } & QueryResultRow;
     type Receipt = { fingerprint: unknown; result: unknown } & QueryResultRow;
     const rows = await this.transaction(async (run) => {
+      await limitAiWrite(operatorLabel, (sql) => run(sql, []));
       // The receipt is read, the transition applied, the audit row and
       // the receipt written, all on this one connection inside this one
       // transaction: a committed moderation always carries the receipt
@@ -533,45 +559,58 @@ export class PostgresCommunityCommentAdapter
     readonly updatedAt: Date;
     readonly updatedBy: string;
   }> {
-    const rows = await this.query<
-      {
-        policy: unknown;
-        updated_at: unknown;
-        updated_by: unknown;
-      } & QueryResultRow
-    >(readPublicationSettingSql, []);
-    const row = rows[0];
-    if (
-      row === undefined ||
-      (row.policy !== "PRE_MODERATION" &&
-        row.policy !== "DIRECT_PUBLICATION") ||
-      !(row.updated_at instanceof Date) ||
-      typeof row.updated_by !== "string"
-    )
-      throw new Error("Invalid PostgreSQL publication setting row");
-    return {
-      policy: row.policy,
-      updatedAt: row.updated_at,
-      updatedBy: row.updated_by,
-    };
+    const rows = await this.query<PublicationSettingRow>(
+      readPublicationSettingSql,
+      [],
+    );
+    return publicationStateOf(rows[0]);
   }
 
   /**
    * The switch and its audit row commit together; a write of the mode already
-   * in force matches no row and records nothing.
+   * in force matches no row and records nothing. Under a receipt the replay
+   * comes first, and the receipt commits on both paths, as on a user's status.
    */
   async writePublicationPolicy(
     policy: PublicationPolicy,
     operatorLabel: string,
     at: Date,
     audit?: ModerationEventDraft,
-  ): Promise<void> {
+    receipt?: CommandReceipt,
+  ): Promise<PublicationPolicyWrite | null> {
     const values = [policy, operatorLabel, at];
     if (audit === undefined) {
       await this.query(writePublicationSettingSql, values);
-      return;
+      return null;
     }
-    await this.transaction(async (run) => {
+    return this.transaction(async (run) => {
+      await limitAiWrite(operatorLabel, (sql) => run(sql, []));
+      const stored = async (): Promise<PublicationPolicyWrite | null> => {
+        if (receipt === undefined) return null;
+        const prior = (
+          await run<{ fingerprint: unknown; result: unknown } & QueryResultRow>(
+            findCommandReceiptSql,
+            [operatorLabel, receipt.requestId],
+          )
+        )[0];
+        if (prior === undefined) return null;
+        if (prior.fingerprint !== receipt.fingerprint)
+          throw new CommunityIdempotencyConflictError(
+            "Reused command identity with other content",
+          );
+        const state = prior.result as {
+          policy: PublicationPolicy;
+          updatedAt: string;
+          updatedBy: string;
+        };
+        return {
+          ...state,
+          updatedAt: new Date(state.updatedAt),
+          replayed: true,
+        };
+      };
+      const replay = await stored();
+      if (replay !== null) return replay;
       const changed = await run(writePublicationSettingSql, values);
       if (changed.length > 0)
         await run(insertModerationEventSql, [
@@ -583,6 +622,24 @@ export class PostgresCommunityCommentAdapter
           "publication",
           audit.detail ?? null,
         ]);
+      if (receipt === undefined) return null;
+      // Nothing changed: a holder of this very key may have committed it while
+      // this one waited on the row, and the receipt decides, not a guess.
+      if (changed.length === 0) {
+        const concurrent = await stored();
+        if (concurrent !== null) return concurrent;
+      }
+      const state = publicationStateOf(
+        (await run<PublicationSettingRow>(readPublicationSettingSql, []))[0],
+      );
+      await run(insertCommandReceiptSql, [
+        operatorLabel,
+        receipt.requestId,
+        receipt.fingerprint,
+        JSON.stringify(state),
+        at,
+      ]);
+      return changed.length === 0 ? { ...state, unchanged: true } : state;
     });
   }
 
