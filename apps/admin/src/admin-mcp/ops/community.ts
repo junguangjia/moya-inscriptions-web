@@ -2,6 +2,7 @@ import {
   communityOperationDefinitions,
   type CommunityOperationName,
 } from "../../community/endpoints";
+import { COMMUNITY_READ_FACTS } from "./community-reads";
 import {
   asynchronous,
   example,
@@ -369,7 +370,7 @@ export const communityOps = Object.fromEntries(
       const credential = CALLS_NO_BACKEND.has(route) ? "none" : "community";
       return [
         `community.${route}`,
-        { ...row, credential, input, output },
+        { ...row, credential, input, output, ...COMMUNITY_READ_FACTS[route] },
       ] as const;
     },
   ),

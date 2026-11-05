@@ -9,6 +9,7 @@ import {
   ADMIN_MCP_TOKEN_BUDGET,
   adminFindInputSchema,
   adminGetInputSchema,
+  adminMcpEnvelopeSchema,
   adminReadInputSchema,
   type AdminCmsRecordType,
 } from "@moya/contracts/internal/admin-mcp";
@@ -32,10 +33,12 @@ import {
   LINK_PARAMETER_EXCLUSIONS,
   LINK_PARAMETER_RULES,
   normalizeSearchQuery,
+  okEnvelope,
   readContinuation,
   textHash,
   textWindow,
   toolListingFor,
+  toolResult,
   WINDOW_BYTES,
 } from "admin/admin-mcp";
 
@@ -798,6 +801,54 @@ describe("a read cut at the size cap", () => {
     ).toBeUndefined();
     expect(readContinuation({ op: "list.catalogs" }, [])).toBeUndefined();
     expect(readContinuation({ op: "no.such_op" }, rows(3))).toBeUndefined();
+  });
+
+  describe("an answer with a next of its own", () => {
+    const large = () =>
+      okEnvelope(
+        {
+          rows: Array.from({ length: 12 }, (_, index) => ({
+            id: `row-${index}`,
+            title: "石".repeat(400),
+          })),
+        },
+        ["/data/rows"],
+      );
+    const cut = (read: { op: string }, next: { tool: string; args: object }) =>
+      adminMcpEnvelopeSchema.parse(
+        toolResult(
+          { keyId: 7_001, tool: "admin_read" },
+          { ...large(), next: next as never },
+          (kept) => readContinuation(read, kept),
+        ).structuredContent,
+      );
+
+    it.each(["list.article_submissions", "community.read-article-submissions"])(
+      "drops the Backend's cursor from a cut of %s, which stands past the rows it dropped",
+      (op) => {
+        const answer = cut(
+          { op },
+          {
+            tool: "admin_read",
+            args: { op, input: { cursor: "past-the-page", pageSize: 10 } },
+          },
+        );
+        expect(answer.meta.truncated).toBe(true);
+        expect(answer.remaining).toBeGreaterThan(0);
+        expect(
+          (answer.data as { rows: unknown[] }).rows.length,
+        ).toBeGreaterThan(0);
+        expect(answer.next).toBeUndefined();
+        expect(answer.hint).toMatch(/cannot continue from here/u);
+      },
+    );
+
+    it("keeps one that reads the rest another way, such as a record through its windows", () => {
+      const next = { tool: "admin_get", args: { type: "report", id: "r" } };
+      const answer = cut({ op: "community.read-report" }, next);
+      expect(answer.meta.truncated).toBe(true);
+      expect(answer.next).toEqual(next);
+    });
   });
 });
 

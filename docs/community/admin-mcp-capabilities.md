@@ -15,18 +15,18 @@ reports `not_available`.
 
 | Op                                        | Class                                                   | Tool                         | Completion | Recovery         | Credential | Switch | Built |
 | ----------------------------------------- | ------------------------------------------------------- | ---------------------------- | ---------- | ---------------- | ---------- | ------ | ----- |
-| `community.read-reports`                  | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | no    |
-| `community.read-report`                   | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | no    |
+| `community.read-reports`                  | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
+| `community.read-report`                   | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.decide-report`                 | reversible                                              | `admin_execute`              | async      | cas_read_back    | community  |        | no    |
 | `community.review-report`                 | reversible                                              | `admin_execute`              | async      | cas_read_back    | community  |        | no    |
 | `community.set-report-metadata`           | reversible; irreversible when legalHold is set to false | `admin_execute`              | sync       | cas_read_back    | community  |        | no    |
 | `community.forward-report`                | irreversible                                            | `admin_execute_irreversible` | sync       | cas_read_back    | community  |        | no    |
-| `community.read-feedback`                 | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | no    |
-| `community.read-works`                    | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | no    |
-| `community.read-users`                    | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | no    |
+| `community.read-feedback`                 | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
+| `community.read-works`                    | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
+| `community.read-users`                    | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.recommend-user`                | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | no    |
 | `community.moderate-work`                 | reversible                                              | `admin_execute`              | async      | receipt          | community  |        | no    |
-| `community.read-featured`                 | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | no    |
+| `community.read-featured`                 | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.set-featured`                  | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | no    |
 | `community.set-featured-quantity`         | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | no    |
 | `community.delete-body`                   | irreversible                                            | `admin_execute_irreversible` | sync       | receipt          | community  |        | no    |
@@ -34,29 +34,29 @@ reports `not_available`.
 | `community.read-dm-conversation`          | read                                                    | `admin_sensitive_read`       | sync       | state_idempotent | community  | dm     | no    |
 | `community.lookup-dm-conversation`        | read                                                    | `admin_sensitive_read`       | sync       | state_idempotent | community  | dm     | no    |
 | `community.remove-dm-message`             | irreversible                                            | `admin_execute_irreversible` | sync       | receipt          | community  | dm     | no    |
-| `community.read-threads`                  | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | no    |
+| `community.read-threads`                  | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.create-thread`                 | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | no    |
 | `community.update-thread`                 | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | no    |
-| `community.read-feature-catalogs`         | read                                                    | `admin_read`                 | sync       | state_idempotent | none       |        | no    |
-| `community.read-policy`                   | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | no    |
+| `community.read-feature-catalogs`         | read                                                    | `admin_read`                 | sync       | state_idempotent | none       |        | yes   |
+| `community.read-policy`                   | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.set-policy`                    | reversible                                              | `admin_execute`              | sync       | cas_read_back    | community  |        | no    |
-| `community.read-comments`                 | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | no    |
-| `community.read-comment`                  | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | no    |
+| `community.read-comments`                 | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
+| `community.read-comment`                  | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.moderate-comment`              | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | no    |
 | `community.moderate-user`                 | reversible                                              | `admin_execute`              | async      | cas_read_back    | community  |        | no    |
-| `community.read-events`                   | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | no    |
-| `community.read-summary`                  | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | no    |
-| `community.read-work-publishing-settings` | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | no    |
+| `community.read-events`                   | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
+| `community.read-summary`                  | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
+| `community.read-work-publishing-settings` | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.set-work-publishing-settings`  | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | no    |
-| `community.read-article-submissions`      | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | no    |
-| `community.read-article-submission`       | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | no    |
+| `community.read-article-submissions`      | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
+| `community.read-article-submission`       | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.moderate-article-submission`   | reversible                                              | `admin_execute`              | async      | receipt          | community  |        | no    |
-| `community.read-work-submissions`         | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | no    |
-| `community.read-work-submission`          | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | no    |
+| `community.read-work-submissions`         | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
+| `community.read-work-submission`          | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.moderate-work-submission`      | reversible                                              | `admin_execute`              | async      | receipt          | community  |        | no    |
-| `community.read-account-capacity`         | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | no    |
+| `community.read-account-capacity`         | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.set-account-capacity`          | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | no    |
-| `community.read-publishing-jobs`          | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | no    |
+| `community.read-publishing-jobs`          | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.retry-publishing-job`          | reversible                                              | `admin_execute`              | async      | receipt          | community  |        | no    |
 | `community.abandon-publishing-job`        | irreversible                                            | `admin_execute_irreversible` | sync       | receipt          | community  |        | no    |
 
@@ -86,22 +86,22 @@ reports `not_available`.
 
 | Op                         | Class | Tool         | Completion | Recovery         | Credential | Switch | Built |
 | -------------------------- | ----- | ------------ | ---------- | ---------------- | ---------- | ------ | ----- |
-| `list.comments`            | read  | `admin_read` | sync       | state_idempotent | community  |        | no    |
-| `list.works`               | read  | `admin_read` | sync       | state_idempotent | community  |        | no    |
-| `list.users`               | read  | `admin_read` | sync       | state_idempotent | community  |        | no    |
-| `list.threads`             | read  | `admin_read` | sync       | state_idempotent | community  |        | no    |
-| `list.featured`            | read  | `admin_read` | sync       | state_idempotent | community  |        | no    |
-| `list.feature_catalogs`    | read  | `admin_read` | sync       | state_idempotent | none       |        | no    |
-| `list.reports`             | read  | `admin_read` | sync       | state_idempotent | community  |        | no    |
-| `list.appeals`             | read  | `admin_read` | sync       | state_idempotent | community  |        | no    |
-| `list.work_submissions`    | read  | `admin_read` | sync       | state_idempotent | community  |        | no    |
-| `list.article_submissions` | read  | `admin_read` | sync       | state_idempotent | community  |        | no    |
-| `list.jobs`                | read  | `admin_read` | sync       | state_idempotent | community  |        | no    |
-| `list.feedback`            | read  | `admin_read` | sync       | state_idempotent | community  |        | no    |
-| `list.events`              | read  | `admin_read` | sync       | state_idempotent | community  |        | no    |
-| `list.policy`              | read  | `admin_read` | sync       | state_idempotent | community  |        | no    |
-| `list.work_settings`       | read  | `admin_read` | sync       | state_idempotent | community  |        | no    |
-| `list.overview`            | read  | `admin_read` | sync       | state_idempotent | community  |        | no    |
+| `list.comments`            | read  | `admin_read` | sync       | state_idempotent | community  |        | yes   |
+| `list.works`               | read  | `admin_read` | sync       | state_idempotent | community  |        | yes   |
+| `list.users`               | read  | `admin_read` | sync       | state_idempotent | community  |        | yes   |
+| `list.threads`             | read  | `admin_read` | sync       | state_idempotent | community  |        | yes   |
+| `list.featured`            | read  | `admin_read` | sync       | state_idempotent | community  |        | yes   |
+| `list.feature_catalogs`    | read  | `admin_read` | sync       | state_idempotent | none       |        | yes   |
+| `list.reports`             | read  | `admin_read` | sync       | state_idempotent | community  |        | yes   |
+| `list.appeals`             | read  | `admin_read` | sync       | state_idempotent | community  |        | yes   |
+| `list.work_submissions`    | read  | `admin_read` | sync       | state_idempotent | community  |        | yes   |
+| `list.article_submissions` | read  | `admin_read` | sync       | state_idempotent | community  |        | yes   |
+| `list.jobs`                | read  | `admin_read` | sync       | state_idempotent | community  |        | yes   |
+| `list.feedback`            | read  | `admin_read` | sync       | state_idempotent | community  |        | yes   |
+| `list.events`              | read  | `admin_read` | sync       | state_idempotent | community  |        | yes   |
+| `list.policy`              | read  | `admin_read` | sync       | state_idempotent | community  |        | yes   |
+| `list.work_settings`       | read  | `admin_read` | sync       | state_idempotent | community  |        | yes   |
+| `list.overview`            | read  | `admin_read` | sync       | state_idempotent | community  |        | yes   |
 | `list.catalogs`            | read  | `admin_read` | sync       | state_idempotent | none       |        | yes   |
 | `list.review_page`         | read  | `admin_read` | sync       | state_idempotent | none       |        | yes   |
 | `list.approvals`           | read  | `admin_read` | sync       | state_idempotent | none       |        | yes   |

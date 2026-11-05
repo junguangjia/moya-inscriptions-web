@@ -760,7 +760,7 @@ export type FieldText =
  * window.
  */
 export const fieldTextOf = (
-  family: CmsFamily,
+  family: Pick<CmsFamily, "fields">,
   doc: RecordDocument,
   name: string,
 ): FieldText => {

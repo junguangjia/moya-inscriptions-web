@@ -16,6 +16,8 @@ export const operatorFeedbackQuerySchema = z.strictObject({
     .union([z.number(), z.string().regex(/^[1-9]\d*$/u)])
     .pipe(z.coerce.number<string | number>().int().min(1).max(50))
     .default(20),
+  userId: publicUserIdSchema.optional(),
+  id: feedbackIdSchema.optional(),
 });
 export type OperatorFeedbackQuery = z.infer<typeof operatorFeedbackQuerySchema>;
 export const operatorFeedbackImageSchema = z.strictObject({

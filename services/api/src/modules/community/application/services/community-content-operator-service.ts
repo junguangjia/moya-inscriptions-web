@@ -8,6 +8,7 @@ import {
   featuredOrderCommandSchema,
   featuredSettingsMutationSchema,
   operatorDeleteBodySchema,
+  operatorReadScopeFor,
   operatorRemoveThreadSchema,
 } from "@moya/contracts/internal/community-operator";
 import {
@@ -42,11 +43,15 @@ export class CommunityContentOperatorService {
     return this.content;
   }
   readWorks(input: unknown) {
-    return this.contentPort().readWorks(parse(operatorWorksQuerySchema, input));
+    return this.contentPort().readWorks(
+      parse(operatorWorksQuerySchema, input),
+      ...operatorReadScopeFor(this.operator),
+    );
   }
   readFeatured(input: unknown) {
     return this.contentPort().readFeatured(
       parse(operatorFeaturedQuerySchema, input),
+      ...operatorReadScopeFor(this.operator),
     );
   }
   moderateWork(id: string, input: unknown) {
@@ -57,7 +62,10 @@ export class CommunityContentOperatorService {
     );
   }
   readUsers(input: unknown) {
-    return this.contentPort().readUsers(parse(operatorUsersQuerySchema, input));
+    return this.contentPort().readUsers(
+      parse(operatorUsersQuerySchema, input),
+      ...operatorReadScopeFor(this.operator),
+    );
   }
   recommendUser(input: unknown) {
     return this.contentPort().recommendUser(

@@ -1,6 +1,8 @@
 import {
   ADMIN_CMS_RECORD_TYPES,
   ADMIN_FIND_SKIP_MAX,
+  AI_FIND_SOURCES,
+  AI_LOOKUP_TYPES,
 } from "@moya/contracts/internal/admin-mcp";
 import type {
   AdminCmsRecordType,
@@ -10,13 +12,23 @@ import type {
   AdminMatchKind,
   AdminMcpEnvelope,
   AdminRecordType,
+  AiFindItem,
+  AiFindResult,
+  AiFindSource,
+  AiLookupType,
 } from "@moya/contracts/internal/admin-mcp";
+import { operatorExactIdSchema } from "@moya/contracts/internal/community-operator";
 import { sql } from "@payloadcms/db-postgres";
 import type { PayloadRequest, Where } from "payload";
 
+import { aiCredentialConfigured } from "../community/backend";
 import { isMissingRecord } from "../editorial/transaction";
 import { withIdentityAccess } from "../editorial/state";
-import { actionsFor, candidateActions } from "./actions-for";
+import {
+  actionsFor,
+  candidateActions,
+  communityActionsFor,
+} from "./actions-for";
 import type { ActionScope } from "./actions-for";
 import { withinBudget } from "./budget";
 import type { BranchDb } from "./budget";
@@ -27,6 +39,7 @@ import {
 } from "./envelope";
 import { classifyQuery } from "./locate-reference";
 import type { ClassifiedQuery, LocateReference } from "./locate-reference";
+import { askFind, fitsFindAddress } from "./ops/community-reads";
 import {
   adminPathOf,
   CMS_FAMILIES,
@@ -62,6 +75,15 @@ interface Hit {
   readonly snippet?: string;
 }
 
+/** A record the Backend found, as it said it. */
+interface CommunityHit {
+  readonly community: AiFindItem;
+}
+
+type AnyHit = Hit | CommunityHit;
+
+const isCommunityHit = (hit: AnyHit): hit is CommunityHit => "community" in hit;
+
 const COMMUNITY_SOURCE: Readonly<Record<string, string>> = {
   user: "users",
   work: "works",
@@ -76,14 +98,41 @@ const COMMUNITY_SOURCE: Readonly<Record<string, string>> = {
   article: "article_documents",
 };
 
-/** What a text search covers on the Backend once the community slice ships. */
-const COMMUNITY_SEARCH_SOURCES = [
-  "users",
-  "works",
-  "comments",
-  "threads",
-  "reports",
-] as const;
+const isSearchSource = (source: string | undefined): source is AiFindSource =>
+  (AI_FIND_SOURCES as readonly string[]).includes(source ?? "");
+
+const isLookupType = (type: string): type is AiLookupType =>
+  (AI_LOOKUP_TYPES as readonly string[]).includes(type);
+
+/** One source asked twice is only as answered as its worst call. */
+const noted = (sources: Sources, source: string, status: SourceStatus) => {
+  if (status !== "ok" || sources[source] === undefined)
+    sources[source] = status;
+};
+
+/** A branch not really read says so, and a failed call is every branch it asked for. */
+const askedBackend = async (
+  query: Readonly<Record<string, string | number>>,
+  asked: readonly string[],
+  sources: Sources,
+  excluded: Set<string>,
+): Promise<readonly CommunityHit[]> => {
+  if (!aiCredentialConfigured("community")) {
+    for (const source of asked) sources[source] = "not_available";
+    return [];
+  }
+  let answer: AiFindResult;
+  try {
+    answer = await askFind(query);
+  } catch {
+    for (const source of asked) sources[source] = "failed";
+    return [];
+  }
+  for (const [source, status] of Object.entries(answer.sources))
+    noted(sources, source, status);
+  for (const category of answer.excluded) excluded.add(category);
+  return answer.items.map((community) => ({ community }));
+};
 
 const SOURCE_OF_FAMILY: Readonly<Record<AdminCmsRecordType, string>> = {
   catalog: "catalogs",
@@ -278,17 +327,60 @@ const hitsOf = async (
   }
 };
 
-const sameRecord = (left: Hit, right: Hit) =>
-  left.family === right.family && left.doc.id === right.doc.id;
+const sameRecord = (left: AnyHit, right: AnyHit) =>
+  isCommunityHit(left) || isCommunityHit(right)
+    ? isCommunityHit(left) &&
+      isCommunityHit(right) &&
+      left.community.type === right.community.type &&
+      left.community.id === right.community.id
+    : left.family === right.family && left.doc.id === right.doc.id;
 
-const distinct = (hits: readonly Hit[]): readonly Hit[] =>
+const distinct = <Found extends AnyHit>(hits: readonly Found[]) =>
   hits.filter(
     (hit, index) => hits.findIndex((other) => sameRecord(hit, other)) === index,
   );
 
 /**
- * Step 2. Community references are named not_available until their slice ships, and
- * an Article hit in the CMS settles an id the community side cannot also hold.
+ * A link's community ids run in turn, each up to 20 s: a wait of 5 s and a call of 15 s.
+ * Nginx and the clients stop at 60 s, so no new call starts past this, and the last to
+ * start still answers in time. The product's own links name only two or three ids.
+ */
+const EXACT_STAGE_DEADLINE_MS = 35_000;
+
+/** The one exact lookup a community reference names. Its value can name no record. */
+const communityLookup = async (
+  reference: Extract<LocateReference, { kind: "community" | "handle" }>,
+  sources: Sources,
+  excluded: Set<string>,
+  stopped: () => boolean,
+): Promise<readonly CommunityHit[]> => {
+  const type = reference.kind === "handle" ? "user" : reference.type;
+  const source = COMMUNITY_SOURCE[type]!;
+  const value =
+    reference.kind === "handle" ? reference.handle : reference.value;
+  if (!isLookupType(type)) {
+    sources[source] = "not_available";
+    return [];
+  }
+  if (!operatorExactIdSchema.safeParse(value).success) {
+    noted(sources, source, "ok");
+    return [];
+  }
+  if (stopped()) {
+    sources[source] = "timed_out";
+    return [];
+  }
+  return askedBackend(
+    reference.kind === "handle" ? { handle: value } : { type, id: value },
+    [source],
+    sources,
+    excluded,
+  );
+};
+
+/**
+ * Step 2. An Article hit in the CMS settles an id the community side cannot also
+ * hold.
  */
 const exactStage = async (
   req: PayloadRequest,
@@ -296,10 +388,14 @@ const exactStage = async (
   input: AdminFindInput,
   reach: number,
   sources: Sources,
+  excluded: Set<string>,
 ) => {
   const families = familiesFor(input.type);
-  const hits: Hit[] = [];
+  const hits: AnyHit[] = [];
   let considered = 0;
+  const deadline = Date.now() + EXACT_STAGE_DEADLINE_MS;
+  // A client that has gone is waiting for no answer.
+  const stopped = () => Date.now() >= deadline || req.signal?.aborted === true;
   for (const reference of references) {
     if (reference.kind === "text") continue;
     if (reference.kind === "community" || reference.kind === "handle") {
@@ -307,11 +403,17 @@ const exactStage = async (
       const settled =
         reference.kind === "community" &&
         reference.type === "article" &&
-        hits.some(({ family }) => family.type === "article");
+        hits.some(
+          (hit) => !isCommunityHit(hit) && hit.family.type === "article",
+        );
       if (settled || (input.type !== undefined && input.type !== type))
         continue;
-      considered += 1;
-      sources[COMMUNITY_SOURCE[type]!] = "not_available";
+      // One id asked of two stores is one reference; its CMS twin already counted.
+      if (reference.kind !== "community" || reference.type !== "article")
+        considered += 1;
+      hits.push(
+        ...(await communityLookup(reference, sources, excluded, stopped)),
+      );
       continue;
     }
     considered += 1;
@@ -555,6 +657,34 @@ const wholeTitleHits = async (
     ...snippetAround(text, text),
   }));
 
+/** With no token placed no Backend address is ever built. */
+const asksBackendToSearch = ({ type }: AdminFindInput): boolean =>
+  aiCredentialConfigured("community") &&
+  (type === undefined || isSearchSource(COMMUNITY_SOURCE[type]));
+
+/** The Backend's branches, each budgeted where its SQL runs and named per branch. */
+const communitySearch = async (
+  text: string,
+  input: AdminFindInput,
+  limit: number,
+  sources: Sources,
+  excluded: Set<string>,
+): Promise<readonly CommunityHit[]> => {
+  if (input.type !== undefined && isCmsType(input.type)) return [];
+  const source =
+    input.type === undefined ? undefined : COMMUNITY_SOURCE[input.type];
+  if (source !== undefined && !isSearchSource(source)) {
+    sources[source] = "not_available";
+    return [];
+  }
+  return askedBackend(
+    { text, limit, ...(source === undefined ? {} : { source }) },
+    source === undefined ? AI_FIND_SOURCES : [source],
+    sources,
+    excluded,
+  );
+};
+
 /** Step 3: each branch budgeted and named, never added up as if complete. */
 const fuzzyStage = async (
   req: PayloadRequest,
@@ -562,7 +692,8 @@ const fuzzyStage = async (
   input: AdminFindInput,
   limit: number,
   sources: Sources,
-): Promise<readonly Hit[]> => {
+  excluded: Set<string>,
+): Promise<readonly AnyHit[]> => {
   const families = familiesFor(input.type);
   const hits: Hit[] = [];
   const runBranch = async (
@@ -575,6 +706,8 @@ const fuzzyStage = async (
       req.payload.logger.error({ category: "ADMIN_MCP_FIND_BRANCH_FAILED" });
     if (answer.status === "ok") hits.push(...answer.value);
   };
+  // The Backend's reads hold no connection of this pool, so they need not wait for it.
+  const community = communitySearch(text, input, limit, sources, excluded);
   // In turn: the Admin pool is five connections and the screens share it.
   for (const family of families) {
     if (family.type === "catalog") {
@@ -590,37 +723,72 @@ const fuzzyStage = async (
         containsHits(branch, family, text, limit),
       );
   }
+  const others = distinct(await community);
   if (
     hits.length === 0 &&
+    others.length === 0 &&
     wants(families, "catalog") &&
     Array.from(text).length >= TRIGRAM_MINIMUM_CHARS
   )
     await runBranch("catalogs_similar", (branch, db) =>
       closeCatalogHits(branch, db, text, limit),
     );
-  if (input.type === undefined)
-    for (const source of COMMUNITY_SEARCH_SOURCES)
-      sources[source] = "not_available";
-  else if (!isCmsType(input.type))
-    sources[COMMUNITY_SOURCE[input.type]!] = "not_available";
   // First wherever a branch read it: drafts come after the published branch, and past
   // enough near-twins no page would reach one.
   const found = distinct(hits);
   const isWhole = ({ family, doc }: Hit) => titleOf(family, doc) === text;
-  return [...found.filter(isWhole), ...found.filter((hit) => !isWhole(hit))];
+  // An id or a handle given whole is first for the same reason.
+  const isIdentity = ({ community: { match } }: CommunityHit) =>
+    match.kind === "identity";
+  return [
+    ...others.filter(isIdentity),
+    ...found.filter(isWhole),
+    ...found.filter((hit) => !isWhole(hit)),
+    ...others.filter((hit) => !isIdentity(hit)),
+  ];
 };
+
+const communityItemOf = (
+  {
+    type,
+    id,
+    title,
+    state,
+    updatedAt,
+    version,
+    disambiguators,
+    match,
+  }: AiFindItem,
+  exact: boolean,
+  scope: ActionScope,
+): AdminFindItem => ({
+  type,
+  id,
+  ...(title === undefined ? {} : { title }),
+  state,
+  ...(updatedAt === undefined ? {} : { updatedAt }),
+  ...(version === undefined ? {} : { version }),
+  disambiguators,
+  match,
+  actions: [
+    ...(exact
+      ? communityActionsFor(type, id, scope)
+      : candidateActions(type, id)),
+  ],
+});
 
 const itemsOf = async (
   req: PayloadRequest,
-  hits: readonly Hit[],
+  hits: readonly AnyHit[],
   exact: boolean,
   scope: ActionScope,
 ): Promise<readonly AdminFindItem[]> => {
-  const families = [...new Set(hits.map(({ family }) => family))];
+  const cmsHits = hits.filter((hit): hit is Hit => !isCommunityHit(hit));
+  const families = [...new Set(cmsHits.map(({ family }) => family))];
   const context = new Map(
     await Promise.all(
       families.map(async (family) => {
-        const ids = hits
+        const ids = cmsHits
           .filter((hit) => hit.family === family)
           .map(({ doc }) => doc.id);
         return [
@@ -633,7 +801,10 @@ const itemsOf = async (
       }),
     ),
   );
-  return hits.map(({ family, doc, field, kind, offset, snippet }) => {
+  return hits.map((hit) => {
+    if (isCommunityHit(hit))
+      return communityItemOf(hit.community, exact, scope);
+    const { family, doc, field, kind, offset, snippet } = hit;
     const { live, locks } = context.get(family)!;
     const id = doc.id as number;
     const title = titleOf(family, doc);
@@ -733,12 +904,20 @@ export const findEnvelope = async (
 ): Promise<AdminMcpEnvelope> => {
   const classified = await classifiedFor(req, input);
   const sources: Sources = {};
+  const excluded = new Set(classified.excluded);
   const limit = input.limit ?? DEFAULT_LIMIT;
   const skip = input.skip ?? 0;
   const reached = skip + limit;
   // One past the page, so a source that holds more is seen to hold more.
   const reach = reached + 1;
-  const exact = await exactStage(req, classified, input, reach, sources);
+  const exact = await exactStage(
+    req,
+    classified,
+    input,
+    reach,
+    sources,
+    excluded,
+  );
   const textToSearch =
     exact.hits.length > 0 || classified.link
       ? undefined
@@ -757,15 +936,35 @@ export const findEnvelope = async (
     return inputInvalidEnvelope([
       { path: ["query"], code: `more_than_${QUERY_WORDS_MAX}_words` },
     ]);
+  // Named too: it would answer `failed` every time, which reads as worth repeating.
+  if (
+    textToSearch !== undefined &&
+    asksBackendToSearch(input) &&
+    !fitsFindAddress(textToSearch)
+  )
+    return inputInvalidEnvelope([
+      { path: ["query"], code: "too_long_for_community_search" },
+    ]);
   const fuzzy =
     textToSearch === undefined
       ? []
-      : await fuzzyStage(req, textToSearch, input, reach, sources);
+      : await fuzzyStage(req, textToSearch, input, reach, sources, excluded);
   const hits = exact.hits.length > 0 ? exact.hits : fuzzy;
+  const only = hits.length === 1 ? hits[0]! : undefined;
+  const kindOfOnly =
+    only === undefined
+      ? undefined
+      : isCommunityHit(only)
+        ? only.community.match.kind
+        : only.kind;
   // Unique means one identity hit from one reference: a link naming two things, one
-  // of them unanswered, has not said which it means.
+  // of them unanswered, has not said which it means. A fuzzy hit is unique only once
+  // every source answered, because one that did not may hold the same word.
   const unique =
-    hits.length === 1 && hits[0]!.kind === "identity" && exact.considered === 1;
+    kindOfOnly === "identity" &&
+    exact.considered === 1 &&
+    (exact.hits.length > 0 ||
+      Object.values(sources).every((status) => status === "ok"));
   const page = hits.slice(skip, reached);
   const items = await itemsOf(req, page, unique, scope);
   const data: AdminFindData = {
@@ -774,7 +973,11 @@ export const findEnvelope = async (
       uniqueIdentity: unique,
       // From the hit: a skip past it leaves this page empty and the answer the same.
       ...(unique
-        ? { ref: { type: hits[0]!.family.type, id: hits[0]!.doc.id as number } }
+        ? {
+            ref: isCommunityHit(only!)
+              ? { type: only.community.type, id: only.community.id }
+              : { type: only!.family.type, id: only!.doc.id as number },
+          }
         : {}),
     },
     items: [...items],
@@ -784,8 +987,7 @@ export const findEnvelope = async (
   };
   // A withheld category is named on its own; with nothing read and nothing named, this
   // none would read as searched and missing.
-  const unread =
-    Object.keys(sources).length === 0 && classified.excluded.length === 0;
+  const unread = Object.keys(sources).length === 0 && excluded.size === 0;
   const partial =
     unread || Object.values(sources).some((status) => status !== "ok");
   const envelope = okEnvelope(data, UNTRUSTED);
@@ -803,9 +1005,7 @@ export const findEnvelope = async (
       sources,
       ...(partial ? { partial: true as const } : {}),
       ...(stopped ? { truncated: true as const } : {}),
-      ...(classified.excluded.length > 0
-        ? { excluded: [...classified.excluded] }
-        : {}),
+      ...(excluded.size > 0 ? { excluded: [...excluded] } : {}),
     },
   };
 };

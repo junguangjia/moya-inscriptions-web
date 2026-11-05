@@ -15,6 +15,9 @@ export const AI_OPERATOR_CREDENTIALS = [
 /** The audit label of every AI credential, beside the Owner's `owner`. */
 export const AI_OPERATOR_LABEL = "ai-admin";
 
+/** A self-only work, or what it withholds: it exists, and it is the Owner's. */
+export const SELF_ONLY_OWNER_REVIEW = "SELF_ONLY_OWNER_REVIEW";
+
 /**
  * Set only by the run engine. This does not stop a compromised Admin; it makes a
  * misclassified op fail instead of skipping preview.
@@ -22,26 +25,54 @@ export const AI_OPERATOR_LABEL = "ai-admin";
 export const AI_OPERATOR_RUN_HEADER = "x-admin-mcp-run";
 
 export type AiOperatorRouteClass =
-  "read" | "write" | "irreversible" | "sensitive:raw_ip";
+  | "read"
+  | "write"
+  | "irreversible"
+  | "sensitive:raw_ip"
+  | "sensitive:dm"
+  | "sensitive:evidence";
 
 export interface AiOperatorRoute {
   readonly method: "GET" | "POST";
-  /** Exact: a prefix would pass a future route unclassified. */
+  /**
+   * Exact, but for whole `:name` segments: a prefix would pass a future route
+   * unclassified.
+   */
   readonly path: string;
   readonly klass: AiOperatorRouteClass;
   readonly credentials: readonly AiOperatorCredential[];
   /** Parameters that must each appear exactly once, with this value. */
   readonly query?: Readonly<Record<string, string>>;
+  /**
+   * The route's `:id` names this record: while it is self-only, or for an Article
+   * while it uses an item of a self-only work, the route answers
+   * SELF_ONLY_OWNER_REVIEW, and withheld never reads as not found.
+   */
+  readonly selfOnly?: "work" | "comment" | "work_revision" | "article";
 }
 
 const base = ["base"] as const;
+const community = ["community"] as const;
 const master = "/internal/community/ai/catalog-master";
+const internal = "/internal/community";
+
+const communityRead = (
+  path: string,
+  selfOnly?: AiOperatorRoute["selfOnly"],
+): AiOperatorRoute => ({
+  method: "GET",
+  path: `${internal}/${path}`,
+  klass: "read",
+  credentials: community,
+  ...(selfOnly === undefined ? {} : { selfOnly }),
+});
 
 /**
  * Where an AI credential may go on the Backend (admin-mcp-completion-v1 section 2).
  * Default deny: a method and path with no row answers 403, binary routes included,
- * and so do `agent/*`, delegations and principals. These are the base credential's
- * routes, so Catalog work and analytics never need the community token.
+ * and so do `agent/*`, delegations and principals. The base credential's routes are
+ * apart, so Catalog work and analytics never need the community token. Community
+ * writes join with the slice that builds them.
  */
 export const AI_OPERATOR_ROUTES: readonly AiOperatorRoute[] = [
   {
@@ -124,7 +155,69 @@ export const AI_OPERATOR_ROUTES: readonly AiOperatorRoute[] = [
     klass: "sensitive:raw_ip",
     credentials: base,
   },
+  communityRead("ai/find"),
+  communityRead("ai/count"),
+  communityRead("reports"),
+  communityRead("reports/:id"),
+  {
+    method: "GET",
+    path: `${internal}/reports/:id/evidence/:evidenceId`,
+    klass: "sensitive:evidence",
+    credentials: community,
+  },
+  communityRead("feedback"),
+  communityRead("feedback/:id/images/:itemId/:variant"),
+  communityRead("works"),
+  communityRead("users"),
+  communityRead("featured"),
+  communityRead("threads"),
+  communityRead("publication-policy"),
+  communityRead("comments"),
+  communityRead("comments/:id", "comment"),
+  communityRead("comments/:id/images/:itemId/:variant", "comment"),
+  communityRead("moderation-events"),
+  communityRead("summary"),
+  communityRead("publishing/settings"),
+  communityRead("publishing/submissions"),
+  communityRead("publishing/submissions/:id", "work_revision"),
+  communityRead(
+    "publishing/media/:id/:itemId/:variant/:editKey",
+    "work_revision",
+  ),
+  communityRead("publishing/accounts/:id/capacity"),
+  communityRead("publishing/jobs"),
+  communityRead("articles/submissions"),
+  communityRead("articles/:id/submission"),
+  communityRead("articles/:id/submission-media", "article"),
+  ...["conversation", "lookup", ":id/remove"].map((leaf): AiOperatorRoute => ({
+    method: "POST",
+    path: `${internal}/messages/${leaf}`,
+    klass: "sensitive:dm",
+    credentials: community,
+  })),
 ];
+
+const segmentsMatch = (pattern: string, pathname: string): boolean => {
+  const expected = pattern.split("/");
+  const actual = pathname.split("/");
+  return (
+    expected.length === actual.length &&
+    expected.every(
+      (segment, index) =>
+        actual[index] === segment ||
+        (segment.startsWith(":") && actual[index] !== ""),
+    )
+  );
+};
+
+/** The segment a route's `:id` holds, as sent. */
+export const aiOperatorRouteId = (
+  route: AiOperatorRoute,
+  pathname: string,
+): string | undefined => {
+  const index = route.path.split("/").indexOf(":id");
+  return index < 0 ? undefined : pathname.split("/")[index];
+};
 
 /** The row deciding this request, or undefined, which is a refusal. */
 export const aiOperatorRouteFor = (
@@ -135,7 +228,7 @@ export const aiOperatorRouteFor = (
   AI_OPERATOR_ROUTES.find(
     (route) =>
       route.method === method &&
-      route.path === pathname &&
+      segmentsMatch(route.path, pathname) &&
       Object.entries(route.query ?? {}).every(([name, value]) => {
         const values = query.getAll(name);
         return values.length === 1 && values[0] === value;

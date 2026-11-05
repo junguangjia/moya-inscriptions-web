@@ -1,6 +1,11 @@
+import {
+  adminCommentListInputSchema,
+  adminWorkListInputSchema,
+} from "@moya/contracts/internal/admin-mcp";
 import type { AdminOpName } from "@moya/contracts/internal/admin-mcp";
 
 import { communityOps } from "./community";
+import { appealQueueRun } from "./community-reads";
 import { readOp, type AdminOpEntry } from "./define";
 import { editorialOps } from "./editorial";
 import { LIST_SOURCES, runListSource } from "./list-sources";
@@ -33,8 +38,11 @@ export const listOps: Readonly<Record<ListOpName, AdminOpEntry>> = {
   "list.comments": on(
     communityOps["community.read-comments"],
     "Comment queue.",
+    { input: adminCommentListInputSchema },
   ),
-  "list.works": on(communityOps["community.read-works"], "Works page."),
+  "list.works": on(communityOps["community.read-works"], "Works page.", {
+    input: adminWorkListInputSchema,
+  }),
   "list.users": on(communityOps["community.read-users"], "Website users page."),
   "list.threads": on(communityOps["community.read-threads"], "Threads page."),
   "list.featured": on(
@@ -47,7 +55,8 @@ export const listOps: Readonly<Record<ListOpName, AdminOpEntry>> = {
   ),
   "list.reports": on(communityOps["community.read-reports"], "Report queue."),
   "list.appeals": on(communityOps["community.read-reports"], "Appeal queue.", {
-    example: { status: "appealed" },
+    example: { urgent: "true" },
+    run: appealQueueRun,
   }),
   "list.work_submissions": on(
     communityOps["community.read-work-submissions"],

@@ -1,4 +1,5 @@
 import { commentImagesSql } from "./comment-images.js";
+import { commentIsSelfOnlySql, workInSelfOnlySetSql } from "./self-only.js";
 /**
  * Every statement is parameterized and confined to the community namespace.
  * Root comments read newest-first and replies oldest-first; both orders are
@@ -191,7 +192,7 @@ export const applyCommentModerationSql = `
   SELECT id, moderation, 'reply' AS kind FROM reply
 `;
 
-const operatorCommentUnion = `
+export const operatorCommentUnion = `
   SELECT c.id, 'comment' AS kind, c.catalog_id,c.target_type,c.body_deleted_at,c.thread_removed_at, NULL::text AS root_comment_id,
          NULL::text AS reply_to_reply_id,
          c.text, c.created_at, c.moderation, ${commentImagesSql("c", true)} AS images,
@@ -226,10 +227,12 @@ const withThreadAffectedCount = (pageSql: string): string => `
 /**
  * The review filters: `$1` state (NULL = every state), `$2` kind, `$3`
  * Catalog record, `$4` a pre-escaped substring pattern matched against the
- * text and the author's handle and display name. Nothing here is the public
- * hot ordering; the Owner reviews newest or oldest first.
+ * text and the author's handle and display name, `$5` author, `$6` and `$7`
+ * the creation range, `$8` true to leave out what a self-only work withholds.
+ * Nothing here is the public hot ordering; the Owner reviews newest or oldest
+ * first.
  */
-const operatorFilter = `
+export const operatorFilter = `
   WHERE ($1::text IS NULL OR entries.moderation = $1::text)
     AND ($2::text IS NULL OR entries.kind = $2::text)
     AND ($3::text IS NULL OR entries.catalog_id = $3::text)
@@ -238,6 +241,14 @@ const operatorFilter = `
       OR entries.text ILIKE $4::text ESCAPE '\\'
       OR entries.author_handle ILIKE $4::text ESCAPE '\\'
       OR entries.author_display_name ILIKE $4::text ESCAPE '\\'
+    )
+    AND ($5::text IS NULL OR entries.author_id = $5::text)
+    AND ($6::timestamptz IS NULL OR entries.created_at >= $6::timestamptz)
+    AND ($7::timestamptz IS NULL OR entries.created_at <= $7::timestamptz)
+    AND NOT (
+      $8::boolean
+      AND entries.target_type = 'work'
+      AND ${workInSelfOnlySetSql("entries.catalog_id")}
     )
 `;
 
@@ -260,7 +271,7 @@ export const listOperatorCommentsNewestSql = `
     SELECT * FROM (${operatorCommentUnion}) entries
     ${operatorFilter}
     ORDER BY entries.created_at DESC, entries.id DESC
-    LIMIT $5::integer OFFSET $6::bigint
+    LIMIT $9::integer OFFSET $10::bigint
   `)}
   ORDER BY page.created_at DESC, page.id DESC
 `;
@@ -270,7 +281,7 @@ export const listOperatorCommentsOldestSql = `
     SELECT * FROM (${operatorCommentUnion}) entries
     ${operatorFilter}
     ORDER BY entries.created_at ASC, entries.id ASC
-    LIMIT $5::integer OFFSET $6::bigint
+    LIMIT $9::integer OFFSET $10::bigint
   `)}
   ORDER BY page.created_at ASC, page.id ASC
 `;
@@ -288,32 +299,51 @@ const moderationEventColumns = `
   id, occurred_at, operator_label, action, subject_kind, subject_id, detail
 `;
 
+/** `$3` true leaves out events on a comment a self-only work withholds. */
+const moderationEventFilter = `
+  WHERE ($1::text IS NULL OR subject_id = $1::text)
+    AND ($2::text IS NULL OR action = $2::text)
+    AND NOT (
+      $3::boolean
+      AND subject_kind IN ('comment', 'reply')
+      AND ${commentIsSelfOnlySql("subject_id")}
+    )
+`;
+
 export const countModerationEventsSql = `
   SELECT COUNT(*)::text AS total
   FROM community.moderation_events
-  WHERE ($1::text IS NULL OR subject_id = $1::text)
-    AND ($2::text IS NULL OR action = $2::text)
+  ${moderationEventFilter}
 `;
 
 export const listModerationEventsSql = `
   SELECT ${moderationEventColumns}
   FROM community.moderation_events
-  WHERE ($1::text IS NULL OR subject_id = $1::text)
-    AND ($2::text IS NULL OR action = $2::text)
+  ${moderationEventFilter}
   ORDER BY occurred_at DESC, id DESC
-  LIMIT $3::integer OFFSET $4::bigint
+  LIMIT $4::integer OFFSET $5::bigint
 `;
 
 export const countModerationActionsInRangeSql = `
   SELECT action, COUNT(*)::text AS total
   FROM community.moderation_events
   WHERE occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
+    AND NOT (
+      $3::boolean
+      AND subject_kind IN ('comment', 'reply')
+      AND ${commentIsSelfOnlySql("subject_id")}
+    )
   GROUP BY action
 `;
 
 export const recentModerationEventsSql = `
   SELECT ${moderationEventColumns}
   FROM community.moderation_events
+  WHERE NOT (
+    $2::boolean
+    AND subject_kind IN ('comment', 'reply')
+    AND ${commentIsSelfOnlySql("subject_id")}
+  )
   ORDER BY occurred_at DESC, id DESC
   LIMIT $1::integer
 `;

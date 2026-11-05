@@ -71,7 +71,11 @@ import type {
 } from "@moya/api";
 import type { ArticleAuthoringGrant } from "@moya/contracts";
 import type { CatalogRecipePolicy } from "@moya/contracts/internal/editorial";
-import type { AnalyticsInsightsReader } from "@moya/contracts/internal/admin-mcp";
+import { AI_OPERATOR_LABEL } from "@moya/contracts/internal/admin-mcp";
+import type {
+  AiOperatorReader,
+  AnalyticsInsightsReader,
+} from "@moya/contracts/internal/admin-mcp";
 import type { NodeEnvironment } from "./config.js";
 import type { ArticleDelegationRuntime } from "./community/article-delegation-handler.js";
 import type { DevelopmentCatalogRenditions } from "./community/development-catalog-rendition-handler.js";
@@ -134,6 +138,10 @@ export interface BackendApplicationOptions {
   readonly communityOperatorCredential?: string;
   /** The AI credential for Catalog work and analytics; empty leaves its routes closed. */
   readonly operatorAiBaseCredential?: string;
+  /** The AI credential for community routes; empty leaves its routes closed. */
+  readonly operatorAiCommunityCredential?: string;
+  /** The AI-only reads; absent, those routes and the self-only check answer 503. */
+  readonly aiOperatorReader?: AiOperatorReader;
   /** Work publishing persistence; requires the author port. */
   readonly workPublishingPort?: WorkPublishingPort;
   /** Human Article drafts and publication. */
@@ -223,39 +231,100 @@ const resolveStorageUrlResolver = ({
 // Publishing routes require their real ports; operator authority stays separate.
 const resolvePublishing = (
   options: BackendApplicationOptions,
+): Pick<CommunityRouterDependencies, "publishingService"> =>
+  options.authorCommunityPort !== undefined &&
+  options.workPublishingPort !== undefined
+    ? {
+        publishingService: new WorkPublishingService(
+          options.workPublishingPort,
+          {
+            store: options.publishingMediaStore,
+            clock: options.publishingClock,
+            processor: options.publishingMediaProcessor,
+            transfers: options.publishingTransfers,
+            transferPolicy: options.publishingTransferPolicy,
+          },
+        ),
+      }
+    : {};
+
+/**
+ * The services that record who acted, for one audit label. The Owner's bundle and
+ * AI's come from here alike, so a route reaches the same code whoever calls it, and
+ * every row it writes names that caller.
+ */
+const createOperatorServices = (
+  label: string,
+  options: BackendApplicationOptions,
+  communityIdentityPort: CommunityIdentityPort,
+  catalogPublicationPort: CatalogPublicationPort,
+  catalogReadService: CatalogReadService,
+  publishing: Pick<CommunityRouterDependencies, "publishingService">,
 ): Pick<
   CommunityRouterDependencies,
-  "publishingService" | "publishingOperatorService"
-> => {
-  const shared = {
-    store: options.publishingMediaStore,
-    clock: options.publishingClock,
-  };
-  return {
-    ...(options.authorCommunityPort !== undefined &&
-    options.workPublishingPort !== undefined
-      ? {
-          publishingService: new WorkPublishingService(
-            options.workPublishingPort,
+  | "moderationService"
+  | "reportingService"
+  | "publishingOperatorService"
+  | "articlePublicationOperatorService"
+> => ({
+  ...(options.communityCommentPort === undefined
+    ? {}
+    : {
+        moderationService: new CommunityModerationService(
+          options.communityCommentPort,
+          communityIdentityPort,
+          catalogPublicationPort,
+          {
+            operatorLabel: label,
+            ...(options.contentOperatorPort
+              ? { contentOperatorPort: options.contentOperatorPort }
+              : {}),
+            ...(options.communityAnalysisPort === undefined
+              ? {}
+              : { analysisPort: options.communityAnalysisPort }),
+          },
+        ),
+      }),
+  ...(options.reportingPort
+    ? {
+        reportingService: new CommunityReportingService(options.reportingPort, {
+          operatorLabel: label,
+          ...(options.reportingEvidenceStore
+            ? { evidenceStore: options.reportingEvidenceStore }
+            : {}),
+        }),
+      }
+    : {}),
+  ...(options.publishingOperatorPort !== undefined
+    ? {
+        publishingOperatorService: new PublishingOperatorService(
+          options.publishingOperatorPort,
+          {
+            operatorLabel: label,
+            store: options.publishingMediaStore,
+            clock: options.publishingClock,
+          },
+        ),
+      }
+    : {}),
+  ...(options.articlePublicationOperatorPort !== undefined
+    ? {
+        articlePublicationOperatorService:
+          new ArticlePublicationOperatorService(
+            options.articlePublicationOperatorPort,
             {
-              ...shared,
-              processor: options.publishingMediaProcessor,
-              transfers: options.publishingTransfers,
-              transferPolicy: options.publishingTransferPolicy,
+              operatorLabel: label,
+              ...(options.publishingClock === undefined
+                ? {}
+                : { clock: options.publishingClock }),
+              publishing: publishing.publishingService,
+              catalog: catalogReadService,
+              authorMedia: options.authorCommunityPort,
             },
           ),
-        }
-      : {}),
-    ...(options.publishingOperatorPort !== undefined
-      ? {
-          publishingOperatorService: new PublishingOperatorService(
-            options.publishingOperatorPort,
-            shared,
-          ),
-        }
-      : {}),
-  };
-};
+      }
+    : {}),
+});
 
 // Without an identity and comment port no session or comment can exist and no
 // community route is composed; the production composition root always wires the
@@ -302,47 +371,41 @@ const resolveCommunity = (
     )
       throw new Error("Production Article delegation requires HTTPS");
   }
+  const operatorServices = (label: string) =>
+    createOperatorServices(
+      label,
+      options,
+      communityIdentityPort,
+      catalogPublicationPort,
+      catalogReadService,
+      publishing,
+    );
+  const aiServices = operatorServices(AI_OPERATOR_LABEL);
   return {
     sessionService,
-    ...(options.reportingPort
+    ...operatorServices("owner"),
+    ...(aiServices.moderationService === undefined
+      ? {}
+      : {
+          aiServices: {
+            ...aiServices,
+            moderationService: aiServices.moderationService,
+            reportingService: aiServices.reportingService?.forAiOperator(),
+          },
+        }),
+    ...(options.aiOperatorReader === undefined
+      ? {}
+      : { aiOperatorReader: options.aiOperatorReader }),
+    ...(options.reportingPort && options.authService
       ? {
-          reportingService: new CommunityReportingService(
-            options.reportingPort,
-            {
-              ...(options.reportingEvidenceStore
-                ? { evidenceStore: options.reportingEvidenceStore }
-                : {}),
-            },
-          ),
-          ...(options.authService
-            ? {
-                reportingIdentify: async (token: string) => {
-                  const result =
-                    await options.authService!.readAppealSession(token);
-                  return result.ok ? { id: result.value.profile.id } : null;
-                },
-              }
-            : {}),
+          reportingIdentify: async (token: string) => {
+            const result = await options.authService!.readAppealSession(token);
+            return result.ok ? { id: result.value.profile.id } : null;
+          },
         }
       : {}),
     ...(options.onAuthenticated
       ? { onAuthenticated: options.onAuthenticated }
-      : {}),
-    ...(options.articlePublicationOperatorPort !== undefined
-      ? {
-          articlePublicationOperatorService:
-            new ArticlePublicationOperatorService(
-              options.articlePublicationOperatorPort,
-              {
-                ...(options.publishingClock === undefined
-                  ? {}
-                  : { clock: options.publishingClock }),
-                publishing: publishing.publishingService,
-                catalog: catalogReadService,
-                authorMedia: options.authorCommunityPort,
-              },
-            ),
-        }
       : {}),
     ...(articleDelegation !== undefined ||
     options.articleAuthoringPort !== undefined
@@ -421,19 +484,6 @@ const resolveCommunity = (
               ? { discussionPort: options.discussionPort }
               : {},
           ),
-          moderationService: new CommunityModerationService(
-            communityCommentPort,
-            communityIdentityPort,
-            catalogPublicationPort,
-            {
-              ...(options.contentOperatorPort
-                ? { contentOperatorPort: options.contentOperatorPort }
-                : {}),
-              ...(options.communityAnalysisPort === undefined
-                ? {}
-                : { analysisPort: options.communityAnalysisPort }),
-            },
-          ),
         }),
     // Agent administration shares the moderation and content operator ports;
     // it remains Development-only, separately from human operator services.
@@ -459,7 +509,10 @@ const resolveCommunity = (
     catalogThumbnail: options.catalogThumbnail,
     catalogRenderBacklog: options.catalogRenderBacklog,
     operatorCredential: options.communityOperatorCredential ?? "",
-    aiCredentials: { base: options.operatorAiBaseCredential ?? "" },
+    aiCredentials: {
+      base: options.operatorAiBaseCredential ?? "",
+      community: options.operatorAiCommunityCredential ?? "",
+    },
   };
 };
 

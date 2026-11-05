@@ -5,6 +5,7 @@ import {
   ADMIN_OP_TOOLS,
   adminActionDetailsSchema,
   adminActionsIndexSchema,
+  adminReadRowsDataSchema,
   adminUnknownOpDataSchema,
 } from "@moya/contracts/internal/admin-mcp";
 import type {
@@ -159,7 +160,11 @@ export const actionDetail = (
   switches: ActionSwitches,
 ): AdminActionDetail => {
   const entry = entryOf(name);
-  const output = entry.output?.ai ?? entry.output?.owner;
+  // A queue answers rows: its route's page is what the Backend said, not this answer.
+  const output =
+    entry.readArgs === undefined
+      ? (entry.output?.ai ?? entry.output?.owner)
+      : adminReadRowsDataSchema;
   const input = inputSchemaOf(name);
   const unavailable = tools.includes(entry.tool)
     ? opUnavailable(entry, switches)

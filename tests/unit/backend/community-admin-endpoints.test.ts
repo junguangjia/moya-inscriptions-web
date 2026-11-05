@@ -2348,13 +2348,25 @@ describe("Owner feedback read boundary", () => {
     for (const input of [
       { page: 0 },
       { pageSize: 51 },
-      { userId },
+      { userId: "not-a-user id" },
       { search: "测试" },
     ])
       expect(
         (await invoke(endpoints, "read-feedback", request(input))).status,
       ).toBe(400);
     expect(calls).toEqual([]);
+  });
+
+  it("passes the additive user filter to the Backend", async () => {
+    const { call, calls } = recorder();
+    await invoke(
+      createCommunityEndpoints(call),
+      "read-feedback",
+      request({ userId }),
+    );
+    expect(calls[0]?.path).toBe(
+      `feedback?page=1&pageSize=20&userId=${encodeURIComponent(userId)}`,
+    );
   });
 
   it("does not expose or log an answer outside the feedback contract", async () => {

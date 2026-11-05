@@ -110,7 +110,7 @@ export interface AdminMcpTool {
   continuation?(
     input: unknown,
     kept: readonly unknown[],
-  ): AdminMcpNext | undefined;
+  ): AdminMcpNext | null | undefined;
 }
 
 const READ_ANNOTATIONS: AdminMcpAnnotations = {

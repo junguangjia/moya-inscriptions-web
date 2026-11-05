@@ -1,6 +1,7 @@
 import {
   moderateWorkSubmissionCommandSchema,
   operatorLabelSchema,
+  operatorReadScopeFor,
   operatorPublishingJobQuerySchema,
   operatorWorkSubmissionQuerySchema,
   publishingJobCommandSchema,
@@ -102,6 +103,7 @@ export class PublishingOperatorService {
   listSubmissions(query: unknown): Promise<OperatorWorkSubmissionPage> {
     return this.port.listSubmissions(
       parseCommand(operatorWorkSubmissionQuerySchema, query),
+      ...operatorReadScopeFor(this.operator),
     );
   }
 

@@ -3,7 +3,9 @@ import {
   communityReportActionSchema,
   communityReportSchema,
   communityReportStatusSchema,
+  communityReportTargetSchema,
 } from "../../reporting.ts";
+import { operatorExactIdSchema } from "./query-filters.js";
 
 /** Server-only storage outcome: a remote write may still commit after failure.
  * The pending reservation must survive until a later verified retry or expiry. */
@@ -14,7 +16,13 @@ export interface ReportingEvidenceWriteOutcome {
 export const operatorReportQuerySchema = z
   .object({
     status: communityReportStatusSchema.optional(),
+    /** `true`: open, reviewing and appealed, the cases still waiting on someone. */
+    unresolved: z.enum(["true"]).optional(),
     urgent: z.enum(["true", "false"]).optional(),
+    targetType: communityReportTargetSchema.shape.type.optional(),
+    targetId: operatorExactIdSchema.optional(),
+    affectedUserId: operatorExactIdSchema.optional(),
+    reporterId: operatorExactIdSchema.optional(),
     page: z.coerce.number().int().min(1).max(100000).default(1),
     pageSize: z.coerce.number().int().min(1).max(100).default(20),
   })

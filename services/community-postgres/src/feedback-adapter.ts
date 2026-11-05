@@ -146,7 +146,8 @@ export class PostgresFeedbackAdapter implements FeedbackPort {
       const total = Number(
         (
           await db.query<{ total: string }>(
-            "SELECT count(*) AS total FROM community.feedback",
+            "SELECT count(*) AS total FROM community.feedback WHERE ($1::text IS NULL OR user_id=$1) AND ($2::text IS NULL OR id=$2)",
+            [query.userId ?? null, query.id ?? null],
           )
         ).rows[0]!.total,
       );
@@ -154,8 +155,14 @@ export class PostgresFeedbackAdapter implements FeedbackPort {
         await db.query<FeedbackRow & { user_id: string; display_name: string }>(
           `SELECT f.id,f.message,f.created_at,f.user_id,u.display_name
          FROM community.feedback f JOIN community.public_users u ON u.id=f.user_id
+         WHERE ($3::text IS NULL OR f.user_id=$3) AND ($4::text IS NULL OR f.id=$4)
          ORDER BY f.created_at DESC,f.id DESC LIMIT $1 OFFSET $2`,
-          [query.pageSize, (query.page - 1) * query.pageSize],
+          [
+            query.pageSize,
+            (query.page - 1) * query.pageSize,
+            query.userId ?? null,
+            query.id ?? null,
+          ],
         )
       ).rows;
       const images = rows.length

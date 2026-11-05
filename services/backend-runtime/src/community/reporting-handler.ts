@@ -242,7 +242,7 @@ export async function handleReportingRequest(
 }
 export async function sendReportingEvidence(
   response: ServerResponse,
-  service: CommunityReportingService,
+  service: Pick<CommunityReportingService, "evidence">,
   actor: string | null,
   id: string,
   evidenceId: string,
@@ -257,11 +257,24 @@ export async function sendReportingEvidence(
   });
   response.end(Buffer.from(bytes));
 }
+/** The Owner's service, or its `forAiOperator()`: the routes do not tell them apart. */
+export type ReportingOperatorRoutes = Pick<
+  CommunityReportingService,
+  "evidence"
+> & {
+  operatorList(query: unknown): Promise<unknown>;
+  operatorRead(id: string): Promise<unknown>;
+  decide(id: string, body: unknown): Promise<unknown>;
+  review(id: string, body: unknown): Promise<unknown>;
+  metadata(id: string, body: unknown): Promise<unknown>;
+  forward(id: string, body: unknown): Promise<unknown>;
+};
+
 export async function handleReportingOperatorRequest(
   request: IncomingMessage,
   response: ServerResponse,
   pathname: string,
-  service: CommunityReportingService,
+  service: ReportingOperatorRoutes,
 ): Promise<void> {
   const url = new URL(request.url ?? "/", "http://request.invalid");
   if (pathname === "/internal/community/reports" && request.method === "GET") {

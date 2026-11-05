@@ -5,6 +5,7 @@ import type {
   AdminMcpSensitiveCategory,
   AdminOpName,
   AdminRecordState,
+  AdminRecordType,
 } from "@moya/contracts/internal/admin-mcp";
 
 import { adminOpMeta, opUnavailable } from "./registry";
@@ -194,8 +195,48 @@ export const actionsFor = (
  * the first candidate, and this makes that the shape of the answer.
  */
 export const candidateActions = (
-  type: AdminCmsRecordType,
-  id: number,
+  type: AdminRecordType,
+  id: number | string,
 ): readonly AdminActionSkeleton[] => [
   { tool: "admin_get", args: { type, id } },
 ];
+
+const queue = (op: AdminOpName, input: Record<string, unknown>) => ({
+  tool: "admin_read",
+  args: { op, input },
+});
+
+/** What reads around a community record. Its writes join with the slice that builds them. */
+const COMMUNITY_READS: Readonly<
+  Partial<
+    Record<AdminRecordType, (id: string) => readonly AdminActionSkeleton[]>
+  >
+> = {
+  user: (id) => [
+    queue("list.users", { userId: id }),
+    queue("list.works", { authorId: id }),
+    queue("list.comments", { authorId: id }),
+    queue("list.reports", { affectedUserId: id }),
+    queue("list.feedback", { userId: id }),
+  ],
+  work: (id) => [
+    queue("list.reports", { targetType: "work", targetId: id }),
+    queue("list.work_submissions", { workId: id }),
+  ],
+  comment: (id) => [
+    queue("list.reports", { targetType: "comment", targetId: id }),
+    queue("list.events", { subjectId: id }),
+  ],
+  media_item: (id) => [queue("list.jobs", { subjectId: id })],
+};
+
+/** Exact only, and on the tools this key has: read-only, so every key has them. */
+export const communityActionsFor = (
+  type: AdminRecordType,
+  id: string,
+  { tools }: Pick<ActionScope, "tools">,
+): readonly AdminActionSkeleton[] =>
+  [
+    ...candidateActions(type, id),
+    ...(COMMUNITY_READS[type]?.(id) ?? []),
+  ].filter(({ tool }) => tools.includes(tool));

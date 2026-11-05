@@ -45,6 +45,23 @@ export const isCommunityConflictError = (
 ): error is CommunityConflictError => error instanceof CommunityConflictError;
 
 /**
+ * A read that ran out of its statement limit: no answer, and not an empty one. Maps to
+ * READ_TIMED_OUT on the operator boundary.
+ */
+export class CommunityReadTimedOutError extends Error {
+  override readonly name = "CommunityReadTimedOutError";
+
+  constructor(message = "Community read ran out of time") {
+    super(message);
+  }
+}
+
+export const isCommunityReadTimedOutError = (
+  error: unknown,
+): error is CommunityReadTimedOutError =>
+  error instanceof CommunityReadTimedOutError;
+
+/**
  * The mutation was refused because the caller had lost the right to execute,
  * not because the subject moved on.
  *

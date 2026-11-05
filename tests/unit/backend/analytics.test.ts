@@ -263,24 +263,30 @@ describe("analytics configuration", () => {
           ),
         ).toThrow("must be separate");
     const aiValue = randomBytes(32).toString("base64url");
-    for (const other of [
-      "COMMUNITY_OPERATOR_TOKEN",
-      "AUTH_SOURCE_RELAY_TOKEN",
+    for (const aiToken of [
       "OPERATOR_AI_BASE_TOKEN",
-    ])
-      expect(() =>
-        parseAnalyticsConfiguration(
-          {
-            ...shared,
-            COMMUNITY_OPERATOR_AI_TOKEN: aiValue,
-            [other]: aiValue,
-          },
-          "production",
-        ),
-      ).toThrow("must be separate");
+      "COMMUNITY_OPERATOR_AI_TOKEN",
+    ] as const)
+      for (const other of [
+        "COMMUNITY_OPERATOR_TOKEN",
+        "AUTH_SOURCE_RELAY_TOKEN",
+        ...(aiToken === "OPERATOR_AI_BASE_TOKEN"
+          ? []
+          : ["OPERATOR_AI_BASE_TOKEN"]),
+      ])
+        expect(() =>
+          parseAnalyticsConfiguration(
+            { ...shared, [aiToken]: aiValue, [other]: aiValue },
+            "production",
+          ),
+        ).toThrow("must be separate");
     expect(() =>
       parseAnalyticsConfiguration(
-        { ...shared, COMMUNITY_OPERATOR_AI_TOKEN: aiValue },
+        {
+          ...shared,
+          COMMUNITY_OPERATOR_AI_TOKEN: aiValue,
+          OPERATOR_AI_BASE_TOKEN: randomBytes(32).toString("base64url"),
+        },
         "production",
       ),
     ).not.toThrow();

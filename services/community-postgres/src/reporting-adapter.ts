@@ -23,9 +23,15 @@ import type {
   CommunityReportAction,
   CommunityReportEvidence,
 } from "@moya/contracts";
-import { operatorReportSchema } from "@moya/contracts/internal/community-operator";
+import { SELF_ONLY_OWNER_REVIEW } from "@moya/contracts/internal/admin-mcp";
+import {
+  operatorReportSchema,
+  projectReportForAi,
+} from "@moya/contracts/internal/community-operator";
 import type {
   OperatorReport,
+  OperatorReportAiAnswer,
+  OperatorReportAiPage,
   OperatorReportQuery,
   OperatorReportDecisionRequest,
   OperatorReportReviewRequest,
@@ -34,6 +40,7 @@ import type {
 } from "@moya/contracts/internal/community-operator";
 import type { Pool, PoolClient } from "pg";
 import { asCommunityOperationError } from "./availability.js";
+import { reportIsSelfOnlySql } from "./self-only.js";
 import {
   beginWorkPublicationSync,
   syncWorkHolds,
@@ -44,6 +51,37 @@ import type { PublicationSyncOptions } from "./publishing/publication-sync.js";
 
 const opaque = (prefix: string) =>
   `${prefix}-${randomUUID().replaceAll("-", "")}`;
+
+/** The queue's filters, on `community.report_cases c`, and their values from `$1`. */
+export const operatorReportFilter = {
+  sql: `($1::text IS NULL OR c.status=$1)
+    AND ($2::boolean IS NULL OR c.urgent=$2)
+    AND ($3::boolean IS NULL OR c.status<>'resolved')
+    AND ($4::text IS NULL OR c.target_type=$4)
+    AND ($5::text IS NULL OR c.target_id=$5)
+    AND ($6::text IS NULL OR c.affected_user_id=$6)
+    AND ($7::text IS NULL OR c.reporter_id=$7)`,
+  values: (q: Omit<OperatorReportQuery, "page" | "pageSize">): unknown[] => [
+    q.status ?? null,
+    q.urgent === undefined ? null : q.urgent === "true",
+    q.unresolved === undefined ? null : true,
+    q.targetType ?? null,
+    q.targetId ?? null,
+    q.affectedUserId ?? null,
+    q.reporterId ?? null,
+  ],
+  /**
+   * An owner-only row shows its id, kind and status and no more, so it stays only
+   * under a filter on what it shows. Anything else would read its target, its people
+   * or its urgency back by counting.
+   */
+  namesWithheld: (q: Omit<OperatorReportQuery, "page" | "pageSize">): boolean =>
+    q.urgent !== undefined ||
+    q.targetType !== undefined ||
+    q.targetId !== undefined ||
+    q.affectedUserId !== undefined ||
+    q.reporterId !== undefined,
+};
 const publicEvidence = (
   e: ReportingEvidenceRecord,
 ): CommunityReportEvidence => ({
@@ -547,9 +585,10 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
       };
     }
     if (target.type === "article") {
+      // The title the reporter saw: the document's own may be a private draft's.
       const a = (
         await db.query<{ title: string; owner_id: string }>(
-          "SELECT a.title,a.owner_id FROM community.article_documents a JOIN community.public_users u ON u.id=a.owner_id WHERE a.id=$1 AND a.published_version IS NOT NULL AND NOT a.reporting_hidden AND u.status='active' AND community.accounts_can_interact($2,a.owner_id) FOR SHARE OF a",
+          "SELECT r.title,a.owner_id FROM community.article_documents a JOIN community.article_revisions r ON r.article_id=a.id AND r.version=a.published_version JOIN community.public_users u ON u.id=a.owner_id WHERE a.id=$1 AND a.published_version IS NOT NULL AND NOT a.reporting_hidden AND u.status='active' AND community.accounts_can_interact($2,a.owner_id) FOR SHARE OF a",
           [id, actor],
         )
       ).rows[0];
@@ -1060,21 +1099,16 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
   }
   async operatorList(q: OperatorReportQuery) {
     return this.tx(async (db) => {
-      const filter =
-        "($1::text IS NULL OR status=$1) AND ($2::boolean IS NULL OR urgent=$2)";
-      const args = [
-        q.status ?? null,
-        q.urgent === undefined ? null : q.urgent === "true",
-      ];
+      const args = operatorReportFilter.values(q);
       const rows = (
         await db.query<CaseRow>(
-          `SELECT * FROM community.report_cases WHERE ${filter} ORDER BY urgent DESC,created_at,id LIMIT $3 OFFSET $4`,
+          `SELECT c.* FROM community.report_cases c WHERE ${operatorReportFilter.sql} ORDER BY c.urgent DESC,c.created_at,c.id LIMIT $8 OFFSET $9`,
           [...args, q.pageSize, (q.page - 1) * q.pageSize],
         )
       ).rows;
       const total = (
         await db.query<{ n: number }>(
-          `SELECT count(*)::integer n FROM community.report_cases WHERE ${filter}`,
+          `SELECT count(*)::integer n FROM community.report_cases c WHERE ${operatorReportFilter.sql}`,
           args,
         )
       ).rows[0]!.n;
@@ -1088,6 +1122,63 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
   }
   async operatorRead(id: string) {
     return this.tx(async (db) => this.operatorDto(db, await this.row(db, id)));
+  }
+  /** Reads no text for an owner-only case, so none of it can reach a model. */
+  private async aiAnswer(
+    db: PoolClient,
+    row: CaseRow & { readonly owner_only: boolean },
+  ): Promise<OperatorReportAiAnswer> {
+    return row.owner_only
+      ? {
+          id: row.id,
+          kind: row.kind,
+          status: row.status,
+          ownerOnly: true,
+          code: SELF_ONLY_OWNER_REVIEW,
+        }
+      : projectReportForAi(await this.operatorDto(db, row));
+  }
+  async operatorListForAi(
+    q: OperatorReportQuery,
+  ): Promise<OperatorReportAiPage> {
+    const leavesOut = operatorReportFilter.namesWithheld(q);
+    const where =
+      operatorReportFilter.sql +
+      (leavesOut ? ` AND NOT ${reportIsSelfOnlySql("c")}` : "");
+    return this.tx(async (db) => {
+      const args = operatorReportFilter.values(q);
+      const rows = (
+        await db.query<CaseRow & { owner_only: boolean }>(
+          `SELECT c.*,${reportIsSelfOnlySql("c")} AS owner_only FROM community.report_cases c WHERE ${where} ORDER BY c.urgent DESC,c.created_at,c.id LIMIT $8 OFFSET $9`,
+          [...args, q.pageSize, (q.page - 1) * q.pageSize],
+        )
+      ).rows;
+      const total = (
+        await db.query<{ n: number }>(
+          `SELECT count(*)::integer n FROM community.report_cases c WHERE ${where}`,
+          args,
+        )
+      ).rows[0]!.n;
+      return {
+        items: await Promise.all(rows.map((r) => this.aiAnswer(db, r))),
+        total,
+        page: q.page,
+        pageSize: q.pageSize,
+        ...(leavesOut ? { leavesOutOwnerOnly: true as const } : {}),
+      };
+    });
+  }
+  async operatorReadForAi(id: string): Promise<OperatorReportAiAnswer> {
+    return this.tx(async (db) => {
+      const row = (
+        await db.query<CaseRow & { owner_only: boolean }>(
+          `SELECT c.*,${reportIsSelfOnlySql("c")} AS owner_only FROM community.report_cases c WHERE c.id=$1`,
+          [id],
+        )
+      ).rows[0];
+      if (!row) throw new CommunityNotFoundError();
+      return this.aiAnswer(db, row);
+    });
   }
   private async bump(db: PoolClient, id: string) {
     await db.query(
