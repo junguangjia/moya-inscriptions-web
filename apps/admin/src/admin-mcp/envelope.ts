@@ -113,7 +113,7 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     retryable: false,
   },
   NOT_FOUND: {
-    hint: "No such record, or not one this key can read. Locate it with admin_find.",
+    hint: "No such record, or not one this credential can read. Locate it with admin_find.",
     retryable: false,
   },
   NOT_AVAILABLE: {
@@ -592,7 +592,7 @@ const withinCap = (
  * with no structuredContent, and Codex drops the image when structuredContent is set.
  */
 export const imageToolResult = (
-  scope: { readonly keyId: number; readonly tool: string },
+  scope: { readonly keyId: number | string; readonly tool: string },
   envelope: AdminMcpEnvelope,
   image?: { readonly data: Buffer; readonly mimeType: string },
 ) => {
@@ -622,7 +622,7 @@ export const imageToolResult = (
  * says how to go on from a cut result.
  */
 export const toolResult = (
-  scope: { readonly keyId: number; readonly tool: string },
+  scope: { readonly keyId: number | string; readonly tool: string },
   envelope: AdminMcpEnvelope,
   continuation?: CutContinuation,
 ) => {

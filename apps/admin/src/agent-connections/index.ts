@@ -37,7 +37,7 @@ export type {
 } from "./contracts";
 export { admitGrant } from "./admission";
 export type { AdmittedConnection } from "./admission";
-export { connectionAuth } from "./authorization";
+export { connectionAuth, verifyConnection } from "./authorization";
 export type {
   AccessTokenVerifier,
   ConnectionAuthDependencies,
@@ -47,6 +47,7 @@ export {
   CONNECTIONS_ENABLED_SETTING,
   connectionOverrideAuth,
   connectionsEnabled,
+  oauthSurfaceEnabled,
 } from "./composition";
 export type { OverrideAuth } from "./composition";
 export {

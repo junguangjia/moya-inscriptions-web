@@ -3999,6 +3999,16 @@ Tool     issuer /token, code and PKCE -> artvenn_ct_ token and refresh token
   plugin connection path and stays as #141 measured it, so its resume takes the
   cookie and an approved row with no secret, and its refresh and lifetimes are
   unchanged.
+- Resource side. `oauthSurfaceEnabled` composes the Admin's resource runtime;
+  `connectionsEnabled` alone decides what the plugin path receives from it. In
+  Production `AGENT_RESOURCE_DATABASE_URL` must end in exactly
+  `?sslmode=verify-full`, with `AGENT_DATABASE_SSL_CA_FILE` read for its pool,
+  and the issuer and resource must be https. `CMS_ENVIRONMENT` must be
+  `production`, and must equal `AGENT_AUTHORIZATION_ENVIRONMENT`, so `admin.env`
+  carries that setting too. Development under
+  `AGENT_AUTHORIZATION_PROFILE=operator` needs the same two names equal. A bad
+  setting is a bare code on stderr when the Admin starts, and connection tokens
+  are refused.
 - Development database. Every decision now writes `resume_secret_digest`, a
   read-only approval and a denial too. After this migration, apply
   `infra/development/agent-connections/grant-authorization.sql` again, or a
@@ -4008,11 +4018,33 @@ Tool     issuer /token, code and PKCE -> artvenn_ct_ token and refresh token
   `ADMIN_SCHEMA_NOT_READY` until every required migration has run unchanged.
 - Article. It runs the same `main.ts`, so its refused start now names a category
   on stderr, and nothing else about it changes.
+- Door. `adminMcpDispatch` looks for an `artvenn_ct_` token first, under any
+  spelling of the scheme, so one never reaches the key lookup. `admitConnection`
+  reads everything again on each request: the token and its frozen grant, the
+  preset, the closed list, the limit from consent, the authorizing person's role
+  against `ADMIN_MCP_AUTHORIZE_CEILING`, the operator row's role, and the pause.
+  A token of another preset goes to the plugin path, which refuses it in
+  Production. Every refusal is the plugin's generic 401, with a bare code in the
+  diagnostics, including a resource runtime that refused to build and a failed
+  read of a store or of `users`. An unreadable pause answers 503, as it does for
+  a key. The person is read from `payload-user-<id>`, the form the consent views
+  stamp. The door also stops a connection at 180 days from consent itself,
+  because a token refreshed just before that limit would otherwise outlive it by
+  up to an hour.
+- Audit and `admin_whoami`. `auditIdentity` builds what every row says about the
+  caller: a key's id, or the connection id and the person's email at that
+  moment. `admin_whoami` gives the `conn-` id, the expiry at that limit and the
+  authorizing account's id, never an email. It also gives `byteChannel`, which
+  says what a client with no local process cannot do, because every connection
+  is such a client. A key can be held by either kind, so a key's answer has no
+  such field; section 20's `byteChannel` for keys arrives with the companion.
 - Closed list. The name on the consent page and the callback host come from
-  `AGENT_AUTHORIZATION_CLIENTS`, never from the request. There is no
-  registration endpoint, and `features.clientIdMetadataDocument` stays off so
-  its fetch path cannot run: `Client.find` reads static clients first
-  (oidc-provider lib/models/client.js). Discovery still says
+  `AGENT_AUTHORIZATION_CLIENTS`, never from the request. The Admin reads the
+  same setting under `operator`, and refuses by a bare code when it is missing
+  or malformed; the read-only profile does not read it. There is no registration
+  endpoint, and `features.clientIdMetadataDocument` stays off so its fetch path
+  cannot run: `Client.find` reads static clients first (oidc-provider
+  lib/models/client.js). Discovery still says
   `client_id_metadata_document_supported`, added by a post-route middleware. The
   public policy names Anthropic and OpenAI, which covers this list; another
   vendor needs the policy text changed first. `parseRegisteredClients` refuses
@@ -4026,7 +4058,10 @@ Tool     issuer /token, code and PKCE -> artvenn_ct_ token and refresh token
 - Identity. One shared `ai_operator` row, seeded with no password, so
   `approvedBy`, locks and receipts need no change, and the audit names the
   person beside it. Strategy `mcp-connection`, set only by the door. `isOwner`
-  and `isHumanOwner` are unchanged.
+  and `isHumanOwner` are unchanged. `provisionInitialOwner` does not count that
+  exact row, so a new install still provisions; its address on another role, or
+  another `ai_operator` account, still refuses. The Admin's account list shows
+  it.
 - Binding. Under `operator`, `decideConsent` mints a one-time secret, stores its
   digest and returns it in the resume URL. Resume needs the secret and the
   provider cookie, so an approval reaches only the browser that started the
@@ -4094,6 +4129,8 @@ Limits, stated:
 - The other owners are told of a new connection by a notice in the Admin on
   their next visit, not when it happens, because the Admin has no mail adapter.
   O3 builds it.
+- Until O3 lands, the metadata pointer on a 401 follows `connectionsEnabled`, so
+  Production's door has none, and the challenge carries no `scope` anywhere.
 - A connection is always at profile full, so section 14's advice to use profile
   `read` for sessions that bulk-read untrusted content has no form here.
 - A connection has no byte channel. Uploads, originals and rendered previews

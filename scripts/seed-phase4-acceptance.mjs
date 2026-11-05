@@ -308,8 +308,13 @@ async function main() {
     }
     assert(
       existing.totalDocs === 0 &&
-        (await payload.count({ collection: "users", overrideAccess: true }))
-          .totalDocs === 0,
+        (
+          await payload.count({
+            collection: "users",
+            overrideAccess: true,
+            where: { role: { not_equals: "ai_operator" } },
+          })
+        ).totalDocs === 0,
       "SYNTHETIC_OWNER_BOOTSTRAP_NOT_EMPTY",
     );
     const owner = await payload.create({

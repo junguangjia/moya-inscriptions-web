@@ -10,7 +10,12 @@ import {
   isHumanOwner,
   isOwner,
 } from "admin/editorial";
+import { McpAuditEvents } from "admin/admin-mcp";
 import { Users } from "admin/users";
+import {
+  ADMIN_MCP_AUTHORIZE_CEILING,
+  ADMIN_USER_ROLES,
+} from "@moya/contracts/internal/admin-mcp";
 
 // A synthetic value built at runtime, so no credential-shaped literal is tracked.
 const signedValue = ["signed", "value"].join("-");
@@ -54,6 +59,61 @@ describe("Admin MCP predicates", () => {
     expect(canEditCatalog(row("mcp-api-key"), "any")).toBe(true);
     expect(catalogScopeAccess(row("mcp-api-key"))).toBe(true);
     expect(isOwner(row("mcp-api-key"))).toBe(false);
+  });
+
+  it("grants ai_operator authority through the login door's strategy as well", () => {
+    const row = request({ role: "ai_operator", _strategy: "mcp-connection" });
+    expect(isAiOperator(row)).toBe(true);
+    expect(actsAsOwner(row)).toBe(true);
+    expect(canEditCatalog(row, "any")).toBe(true);
+    expect(catalogScopeAccess(row)).toBe(true);
+    // A connection identity is never an Owner, whoever authorized it.
+    expect(isOwner(row)).toBe(false);
+    expect(
+      isHumanOwner(
+        request({ role: "ai_operator", _strategy: "mcp-connection" }, session),
+      ),
+    ).toBe(false);
+  });
+
+  it("grants nothing by that strategy on a row with any other role", () => {
+    for (const strategy of ["mcp-connection", "mcp-api-key"]) {
+      for (const role of ["automation", "agent-connection", undefined]) {
+        const row = request({ role, _strategy: strategy });
+        expect([role, isAiOperator(row)]).toEqual([role, false]);
+        expect([role, actsAsOwner(row)]).toEqual([role, false]);
+        expect([role, canEditCatalog(row, "any")]).toEqual([role, false]);
+        expect([role, catalogScopeAccess(row)]).toEqual([role, false]);
+      }
+      // An Owner row keeps what the role gives on any credential, as isOwner always
+      // has. It is not an AI operator and not a browser session, so the strategy adds
+      // nothing, and the door never builds this identity.
+      const ownerRow = request(owner(strategy), session);
+      expect(isAiOperator(ownerRow)).toBe(false);
+      expect(isHumanOwner(ownerRow)).toBe(false);
+    }
+    expect(
+      isAiOperator(
+        request({
+          role: "ai_operator",
+          _strategy: "mcp-connection",
+          collection: "payload-mcp-api-keys",
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not read a strategy name case-insensitively or by prefix", () => {
+    for (const strategy of [
+      "MCP-CONNECTION",
+      "mcp-connection ",
+      "mcp-connection-x",
+      "mcp",
+      "artvenn-connection",
+    ])
+      expect(
+        isAiOperator(request({ role: "ai_operator", _strategy: strategy })),
+      ).toBe(false);
   });
 
   it("keeps a role from another collection or an automation key out", () => {
@@ -126,6 +186,36 @@ describe("Admin MCP predicates", () => {
   });
 });
 
+describe("the audit row of a connection", () => {
+  const fields = McpAuditEvents.fields.flatMap((field) =>
+    "fields" in field ? field.fields : [field],
+  ) as { name: string; type: string }[];
+  const named = (name: string) => fields.find((field) => field.name === name);
+
+  it("names the connection and the person who authorized it, as text", () => {
+    expect(named("connectionId")?.type).toBe("text");
+    expect(named("authorizedBy")?.type).toBe("text");
+    // Empty for a connection, so its type stays what a key writes.
+    expect(named("keyId")?.type).toBe("number");
+    expect(McpAuditEvents.admin?.defaultColumns).toContain("authorizedBy");
+  });
+
+  it("stays readable only in an Owner browser session", () => {
+    const read = McpAuditEvents.access!.read as (args: {
+      req: PayloadRequest;
+    }) => unknown;
+    expect(read({ req: browserOwner })).toBe(true);
+    for (const [role, strategy] of [
+      ["ai_operator", "mcp-connection"],
+      ["ai_operator", "mcp-api-key"],
+      ["owner", "mcp-connection"],
+    ])
+      expect(
+        read({ req: request({ role, _strategy: strategy }, session) }),
+      ).toBe(false);
+  });
+});
+
 describe("Admin accounts as a reserved surface", () => {
   const access = Users.access!;
   const callers = {
@@ -141,6 +231,10 @@ describe("Admin accounts as a reserved surface", () => {
     }),
     automationKey: request({ role: "automation", _strategy: "api-key" }),
     aiOperatorKey: request({ role: "ai_operator", _strategy: "mcp-api-key" }),
+    aiOperatorConnection: request({
+      role: "ai_operator",
+      _strategy: "mcp-connection",
+    }),
     aiOperatorJwt: request({ role: "ai_operator", _strategy: "local-jwt" }),
     anonymous: request(null),
   };
@@ -193,6 +287,7 @@ describe("Admin accounts as a reserved surface", () => {
     for (const req of [
       callers.automationKey,
       callers.aiOperatorKey,
+      callers.aiOperatorConnection,
       callers.aiOperatorJwt,
       callers.anonymous,
     ])
@@ -203,6 +298,7 @@ describe("Admin accounts as a reserved surface", () => {
     const admin = access.admin as (args: { req: PayloadRequest }) => unknown;
     expect(admin({ req: callers.ownerJwtHeader })).toBe(true);
     expect(admin({ req: callers.aiOperatorKey })).toBe(false);
+    expect(admin({ req: callers.aiOperatorConnection })).toBe(false);
     expect(Users.disableBulkEdit).toBe(true);
   });
 
@@ -217,6 +313,20 @@ describe("Admin accounts as a reserved surface", () => {
       "ai_operator",
     ]);
     expect(role.defaultValue).toBe("automation");
+  });
+
+  it("decides who may authorize a tool for every role there is", () => {
+    const role = Users.fields[0] as { options: { value: string }[] };
+    const roles = role.options.map(({ value }) => value);
+    expect([...ADMIN_USER_ROLES]).toEqual(roles);
+    expect(Object.keys(ADMIN_MCP_AUTHORIZE_CEILING).sort()).toEqual(
+      [...roles].sort(),
+    );
+    expect(ADMIN_MCP_AUTHORIZE_CEILING).toEqual({
+      owner: "full",
+      automation: null,
+      ai_operator: null,
+    });
   });
 
   it("refuses a password login on an ai_operator row", () => {

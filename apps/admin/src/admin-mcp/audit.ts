@@ -37,7 +37,7 @@ export const McpAuditEvents: CollectionConfig = {
     useAsTitle: "callId",
     group: "操作记录",
     description:
-      "查看 AI 与自动化密钥的每次调用。写入有开始和结束两条记录，只有开始的记录表示结果未知。",
+      "查看 AI 工具与自动化密钥的每次调用。写入有开始和结束两条记录，只有开始的记录表示结果未知。",
     defaultColumns: [
       "at",
       "tool",
@@ -48,6 +48,7 @@ export const McpAuditEvents: CollectionConfig = {
       "code",
       "durationMs",
       "keyLabel",
+      "authorizedBy",
     ],
   },
   access: {
@@ -92,7 +93,7 @@ export const McpAuditEvents: CollectionConfig = {
     { name: "op", type: "text", label: "操作" },
     { name: "ok", type: "checkbox", label: "成功" },
     { name: "code", type: "text", label: "结果代码" },
-    { name: "keyLabel", type: "text", label: "密钥名称" },
+    { name: "keyLabel", type: "text", label: "密钥或工具" },
     { name: "targetType", type: "text", label: "对象类型" },
     { name: "targetId", type: "text", label: "对象编号" },
     { name: "count", type: "number", label: "对象数量" },
@@ -112,6 +113,10 @@ export const McpAuditEvents: CollectionConfig = {
         },
         { name: "keyId", type: "number", label: "密钥编号" },
         { name: "userId", type: "text", label: "账号编号" },
+        // A login-door call: which connection, and the email of the person who
+        // authorized it at that moment. userId stays the AI row, keyId stays empty.
+        { name: "connectionId", type: "text", label: "连接编号" },
+        { name: "authorizedBy", type: "text", label: "授权人" },
         { name: "runId", type: "text", label: "运行编号" },
         { name: "requestId", type: "text", label: "请求编号" },
         { name: "durationMs", type: "number", label: "耗时（毫秒）" },

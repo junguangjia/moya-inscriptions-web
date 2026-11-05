@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  ADMIN_MCP_BYTE_WORK,
   ADMIN_MCP_CODES,
   ADMIN_MCP_COMPLIANCE_PHRASES,
   ADMIN_MCP_DEFAULT_THRESHOLD,
@@ -142,6 +143,40 @@ describe("Admin MCP door and whoami", () => {
       { ...data, key: { ...data.key, toolProfile: "admin" } },
     ])
       expect(adminWhoamiDataSchema.safeParse(stray).success).toBe(false);
+  });
+
+  it("carries a connection's id and authorizing account, and never an email", () => {
+    const connection = {
+      ...data,
+      key: {
+        ...data.key,
+        id: `conn-${"a".repeat(32)}`,
+        toolProfile: "full",
+        authorizedBy: 7,
+      },
+      byteChannel: { available: false, unavailable: [...ADMIN_MCP_BYTE_WORK] },
+    };
+    expect(adminWhoamiDataSchema.safeParse(connection).success).toBe(true);
+    for (const stray of [
+      { ...connection.key, authorizedBy: "a@example.invalid" },
+      { ...connection.key, authorizedBy: "payload-user-7" },
+      { ...connection.key, authorizedBy: 0 },
+      { ...connection.key, id: "a@example.invalid" },
+      { ...connection.key, id: `conn-${"A".repeat(32)}` },
+      { ...connection.key, id: `conn-${"a".repeat(31)}` },
+      { ...connection.key, id: `${["artvenn", "ct"].join("_")}_x` },
+    ])
+      expect(
+        adminWhoamiDataSchema.safeParse({ ...connection, key: stray }).success,
+      ).toBe(false);
+    for (const byteChannel of [
+      { available: true, unavailable: [] },
+      { available: false, unavailable: ["shell"] },
+      { available: false, unavailable: [], url: extraField },
+    ])
+      expect(
+        adminWhoamiDataSchema.safeParse({ ...connection, byteChannel }).success,
+      ).toBe(false);
   });
 });
 

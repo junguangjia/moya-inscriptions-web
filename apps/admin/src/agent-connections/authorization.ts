@@ -1,6 +1,7 @@
 import { UnauthorizedError } from "payload";
 
 import { admitGrant } from "./admission";
+import type { AdmittedConnection } from "./admission";
 
 import {
   ConnectionAuthError,
@@ -115,6 +116,38 @@ const connectionUser = (connection: AgentConnection): TypedUser =>
   }) as unknown as TypedUser;
 
 /**
+ * The rule both paths apply to a presented token: it resolves, its claims parse,
+ * and the connection admits it. Throws on any refusal, a `ConnectionAuthError` with
+ * a bare code or whatever the store threw. What a refusal looks like on the wire,
+ * and recording that a request authenticated, are each caller's own.
+ */
+export const verifyConnection = async (
+  dependencies: ConnectionAuthDependencies,
+  presented: string,
+): Promise<AdmittedConnection> => {
+  const verified = await dependencies.verifyAccessToken(presented);
+  if (verified === null)
+    throw new ConnectionAuthError("CONNECTION_TOKEN_INVALID");
+  // The verifier's return is untrusted data: its fields come from a token a caller
+  // supplied, and the TypeScript type is erased at runtime. Parse it rather than
+  // assume it, so a malformed claim is a refusal here instead of a surprise inside
+  // a comparison.
+  const parsed = verifiedGrantSchema.safeParse(verified);
+  if (!parsed.success)
+    throw new ConnectionAuthError("CONNECTION_GRANT_MALFORMED");
+  const grant = parsed.data;
+  return admitGrant(
+    grant,
+    await dependencies.readConnection(grant.connectionId),
+    {
+      issuer: dependencies.issuer,
+      resource: dependencies.resource,
+      environment: dependencies.environment,
+    },
+  );
+};
+
+/**
  * Builds the plugin's `overrideAuth`. Legacy API-key callers are untouched:
  * a request with no bearer, or a bearer that is not one of ours, goes to the
  * plugin's own resolver exactly as before.
@@ -137,25 +170,9 @@ export const connectionAuth =
     // no path back to the legacy resolver, so a forged or expired connection
     // token cannot be retried as an API key.
     try {
-      const verified = await dependencies.verifyAccessToken(presented);
-      if (verified === null)
-        throw new ConnectionAuthError("CONNECTION_TOKEN_INVALID");
-      // The verifier's return is untrusted data: its fields come from a token
-      // a caller supplied, and the TypeScript type is erased at runtime. Parse
-      // it rather than assume it, so a malformed claim is a refusal here
-      // instead of a surprise inside a comparison.
-      const parsed = verifiedGrantSchema.safeParse(verified);
-      if (!parsed.success)
-        throw new ConnectionAuthError("CONNECTION_GRANT_MALFORMED");
-      const grant = parsed.data;
-      const { connection, consent } = admitGrant(
-        grant,
-        await dependencies.readConnection(grant.connectionId),
-        {
-          issuer: dependencies.issuer,
-          resource: dependencies.resource,
-          environment: dependencies.environment,
-        },
+      const { connection, consent } = await verifyConnection(
+        dependencies,
+        presented,
       );
       // Admission succeeded, so this request really did authenticate. After
       // the decision, never before it.

@@ -4,15 +4,18 @@ import {
   parsePostgresConfig,
 } from "@moya/catalog-postgres";
 import {
+  RegisteredClientError,
   createAgentConnectionStore,
   createWrapperStore,
+  parseRegisteredClients,
   wrapperKeysFrom,
 } from "@moya/community-postgres";
 
-import { connectionsEnabled } from "./composition";
+import { connectionsEnabled, oauthSurfaceEnabled } from "./composition";
 
 import type { ConnectionAuthDependencies } from "./authorization";
 import type { ConnectionRecord, VerifiedGrant } from "./contracts";
+import type { RegisteredClient } from "@moya/community-postgres";
 
 /**
  * Agent Connections V1 (Issue #141 r15 §7) — the RESOURCE server's half.
@@ -52,6 +55,7 @@ import type { ConnectionRecord, VerifiedGrant } from "./contracts";
  */
 
 export const RESOURCE_DATABASE_SETTING = "AGENT_RESOURCE_DATABASE_URL";
+export const AGENT_DATABASE_CA_SETTING = "AGENT_DATABASE_SSL_CA_FILE";
 
 export class ResourceRuntimeError extends Error {
   readonly code: string;
@@ -63,6 +67,12 @@ export class ResourceRuntimeError extends Error {
 }
 
 export interface ResourceRuntime extends ConnectionAuthDependencies {
+  /**
+   * The closed list, one setting read by both services, so taking a tool off it
+   * and restarting stops that tool at the login door. Empty under the read-only
+   * profile, whose plugin path never reads it.
+   */
+  readonly clients: ReadonlyMap<string, RegisteredClient>;
   close(): Promise<void>;
 }
 
@@ -86,13 +96,51 @@ const frozen = (value: string | undefined, code: string): URL => {
 };
 
 /**
- * Builds the resource-server boundary, or refuses. `null` only when the
- * connection surface is OFF — which is the composition gate, not a failure.
+ * The name a connection row must carry to be admitted here. Under `operator` the
+ * issuer compares its own `AGENT_AUTHORIZATION_ENVIRONMENT` with that same column
+ * when a token refreshes, so the two settings have to agree. Unset, or unequal, is
+ * a refusal by name: a token from another environment never gets in on a default,
+ * and a refresh never starts failing with no reason anyone can read.
+ */
+const servedEnvironment = (
+  environment: NodeJS.ProcessEnv,
+  production: boolean,
+  operator: boolean,
+): string => {
+  const served = environment.CMS_ENVIRONMENT ?? "development";
+  if (production && served !== "production")
+    throw new ResourceRuntimeError("ENVIRONMENT_DISAGREES_WITH_NODE_ENV");
+  if (operator && environment.AGENT_AUTHORIZATION_ENVIRONMENT !== served)
+    throw new ResourceRuntimeError("ENVIRONMENT_DISAGREES_WITH_ISSUER");
+  return served;
+};
+
+const operatorClients = (
+  environment: NodeJS.ProcessEnv,
+): ReadonlyMap<string, RegisteredClient> => {
+  try {
+    return parseRegisteredClients(
+      environment.AGENT_AUTHORIZATION_CLIENTS ?? "",
+      { allowHosted: true },
+    );
+  } catch (error) {
+    throw new ResourceRuntimeError(
+      error instanceof RegisteredClientError ? error.code : "CLIENTS_MALFORMED",
+    );
+  }
+};
+
+/**
+ * Builds the resource-server boundary, or refuses. `null` only when the login
+ * door is OFF — which is the composition gate, not a failure.
  */
 export const createResourceRuntime = (
   environment: NodeJS.ProcessEnv = process.env,
 ): ResourceRuntime | null => {
-  if (!connectionsEnabled(environment)) return null;
+  if (!oauthSurfaceEnabled(environment)) return null;
+  const production = environment.NODE_ENV === "production";
+  const operator =
+    production || environment.AGENT_AUTHORIZATION_PROFILE === "operator";
 
   const databaseUrl = environment[RESOURCE_DATABASE_SETTING];
   if (!databaseUrl)
@@ -103,7 +151,15 @@ export const createResourceRuntime = (
   } catch {
     throw new ResourceRuntimeError("RESOURCE_DATABASE_MALFORMED");
   }
-  if (!["127.0.0.1", "localhost", "[::1]"].includes(connectionString.hostname))
+  // Development stays on loopback. Production's database is across a network, so
+  // the fence there is verified TLS, by exact spelling: the parser below also takes
+  // weaker modes for other callers, and pg reads host and TLS files from the query.
+  if (production) {
+    if (connectionString.search !== "?sslmode=verify-full")
+      throw new ResourceRuntimeError("RESOURCE_DATABASE_TLS_REQUIRED");
+  } else if (
+    !["127.0.0.1", "localhost", "[::1]"].includes(connectionString.hostname)
+  )
     throw new ResourceRuntimeError("RESOURCE_DATABASE_NOT_LOOPBACK");
 
   const issuer = frozen(
@@ -116,15 +172,32 @@ export const createResourceRuntime = (
     environment.AGENT_AUTHORIZATION_RESOURCE,
     "RESOURCE_REQUIRED",
   );
+  if (
+    production &&
+    (issuer.protocol !== "https:" || resource.protocol !== "https:")
+  )
+    throw new ResourceRuntimeError("PRODUCTION_HTTPS_REQUIRED");
+  const served = servedEnvironment(environment, production, operator);
+  const clients = operator ? operatorClients(environment) : new Map();
 
   // A missing key is a startup refusal, never a silently generated one: a new
   // key would make every previously sealed wrapper unreadable, which looks
   // exactly like every connection being revoked at once.
   const keys = wrapperKeysFrom(environment);
 
-  const pool = createPostgresPool(
-    parsePostgresConfig({ DATABASE_URL: databaseUrl, DATABASE_POOL_MAX: "4" }),
-  );
+  let poolConfig: ReturnType<typeof parsePostgresConfig>;
+  try {
+    poolConfig = parsePostgresConfig({
+      DATABASE_URL: databaseUrl,
+      DATABASE_POOL_MAX: "4",
+      ...(production
+        ? { DATABASE_SSL_CA_FILE: environment[AGENT_DATABASE_CA_SETTING] }
+        : {}),
+    });
+  } catch {
+    throw new ResourceRuntimeError("RESOURCE_DATABASE_REFUSED");
+  }
+  const pool = createPostgresPool(poolConfig);
   const connections = createAgentConnectionStore({ pool });
   const wrappers = createWrapperStore({ pool, keys });
 
@@ -177,11 +250,12 @@ export const createResourceRuntime = (
   };
 
   return {
+    clients,
     verifyAccessToken,
     readConnection,
     issuer: issuer.origin,
     resource: resource.href,
-    environment: environment.CMS_ENVIRONMENT ?? "development",
+    environment: served,
     // The boundary answers one shape on the wire whatever went wrong, so an
     // operator has no way to tell a store outage from a forged signature from
     // a revoked connection unless the code is recorded HERE. Nothing was
@@ -202,17 +276,31 @@ export const createResourceRuntime = (
   };
 };
 
-/** One runtime per process, built lazily so importing never opens a pool. */
+/**
+ * One runtime per process, built lazily so importing never opens a pool. A refusal
+ * is kept as well: the door asks on every request, a process's settings do not
+ * change while it runs, and a junk token must not re-read a file each time.
+ */
 let cached: ResourceRuntime | null | undefined;
+let refusal: unknown;
 
 export const resourceRuntime = (): ResourceRuntime | null => {
-  if (cached === undefined) cached = createResourceRuntime();
+  if (refusal !== undefined) throw refusal;
+  if (cached === undefined) {
+    try {
+      cached = createResourceRuntime();
+    } catch (error) {
+      refusal = error;
+      throw error;
+    }
+  }
   return cached;
 };
 
 /** Testing seam. Never called by the composition root. */
 export const resetResourceRuntime = (): void => {
   cached = undefined;
+  refusal = undefined;
 };
 
 /**
@@ -221,6 +309,10 @@ export const resetResourceRuntime = (): void => {
  * `null` is the CLOSED DOOR: a request presenting a connection token is
  * refused outright rather than falling through to the API-key resolver.
  * Wiring the real boundary did not remove that door; it gave it a hinge.
+ *
+ * This is the plugin path's, so `connectionsEnabled` alone decides what comes
+ * back, and Production always answers `null`. The login door takes its runtime
+ * from `resourceRuntime`, never from here.
  *
  * A REFUSAL HERE MUST NOT TAKE DOWN THE ADMIN. This is called inside
  * `buildConfig`, during module evaluation of the Payload config, so a thrown
@@ -240,7 +332,11 @@ export const connectionAuthDependencies = (
     process.stderr.write(`agent-connections composition refused: ${code}\n`),
 ): ConnectionAuthDependencies | null => {
   try {
-    return resourceRuntime();
+    // Built whenever the login door is on, whichever path it serves, so a bad
+    // setting is a bare code when the Admin starts and not on someone's first
+    // connect.
+    const runtime = resourceRuntime();
+    return connectionsEnabled() ? runtime : null;
   } catch (error) {
     report(
       error instanceof ResourceRuntimeError

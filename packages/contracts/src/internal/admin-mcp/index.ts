@@ -295,9 +295,17 @@ export type {
   AdminOpName,
 } from "./op-names.js";
 export {
+  ADMIN_MCP_AUTHORIZE_CEILING,
+  ADMIN_MCP_CONNECTION_LIFETIME_MS,
+  ADMIN_MCP_OPERATOR_ROW_EMAIL,
   ADMIN_MCP_TOOL_PROFILES,
+  ADMIN_USER_ROLES,
   adminMcpToolProfileSchema,
 } from "./profiles.js";
-export type { AdminMcpToolProfile } from "./profiles.js";
-export { ADMIN_MCP_DOOR_REFUSALS, adminWhoamiDataSchema } from "./whoami.js";
+export type { AdminMcpToolProfile, AdminUserRole } from "./profiles.js";
+export {
+  ADMIN_MCP_BYTE_WORK,
+  ADMIN_MCP_DOOR_REFUSALS,
+  adminWhoamiDataSchema,
+} from "./whoami.js";
 export type { AdminMcpDoorRefusal, AdminWhoamiData } from "./whoami.js";

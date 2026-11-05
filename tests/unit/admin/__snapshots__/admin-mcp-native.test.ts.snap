@@ -9,7 +9,7 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
       "openWorldHint": false,
       "readOnlyHint": true,
     },
-    "description": "Who this key is, what it can call now, when it expires. Call it first, and again when an admin_ tool is reported missing: a client may hold a stale tool list.",
+    "description": "Who this credential is, what it can call now, when it expires. Call it first, and again when an admin_ tool is reported missing: a client may hold a stale tool list.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {},
@@ -763,7 +763,7 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
       "openWorldHint": false,
       "readOnlyHint": true,
     },
-    "description": "Who this key is, what it can call now, when it expires. Call it first, and again when an admin_ tool is reported missing: a client may hold a stale tool list.",
+    "description": "Who this credential is, what it can call now, when it expires. Call it first, and again when an admin_ tool is reported missing: a client may hold a stale tool list.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {},
@@ -1517,7 +1517,7 @@ exports[`tool table > matches the checked-in tools/list for the read profile 1`]
       "openWorldHint": false,
       "readOnlyHint": true,
     },
-    "description": "Who this key is, what it can call now, when it expires. Call it first, and again when an admin_ tool is reported missing: a client may hold a stale tool list.",
+    "description": "Who this credential is, what it can call now, when it expires. Call it first, and again when an admin_ tool is reported missing: a client may hold a stale tool list.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {},

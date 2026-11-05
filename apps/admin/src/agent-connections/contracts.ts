@@ -84,9 +84,11 @@ export const PRESET_SCOPES: Readonly<
  * The MCP tools each preset may call. Derived from the preset rather than from
  * the token, so a token can never widen what its connection consented to.
  *
- * The five `editorial_*` tools are deliberately absent from both presets: a
+ * The five `editorial_*` tools are deliberately absent from every preset: a
  * connection is an Agent Administration identity and never inherits the
- * separate editorial domain, whatever its bearer presents.
+ * separate editorial domain, whatever its bearer presents. `operator` lists
+ * nothing because this map is the plugin path's; the login door serves that preset
+ * the native tools at profile full, and the plugin path never serves it.
  */
 export const PRESET_TOOLS: Readonly<
   Record<ConnectionPreset, readonly string[]>

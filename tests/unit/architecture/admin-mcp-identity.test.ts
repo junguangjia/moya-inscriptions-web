@@ -1,6 +1,10 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
+import {
+  ADMIN_MCP_CONNECTION_LIFETIME_MS,
+  ADMIN_MCP_OPERATOR_ROW_EMAIL,
+} from "@moya/contracts/internal/admin-mcp";
 import { describe, expect, it } from "vitest";
 
 import { repositoryRoot } from "./workspace-scanner.js";
@@ -196,6 +200,71 @@ describe("Admin MCP identity (admin-mcp-completion-v1, section 2)", () => {
     );
   });
 
+  it("lets only the door set the login door's strategy, and only the predicate read it", async () => {
+    const found: Record<string, number> = {};
+    for (const file of await adminSources()) {
+      const count = occurrences(await read(file), /mcp-connection/gu);
+      if (count) found[file] = count;
+    }
+    expect(found["src/editorial/access.ts"]).toBe(1);
+    expect(
+      Object.keys(found).filter(
+        (file) =>
+          file !== "src/editorial/access.ts" &&
+          file !== "src/admin-mcp/door.ts",
+      ),
+    ).toEqual([]);
+    expect(found["src/admin-mcp/door.ts"]).toBe(1);
+    // Not a strategy Payload or the plugin can produce for a caller, the way each
+    // of them stamps its own name in the pins above.
+    const dependency = (package_: string, file: string) =>
+      readFile(path.join(adminRoot, "node_modules", package_, file), "utf8");
+    for (const [package_, file] of [
+      ["payload", "dist/auth/strategies/jwt.js"],
+      ["payload", "dist/auth/strategies/apiKey.js"],
+      ["@payloadcms/plugin-mcp", "dist/endpoints/resolveAccessSettings.js"],
+    ] as const)
+      expect(await dependency(package_, file)).not.toContain("mcp-connection");
+    expect(await read("payload.config.ts")).not.toMatch(/\bstrategies\s*:/u);
+    expect(await read("src/users.ts")).not.toMatch(/\bstrategies\s*:/u);
+  });
+
+  it("reads the person exactly as the consent views stamp them", async () => {
+    const stamp = "`payload-user-${String(";
+    expect(await read("src/agent-connections/View.tsx")).toContain(stamp);
+    expect(await read("src/agent-connections/endpoints.ts")).toContain(stamp);
+    expect(await read("src/admin-mcp/door.ts")).toContain(
+      "/^payload-user-([1-9][0-9]*)$/u",
+    );
+  });
+
+  it("holds a connection to the issuer's Grant lifetime", async () => {
+    const provider = await readFile(
+      path.join(repositoryRoot, "services/agent-authorization/src/provider.ts"),
+      "utf8",
+    );
+    const operatorTtl = /const OPERATOR_TTL = \{[\s\S]*?\n\};/u.exec(provider);
+    expect(operatorTtl?.[0]).toContain("Grant: 180 * 24 * 60 * 60,");
+    expect(ADMIN_MCP_CONNECTION_LIFETIME_MS).toBe(180 * 24 * 60 * 60 * 1000);
+  });
+
+  it("builds a call's audit identity in one place", async () => {
+    const found: Record<string, number> = {};
+    for (const file of await adminSources()) {
+      if (!file.startsWith("src/admin-mcp/")) continue;
+      const count = occurrences(await read(file), /\bauditIdentity\(/gu);
+      if (count) found[file] = count;
+      expect([file, /\bkeyLabel: /u.test(await read(file))]).toEqual([
+        file,
+        file === "src/admin-mcp/door.ts",
+      ]);
+    }
+    expect(found).toEqual({
+      "src/admin-mcp/guard.ts": 1,
+      "src/admin-mcp/tools/execute.ts": 1,
+    });
+  });
+
   it("adds the role value alone in its own migration", async () => {
     const migration = await read(
       "src/migrations/20261103_143652_ai_operator_role.ts",
@@ -254,6 +323,41 @@ describe("Admin MCP identity (admin-mcp-completion-v1, section 2)", () => {
     expect(audit).toContain('BEFORE TRUNCATE ON "mcp_audit_events"');
     expect(audit).toContain("FOR EACH STATEMENT EXECUTE FUNCTION");
     expect(audit).toContain("MCP_AUDIT_APPEND_ONLY");
+  });
+
+  it("adds the login door's identity in its own migration, after the role value", async () => {
+    const name = "20261105_131739_mcp_connection_identity";
+    const index = await read("src/migrations/index.ts");
+    expect(index.indexOf(`name: "${name}"`)).toBeGreaterThan(
+      index.indexOf('name: "20261103_143652_ai_operator_role"'),
+    );
+    const migration = await read(`src/migrations/${name}.ts`);
+    const up = /function up[\s\S]*?\n\}/u.exec(migration)?.[0] ?? "";
+    expect(up.match(/;/gu)).toHaveLength(4);
+    expect(up).toContain(
+      'ALTER TABLE "mcp_audit_events" ADD COLUMN "connection_id" varchar;',
+    );
+    expect(up).toContain(
+      'ALTER TABLE "mcp_audit_events" ADD COLUMN "authorized_by" varchar;',
+    );
+    // No password, and a row that already holds the address stays as it is.
+    expect(up).toContain(
+      `INSERT INTO "users" ("role", "email") VALUES ('ai_operator', '${ADMIN_MCP_OPERATOR_ROW_EMAIL}') ON CONFLICT DO NOTHING;`,
+    );
+    expect(up).not.toMatch(/"(?:salt|hash)"/u);
+    const snapshot = await read(`src/migrations/${name}.json`);
+    expect(snapshot).not.toContain(ADMIN_MCP_OPERATOR_ROW_EMAIL);
+    const columns = (
+      JSON.parse(snapshot) as {
+        tables: Record<string, { columns: Record<string, unknown> }>;
+      }
+    ).tables["public.mcp_audit_events"]!.columns;
+    expect(Object.keys(columns)).toEqual(
+      expect.arrayContaining(["connection_id", "authorized_by"]),
+    );
+    const types = await read("src/payload-types.ts");
+    expect(types).toContain("  connectionId?: string | null;");
+    expect(types).toContain("  authorizedBy?: string | null;");
   });
 
   it("keeps the singleton index and the seed out of the Payload snapshot, as the triggers are", async () => {

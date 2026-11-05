@@ -1,3 +1,4 @@
+import { ADMIN_MCP_OPERATOR_ROW_EMAIL } from "@moya/contracts/internal/admin-mcp";
 import { createLocalReq, type Payload } from "payload";
 import { lockEditorialKey, withEditorialTransaction } from "./transaction";
 
@@ -24,6 +25,15 @@ export const provisionInitialOwner = async (
       collection: "users",
       overrideAccess: true,
       req,
+      // The migrations seed the login door's row, which nobody can sign in with, so
+      // it is not an account yet. Only that exact row: its address on another role,
+      // or another ai_operator account, still refuses.
+      where: {
+        or: [
+          { email: { not_equals: ADMIN_MCP_OPERATOR_ROW_EMAIL } },
+          { role: { not_equals: "ai_operator" } },
+        ],
+      },
     });
     if (existing.totalDocs !== 0)
       throw new Error("INITIAL_OWNER_ALREADY_EXISTS");

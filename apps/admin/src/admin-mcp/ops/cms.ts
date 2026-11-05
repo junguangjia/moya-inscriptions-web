@@ -244,7 +244,7 @@ export const cmsOps: Readonly<Record<CmsOpName, AdminOpEntry>> = {
     },
   ),
   "document.lock_release": reversibleOp(
-    "Give back a lock this key's account holds, after a takeover with no save.",
+    "Give back a lock this credential's account holds, after a takeover with no save.",
     "state_idempotent",
     {
       input: adminLockReleaseInputSchema,

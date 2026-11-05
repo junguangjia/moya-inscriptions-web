@@ -20,6 +20,7 @@ import { z } from "zod";
 import { writeAuditEvent } from "../audit";
 import { EXECUTE_BUDGET_MS } from "../budget";
 import { readMcpControl } from "../control/state";
+import { auditIdentity } from "../door";
 import type { AdminMcpKey } from "../door";
 import {
   CODE_GUIDE,
@@ -351,8 +352,7 @@ const auditTarget = async (
       requestId: call.requestId,
       ok: COMPLETE.has(state),
       code,
-      keyId: key.id,
-      ...(key.label ? { keyLabel: key.label } : {}),
+      ...auditIdentity(key),
       userId: String(key.user.id),
       ...(target?.type ? { targetType: target.type } : {}),
       ...(id === undefined ? {} : { targetId: String(id) }),
