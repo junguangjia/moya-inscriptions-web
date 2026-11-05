@@ -26,12 +26,28 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const read = (file) =>
   readFileSync(new URL(file, new URL("../", import.meta.url)), "utf8");
 
-const STEP =
+// The mandatory run is on the PostgreSQL 16 service. The PostgreSQL 18 run it
+// was first added as stays in the job behind the workflow's one switch,
+// CI_POSTGRES_18, which the Owner paused on 2026-11-05.
+const STEP = "Development OAuth consent and Backend tool read on PostgreSQL 16";
+const STEP_18 =
   "Development OAuth consent, revocation and a real Backend tool read";
 const OPERATOR_STEP =
   "Login door consent in two browsers and the official SDK client";
 const COMMAND = "pnpm test:cms:agent-connections --profile complete";
 const PRODUCTION_BROWSER = "pnpm test:cms:browser --profile complete";
+const PG16_URL =
+  "CMS_TEST_DATABASE_URL: postgresql://cms_qa@127.0.0.1:5433/cms_synthetic_test";
+const PG18_URL =
+  "CMS_TEST_DATABASE_URL: postgresql://cms_qa@127.0.0.1:5432/cms_synthetic_test";
+
+// One step's own lines: from its `- name:` line to the next step or the end.
+const stepOf = (job, name) => {
+  const at = job.indexOf(`      - name: ${name}\n`);
+  if (at < 0) return { at, body: "" };
+  const next = job.indexOf("\n      - ", at + 1);
+  return { at, body: job.slice(at, next < 0 ? undefined : next) };
+};
 
 const cmsJob = () => {
   const workflow = read(".github/workflows/ci.yml");
@@ -50,22 +66,43 @@ const cmsJob = () => {
 describe("the agent-connections acceptance runs in CI", () => {
   it("is a mandatory step of the cms job, after its browser preparation", () => {
     const job = cmsJob();
-    const step = job.indexOf(`- name: ${STEP}`);
+    const { at: step, body } = stepOf(job, STEP);
     assert.ok(step > 0, "the named step must exist");
     // After the Playwright install: the harness drives a real browser and
     // would otherwise fail on a missing one rather than on its own property.
     assert.ok(step > job.indexOf("playwright install --with-deps"));
-    // And after the Production Admin browser check, which keeps running
+    // And after BOTH Production Admin browser checks, which keep running
     // against a tree this harness has not touched.
-    assert.ok(step > job.indexOf(`run: ${PRODUCTION_BROWSER}`));
-    assert.ok(job.includes(`run: ${COMMAND}`));
+    assert.ok(step > job.lastIndexOf(`run: ${PRODUCTION_BROWSER}`));
+    assert.ok(body.includes(`run: ${COMMAND}\n`), "it runs the acceptance");
+    // On the PostgreSQL 16 service, the minimum supported Production major.
+    assert.ok(body.includes(`${PG16_URL}\n`), "it uses the 5433 service");
+    assert.doesNotMatch(body, /:5432\//u, "not the PostgreSQL 18 service");
     // The COMPLETE profile, not a shorter one: the acceptance is the point.
     assert.doesNotMatch(job, /test:cms:agent-connections --profile feedback/u);
   });
 
+  it("keeps the PostgreSQL 18 run, behind the one switch only", () => {
+    const job = cmsJob();
+    const { at, body } = stepOf(job, STEP_18);
+    // Paused, not deleted: setting CI_POSTGRES_18 to "on" brings it back.
+    assert.ok(at > 0, "the PostgreSQL 18 run must still exist");
+    assert.ok(at < stepOf(job, STEP).at, "it precedes the mandatory run");
+    assert.ok(at > job.lastIndexOf(`run: ${PRODUCTION_BROWSER}`));
+    assert.ok(body.includes(`${PG18_URL}\n`), "it uses the 5432 service");
+    assert.ok(body.includes(`run: ${COMMAND}\n`));
+    const conditions = [...body.matchAll(/^\s+if:\s*(.+)$/gmu)].map((match) =>
+      match[1].trim(),
+    );
+    assert.deepEqual(conditions, ["env.CI_POSTGRES_18 == 'on'"]);
+    assert.doesNotMatch(body, /continue-on-error|\|\|\s*true/u);
+    // Exactly these two runs, so a third copy cannot stand in for either.
+    assert.equal(job.split(`run: ${COMMAND}\n`).length - 1, 2);
+  });
+
   it("cannot pass softly", () => {
     const job = cmsJob();
-    const at = job.indexOf(`- name: ${STEP}`);
+    const at = stepOf(job, STEP).at;
     // Without this the whole check passes vacuously when the step is gone:
     // `indexOf` answers -1, `slice(-1)` is one character, and none of the
     // patterns below match one character. Measured by deleting the step.
@@ -161,6 +198,12 @@ describe("the agent-connections acceptance runs in CI", () => {
         "Native Owner create, publish, autosave, batch approval and restore",
       ),
     );
+    // The one that runs while PostgreSQL 18 is paused: unconditional, 5433.
+    const pg16 = stepOf(job, "Native Owner browser flow on PostgreSQL 16");
+    assert.ok(pg16.at > 0, "the PostgreSQL 16 Owner browser flow must exist");
+    assert.ok(pg16.body.includes(`${PG16_URL}\n`));
+    assert.ok(pg16.body.includes(`run: ${PRODUCTION_BROWSER}\n`));
+    assert.doesNotMatch(pg16.body, /^\s+if:/mu);
     // Two harnesses, two claims, neither standing in for the other. The
     // production one boots the STANDALONE build, where every
     // Development-gated surface is absent from the emitted JavaScript rather
