@@ -252,9 +252,15 @@ export class AuthorCommunityService {
     }
     const middle = cards.length >> 1;
     const resolved: ContentCard[] = [];
+    const failed: { part: readonly DiscoveryCardRecord[]; error: unknown }[] =
+      [];
+    // Both halves first: a good half is cheap to keep, and it decides outage.
     for (const part of [cards.slice(0, middle), cards.slice(middle)]) {
-      // Past the budget the remaining rows stay text-only for this read.
-      if (walk.reads >= TIMELINE_ISOLATION_READS) break;
+      if (walk.reads >= TIMELINE_ISOLATION_READS) {
+        // Past the budget the remaining rows stay text-only for this read.
+        console.warn("[timeline] linked_image_budget");
+        break;
+      }
       walk.reads += 1;
       try {
         const read = await this.cards(part);
@@ -262,9 +268,11 @@ export class AuthorCommunityService {
         resolved.push(...read);
       } catch (error) {
         if (isCardAvailabilityFailure(error)) throw error;
-        resolved.push(...(await this.isolateCards(part, error, walk)));
+        failed.push({ part, error });
       }
     }
+    for (const { part, error } of failed)
+      resolved.push(...(await this.isolateCards(part, error, walk)));
     return resolved;
   }
   /** The adapter computes every total in one snapshot with the lists' own rules. */

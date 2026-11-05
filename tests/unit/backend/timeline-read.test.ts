@@ -350,7 +350,7 @@ describe("timeline service", () => {
         { resolveMany },
       ).timeline(),
     ).rejects.toThrow("credentials expired");
-    expect(resolveMany.mock.calls.length).toBeLessThan(12);
+    expect(resolveMany.mock.calls.length).toBeLessThan(16);
   });
 
   it("keeps the rows when one record fails beside records with no image", async () => {

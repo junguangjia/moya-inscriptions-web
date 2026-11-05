@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, useRef } from "react";
+import { act, useCallback, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -14,7 +14,6 @@ import type { TimelineWindow } from "./use-timeline-window";
 
 const ROW_HEIGHT = 100;
 const rows = Array.from({ length: 100 }, (_, at) => ({ key: `row-${at}` }));
-const estimate = () => ROW_HEIGHT;
 
 let observed: { callback: ResizeObserverCallback; elements: Set<Element> }[];
 let container: HTMLDivElement;
@@ -30,6 +29,8 @@ interface HarnessProps {
   readonly active?: boolean;
   readonly enabled?: boolean;
   readonly resetKey?: string;
+  /** A layout's row height, which rebuilds the offsets with the layout. */
+  readonly rowHeight?: number;
   /** A PC: no scroll surface around the list, so the document scrolls. */
   readonly documentScroller?: boolean;
 }
@@ -39,12 +40,14 @@ const Harness = ({
   documentScroller = false,
   enabled = true,
   resetKey = "phone",
+  rowHeight = ROW_HEIGHT,
 }: HarnessProps) => {
   const listRef = useRef<HTMLDivElement>(null);
+  const estimateRow = useCallback(() => rowHeight, [rowHeight]);
   const view = useTimelineWindow({
     active,
     enabled,
-    estimate,
+    estimate: estimateRow,
     listRef,
     onScrollSettled: settled,
     resetKey,
@@ -395,6 +398,23 @@ describe("useTimelineWindow", () => {
     expect(scrollTo.mock.calls.at(-1)?.[0]).toBe(
       current.scrollTopForIndex(reading),
     );
+  });
+
+  it("holds the reader's row when the new layout's rows have another height", () => {
+    render({ resetKey: "phone:phone", rowHeight: 100 });
+    listTop = -983;
+    fireScroll();
+    const reading = current.topIndex;
+    expect(reading).toBeGreaterThan(0);
+    const before = current.scrollTopForIndex(reading);
+    scrollTo.mockClear();
+    // The shell commits the layout before this hook's own resize listener runs.
+    listWidth = 744;
+    render({ resetKey: "tablet:tablet", rowHeight: 200 });
+    expect(scrollTo.mock.calls.at(-1)?.[0]).toBe(
+      current.scrollTopForIndex(reading),
+    );
+    expect(current.scrollTopForIndex(reading)).toBeGreaterThan(before);
   });
 
   it("does not hold a row for a layout change while another feed is on screen", () => {

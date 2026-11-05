@@ -187,18 +187,15 @@ export const useTimelineWindow = <Row extends TimelineWindowRow>({
           state.measuredWidth !== 0 &&
           state.enabled &&
           state.active &&
-          activeAnchor(anchor.current) === null
-        ) {
-          const index = rowIndexAtOffset(
-            state.offsets,
-            viewTopOf(list, scroller) + state.stickyTop,
-          );
-          if (index > 0)
-            anchor.current = {
-              index,
-              until: performance.now() + JUMP_SETTLE_MS,
-            };
-        }
+          activeAnchor(anchor.current) === null &&
+          state.topIndex > 0
+        )
+          // Not from the offsets: a layout change has already rebuilt them, so
+          // the old scroll position would name a different row.
+          anchor.current = {
+            index: state.topIndex,
+            until: performance.now() + JUMP_SETTLE_MS,
+          };
         setCorrections(NO_CORRECTIONS);
         setMeasuredWidth(listWidth);
       }
