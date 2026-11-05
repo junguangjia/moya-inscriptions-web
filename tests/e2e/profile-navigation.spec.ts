@@ -306,6 +306,47 @@ test("Profile empty collections share collapse and preserve long body offsets", 
   expect(Math.abs(g.top - pagePadding - g.collapse)).toBeLessThanOrEqual(1);
 });
 
+test("A desktop profile shows its whole Search field and rests clear of the header", async ({
+  page,
+}, info) => {
+  test.skip(
+    !info.project.name.startsWith("desktop"),
+    "The Search field and the taller header belong to full desktop width.",
+  );
+  await fixture(page);
+  const header = page.locator("[data-author-profile] > header").first();
+  const search = header.getByRole("button", { name: "打开搜索", exact: true });
+  const label = search.getByText("搜索", { exact: true });
+  await expect(label).toBeVisible();
+  for (const width of [1024, 1280, 1920]) {
+    await page.setViewportSize({ width, height: 800 });
+    await expect(page.locator("[data-product-shell]")).toHaveAttribute(
+      "data-desktop",
+      "true",
+    );
+    const box = async (target: typeof header) => {
+      const found = await target.boundingBox();
+      if (found === null) throw new Error(`Missing geometry at ${width}px`);
+      return found;
+    };
+    const headerBox = await box(header);
+    const searchBox = await box(search);
+    const labelBox = await box(label);
+    expect(searchBox.x).toBeGreaterThanOrEqual(headerBox.x);
+    expect(searchBox.x + searchBox.width).toBeLessThanOrEqual(
+      headerBox.x + headerBox.width,
+    );
+    expect(labelBox.x).toBeGreaterThanOrEqual(searchBox.x);
+    expect(labelBox.x + labelBox.width).toBeLessThanOrEqual(
+      searchBox.x + searchBox.width,
+    );
+    const avatarBox = await box(
+      page.getByRole("button", { name: "更换头像", exact: true }),
+    );
+    expect(avatarBox.y).toBeGreaterThanOrEqual(headerBox.y + headerBox.height);
+  }
+});
+
 /** Where the identity rests, where it is, and the stage shown. */
 async function stage(page: Page) {
   return page.evaluate(() => {
