@@ -10,7 +10,7 @@ import {
 /** The only proxy trust boundary: reject before provider, resume, or cookies. */
 export const articleAuthorizationRequestAllowed = (
   request: IncomingMessage,
-  config: ArticleAuthorizationConfig,
+  config: Pick<ArticleAuthorizationConfig, "issuer" | "environment">,
 ): boolean => {
   const issuer = new URL(config.issuer);
   if (request.headers.host !== issuer.host) return false;

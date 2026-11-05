@@ -7,10 +7,16 @@
  * service that invents an issuer, a resource or a sealing key would be
  * authorising against values nobody chose.
  *
- * The composition gate is Development AND an explicit opt-in, the same shape
- * `connectionsEnabled` uses in the Admin, and for the same reason: a
- * Development default that switches itself on is how a Development-only
- * surface ends up somewhere else.
+ * The composition gate has two doors and each needs its own explicit opt-in:
+ * Development with `AGENT_AUTHORIZATION_ENABLED`, the same shape
+ * `connectionsEnabled` uses in the Admin, and Production with
+ * `ADMIN_MCP_OAUTH_ENABLED` (amendment 2026-11-05). Neither setting opens the
+ * other's door, because a default that switches itself on is how a surface ends
+ * up somewhere nobody chose.
+ *
+ * Production always runs the `operator` profile. Development reads
+ * `AGENT_AUTHORIZATION_PROFILE` and defaults to `read-only`, so a Development
+ * deployment means what it always meant unless it asks otherwise.
  */
 
 import { parseRegisteredClients } from "@moya/community-postgres";
@@ -27,8 +33,17 @@ export class AuthorizationConfigError extends Error {
 }
 
 export const AUTHORIZATION_ENABLED_SETTING = "AGENT_AUTHORIZATION_ENABLED";
+export const OPERATOR_ENABLED_SETTING = "ADMIN_MCP_OAUTH_ENABLED";
+export const AUTHORIZATION_PROFILE_SETTING = "AGENT_AUTHORIZATION_PROFILE";
+
+/**
+ * What a consent on this issuer can grant. `operator` is what an administrator
+ * grants by signing in; `read-only` is the Development-only profile from #141.
+ */
+export type AuthorizationProfile = "read-only" | "operator";
 
 export interface AuthorizationConfig {
+  readonly profile: AuthorizationProfile;
   /** The canonical issuer. Must be an exact origin with no path. */
   readonly issuer: string;
   /** The RFC 8707 resource indicator this provider mints tokens for. */
@@ -71,13 +86,27 @@ const required = (raw: string | undefined, name: string): string => {
 };
 
 /**
- * Development AND an explicit opt-in. Both, never either.
+ * An explicit opt-in for the environment this is. Both halves, never either.
  */
 export const authorizationEnabled = (
   environment: NodeJS.ProcessEnv = process.env,
 ): boolean =>
-  environment.NODE_ENV === "development" &&
-  environment[AUTHORIZATION_ENABLED_SETTING] === "true";
+  (environment.NODE_ENV === "development" &&
+    environment[AUTHORIZATION_ENABLED_SETTING] === "true") ||
+  (environment.NODE_ENV === "production" &&
+    environment[OPERATOR_ENABLED_SETTING] === "true");
+
+const profileFrom = (environment: NodeJS.ProcessEnv): AuthorizationProfile => {
+  if (environment.NODE_ENV === "production") return "operator";
+  const raw = environment[AUTHORIZATION_PROFILE_SETTING];
+  if (raw === undefined || raw === "") return "read-only";
+  if (raw !== "read-only" && raw !== "operator")
+    throw new AuthorizationConfigError(
+      "PROFILE_UNKNOWN",
+      AUTHORIZATION_PROFILE_SETTING,
+    );
+  return raw;
+};
 
 /**
  * The shared registry, with this service's refusals wrapped around the shared
@@ -87,13 +116,14 @@ export const authorizationEnabled = (
  */
 const registeredClients = (
   environment: NodeJS.ProcessEnv,
+  profile: AuthorizationProfile,
 ): ReadonlyMap<string, RegisteredClient> => {
   const raw = required(
     environment.AGENT_AUTHORIZATION_CLIENTS,
     "AGENT_AUTHORIZATION_CLIENTS",
   );
   try {
-    return parseRegisteredClients(raw);
+    return parseRegisteredClients(raw, { allowHosted: profile === "operator" });
   } catch (error) {
     throw new AuthorizationConfigError(
       error instanceof Error && "code" in error
@@ -104,9 +134,53 @@ const registeredClients = (
   }
 };
 
+/**
+ * The public boundary. A Production setting is read from a file a person edits,
+ * so anything the URL parser would quietly tidy up is refused rather than
+ * normalized: a stray `?` becomes part of the resource every token is bound to.
+ */
+const requireProductionUrl = (
+  url: URL,
+  name: string,
+  raw: string | undefined,
+): void => {
+  if (url.protocol !== "https:")
+    throw new AuthorizationConfigError("PRODUCTION_HTTPS_REQUIRED", name);
+  if (raw === undefined || /[\s?#]/u.test(raw))
+    throw new AuthorizationConfigError("NOT_A_PLAIN_URL", name);
+};
+
+/** Cookies are host-scoped, so sharing Article's host would share its jar. */
+const refuseArticleHost = (
+  issuer: URL,
+  environment: NodeJS.ProcessEnv,
+): void => {
+  const article = environment.ARTICLE_AUTHORING_ISSUER;
+  if (article === undefined || !URL.canParse(article)) return;
+  if (new URL(article).hostname === issuer.hostname)
+    throw new AuthorizationConfigError(
+      "ISSUER_SHARES_ARTICLE_HOST",
+      "AGENT_AUTHORIZATION_ISSUER",
+    );
+};
+
+/** The grant says where it was issued, so that claim has to match the process. */
+const refuseEnvironmentDisagreement = (
+  value: string,
+  production: boolean,
+): void => {
+  if ((value === "production") !== production)
+    throw new AuthorizationConfigError(
+      "ENVIRONMENT_DISAGREES_WITH_NODE_ENV",
+      "AGENT_AUTHORIZATION_ENVIRONMENT",
+    );
+};
+
 export const authorizationConfigFrom = (
   environment: NodeJS.ProcessEnv,
 ): AuthorizationConfig => {
+  const production = environment.NODE_ENV === "production";
+  const profile = profileFrom(environment);
   const issuer = origin(
     environment.AGENT_AUTHORIZATION_ISSUER,
     "AGENT_AUTHORIZATION_ISSUER",
@@ -119,6 +193,7 @@ export const authorizationConfigFrom = (
       "ISSUER_MUST_BE_ORIGIN",
       "AGENT_AUTHORIZATION_ISSUER",
     );
+  refuseArticleHost(issuer, environment);
 
   const resource = origin(
     environment.AGENT_AUTHORIZATION_RESOURCE,
@@ -139,6 +214,34 @@ export const authorizationConfigFrom = (
       `${issuer.hostname}`,
     );
 
+  if (production) {
+    requireProductionUrl(
+      issuer,
+      "AGENT_AUTHORIZATION_ISSUER",
+      environment.AGENT_AUTHORIZATION_ISSUER,
+    );
+    requireProductionUrl(
+      resource,
+      "AGENT_AUTHORIZATION_RESOURCE",
+      environment.AGENT_AUTHORIZATION_RESOURCE,
+    );
+    requireProductionUrl(
+      consent,
+      "AGENT_AUTHORIZATION_CONSENT_URL",
+      environment.AGENT_AUTHORIZATION_CONSENT_URL,
+    );
+    if (consent.pathname !== "/")
+      throw new AuthorizationConfigError(
+        "CONSENT_MUST_BE_ORIGIN",
+        "AGENT_AUTHORIZATION_CONSENT_URL",
+      );
+    if (resource.pathname !== "/api/mcp")
+      throw new AuthorizationConfigError(
+        "RESOURCE_MUST_BE_THE_MCP_PATH",
+        "AGENT_AUTHORIZATION_RESOURCE",
+      );
+  }
+
   const port = Number(
     required(environment.AGENT_AUTHORIZATION_PORT, "AGENT_AUTHORIZATION_PORT"),
   );
@@ -147,13 +250,28 @@ export const authorizationConfigFrom = (
       "NOT_A_PORT",
       "AGENT_AUTHORIZATION_PORT",
     );
-  if (issuer.port !== "" && Number(issuer.port) !== port)
+  // Behind a proxy in Production, so the public port and the listener are two
+  // different things and being equal means something is pointed at the wrong one.
+  if (production) {
+    if (port === Number(issuer.port || 443))
+      throw new AuthorizationConfigError(
+        "LISTENER_PORT_IS_THE_PUBLIC_PORT",
+        "AGENT_AUTHORIZATION_PORT",
+      );
+  } else if (issuer.port !== "" && Number(issuer.port) !== port)
     throw new AuthorizationConfigError(
       "ISSUER_PORT_DISAGREES_WITH_LISTENER",
       `${issuer.port} vs ${port}`,
     );
 
+  const environmentName = required(
+    environment.AGENT_AUTHORIZATION_ENVIRONMENT,
+    "AGENT_AUTHORIZATION_ENVIRONMENT",
+  );
+  refuseEnvironmentDisagreement(environmentName, production);
+
   return {
+    profile,
     issuer: issuer.origin,
     resource: resource.href,
     consentBaseUrl: consent.origin,
@@ -162,11 +280,8 @@ export const authorizationConfigFrom = (
     // assumed.
     host: "127.0.0.1",
     port,
-    clients: registeredClients(environment),
-    environment: required(
-      environment.AGENT_AUTHORIZATION_ENVIRONMENT,
-      "AGENT_AUTHORIZATION_ENVIRONMENT",
-    ),
+    clients: registeredClients(environment, profile),
+    environment: environmentName,
     databaseUrl: required(
       environment.AGENT_AUTHORIZATION_DATABASE_URL,
       "AGENT_AUTHORIZATION_DATABASE_URL",

@@ -12,7 +12,7 @@ import console from "node:console";
  * sees the old set or the new one. Output carries counts only: no row content
  * and no connection string.
  */
-export const TIMELINE_MIGRATION_ID = "20261105020000";
+export const TIMELINE_MIGRATION_ID = "20261105235900";
 const migrationVariable = "APP_MIGRATION_DATABASE_URL";
 const INSERT_BATCH_ROWS = 200;
 const ISSUES_SHOWN = 5;

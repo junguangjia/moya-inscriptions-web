@@ -111,7 +111,9 @@ describe("community migration family", () => {
         "20261102010000_comment_inline_images.sql",
         "20261104010000_ai_operator_locate_indexes.sql",
         "20261105010000_article_consent_resume_secret.sql",
-        "20261105020000_timeline_entries.sql",
+        "20261105020000_agent_connection_operator_preset.sql",
+        "20261105030000_agent_connection_resume_secret.sql",
+        "20261105235900_timeline_entries.sql",
       ],
     );
     expect(files.every((file) => file.sql.includes("community."))).toBe(true);
@@ -125,7 +127,7 @@ describe("community migration family", () => {
       ),
     );
     const { sql } = files.find(
-      ({ filename }) => filename === "20261105020000_timeline_entries.sql",
+      ({ filename }) => filename === "20261105235900_timeline_entries.sql",
     )!;
     const listed = (constraint: string) =>
       [

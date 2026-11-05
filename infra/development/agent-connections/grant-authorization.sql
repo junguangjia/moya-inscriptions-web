@@ -155,6 +155,9 @@ BEGIN
   -- resumed_at and grant_id. The provider never authenticates a human, so it
   -- must not be able to say who consented, know the browser's single-use
   -- secret, or record a decision -- at INSERT or at UPDATE.
+  --
+  -- `resume_secret_digest` is absent from the INSERT and UPDATE lists for the same
+  -- reason. SELECT lets it compare the digest; it never holds the secret.
   EXECUTE format(
     'GRANT SELECT ON TABLE community.agent_connection_consents TO %I',
     provider_role);
@@ -165,6 +168,11 @@ BEGIN
   EXECUTE format(
     'GRANT UPDATE (resumed_at, grant_id)
        ON TABLE community.agent_connection_consents TO %I', provider_role);
+
+  -- The one way it removes a consent row. It holds no DELETE on that table.
+  EXECUTE format(
+    'GRANT EXECUTE ON FUNCTION community.agent_connection_consents_reap(INTEGER) TO %I',
+    provider_role);
 
   -- Startup readiness verifies the ledger read-only, exactly as the App role.
   EXECUTE format(
@@ -181,7 +189,8 @@ BEGIN
     consent_role);
   EXECUTE format(
     'GRANT UPDATE (ticket_digest, human_account_id, connection_id,
-                   decision, decided_at, granted_generation)
+                   decision, decided_at, granted_generation,
+                   resume_secret_digest)
        ON TABLE community.agent_connection_consents TO %I', consent_role);
 
   -- The connection authority: status, generation and the consent timestamp
