@@ -29,6 +29,7 @@ const settled = vi.fn();
 interface HarnessProps {
   readonly active?: boolean;
   readonly enabled?: boolean;
+  readonly resetKey?: string;
   /** A PC: no scroll surface around the list, so the document scrolls. */
   readonly documentScroller?: boolean;
 }
@@ -37,6 +38,7 @@ const Harness = ({
   active = true,
   documentScroller = false,
   enabled = true,
+  resetKey = "phone",
 }: HarnessProps) => {
   const listRef = useRef<HTMLDivElement>(null);
   const view = useTimelineWindow({
@@ -45,7 +47,7 @@ const Harness = ({
     estimate,
     listRef,
     onScrollSettled: settled,
-    resetKey: "phone",
+    resetKey,
     rows,
     scrollTo,
     stickyTop: 36,
@@ -370,11 +372,38 @@ describe("useTimelineWindow", () => {
 
   it("does not hold a row on the first read after being re-enabled", () => {
     render();
+    listTop = -983;
+    fireScroll();
     render({ enabled: false });
     scrollTo.mockClear();
     listWidth = 430;
     render({ enabled: true });
     expect(current.width).toBe(430);
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("holds the reader's row when a width change also changes the layout", () => {
+    render({ resetKey: "tablet:tablet" });
+    listTop = -983;
+    fireScroll();
+    const reading = current.topIndex;
+    expect(reading).toBeGreaterThan(0);
+    scrollTo.mockClear();
+    listWidth = 1100;
+    render({ resetKey: "tablet:wide" });
+    expect(scrollTo).toHaveBeenCalled();
+    expect(scrollTo.mock.calls.at(-1)?.[0]).toBe(
+      current.scrollTopForIndex(reading),
+    );
+  });
+
+  it("does not hold a row for a layout change while another feed is on screen", () => {
+    render({ active: false, resetKey: "tablet:tablet" });
+    listTop = -983;
+    fireScroll();
+    scrollTo.mockClear();
+    listWidth = 1100;
+    render({ active: false, resetKey: "tablet:wide" });
     expect(scrollTo).not.toHaveBeenCalled();
   });
 

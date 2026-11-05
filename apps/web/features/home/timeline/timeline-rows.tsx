@@ -87,6 +87,8 @@ const TimelineRowMedia = ({
   readonly listWidth: number;
 }) => {
   const [failed, setFailed] = useState(false);
+  // A refreshed list is a new entry object: try again, even with the same URL.
+  useEffect(() => setFailed(false), [entry]);
   // During a rail drag new rows keep an empty box; rows already on screen
   // keep their image. Loading resumes when the drag has stopped.
   const [armed, setArmed] = useState(!held);
@@ -132,6 +134,7 @@ const TimelineRowMedia = ({
     <span
       className={styles.media}
       data-timeline-media={armed ? (failed ? "failed" : "image") : "held"}
+      {...(failed ? { "aria-label": media.alt, role: "img" } : {})}
       style={{ width: box.width, height: box.height }}
     >
       {content()}

@@ -36,6 +36,9 @@ import { mapTimeline } from "../mappers/timeline-contract-mapper.js";
 const noRenditionUrls: CatalogRenditionUrls = new Map();
 
 /** Public application boundary; the adapter enforces transactional ownership. */
+const TIMELINE_OUTAGE_FAILED_RECORDS = 3;
+const TIMELINE_ISOLATION_READS = 32;
+
 const isCardAvailabilityFailure = (error: unknown) =>
   isCatalogQueryUnavailableError(error) ||
   isCommunityStoreUnavailableError(error);
@@ -209,8 +212,7 @@ export class AuthorCommunityService {
   }
   /**
    * One record's unresolvable image leaves that row text-only instead of
-   * failing every other row. An availability failure repeats for every row, so
-   * it fails the read at once, and so does no image resolving from several.
+   * failing every other row. An availability failure fails the read at once.
    */
   private async timelineCards(
     cards: readonly DiscoveryCardRecord[],
@@ -220,37 +222,50 @@ export class AuthorCommunityService {
       return await this.cards(cards);
     } catch (batchError) {
       if (isCardAvailabilityFailure(batchError)) throw batchError;
-      const resolved = await this.isolateCards(cards);
-      const images = cards.filter(({ media }) => media !== null).length;
-      if (images > 1 && !resolved.some(({ media }) => media !== null))
-        throw batchError;
+      const resolved = await this.isolateCards(cards, batchError, {
+        reads: 0,
+        failedRecords: 0,
+        imageResolved: false,
+      });
       console.warn("[timeline] linked_image_fallback");
       return resolved;
     }
   }
-  /** Halves a failing batch: one bad record costs a few reads, not one a row. */
+  /**
+   * Halves a failed batch, so one bad record costs a few reads, not one a row.
+   * Several records failing with no image resolved is an outage that arrived as
+   * a plain error, such as expired storage credentials, so it stops the walk.
+   */
   private async isolateCards(
     cards: readonly DiscoveryCardRecord[],
+    failure: unknown,
+    walk: { reads: number; failedRecords: number; imageResolved: boolean },
   ): Promise<ContentCard[]> {
-    if (cards.length <= 1) {
-      try {
-        return await this.cards(cards);
-      } catch (error) {
-        if (isCardAvailabilityFailure(error)) throw error;
-        return [];
-      }
+    if (cards.length === 1) {
+      walk.failedRecords += 1;
+      if (
+        walk.failedRecords >= TIMELINE_OUTAGE_FAILED_RECORDS &&
+        !walk.imageResolved
+      )
+        throw failure;
+      return [];
     }
     const middle = cards.length >> 1;
-    const halves: ContentCard[] = [];
+    const resolved: ContentCard[] = [];
     for (const part of [cards.slice(0, middle), cards.slice(middle)]) {
+      // Past the budget the remaining rows stay text-only for this read.
+      if (walk.reads >= TIMELINE_ISOLATION_READS) break;
+      walk.reads += 1;
       try {
-        halves.push(...(await this.cards(part)));
+        const read = await this.cards(part);
+        walk.imageResolved ||= read.some(({ media }) => media !== null);
+        resolved.push(...read);
       } catch (error) {
         if (isCardAvailabilityFailure(error)) throw error;
-        halves.push(...(await this.isolateCards(part)));
+        resolved.push(...(await this.isolateCards(part, error, walk)));
       }
     }
-    return halves;
+    return resolved;
   }
   /** The adapter computes every total in one snapshot with the lists' own rules. */
   async profile(id: string, viewer: string | null) {

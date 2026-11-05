@@ -331,30 +331,53 @@ describe("timeline service", () => {
     height: 800,
   });
 
-  it("fails closed when no linked image resolves, even beside one with none", async () => {
+  it("treats several failed records with no image resolved as an outage, in a few reads", async () => {
     const resolveMany = vi.fn(
       async (locators: Parameters<StorageUrlResolver["resolveMany"]>[0]) => {
-        if (locators.length > 0) throw new Error("storage outage");
+        if (locators.length > 0) throw new Error("credentials expired");
         return new Map();
       },
     );
+    const ids = Array.from({ length: 60 }, (_, at) => at);
     await expect(
       serviceFor(
         {
-          entries: [
-            entry("one", "catalog-one"),
-            entry("two", "catalog-two"),
-            entry("textual", "catalog-textual"),
-          ],
-          cards: [
-            card("catalog-one", linkedImage("media-one")),
-            card("catalog-two", linkedImage("media-two")),
-            card("catalog-textual", null),
-          ],
+          entries: ids.map((at) => entry(`row-${at}`, `catalog-${at}`)),
+          cards: ids.map((at) =>
+            card(`catalog-${at}`, linkedImage(`media-${at}`)),
+          ),
         },
         { resolveMany },
       ).timeline(),
-    ).rejects.toThrow("storage outage");
+    ).rejects.toThrow("credentials expired");
+    expect(resolveMany.mock.calls.length).toBeLessThan(12);
+  });
+
+  it("keeps the rows when one record fails beside records with no image", async () => {
+    const resolveMany = vi.fn(
+      async (locators: Parameters<StorageUrlResolver["resolveMany"]>[0]) => {
+        if (locators.length > 0) throw new Error("COS object key invalid");
+        return new Map();
+      },
+    );
+    const timeline = await serviceFor(
+      {
+        entries: [
+          entry("plain"),
+          entry("bad", "catalog-bad"),
+          entry("textual-1", "catalog-textual-1"),
+          entry("textual-2", "catalog-textual-2"),
+        ],
+        cards: [
+          card("catalog-bad", linkedImage("media-bad")),
+          card("catalog-textual-1", null),
+          card("catalog-textual-2", null),
+        ],
+      },
+      { resolveMany },
+    ).timeline();
+    expect(timeline.entries).toHaveLength(4);
+    expect(timeline.entries.every(({ media }) => media === null)).toBe(true);
   });
 
   it("fails an availability error at once, without retrying per row", async () => {

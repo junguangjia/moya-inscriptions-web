@@ -136,6 +136,7 @@ export const useTimelineWindow = <Row extends TimelineWindowRow>({
 
   const latest = useRef({
     active,
+    topIndex,
     corrections,
     enabled,
     heights,
@@ -150,6 +151,7 @@ export const useTimelineWindow = <Row extends TimelineWindowRow>({
   });
   latest.current = {
     active,
+    topIndex,
     corrections,
     enabled,
     heights,
@@ -260,6 +262,20 @@ export const useTimelineWindow = <Row extends TimelineWindowRow>({
     if (previousResetKey.current === resetKey) return;
     previousResetKey.current = resetKey;
     setCorrections(NO_CORRECTIONS);
+    // A layout change reaches the hook as a new subscription, whose first read
+    // holds nothing, and this render's top row is still the one the reader was
+    // on: the offsets are new but topIndex is not yet.
+    const state = latest.current;
+    if (
+      state.enabled &&
+      state.active &&
+      state.topIndex > 0 &&
+      activeAnchor(anchor.current) === null
+    )
+      anchor.current = {
+        index: state.topIndex,
+        until: performance.now() + JUMP_SETTLE_MS,
+      };
   }, [resetKey]);
 
   const rowObserver = useRef<ResizeObserver | null>(null);

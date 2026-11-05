@@ -187,6 +187,35 @@ describe("LiveTimeline", () => {
     expect(container.querySelector(`img[src="${expired}"]`)).toBeNull();
   });
 
+  it("retries a failed image after a refresh even when its URL is the same", async () => {
+    const stable = entries.map((entry) => ({
+      ...entry,
+      media: {
+        id: "media-1",
+        kind: "image",
+        src: "https://media.example.invalid/stable.webp",
+        alt: "虚构南寺碑",
+        width: 1200,
+        height: 800,
+      },
+    }));
+    client.timeline.mockResolvedValue({ entries: stable });
+    const LiveTimeline = await load();
+    await act(async () => root.render(<LiveTimeline active />));
+    await flush();
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 61_000);
+    client.timeline.mockResolvedValue({
+      entries: stable.map((entry) => ({ ...entry })),
+    });
+    const image = container.querySelector("img");
+    await act(async () => image!.dispatchEvent(new Event("error")));
+    await flush();
+    clock.mockRestore();
+    expect(client.timeline).toHaveBeenCalledTimes(2);
+    expect(container.querySelector("img")).not.toBeNull();
+  });
+
   it("never fetches before the feed is active", async () => {
     const LiveTimeline = await load();
     act(() => root.render(<LiveTimeline active={false} />));
