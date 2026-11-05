@@ -405,13 +405,19 @@ export const requiredCommunityMigrations: readonly RequiredCommunityMigration[] 
     }),
     Object.freeze({
       migrationId: "20261105010000",
-      filename: "20261105010000_agent_connection_operator_preset.sql",
+      filename: "20261105010000_article_consent_resume_secret.sql",
+      checksum:
+        "c0cb86283d3be046ea996d3cb39b4458821b7736e3478bd498a6906bf541e074",
+    }),
+    Object.freeze({
+      migrationId: "20261105020000",
+      filename: "20261105020000_agent_connection_operator_preset.sql",
       checksum:
         "28ec63580b7f47b9abb5acff878bbf1cf7d574e0c7d6caca59dc7d473381b970",
     }),
     Object.freeze({
-      migrationId: "20261105020000",
-      filename: "20261105020000_agent_connection_resume_secret.sql",
+      migrationId: "20261105030000",
+      filename: "20261105030000_agent_connection_resume_secret.sql",
       checksum:
         "94b22eb09d3b1274f116e7db9401a949366b3068bfcde415c73457e2037dd2ac",
     }),

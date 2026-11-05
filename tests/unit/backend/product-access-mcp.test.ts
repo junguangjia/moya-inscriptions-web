@@ -64,6 +64,8 @@ describe("product access and the Article MCP boundary", () => {
       consents: {
         open: unreachable,
         read: async () => null,
+        readForResume: async () => null,
+        voidResume: async () => false,
         prepareReview: unreachable,
         decide: unreachable,
         finalizeGrant: unreachable,

@@ -389,8 +389,10 @@ are changed only at the seams listed here.
 - `database/community-migrations/20260930020000_article_authoring.sql`,
   `20260930030000_article_authoring_delegation.sql` and the forward-only
   `20260930040000_article_consent_uid_check.sql` correction, preserving the
-  already executed migration and 256-character identity contract; named grants
-  in `infra/development/work-publishing/grant-runtime.sql` and a precise
+  already executed migration and 256-character identity contract; the
+  forward-only `20261105010000_article_consent_resume_secret.sql`, which binds a
+  consent decision to the browser that clicked; named grants in
+  `infra/development/work-publishing/grant-runtime.sql` and a precise
   `infra/development/article-authoring/grant-delegation.sql` role plan; the
   explicit post-community
   `infra/development/article-authoring/grant-public-read.sql`.
