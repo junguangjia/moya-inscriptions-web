@@ -65,7 +65,7 @@ import {
   articlePublicationResultSchema,
 } from "@moya/contracts/schemas";
 import type { ArticleDraft, PublicUserId } from "@moya/contracts";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 type Pool = ReturnType<typeof createPostgresPool>;
 
@@ -1065,5 +1065,345 @@ export const registerArticleDelegationSdkCases = (fixture: {
         await expect(grant.refresh()).rejects.toMatchObject({
           errorCode: "invalid_grant",
         });
+    });
+
+    describe("consent is bound to the browser that began the request", () => {
+      /**
+       * One browser profile. Its cookies live here alone and go only where a
+       * browser would send them: the exact host, the cookie's path and its
+       * Secure flag. A jar replaying every cookie could not tell two browsers
+       * apart, which is the whole question here.
+       */
+      const browserContext = () => {
+        const cookies = new Map<
+          string,
+          {
+            name: string;
+            value: string;
+            host: string;
+            path: string;
+            secure: boolean;
+          }
+        >();
+        const open = async (url: URL) => {
+          const header = [...cookies.values()]
+            .filter(
+              (cookie) =>
+                cookie.host === url.hostname &&
+                (!cookie.secure || url.protocol === "https:") &&
+                (url.pathname === cookie.path ||
+                  url.pathname.startsWith(`${cookie.path}/`)),
+            )
+            .map((cookie) => `${cookie.name}=${cookie.value}`)
+            .join("; ");
+          const response = await requestFetch(url, {
+            redirect: "manual",
+            headers: header === "" ? {} : { cookie: header },
+          });
+          for (const raw of response.headers.getSetCookie()) {
+            const [pair = "", ...attributes] = raw.split(";");
+            const attribute = (name: string) =>
+              attributes
+                .map((entry) => entry.trim())
+                .find((entry) => entry.toLowerCase().startsWith(`${name}=`))
+                ?.slice(name.length + 1);
+            const split = pair.indexOf("=");
+            const name = pair.slice(0, split);
+            const path = attribute("path") ?? "/";
+            const key = `${name}\0${url.hostname}\0${path}`;
+            const expires = attribute("expires");
+            if (expires !== undefined && Date.parse(expires) <= Date.now())
+              cookies.delete(key);
+            else
+              cookies.set(key, {
+                name,
+                value: pair.slice(split + 1),
+                host: url.hostname,
+                path,
+                secure: attributes.some(
+                  (entry) => entry.trim().toLowerCase() === "secure",
+                ),
+              });
+          }
+          return response;
+        };
+        return {
+          /** Follows redirects until the browser leaves the issuer or stops. */
+          navigate: async (target: URL | string) => {
+            let url = new URL(target);
+            for (let hop = 0; hop < 8; hop++) {
+              const response = await open(url);
+              const location = response.headers.get("location");
+              if (location === null) return { response, url };
+              url = new URL(location, url);
+              if (url.origin !== issuer.bundle.config.issuer)
+                return { response, url };
+            }
+            throw new Error("BROWSER_REDIRECT_LOOP");
+          },
+        };
+      };
+      type BrowserContext = ReturnType<typeof browserContext>;
+      /** A listed public client's request, begun in this browser. */
+      const begin = async (browser: BrowserContext) => {
+        const verifier = randomBytes(32).toString("base64url");
+        const state = randomBytes(16).toString("base64url");
+        const url = new URL("/auth", issuer.bundle.config.issuer);
+        url.search = new URLSearchParams({
+          client_id: issuerClientId,
+          redirect_uri: callback,
+          response_type: "code",
+          scope: "artvenn:article:draft artvenn:article:publish offline_access",
+          resource,
+          code_challenge: createHash("sha256")
+            .update(verifier)
+            .digest("base64url"),
+          code_challenge_method: "S256",
+          prompt: "consent",
+          state,
+        }).toString();
+        const { url: landing } = await browser.navigate(url);
+        expect(landing.origin).toBe(humanOrigin);
+        return { uid: landing.pathname.split("/").at(-1)!, verifier, state };
+      };
+      /** The signed-in author's click on the consent page, whichever browser. */
+      const review = async (uid: string) => {
+        const response = await human(`consents/${uid}`);
+        expect(response.status).toBe(200);
+        return (await response.json()) as {
+          consentTicket: string;
+          scopes: string[];
+        };
+      };
+      const decide = async (
+        uid: string,
+        ticket: Awaited<ReturnType<typeof review>>,
+        requestId: string = randomUUID(),
+        action: "approve" | "deny" = "approve",
+      ) =>
+        human(`consents/${uid}/${action}`, {
+          requestId,
+          interactionUid: uid,
+          consentTicket: ticket.consentTicket,
+          scopes: ticket.scopes,
+        });
+      const approve = async (uid: string) => {
+        const answer = await decide(uid, await review(uid));
+        expect(answer.status).toBe(200);
+        return ((await answer.json()) as { resumeUrl: string }).resumeUrl;
+      };
+      const row = async (uid: string) =>
+        (
+          await fixture.controlPool.query<Record<string, unknown>>(
+            "SELECT * FROM community.article_authoring_consents WHERE interaction_uid=$1",
+            [uid],
+          )
+        ).rows[0]!;
+      const withoutSecret = (resumeUrl: string) => {
+        const url = new URL(resumeUrl);
+        url.search = "";
+        return url;
+      };
+      const digestOf = (resumeUrl: string) =>
+        createHash("sha256")
+          .update(new URL(resumeUrl).searchParams.get("secret") ?? "")
+          .digest("hex");
+      const expectRefused = (url: URL) => {
+        expect(url.searchParams.has("code")).toBe(false);
+        expect(url.searchParams.get("error")).toBe("access_denied");
+      };
+      /** The browser that began the request finishes it and redeems the code. */
+      const finish = async (
+        browser: BrowserContext,
+        resumeUrl: string,
+        started: Awaited<ReturnType<typeof begin>>,
+      ) => {
+        const { url } = await browser.navigate(resumeUrl);
+        expect(url.origin + url.pathname).toBe(callback);
+        expect(url.searchParams.get("state")).toBe(started.state);
+        const tokens = await requestFetch(
+          `${issuer.bundle.config.issuer}/token`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+              grant_type: "authorization_code",
+              code: url.searchParams.get("code") ?? "",
+              redirect_uri: callback,
+              client_id: issuerClientId,
+              code_verifier: started.verifier,
+              resource,
+            }).toString(),
+          },
+        );
+        expect(tokens.status).toBe(200);
+        const body = (await tokens.json()) as { access_token: string };
+        expect(body.access_token.startsWith("artvenn_article_ct_")).toBe(true);
+      };
+
+      it("gives the browser that began the request nothing when another browser approved", async () => {
+        const stranger = browserContext();
+        const { uid } = await begin(stranger);
+        const resumeUrl = await approve(uid);
+        const { url } = await stranger.navigate(withoutSecret(resumeUrl));
+        expectRefused(url);
+        expect(await row(uid)).toMatchObject({
+          decision: "approved",
+          resumed_at: null,
+          provider_grant_id: null,
+        });
+      });
+
+      it("voids the consent when the secret reaches a browser without the cookie", async () => {
+        const stranger = browserContext();
+        const author = browserContext();
+        const { uid } = await begin(stranger);
+        const resumeUrl = await approve(uid);
+        const { response } = await author.navigate(resumeUrl);
+        expect(response.status).toBe(403);
+        expect(response.headers.get("content-type")).toBe(
+          "text/html; charset=utf-8",
+        );
+        expect(response.headers.get("cache-control")).toBe("no-store");
+        expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+        expect(await response.text()).toContain("这次授权已作废");
+        expect(await row(uid)).toMatchObject({
+          decision: "approved",
+          resume_secret_digest: null,
+          resumed_at: null,
+          provider_grant_id: null,
+        });
+        // Both halves together no longer finish a voided consent.
+        expectRefused((await stranger.navigate(resumeUrl)).url);
+      });
+
+      it("changes nothing for a wrong secret or no secret without the cookie", async () => {
+        const browser = browserContext();
+        const elsewhere = browserContext();
+        const started = await begin(browser);
+        const resumeUrl = await approve(started.uid);
+        const wrong = new URL(resumeUrl);
+        wrong.searchParams.set("secret", randomBytes(32).toString("base64url"));
+        for (const target of [wrong, withoutSecret(resumeUrl)])
+          expect((await elsewhere.navigate(target)).response.status).toBe(400);
+        // Any other query is not a resume at all, for either browser.
+        const extra = new URL(resumeUrl);
+        extra.searchParams.set("extra", "1");
+        for (const visitor of [elsewhere, browser])
+          expect((await visitor.navigate(extra)).response.status).toBe(404);
+        expect((await row(started.uid)).resume_secret_digest).toBe(
+          digestOf(resumeUrl),
+        );
+        await finish(browser, resumeUrl, started);
+      });
+
+      it("keeps only a digest and lets the secret finish once in the browser that began the request", async () => {
+        const browser = browserContext();
+        const started = await begin(browser);
+        const resumeUrl = await approve(started.uid);
+        const secret = new URL(resumeUrl).searchParams.get("secret")!;
+        expect(secret).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+        const armed = await row(started.uid);
+        expect(armed.resume_secret_digest).toBe(digestOf(resumeUrl));
+        expect(JSON.stringify(armed)).not.toContain(secret);
+        await finish(browser, resumeUrl, started);
+        const spent = await row(started.uid);
+        expect(spent.resume_secret_digest).toBeNull();
+        expect(spent.resumed_at).not.toBeNull();
+        expect(spent.provider_grant_id).not.toBeNull();
+        const { url } = await browser.navigate(resumeUrl);
+        expect(url.searchParams.has("code")).toBe(false);
+      });
+
+      it("answers a replayed decision with a new secret and retires the lost one", async () => {
+        const browser = browserContext();
+        const elsewhere = browserContext();
+        const started = await begin(browser);
+        const ticket = await review(started.uid);
+        const requestId = randomUUID();
+        const resumeUrls: string[] = [];
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const answer = await decide(started.uid, ticket, requestId);
+          expect(answer.status).toBe(200);
+          resumeUrls.push(
+            ((await answer.json()) as { resumeUrl: string }).resumeUrl,
+          );
+        }
+        const [lost, current] = resumeUrls as [string, string];
+        expect(digestOf(lost)).not.toBe(digestOf(current));
+        expect((await elsewhere.navigate(lost)).response.status).toBe(400);
+        expect((await row(started.uid)).resume_secret_digest).toBe(
+          digestOf(current),
+        );
+        await finish(browser, current, started);
+      });
+
+      it("cannot revive a voided consent by replay or by a direct write", async () => {
+        const stranger = browserContext();
+        const author = browserContext();
+        const { uid } = await begin(stranger);
+        const ticket = await review(uid);
+        const requestId = randomUUID();
+        const answer = await decide(uid, ticket, requestId);
+        const { resumeUrl } = (await answer.json()) as { resumeUrl: string };
+        expect((await author.navigate(resumeUrl)).response.status).toBe(403);
+        expect((await decide(uid, ticket, requestId)).status).toBe(409);
+        expect((await row(uid)).resume_secret_digest).toBeNull();
+        await expect(
+          fixture.controlPool.query(
+            "UPDATE community.article_authoring_consents SET resume_secret_digest=$2 WHERE interaction_uid=$1",
+            [uid, "a".repeat(64)],
+          ),
+        ).rejects.toMatchObject({ code: "23001" });
+      });
+
+      it("does not void a consent over an interaction lookup failure", async () => {
+        const browser = browserContext();
+        const started = await begin(browser);
+        const resumeUrl = await approve(started.uid);
+        const native = issuer.bundle.provider as unknown as {
+          Interaction: { find(id: string): Promise<unknown> };
+        };
+        const failure = vi
+          .spyOn(native.Interaction, "find")
+          .mockRejectedValueOnce(new Error("SYNTHETIC_LOOKUP_FAILURE"));
+        try {
+          const { response } = await browser.navigate(resumeUrl);
+          expect(response.status).toBe(500);
+        } finally {
+          failure.mockRestore();
+        }
+        expect((await row(started.uid)).resume_secret_digest).toBe(
+          digestOf(resumeUrl),
+        );
+        await finish(browser, resumeUrl, started);
+      });
+
+      it("still reports a denial to the client from the browser that began the request", async () => {
+        const browser = browserContext();
+        const { uid } = await begin(browser);
+        const answer = await decide(
+          uid,
+          await review(uid),
+          randomUUID(),
+          "deny",
+        );
+        expect(answer.status).toBe(200);
+        const { resumeUrl } = (await answer.json()) as { resumeUrl: string };
+        expectRefused((await browser.navigate(resumeUrl)).url);
+        expect(await row(uid)).toMatchObject({
+          decision: "denied",
+          resumed_at: null,
+        });
+      });
+
+      it("keeps the resume digest away from the resource role", async () => {
+        await expect(
+          fixture.pool.query(
+            "UPDATE community.article_authoring_consents SET resume_secret_digest=NULL WHERE interaction_uid=$1",
+            ["synthetic-no-such-interaction"],
+          ),
+        ).rejects.toMatchObject({ code: "42501" });
+      });
     });
   });

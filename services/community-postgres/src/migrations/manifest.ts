@@ -403,4 +403,10 @@ export const requiredCommunityMigrations: readonly RequiredCommunityMigration[] 
       checksum:
         "f7a6ef6f04d2e26979b0729894fd66ff2295df749d4e0129d6eaa2853b74f769",
     }),
+    Object.freeze({
+      migrationId: "20261105010000",
+      filename: "20261105010000_article_consent_resume_secret.sql",
+      checksum:
+        "c0cb86283d3be046ea996d3cb39b4458821b7736e3478bd498a6906bf541e074",
+    }),
   ]);

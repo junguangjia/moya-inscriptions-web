@@ -116,6 +116,8 @@ const start = async (
     consents: {
       open: unreachable,
       read: async () => null,
+      readForResume: async () => null,
+      voidResume: async () => false,
       prepareReview: unreachable,
       decide: unreachable,
       finalizeGrant: unreachable,
