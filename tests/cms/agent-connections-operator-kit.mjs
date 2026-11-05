@@ -296,8 +296,8 @@ export const clickConsent = async (
       }
       await Promise.race([firstPost, delay(5000)]);
     }
-    // A late POST from an earlier click would arrive now, beside this one.
-    if (attempts > 1) await delay(2000);
+    // A late second POST, from an earlier click or from this one, would arrive now.
+    await delay(2000);
     assert.equal(posts, 1, "a decision was sent more than once");
     (consentClicks[stage] ??= []).push(attempts);
   } finally {

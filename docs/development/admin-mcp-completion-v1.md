@@ -4308,17 +4308,19 @@ service on its own database role.
   synthetic.
 
 O4 still owes: the Nginx block for the issuer host and its limits, with a log
-format that does not carry the query string; the issuer's systemd unit; the
-environment templates, in which the address on the AI connections page,
-`CMS_PUBLIC_URL` plus `/api/mcp`, and `AGENT_AUTHORIZATION_RESOURCE` must be
-equal, because a tool connects only then; release checks that the origin of
-`AGENT_AUTHORIZATION_CONSENT_URL` equals the origin of `CMS_PUBLIC_URL`, because
-the Admin checks every allow, deny and disconnect against that origin and would
-refuse them all otherwise, and that the Admin's and the issuer's copies of
-`AGENT_AUTHORIZATION_CLIENTS` are identical; the documents section 7 of the
-amendment names; the private release toolkit; and the real-client record, per
-task and client, failures included, in which Claude's link and the step lists on
-the AI connections page meet a real client for the first time, and which says
-whether each hosted tool's own state check refuses a link started in an
-administrator's own browser. Everything above ran under `next dev`, so a
-Production build with the door on first runs in O4.
+format that does not carry the query string; `frame-ancestors 'none'` for all of
+`/admin` at the Nginx layer, because the Admin's own refusal holds only for a
+document load and a tab change inside a framed Admin page is not one; the
+issuer's systemd unit; the environment templates, in which the address on the AI
+connections page, `CMS_PUBLIC_URL` plus `/api/mcp`, and
+`AGENT_AUTHORIZATION_RESOURCE` must be equal, because a tool connects only then;
+release checks that the origin of `AGENT_AUTHORIZATION_CONSENT_URL` equals the
+origin of `CMS_PUBLIC_URL`, because the Admin checks every allow, deny and
+disconnect against that origin and would refuse them all otherwise, and that the
+Admin's and the issuer's copies of `AGENT_AUTHORIZATION_CLIENTS` are identical;
+the documents section 7 of the amendment names; the private release toolkit; and
+the real-client record, per task and client, failures included, in which
+Claude's link and the step lists on the AI connections page meet a real client
+for the first time, and which says whether each hosted tool's own state check
+refuses a link started in an administrator's own browser. Everything above ran
+under `next dev`, so a Production build with the door on first runs in O4.

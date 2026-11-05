@@ -100,11 +100,11 @@ const OTHER_TOOLS: readonly {
           value={`codex mcp add artvenn --url ${address}`}
         />
       </span>,
+      "Codex 发现需要登录时会自己打开浏览器，在那里登录后台并点「允许」。",
       <span className={styles.stepCopy} key="login">
-        再运行：
+        浏览器没有打开，或以后要重新登录时，运行：
         <CopyValue label="命令" value="codex mcp login artvenn" />
       </span>,
-      "浏览器打开后，登录后台并点「允许」。",
     ],
   },
   {

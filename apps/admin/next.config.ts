@@ -36,7 +36,10 @@ const harnessDistDir =
  * The login door's pages refuse to be framed, from the app itself, so Development,
  * the harness and Production answer alike. A hidden 允许 or 确认断开 in a frame
  * would otherwise rest on the session cookie's SameSite alone. `withPayload` adds
- * its own headers after these and keeps them.
+ * its own headers after these and keeps them. A browser applies these only when a
+ * document loads, so a framed page elsewhere in /admin could still reach the AI
+ * connections page through a tab change; the Production Nginx closes that for all
+ * of /admin (record section 22, O4).
  */
 const NO_FRAMES = [
   { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
