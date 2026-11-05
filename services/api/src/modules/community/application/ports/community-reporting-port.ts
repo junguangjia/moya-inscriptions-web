@@ -12,6 +12,8 @@ import type {
 } from "@moya/contracts";
 import type {
   OperatorReport,
+  OperatorReportAiAnswer,
+  OperatorReportAiPage,
   OperatorReportQuery,
   OperatorReportPage,
   OperatorReportDecisionRequest,
@@ -70,6 +72,9 @@ export interface CommunityReportingPort {
   ): Promise<ReportingEvidenceRecord>;
   operatorList(query: OperatorReportQuery): Promise<OperatorReportPage>;
   operatorRead(id: string): Promise<OperatorReport>;
+  /** The queue for AI: contact and evidence names removed, self-only cases owner-only. */
+  operatorListForAi(query: OperatorReportQuery): Promise<OperatorReportAiPage>;
+  operatorReadForAi(id: string): Promise<OperatorReportAiAnswer>;
   decide(
     operator: string,
     id: string,

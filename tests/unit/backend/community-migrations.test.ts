@@ -105,6 +105,7 @@ describe("community migration family", () => {
         "20261027010000_account_deletion.sql",
         "20261028010000_analytics_ip_retention_60_days.sql",
         "20261102010000_comment_inline_images.sql",
+        "20261104010000_ai_operator_locate_indexes.sql",
       ],
     );
     expect(files.every((file) => file.sql.includes("community."))).toBe(true);

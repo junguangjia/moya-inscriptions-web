@@ -408,6 +408,57 @@ describe("non-Pilot production public media composition", () => {
     );
   });
 
+  it("composes the community token on its own routes, and nowhere else", async () => {
+    const owner = randomUUID() + randomUUID();
+    const community = randomUUID() + randomUUID();
+    const base = randomUUID() + randomUUID();
+    const serve = async (extra: Record<string, string>) => {
+      const prepared = await prepareProductionBackend({
+        ...environment,
+        COMMUNITY_OPERATOR_TOKEN: owner,
+        ...extra,
+      });
+      const handle = await startBackendProcess({
+        closeResources: prepared.closeResources,
+        listen: { host: "127.0.0.1", port: 0 },
+        requestListener: prepared.requestListener,
+      });
+      handles.add(handle);
+      return async (route: string, token: string) => {
+        const answer = await fetch(
+          `http://${handle.address.address}:${handle.address.port}/internal/community/${route}`,
+          { headers: { authorization: `Bearer ${token}` } },
+        );
+        return (await answer.json()) as { error: { code: string } };
+      };
+    };
+    const composed = await serve({
+      OPERATOR_AI_BASE_TOKEN: base,
+      COMMUNITY_OPERATOR_AI_TOKEN: community,
+    });
+    const reportId = `report-${"a".repeat(32)}`;
+    // Past the credential check, before any store read.
+    expect((await composed("ai/find", community)).error.code).toBe(
+      "INVALID_QUERY",
+    );
+    expect(
+      (await composed(`reports/${reportId}/evidence/${reportId}`, community))
+        .error.code,
+    ).toBe("SENSITIVE_SWITCH_OFF");
+    for (const route of ["catalog-delivery/thumbnail", "agent/users"])
+      expect((await composed(route, community)).error.code, route).toBe(
+        "AI_ROUTE_FORBIDDEN",
+      );
+    for (const route of ["ai/find", "agent/users"])
+      expect((await composed(route, base)).error.code, route).toBe(
+        "AI_ROUTE_FORBIDDEN",
+      );
+    const absent = await serve({});
+    expect((await absent("ai/find", community)).error.code).toBe(
+      "OPERATOR_UNAUTHORIZED",
+    );
+  });
+
   it("ignores the media worker keys: the Production Backend opens no sandbox", async () => {
     for (const keys of [
       {

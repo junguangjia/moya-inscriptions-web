@@ -10,11 +10,23 @@ import {
   startServer,
   stopServer,
 } from "@moya/backend-runtime";
+import {
+  createPostgresPool,
+  parsePostgresConfig,
+} from "@moya/catalog-postgres";
+import {
+  PostgresAiOperatorReader,
+  PostgresCommunityCommentAdapter,
+  PostgresCommunityContentOperatorAdapter,
+  PostgresCommunityIdentityAdapter,
+  PostgresCommunityReportingAdapter,
+} from "@moya/community-postgres";
 import { MappedStorageUrlResolver } from "@moya/image";
 import {
   ADMIN_MCP_TEXT_CAP_BYTES,
   ADMIN_MCP_TOKEN_BUDGET,
   ADMIN_VIEW_MEDIA_MAX_BYTES,
+  adminFindDataSchema,
   adminMcpEnvelopeSchema,
   adminReadRowsDataSchema,
   adminViewMediaDataSchema,
@@ -44,6 +56,11 @@ import {
   gradeC2,
   gradeC3,
   gradeC4,
+  gradeM1,
+  gradeU1,
+  M1_CALL,
+  u1FindCall,
+  u1ReadCall,
 } from "./paths.ts";
 import type { ToolCall } from "./paths.ts";
 import {
@@ -55,7 +72,7 @@ import {
   kindOf,
   sourceIdOf,
 } from "./seed.ts";
-import type { BenchOracle } from "./seed.ts";
+import type { BenchOracle, CommunityOracle } from "./seed.ts";
 
 // L0, the CI floor of admin-mcp-completion-v1 section 21, at seeded scale: tools/list
 // sizes, each reference path replayed over real JSON-RPC with the official client and
@@ -74,9 +91,13 @@ const access = JSON.parse(
   ownerId: number;
   automationId: number;
 };
-const { oracle, rows } = JSON.parse(
+const { oracle, communityOracle, rows } = JSON.parse(
   await readFile(process.env.ADMIN_MCP_BENCH_ORACLE_FILE!, "utf8"),
-) as { oracle: BenchOracle; rows: Record<string, number> };
+) as {
+  oracle: BenchOracle;
+  communityOracle: CommunityOracle;
+  rows: Record<string, number>;
+};
 
 /** This bench's own ceiling: the design asks for a check and names no number. */
 const DESCRIPTION_MAX_CHARS = 1_024;
@@ -100,6 +121,10 @@ const STATEMENTS = {
   // The hooks, the receipt and the echo. A publish costs about the same per target.
   single_write: 51,
   batch_write_30: 1_425,
+  // The Admin's door and audit row, and the Backend's own transaction beside them.
+  m1_count: 10,
+  u1_find: 10,
+  u1_read: 12,
 } as const;
 
 /**
@@ -142,13 +167,18 @@ const captured: Statement[] = [];
 let capturing = false;
 const reportRows: Record<string, unknown>[] = [];
 
+const capturedDrivers = new Set<object>();
+
 /** Every statement of the process, from the driver's own query method. */
-const installCapture = async () => {
-  const client = await pool.connect();
+const installCapture = async (from: Pool = pool) => {
+  const client = await from.connect();
   const proto = Object.getPrototypeOf(client) as {
     query: (...args: unknown[]) => unknown;
   };
   client.release();
+  // Packages can hold their own copy of the driver: each is patched, and only once.
+  if (capturedDrivers.has(proto)) return () => undefined;
+  capturedDrivers.add(proto);
   const original = proto.query;
   proto.query = function (this: unknown, ...args: unknown[]) {
     if (capturing) {
@@ -166,6 +196,7 @@ const installCapture = async () => {
     return original.apply(this, args);
   };
   return () => {
+    capturedDrivers.delete(proto);
     proto.query = original;
   };
 };
@@ -365,7 +396,7 @@ beforeAll(async () => {
     ).client;
   const { rows: tables } = await pool.query(
     `SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-     WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.reltuples >= 1000`,
+     WHERE n.nspname IN ('public', 'community') AND c.relkind = 'r' AND c.reltuples >= 1000`,
   );
   largeTables = new Set(tables.map(({ relname }) => String(relname)));
   restoreCapture = await installCapture();
@@ -738,6 +769,109 @@ describe("C3 reference path", () => {
       bytes: Math.max(approvals.bytes, first.bytes),
       seqScans,
     });
+  });
+});
+
+// The real Backend's AI routes in this process, so their statements count on the same
+// row as the Admin's. As the owner of the tables here: the App role's grants have their
+// own suite, tests/cms/admin-mcp-community.test.ts.
+describe("the community reference paths", () => {
+  const communityToken = randomBytes(32).toString("base64url");
+  let backend: Server;
+  let communityPool: ReturnType<typeof createPostgresPool>;
+  let restoreBackendCapture: () => void;
+
+  beforeAll(async () => {
+    communityPool = createPostgresPool(
+      parsePostgresConfig({ DATABASE_URL: process.env.CMS_TEST_DATABASE_URL! }),
+    );
+    restoreBackendCapture = await installCapture(communityPool as never);
+    backend = createBackendServer(
+      createBackendApplication({
+        nodeEnv: "development",
+        communityIdentityPort: new PostgresCommunityIdentityAdapter(
+          communityPool,
+        ),
+        communityCommentPort: new PostgresCommunityCommentAdapter(
+          communityPool,
+        ),
+        contentOperatorPort: new PostgresCommunityContentOperatorAdapter(
+          communityPool,
+        ),
+        reportingPort: new PostgresCommunityReportingAdapter(communityPool),
+        aiOperatorReader: new PostgresAiOperatorReader(communityPool),
+        operatorAiCommunityCredential: communityToken,
+        storageUrlResolver: new MappedStorageUrlResolver(new Map()),
+      }),
+    );
+    const address = await startServer(backend, { host: "127.0.0.1", port: 0 });
+    vi.stubEnv(
+      "COMMUNITY_OPERATOR_BASE_URL",
+      `http://127.0.0.1:${address.port}/`,
+    );
+    vi.stubEnv("COMMUNITY_OPERATOR_AI_TOKEN", communityToken);
+    vi.stubEnv("COMMUNITY_OPERATOR_TOKEN", "");
+  });
+
+  afterAll(async () => {
+    vi.unstubAllEnvs();
+    restoreBackendCapture?.();
+    backend?.closeAllConnections();
+    if (backend) await stopServer(backend);
+    await communityPool?.end();
+  });
+
+  it("M1: counts what still waits, by kind, and how long the oldest has, in one read", async () => {
+    const state = await contentState();
+    const { envelope, statements, bytes, ms } = await callOn(M1_CALL);
+    expect(envelope.ok).toBe(true);
+    expect(gradeM1(envelope.data, communityOracle.m1)).toEqual([]);
+    expect(communityOracle.m1.groups.length).toBeGreaterThan(1);
+    expect(await contentState()).toEqual(state);
+    expect(statements.length).toBeLessThanOrEqual(STATEMENTS.m1_count);
+    const seqScans = await largeSeqScans(statements);
+    report({
+      name: "M1",
+      budgetMs: GATE_A_P95_MS.aggregate,
+      ms: [ms],
+      statements: statements.length,
+      bytes,
+      seqScans,
+    });
+    // Most of the cases are waiting, so the planner reads them all, and a count of them
+    // is what was asked for. Reported above; no other table may join it.
+    expect(seqScans.filter((table) => table !== "report_cases")).toEqual([]);
+  });
+
+  it("U1: answers registration, state and the three counts within two calls", async () => {
+    const state = await contentState();
+    const u1 = communityOracle.u1;
+    const found = await callOn(u1FindCall(u1.handle));
+    expect(found.envelope.ok).toBe(true);
+    const { resolution } = adminFindDataSchema.parse(found.envelope.data);
+    const listed = await callOn(u1ReadCall(resolution.ref!));
+    expect(listed.envelope.ok).toBe(true);
+    expect(gradeU1(found.envelope.data, listed.envelope.data, u1)).toEqual([]);
+    for (const { text } of [found, listed].map(({ envelope }) => ({
+      text: JSON.stringify(envelope),
+    })))
+      expect(text).not.toContain(u1.canary);
+    expect(await contentState()).toEqual(state);
+    expect(found.statements.length).toBeLessThanOrEqual(STATEMENTS.u1_find);
+    expect(listed.statements.length).toBeLessThanOrEqual(STATEMENTS.u1_read);
+    const seqScans = await largeSeqScans([
+      ...found.statements,
+      ...listed.statements,
+    ]);
+    report({
+      name: "U1",
+      budgetMs: GATE_A_P95_MS.exact_locate + GATE_A_P95_MS.list_page,
+      ms: [found.ms + listed.ms],
+      statements: found.statements.length + listed.statements.length,
+      bytes: Math.max(found.bytes, listed.bytes),
+      seqScans,
+    });
+    expect(seqScans).toEqual([]);
   });
 });
 

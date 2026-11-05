@@ -207,15 +207,15 @@ const otherCommunityRoutes: readonly (readonly [string, string])[] = [
 describe("OPERATOR_AI_BASE_TOKEN route table", () => {
   it("names exactly the base routes of the credential map, each on the base credential", () => {
     expect(
-      AI_OPERATOR_ROUTES.map(
-        ({ method, path: route, klass, credentials, query }) => [
-          method,
-          route,
-          klass,
-          credentials,
-          query,
-        ],
-      ),
+      AI_OPERATOR_ROUTES.filter(({ credentials }) =>
+        credentials.includes("base"),
+      ).map(({ method, path: route, klass, credentials, query }) => [
+        method,
+        route,
+        klass,
+        credentials,
+        query,
+      ]),
     ).toEqual(
       (
         [

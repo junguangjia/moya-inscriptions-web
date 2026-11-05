@@ -10,6 +10,7 @@ import {
   operatorCommentPageSchema,
   operatorCommentQuerySchema,
   operatorLabelSchema,
+  operatorReadScopeFor,
   publicationPolicyStateSchema,
   setPublicationPolicyCommandSchema,
 } from "@moya/contracts/internal/community-operator";
@@ -128,6 +129,7 @@ export class CommunityModerationService {
   private readonly clock: () => Date;
   private readonly randomBytes: RandomBytes;
   private readonly operatorLabel: string;
+  private readonly readScope: ReturnType<typeof operatorReadScopeFor>;
   private readonly analysisPort: CommentAnalysisPort;
   private readonly contentOperatorPort:
     CommunityContentOperatorPort | undefined;
@@ -144,6 +146,7 @@ export class CommunityModerationService {
     this.operatorLabel = operatorLabelSchema.parse(
       options.operatorLabel ?? defaultOperatorLabel,
     );
+    this.readScope = operatorReadScopeFor(this.operatorLabel);
     this.analysisPort =
       options.analysisPort ?? new DisabledCommentAnalysisPort();
   }
@@ -180,19 +183,25 @@ export class CommunityModerationService {
   /** The review queue: bounded filters and search, status counts, review order. */
   async readComments(query: unknown): Promise<OperatorCommentPage> {
     const parsed = this.parse(operatorCommentQuerySchema, query);
-    const listing = await this.commentPort.readOperatorComments({
-      ...(parsed.moderation === undefined
-        ? {}
-        : { moderation: parsed.moderation }),
-      ...(parsed.kind === undefined ? {} : { kind: parsed.kind }),
-      ...(parsed.catalogId === undefined
-        ? {}
-        : { catalogId: parsed.catalogId }),
-      ...(parsed.search === undefined ? {} : { search: parsed.search }),
-      order: parsed.order ?? "newest",
-      page: parsed.page ?? 1,
-      pageSize: parsed.pageSize ?? defaultOperatorPageSize,
-    });
+    const listing = await this.commentPort.readOperatorComments(
+      {
+        ...(parsed.moderation === undefined
+          ? {}
+          : { moderation: parsed.moderation }),
+        ...(parsed.kind === undefined ? {} : { kind: parsed.kind }),
+        ...(parsed.catalogId === undefined
+          ? {}
+          : { catalogId: parsed.catalogId }),
+        ...(parsed.search === undefined ? {} : { search: parsed.search }),
+        ...(parsed.authorId === undefined ? {} : { authorId: parsed.authorId }),
+        ...(parsed.from === undefined ? {} : { from: parsed.from }),
+        ...(parsed.to === undefined ? {} : { to: parsed.to }),
+        order: parsed.order ?? "newest",
+        page: parsed.page ?? 1,
+        pageSize: parsed.pageSize ?? defaultOperatorPageSize,
+      },
+      ...this.readScope,
+    );
     const items = await this.withTitles(listing.items);
     return operatorCommentPageSchema.parse({
       items,
@@ -388,14 +397,17 @@ export class CommunityModerationService {
   /** The operation history, newest first, from the authoritative audit table. */
   async readModerationEvents(query: unknown): Promise<ModerationEventPage> {
     const parsed = this.parse(moderationEventQuerySchema, query);
-    const page = await this.commentPort.readModerationEvents({
-      ...(parsed.subjectId === undefined
-        ? {}
-        : { subjectId: parsed.subjectId }),
-      ...(parsed.action === undefined ? {} : { action: parsed.action }),
-      page: parsed.page ?? 1,
-      pageSize: parsed.pageSize ?? defaultOperatorPageSize,
-    });
+    const page = await this.commentPort.readModerationEvents(
+      {
+        ...(parsed.subjectId === undefined
+          ? {}
+          : { subjectId: parsed.subjectId }),
+        ...(parsed.action === undefined ? {} : { action: parsed.action }),
+        page: parsed.page ?? 1,
+        pageSize: parsed.pageSize ?? defaultOperatorPageSize,
+      },
+      ...this.readScope,
+    );
     return moderationEventPageSchema.parse({
       items: page.items.map(toEventDto),
       total: page.total,
@@ -415,7 +427,10 @@ export class CommunityModerationService {
     const key = parsed.range ?? "7d";
     const to = this.clock();
     const from = new Date(to.getTime() - summaryRangeMs[key]);
-    const record = await this.commentPort.readModerationSummary({ from, to });
+    const record = await this.commentPort.readModerationSummary(
+      { from, to },
+      ...this.readScope,
+    );
     const policy = await this.readPublicationPolicy();
     return moderationSummarySchema.parse({
       generatedAt: isoUtc(to),

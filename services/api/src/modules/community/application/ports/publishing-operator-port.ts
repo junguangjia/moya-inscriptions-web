@@ -5,6 +5,7 @@ import type {
   OperatorPublishingJob,
   OperatorPublishingJobPage,
   OperatorPublishingJobQuery,
+  OperatorReadScope,
   OperatorWorkSubmission,
   OperatorWorkSubmissionPage,
   OperatorWorkSubmissionQuery,
@@ -55,6 +56,7 @@ export interface PublishingOperatorPort {
    */
   listSubmissions(
     query: OperatorWorkSubmissionQuery,
+    scope?: OperatorReadScope,
   ): Promise<OperatorWorkSubmissionPage>;
   /**
    * One queue-visible revision; a `not_required` revision is not found. Its

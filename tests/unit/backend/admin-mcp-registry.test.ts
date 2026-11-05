@@ -972,12 +972,27 @@ describe("admin_actions", () => {
   it("files an op nothing has built under not_available, never as callable", () => {
     const index = actionsIndex(["admin_read"], open);
     const [group] = index.groups;
-    expect(group?.ops.filter((row) => row.startsWith("community."))).toEqual(
-      [],
-    );
-    expect(group?.unavailable?.not_available).toContain(
+    expect(group?.ops).not.toContain("list.masters");
+    expect(group?.unavailable?.not_available).toContain("list.masters");
+  });
+
+  it("files a built community read under its missing token, never as callable", () => {
+    const [group] = actionsIndex(["admin_read"], open).groups;
+    expect(group?.unavailable?.AI_CREDENTIAL_NOT_CONFIGURED).toContain(
       "community.read-comments",
     );
+    expect(group?.ops).not.toContain("community.read-comments");
+    // A Payload read in Admin, which needs no Backend token.
+    expect(group?.ops).toContain("list.feature_catalogs");
+    vi.stubEnv("COMMUNITY_OPERATOR_AI_TOKEN", "synthetic-placed");
+    try {
+      const [placed] = actionsIndex(["admin_read"], open).groups;
+      expect(placed?.ops).toContain("community.read-comments");
+      expect(placed?.ops).toContain("list.reports");
+      expect(placed?.unavailable?.not_available).toContain("list.invitations");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("gives one op's whole contract, and each fits alone with its input", () => {

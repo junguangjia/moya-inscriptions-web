@@ -44,7 +44,7 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
       "openWorldHint": false,
       "readOnlyHint": true,
     },
-    "description": "Resolve a reference in one call: id, pasted public or Admin link, @handle, sourceId, or free text. {query:"/catalog/abc"}, {query:"https://.../?articleId=article-..."}, {query:"兰亭序",type:"catalog"}. resolution says exact, candidates or none. Use resolution.ref for a mutation, never the first candidate. A branch that did not answer is named in meta.sources, never read as zero. Neither none nor a short candidate list proves absence: a draft Catalog is matched on its title only, as typed and by one simplified-traditional conversion, so another form of a character and any draft alias are missed. Retry in the other form before saying it does not exist.",
+    "description": "Resolve a reference in one call: id, pasted public or Admin link, @handle, sourceId, or free text. {query:"/catalog/abc"}, {query:"https://.../?articleId=article-..."}, {query:"兰亭序",type:"catalog"}. resolution says exact, candidates or none. Use resolution.ref for a mutation, never the first candidate. A branch that did not answer is named in meta.sources, never read as zero. Neither none nor a short candidate list proves absence: a draft Catalog is matched on its title only, as typed and by one simplified-traditional conversion, so another form of a character and any draft alias are missed. Community text is matched as stored, with no such conversion. Retry in the other form before saying it does not exist.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -117,7 +117,7 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
       "openWorldHint": false,
       "readOnlyHint": true,
     },
-    "description": "Read one record, and always say which version was read. Default outline: per-field state, length, hash, no long text. {type:"catalog",id:7}. Long text in windows, offsets in code points: {type,id,field:"transcription",offset}. Inside one field: {type,id,field:"transcription",find:{text:"..."}}. view also full, published, preview, history, diff.",
+    "description": "Read one record, and always say which version was read. Default outline: per-field state, length, hash, no long text. {type:"catalog",id:7}, {type:"report",id:"report-..."}. Long text in windows, offsets in code points: {type,id,field:"transcription",offset}. Inside one field: {type,id,field:"transcription",find:{text:"..."}}. view also full, published, preview, history, diff; a community record has outline, full and field only.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -290,7 +290,7 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
       "openWorldHint": false,
       "readOnlyHint": true,
     },
-    "description": "Read a queue or page by op. Rows are compact; long text is only ever state, length and hash. {op:"list.catalogs",input:{filter:{missing:["transcription"]}}}. Count in SQL with no rows: {op:"list.catalogs",view:"count",groupBy:"dynasty",input:{filter:{missing:["transcription"]}}}. Project with fields:[...], continue with next. admin_actions gives each op's filter.",
+    "description": "Read a queue or page by op. Rows are compact; long text is only ever state, length and hash. {op:"list.catalogs",input:{filter:{missing:["transcription"]}}}. {op:"list.reports",input:{status:"open"}}. Count in SQL with no rows: {op:"list.catalogs",view:"count",groupBy:"dynasty",input:{filter:{missing:["transcription"]}}}. {op:"list.reports",view:"count",groupBy:"kind",input:{unresolved:"true"}}. Project with fields:[...], continue with next. admin_actions gives each op's filter.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -765,7 +765,7 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
       "openWorldHint": false,
       "readOnlyHint": true,
     },
-    "description": "Resolve a reference in one call: id, pasted public or Admin link, @handle, sourceId, or free text. {query:"/catalog/abc"}, {query:"https://.../?articleId=article-..."}, {query:"兰亭序",type:"catalog"}. resolution says exact, candidates or none. Use resolution.ref for a mutation, never the first candidate. A branch that did not answer is named in meta.sources, never read as zero. Neither none nor a short candidate list proves absence: a draft Catalog is matched on its title only, as typed and by one simplified-traditional conversion, so another form of a character and any draft alias are missed. Retry in the other form before saying it does not exist.",
+    "description": "Resolve a reference in one call: id, pasted public or Admin link, @handle, sourceId, or free text. {query:"/catalog/abc"}, {query:"https://.../?articleId=article-..."}, {query:"兰亭序",type:"catalog"}. resolution says exact, candidates or none. Use resolution.ref for a mutation, never the first candidate. A branch that did not answer is named in meta.sources, never read as zero. Neither none nor a short candidate list proves absence: a draft Catalog is matched on its title only, as typed and by one simplified-traditional conversion, so another form of a character and any draft alias are missed. Community text is matched as stored, with no such conversion. Retry in the other form before saying it does not exist.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -838,7 +838,7 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
       "openWorldHint": false,
       "readOnlyHint": true,
     },
-    "description": "Read one record, and always say which version was read. Default outline: per-field state, length, hash, no long text. {type:"catalog",id:7}. Long text in windows, offsets in code points: {type,id,field:"transcription",offset}. Inside one field: {type,id,field:"transcription",find:{text:"..."}}. view also full, published, preview, history, diff.",
+    "description": "Read one record, and always say which version was read. Default outline: per-field state, length, hash, no long text. {type:"catalog",id:7}, {type:"report",id:"report-..."}. Long text in windows, offsets in code points: {type,id,field:"transcription",offset}. Inside one field: {type,id,field:"transcription",find:{text:"..."}}. view also full, published, preview, history, diff; a community record has outline, full and field only.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -1011,7 +1011,7 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
       "openWorldHint": false,
       "readOnlyHint": true,
     },
-    "description": "Read a queue or page by op. Rows are compact; long text is only ever state, length and hash. {op:"list.catalogs",input:{filter:{missing:["transcription"]}}}. Count in SQL with no rows: {op:"list.catalogs",view:"count",groupBy:"dynasty",input:{filter:{missing:["transcription"]}}}. Project with fields:[...], continue with next. admin_actions gives each op's filter.",
+    "description": "Read a queue or page by op. Rows are compact; long text is only ever state, length and hash. {op:"list.catalogs",input:{filter:{missing:["transcription"]}}}. {op:"list.reports",input:{status:"open"}}. Count in SQL with no rows: {op:"list.catalogs",view:"count",groupBy:"dynasty",input:{filter:{missing:["transcription"]}}}. {op:"list.reports",view:"count",groupBy:"kind",input:{unresolved:"true"}}. Project with fields:[...], continue with next. admin_actions gives each op's filter.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -1486,7 +1486,7 @@ exports[`tool table > matches the checked-in tools/list for the read profile 1`]
       "openWorldHint": false,
       "readOnlyHint": true,
     },
-    "description": "Resolve a reference in one call: id, pasted public or Admin link, @handle, sourceId, or free text. {query:"/catalog/abc"}, {query:"https://.../?articleId=article-..."}, {query:"兰亭序",type:"catalog"}. resolution says exact, candidates or none. Use resolution.ref for a mutation, never the first candidate. A branch that did not answer is named in meta.sources, never read as zero. Neither none nor a short candidate list proves absence: a draft Catalog is matched on its title only, as typed and by one simplified-traditional conversion, so another form of a character and any draft alias are missed. Retry in the other form before saying it does not exist.",
+    "description": "Resolve a reference in one call: id, pasted public or Admin link, @handle, sourceId, or free text. {query:"/catalog/abc"}, {query:"https://.../?articleId=article-..."}, {query:"兰亭序",type:"catalog"}. resolution says exact, candidates or none. Use resolution.ref for a mutation, never the first candidate. A branch that did not answer is named in meta.sources, never read as zero. Neither none nor a short candidate list proves absence: a draft Catalog is matched on its title only, as typed and by one simplified-traditional conversion, so another form of a character and any draft alias are missed. Community text is matched as stored, with no such conversion. Retry in the other form before saying it does not exist.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -1559,7 +1559,7 @@ exports[`tool table > matches the checked-in tools/list for the read profile 1`]
       "openWorldHint": false,
       "readOnlyHint": true,
     },
-    "description": "Read one record, and always say which version was read. Default outline: per-field state, length, hash, no long text. {type:"catalog",id:7}. Long text in windows, offsets in code points: {type,id,field:"transcription",offset}. Inside one field: {type,id,field:"transcription",find:{text:"..."}}. view also full, published, preview, history, diff.",
+    "description": "Read one record, and always say which version was read. Default outline: per-field state, length, hash, no long text. {type:"catalog",id:7}, {type:"report",id:"report-..."}. Long text in windows, offsets in code points: {type,id,field:"transcription",offset}. Inside one field: {type,id,field:"transcription",find:{text:"..."}}. view also full, published, preview, history, diff; a community record has outline, full and field only.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -1732,7 +1732,7 @@ exports[`tool table > matches the checked-in tools/list for the read profile 1`]
       "openWorldHint": false,
       "readOnlyHint": true,
     },
-    "description": "Read a queue or page by op. Rows are compact; long text is only ever state, length and hash. {op:"list.catalogs",input:{filter:{missing:["transcription"]}}}. Count in SQL with no rows: {op:"list.catalogs",view:"count",groupBy:"dynasty",input:{filter:{missing:["transcription"]}}}. Project with fields:[...], continue with next. admin_actions gives each op's filter.",
+    "description": "Read a queue or page by op. Rows are compact; long text is only ever state, length and hash. {op:"list.catalogs",input:{filter:{missing:["transcription"]}}}. {op:"list.reports",input:{status:"open"}}. Count in SQL with no rows: {op:"list.catalogs",view:"count",groupBy:"dynasty",input:{filter:{missing:["transcription"]}}}. {op:"list.reports",view:"count",groupBy:"kind",input:{unresolved:"true"}}. Project with fields:[...], continue with next. admin_actions gives each op's filter.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {

@@ -6,6 +6,7 @@ import type {
   OperatorPublishingJob,
   OperatorPublishingJobPage,
   OperatorPublishingJobQuery,
+  OperatorReadScope,
   OperatorWorkSubmission,
   OperatorWorkSubmissionPage,
   OperatorWorkSubmissionQuery,
@@ -46,8 +47,9 @@ export class PostgresPublishingOperatorAdapter implements PublishingOperatorPort
   }
   listSubmissions(
     query: OperatorWorkSubmissionQuery,
+    scope?: OperatorReadScope,
   ): Promise<OperatorWorkSubmissionPage> {
-    return operations.listSubmissions(this.pool, query);
+    return operations.listSubmissions(this.pool, query, scope);
   }
   readSubmission(revisionId: string): Promise<OperatorWorkSubmission> {
     return operations.readSubmission(this.pool, revisionId);

@@ -172,6 +172,60 @@ const operatorCallWith =
 export const callCommunityOperator = operatorCallWith({});
 
 /**
+ * The same loopback call for Admin MCP, on the AI credential and never the Owner's.
+ * It keeps the Backend's status and bare code, so SELF_ONLY_OWNER_REVIEW,
+ * SENSITIVE_SWITCH_OFF and READ_TIMED_OUT reach the guard as themselves. A lost
+ * answer is OPERATOR_UNREACHABLE, as on the Owner's route, before its headers or after,
+ * and one given up on at the call's limit is OPERATOR_GAVE_UP, because the Backend's
+ * read may then run on.
+ */
+export const callAiOperator =
+  (credential: AiOperatorCredential) =>
+  async <Result>(
+    method: "GET" | "POST" | "PUT",
+    path: string,
+    body?: unknown,
+  ): Promise<Result> => {
+    const token = aiToken(credential);
+    const url = new URL(`internal/community/${path}`, operatorBaseUrl());
+    const signal = AbortSignal.timeout(15_000);
+    // Never surface the URL, the credential or a driver message.
+    const lost = () =>
+      new CommunityOperatorError(
+        signal.aborted ? "OPERATOR_GAVE_UP" : "OPERATOR_UNREACHABLE",
+        502,
+      );
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method,
+        cache: "no-store",
+        redirect: "error",
+        signal,
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${token}`,
+          [COMMENT_IMAGE_CAPABILITY_HEADER]: COMMENT_IMAGE_CAPABILITY_VERSION,
+          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+    } catch {
+      throw lost();
+    }
+    if (!response.ok)
+      throw new CommunityOperatorError(
+        (await backendCode(response)) ?? operatorFailureCode(response.status),
+        response.status,
+      );
+    try {
+      return (await response.json()) as Result;
+    } catch {
+      throw lost();
+    }
+  };
+
+/**
  * The same loopback call, asserting a machine principal for the agent
  * boundary (Issue #141 r3, Phase B). The label is a server-side value from
  * the Payload operator identity, never a request field; the Backend checks
@@ -469,6 +523,31 @@ export const openCommunityOperatorEvidence: OperatorMediaCall = (
     signal,
     OPERATOR_EVIDENCE_TYPES,
     OPERATOR_EVIDENCE_MAXIMUM_BYTES,
+  );
+
+/** The same relays for Admin MCP: the Backend's route table and switches decide them. */
+export const openCommunityAiMedia: OperatorMediaCall = (path, range, signal) =>
+  openOperatorBinary(
+    path,
+    range,
+    signal,
+    OPERATOR_MEDIA_TYPES,
+    OPERATOR_MEDIA_MAXIMUM_BYTES,
+    "community",
+  );
+
+export const openCommunityAiEvidence: OperatorMediaCall = (
+  path,
+  range,
+  signal,
+) =>
+  openOperatorBinary(
+    path,
+    range,
+    signal,
+    OPERATOR_EVIDENCE_TYPES,
+    OPERATOR_EVIDENCE_MAXIMUM_BYTES,
+    "community",
   );
 
 const CATALOG_THUMBNAIL_TYPES: ReadonlySet<string> = new Set(["image/webp"]);

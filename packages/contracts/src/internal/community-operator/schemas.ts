@@ -4,6 +4,11 @@ import {
   COMMENT_IMAGE_LIMITS,
 } from "../../comment-images.ts";
 import { operatorModerationReasonSchema } from "./moderation-reason.js";
+import {
+  operatorExactIdSchema,
+  operatorTimeBoundSchema,
+  rangeInOrder,
+} from "./query-filters.js";
 
 import {
   contentIdentitySchema,
@@ -245,15 +250,24 @@ export const OPERATOR_SEARCH_MAXIMUM = 100;
  * review order (newest or oldest first) and never the public hot ordering.
  * V1 has no keyword engine or scoring.
  */
-export const operatorCommentQuerySchema = z.strictObject({
+export const operatorCommentFilterSchema = z.strictObject({
   moderation: commentModerationStateSchema.optional(),
   kind: operatorCommentKindSchema.optional(),
   catalogId: catalogIdSchema.optional(),
   search: z.string().trim().min(1).max(OPERATOR_SEARCH_MAXIMUM).optional(),
-  order: z.enum(["newest", "oldest"]).optional(),
-  page: z.number().int().min(1).max(10_000).optional(),
-  pageSize: operatorPageSizeSchema.optional(),
+  authorId: operatorExactIdSchema.optional(),
+  /** By creation time. */
+  from: operatorTimeBoundSchema.optional(),
+  to: operatorTimeBoundSchema.optional(),
 });
+
+export const operatorCommentQuerySchema = operatorCommentFilterSchema
+  .extend({
+    order: z.enum(["newest", "oldest"]).optional(),
+    page: z.number().int().min(1).max(10_000).optional(),
+    pageSize: operatorPageSizeSchema.optional(),
+  })
+  .refine(rangeInOrder);
 
 /** Every recorded moderation action, human or (in future) machine-attributed. */
 export const moderationEventActionSchema = z.enum([

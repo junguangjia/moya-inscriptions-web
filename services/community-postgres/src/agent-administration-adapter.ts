@@ -31,6 +31,7 @@ import type { Pool, PoolClient, QueryResultRow } from "pg";
 import { AgentManifestError } from "@moya/api";
 
 import { asCommunityOperationError } from "./availability.js";
+import { userMatchRankArms } from "./user-match-rank.js";
 
 interface PrincipalRow {
   label: string;
@@ -390,10 +391,7 @@ export class PostgresAgentAdministrationAdapter implements AgentAdministrationPo
            CASE
              WHEN $2::text IS NOT NULL THEN 0
              WHEN $3::text IS NOT NULL THEN 1
-             WHEN $1 <> '' AND u.id = $1 THEN 0
-             WHEN $1 <> '' AND lower(u.handle) = lower(ltrim($1,'@')) THEN 1
-             WHEN $1 <> '' AND lower(u.display_name) = lower($1) THEN 2
-             ELSE 3
+             ${userMatchRankArms("$1")}
            END AS match_rank
          FROM community.public_users u
          WHERE ($2::text IS NULL OR u.id = $2)
@@ -429,10 +427,7 @@ export class PostgresAgentAdministrationAdapter implements AgentAdministrationPo
              CASE
                WHEN $2::text IS NOT NULL THEN 0
                WHEN $3::text IS NOT NULL THEN 1
-               WHEN $1 <> '' AND u.id = $1 THEN 0
-               WHEN $1 <> '' AND lower(u.handle) = lower(ltrim($1,'@')) THEN 1
-               WHEN $1 <> '' AND lower(u.display_name) = lower($1) THEN 2
-               ELSE 3
+               ${userMatchRankArms("$1")}
              END AS match_rank
            FROM community.public_users u
            WHERE ($2::text IS NULL OR u.id = $2)

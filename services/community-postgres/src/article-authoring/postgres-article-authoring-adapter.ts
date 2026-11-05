@@ -281,6 +281,11 @@ const cursorOf = (row: Pick<DraftRow, "id" | "updated_at">): string =>
     JSON.stringify([row.updated_at.toISOString(), row.id]),
     "utf8",
   ).toString("base64url");
+/**
+ * Only what `cursorOf` writes. PostgreSQL refuses some times JavaScript reads, year 0000
+ * among them, and that refusal would read as the store failing.
+ */
+const CURSOR_TIME = /^(?!0000)\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/u;
 const decodeCursor = (
   value: string | undefined,
 ): readonly [string, string] | null => {
@@ -296,7 +301,8 @@ const decodeCursor = (
       typeof parsed[0] !== "string" ||
       typeof parsed[1] !== "string" ||
       !/^article-[0-9a-f]{32}$/u.test(parsed[1]) ||
-      !Number.isFinite(Date.parse(parsed[0]))
+      !CURSOR_TIME.test(parsed[0]) ||
+      new Date(parsed[0]).toISOString() !== parsed[0]
     )
       throw Error();
     return [parsed[0], parsed[1]];
@@ -1048,9 +1054,11 @@ export class PostgresArticleAuthoringAdapter
     return readTransaction(this.pool, async (db) => {
       const rows = (
         await db.query<PendingSummaryRow>(
+          // The cursor holds milliseconds and the column microseconds, so the row a
+          // page ended on must not read as past its own cursor.
           `SELECT ${pendingColumns} ${pendingFrom}
-        AND ($1::timestamptz IS NULL OR (r.created_at,a.id)>($1::timestamptz,$2::text))
-        ORDER BY r.created_at ASC,a.id ASC LIMIT $3`,
+        AND ($1::timestamptz IS NULL OR (date_trunc('milliseconds',r.created_at),a.id)>($1::timestamptz,$2::text))
+        ORDER BY date_trunc('milliseconds',r.created_at) ASC,a.id ASC LIMIT $3`,
           [cursor?.[0] ?? null, cursor?.[1] ?? null, query.pageSize + 1],
         )
       ).rows;

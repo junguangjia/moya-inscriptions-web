@@ -34,7 +34,7 @@ export type AdminOpEntry = AdminOpMeta<
   AdminOpContext
 >;
 
-const NUMBERED_PAGE_SIZE = 20;
+export const NUMBERED_PAGE_SIZE = 20;
 
 /**
  * The largest page size that starts a page right after the rows read, up to the
