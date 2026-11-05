@@ -483,7 +483,7 @@ export const registerAgentConnectionTenStepTests = (
           humanSubject: string;
           issuer: string;
           resource: string;
-          presetAtConsent: "read-only" | "management";
+          presetAtConsent: "read-only" | "management" | "operator";
           capabilityScopes: readonly string[];
           consentedAt: string;
         } | null;

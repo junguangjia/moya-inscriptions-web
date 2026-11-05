@@ -161,16 +161,21 @@ its fixed search path and revoked PUBLIC execution remain unchanged. App gets
 only its named EXECUTE grant. For a separately enabled Article control/issuer
 surface, use `infra/development/article-authoring/grant-delegation.sql` with
 transaction-local `article_authoring.issuer_role`, `.control_role` and
-`.resource_role` set to three distinct pre-provisioned roles. Agent protocol
-roles use `infra/development/agent-connections/grant-authorization.sql` under
-that surface's separate authority. These scripts are not activation permission.
-No Production-specific database privilege is needed for the Article environment
-correction; the existing named issuer/control/resource grants apply. Runtime
-must use its actual environment, with separately configured issuer, resource and
-consent/token fences. Native Catalog editorial MCP is already enabled in Payload
-and uses the CMS role and native API-key authorization. Agent/external Article
-activation and their final Production composition remain the runtime task's
-responsibility.
+`.resource_role` set to three distinct pre-provisioned roles. In Development,
+Agent protocol roles use
+`infra/development/agent-connections/grant-authorization.sql` under that
+surface's separate authority; that file creates missing roles with fixed
+synthetic passwords, so it never runs against Production. The Production login
+door's three roles are provisioned separately and use
+`infra/production/sql/admin-mcp-oauth-grants.sql` (amendment 2026-11-05, section
+5), run by the migration/setup login. These scripts are not activation
+permission. No Production-specific database privilege is needed for the Article
+environment correction; the existing named issuer/control/resource grants apply.
+Runtime must use its actual environment, with separately configured issuer,
+resource and consent/token fences. Native Catalog editorial MCP is already
+enabled in Payload and uses the CMS role and native API-key authorization.
+Agent/external Article activation and their final Production composition remain
+the runtime task's responsibility.
 
 ## Identity rotation correction
 

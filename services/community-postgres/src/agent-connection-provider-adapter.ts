@@ -70,6 +70,9 @@ const MODELS = [
 ] as const;
 export type ProviderModel = (typeof MODELS)[number];
 
+/** The same list for whatever sweeps it, since `deleteExpired` is per model. */
+export const PROVIDER_ARTIFACT_MODELS: readonly ProviderModel[] = MODELS;
+
 /**
  * Models this provider KNOWS about and deliberately does not store.
  *
@@ -239,6 +242,18 @@ export interface ProviderAdapterOptions {
   readonly keys: ProviderAdapterKeys;
   readonly now?: () => Date;
   /**
+   * How long a consumed refresh token still reads as unused, in milliseconds.
+   * Absent or 0 means none, which is what Article uses.
+   *
+   * The provider treats a second use of a refresh token as theft and revokes
+   * the whole grant. A client that refreshes twice at once would then sign out
+   * a person who did nothing wrong, so the Admin issuer tolerates that for a
+   * moment. It has a cost, stated: inside the window a replay forks the chain
+   * instead of revoking anything. After it, replay revokes as usual, measured
+   * from the first use because `consume` keeps the first timestamp.
+   */
+  readonly refreshReuseGraceMs?: number;
+  /**
    * Called when a row cannot be opened or disagrees with its own payload.
    * Receives no credential: the model, the row's digest and a bare reason.
    */
@@ -260,6 +275,27 @@ export const createProviderAdapter = (options: ProviderAdapterOptions) => {
       ? "community.article_authoring_provider_artifacts"
       : TABLE;
   const now = options.now ?? (() => new Date());
+  const refreshReuseGraceMs = options.refreshReuseGraceMs ?? 0;
+  if (!Number.isSafeInteger(refreshReuseGraceMs) || refreshReuseGraceMs < 0)
+    throw new RangeError("refreshReuseGraceMs must be a whole number of ms");
+  if (refreshReuseGraceMs > 0 && options.namespace === "article-authoring")
+    throw new RangeError("Article allows no refresh token reuse");
+
+  /**
+   * Inside the window, a consumed refresh token reads as never consumed. With no
+   * window this never applies: a clock stepped back would otherwise make the
+   * difference negative, and hide a replay from Article's theft check.
+   */
+  const consumedAsSeen = (
+    model: ProviderModel,
+    consumedAt: Date | null,
+  ): Date | null =>
+    refreshReuseGraceMs > 0 &&
+    consumedAt !== null &&
+    model === "RefreshToken" &&
+    now().getTime() - consumedAt.getTime() < refreshReuseGraceMs
+      ? null
+      : consumedAt;
 
   return class ProviderArtifactAdapter {
     /** Readonly rather than private: the class is returned from a factory, and
@@ -354,7 +390,7 @@ export const createProviderAdapter = (options: ProviderAdapterOptions) => {
         this.model,
         digest,
         row.sealed_payload,
-        row.consumed_at,
+        consumedAsSeen(this.model, row.consumed_at),
         row.grant_id,
         options.onUnsealFailure,
       );
@@ -426,10 +462,8 @@ export const createProviderAdapter = (options: ProviderAdapterOptions) => {
      * longer hides them. Deletes nothing that is still live and creates no
      * authority.
      *
-     * NOTHING CALLS THIS YET. There is no authorization service in this slice,
-     * so no rows accumulate either -- but the moment one runs, expired
-     * artifacts stay findable until something schedules this, once per model,
-     * because the sweep is per-model by design.
+     * The sweep is per-model by design, so whatever schedules this calls it once
+     * per model. Where nothing does, expired artifacts stay findable.
      */
     async deleteExpired(limit = 1000): Promise<number> {
       const { rowCount } = await pool.query(

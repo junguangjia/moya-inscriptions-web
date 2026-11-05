@@ -137,6 +137,7 @@ export {
 export { PostgresPublishingOperatorAdapter } from "./publishing-operator-adapter.js";
 export { PostgresAgentAdministrationAdapter } from "./agent-administration-adapter.js";
 export {
+  PROVIDER_ARTIFACT_MODELS,
   ProviderAdapterKeyError,
   createProviderAdapter,
   providerAdapterKeysFrom,
@@ -167,7 +168,11 @@ export type {
   RegisteredClient,
 } from "./agent-connection-identity.js";
 export {
+  RESUME_SECRET_PARAMETER,
   createConsentStore,
+  digestResumeSecret,
+  isResumeSecret,
+  mintResumeSecret,
   parseConsentRow,
 } from "./agent-connection-consents.js";
 export type {
