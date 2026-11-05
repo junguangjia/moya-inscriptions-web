@@ -1,6 +1,11 @@
 import { createHmac } from "node:crypto";
 
 import { sql, type PostgresAdapter } from "@payloadcms/db-postgres";
+import {
+  ADMIN_MCP_AUTHORIZE_CEILING,
+  ADMIN_MCP_CONNECTION_LIFETIME_MS,
+  ADMIN_MCP_OPERATOR_ROW_EMAIL,
+} from "@moya/contracts/internal/admin-mcp";
 import { APIError, UnauthorizedError } from "payload";
 import type {
   AdminMcpDoorRefusal,
@@ -9,22 +14,38 @@ import type {
 import type { MCPAccessSettings } from "@payloadcms/plugin-mcp";
 import type { PayloadRequest } from "payload";
 
+import { verifyConnection } from "../agent-connections/authorization";
+import { bearerOf } from "../agent-connections/composition";
 import type { OverrideAuth } from "../agent-connections/composition";
+import {
+  ConnectionAuthError,
+  isConnectionToken,
+} from "../agent-connections/contracts";
+import { resourceRuntime } from "../agent-connections/resource";
+import type { ResourceRuntime } from "../agent-connections/resource";
 import type { PayloadMcpApiKey, User } from "../payload-types";
 import { controlFor } from "./control/state";
 import type { AdminMcpControl } from "./control/state";
 
 /**
- * The key door of `/api/mcp`, on both paths (docs/development/
- * admin-mcp-completion-v1.md section 3). Only a holder of the correct secret
- * reaches the two named refusals, so they are no oracle; everything else answers
- * the plugin's generic 401. Each refusal logs one fixed category.
+ * The doors of `/api/mcp`: a key, on both paths (docs/development/
+ * admin-mcp-completion-v1.md section 3), and an operator connection, on the native
+ * path (section 22). Only a holder of the correct secret reaches the two named
+ * refusals, so they are no oracle; everything else answers the plugin's generic
+ * 401. Each refusal logs one fixed category.
  */
 
 export type AdminMcpPath = "native" | "plugin";
 
 export interface AdminMcpKey {
-  readonly id: number;
+  /** A key's row id, or `conn-<hex>` for a connection. */
+  readonly id: number | string;
+  readonly connection?: {
+    readonly id: string;
+    readonly authorizedById: User["id"];
+    /** For the audit row, read only by auditIdentity. AI reads account ids, never this. */
+    readonly authorizedByEmail: string;
+  };
   readonly label?: string;
   readonly expiresAt: string;
   readonly lastUsedAt?: string;
@@ -58,6 +79,18 @@ export const takeRequestStart = (req: PayloadRequest): number => {
 /** The key admitted for this request, on either path. */
 export const admittedKeyOf = (req: PayloadRequest): AdminMcpKey | undefined =>
   admittedKeys.get(req);
+
+/** What a call's audit rows say about who made it, for a key or a connection. */
+export const auditIdentity = ({ id, label, connection }: AdminMcpKey) => ({
+  ...(typeof id === "number" ? { keyId: id } : {}),
+  ...(label ? { keyLabel: label } : {}),
+  ...(connection
+    ? {
+        connectionId: connection.id,
+        authorizedBy: connection.authorizedByEmail,
+      }
+    : {}),
+});
 
 /**
  * A production build compiles Payload once for the routes and once for the Admin
@@ -190,6 +223,130 @@ export const admitKey = async (
   };
   admittedKeys.set(req, admitted);
   return admitted;
+};
+
+/** Any spelling of the scheme, as the plugin path's connection door reads it. */
+export const connectionTokenOf = (req: PayloadRequest): string | null => {
+  const presented = bearerOf(req);
+  return presented !== null && isConnectionToken(presented) ? presented : null;
+};
+
+/** The person the consent views stamp, as a `users` id. */
+const AUTHORIZER_SUBJECT = /^payload-user-([1-9][0-9]*)$/u;
+/** `users.id` is an int4, and a number past it would fail the statement, not find nobody. */
+const USERS_ID_MAX = 2_147_483_647;
+
+/** The authorizing person and the operator row, in one statement, uncached. */
+const connectionRows = async (req: PayloadRequest, subject: string) => {
+  const digits = AUTHORIZER_SUBJECT.exec(subject)?.[1];
+  const personId = Number(digits) <= USERS_ID_MAX ? digits : undefined;
+  const { docs } = await req.payload.find({
+    collection: "users",
+    depth: 0,
+    limit: 2,
+    pagination: false,
+    where: {
+      or: [
+        { email: { equals: ADMIN_MCP_OPERATOR_ROW_EMAIL } },
+        ...(personId === undefined
+          ? []
+          : [{ id: { equals: Number(personId) } }]),
+      ],
+    },
+  });
+  return {
+    person: docs.find(({ id }) => String(id) === personId),
+    operator: docs.find(({ email }) => email === ADMIN_MCP_OPERATOR_ROW_EMAIL),
+  };
+};
+
+/**
+ * Admits one consented token for one request, or answers null when this door has
+ * no say: it is off, or the token is a Development read-only one for the plugin
+ * path. Everything is read again for each request, so a disconnect, a tool off the
+ * list, a demoted person or a changed operator row stops the next call. Every
+ * refusal is one generic 401 with a bare code in the diagnostics, apart from the
+ * 503 the key door also answers when it cannot read the pause.
+ */
+export const admitConnection = async (
+  req: PayloadRequest,
+  presented: string,
+): Promise<{ readonly key: AdminMcpKey; readonly user: User } | null> => {
+  const category = "ADMIN_MCP_CONNECTION_REFUSED";
+  let runtime: ResourceRuntime | null;
+  try {
+    runtime = resourceRuntime();
+  } catch {
+    // Its code went to stderr on the first request that loaded the Payload config.
+    return refuse(req, category, null);
+  }
+  if (runtime === null) return null;
+  const { clients, recordRefusal, recordVerified } = runtime;
+  const refused = (code: string): never => {
+    try {
+      recordRefusal?.(code);
+    } catch {
+      // A diagnostics sink that throws must not replace the refusal.
+    }
+    return refuse(req, category, null);
+  };
+
+  let admitted: Awaited<ReturnType<typeof verifyConnection>>;
+  try {
+    admitted = await verifyConnection(runtime, presented);
+  } catch (error) {
+    return refused(
+      error instanceof ConnectionAuthError ? error.code : "CONNECTION_ERROR",
+    );
+  }
+  const { connection, consent } = admitted;
+  if (consent.presetAtConsent !== "operator") return null;
+
+  const client = clients.get(consent.oauthClientId);
+  if (client === undefined) return refused("CONNECTION_CLIENT_NOT_LISTED");
+  // A token refreshed just before the limit would otherwise outlive it by an hour.
+  const expiresAt =
+    Date.parse(consent.consentedAt) + ADMIN_MCP_CONNECTION_LIFETIME_MS;
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now())
+    return refused("CONNECTION_LIFETIME_OVER");
+
+  let rows: Awaited<ReturnType<typeof connectionRows>>;
+  try {
+    rows = await connectionRows(req, consent.humanSubject);
+  } catch {
+    return refused("CONNECTION_ERROR");
+  }
+  const { person, operator } = rows;
+  const toolProfile = person && ADMIN_MCP_AUTHORIZE_CEILING[person.role];
+  if (!person || !toolProfile) return refused("CONNECTION_AUTHORIZER_REFUSED");
+  if (operator?.role !== "ai_operator")
+    return refused("CONNECTION_OPERATOR_ROW_REFUSED");
+
+  const { pause } = await doorControl(req);
+  try {
+    // Fire and forget, and only now: an observation must not claim a refused request.
+    recordVerified?.(connection.id);
+  } catch {
+    // A failed observation must not refuse an admitted request.
+  }
+  const key: AdminMcpKey = {
+    id: connection.id,
+    connection: {
+      id: connection.id,
+      authorizedById: person.id,
+      authorizedByEmail: person.email,
+    },
+    label: client.label,
+    expiresAt: new Date(expiresAt).toISOString(),
+    toolProfile,
+    path: "native",
+    paused: pause,
+    user: { id: operator.id, role: operator.role },
+    pluginTools: {},
+  };
+  admittedKeys.set(req, key);
+  Object.assign(operator, { collection: "users", _strategy: "mcp-connection" });
+  return { key, user: operator };
 };
 
 /**

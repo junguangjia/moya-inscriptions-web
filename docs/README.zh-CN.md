@@ -36,7 +36,8 @@ pnpm dev:migrate
 pnpm dev:all
 ```
 
-这套环境使用独立的本地 PostgreSQL 数据库、合成开发数据和本地媒体存储，无需云服务凭据。
+这套环境使用独立的本地 PostgreSQL 数据库、合成开发数据和本地媒体存储，无需云服务凭据。新数据库要登录 Admin，需先创建第一个 Owner，见
+[docs/development.md](development.md) 的 First run。
 
 | 应用          | 本地地址                      |
 | ------------- | ----------------------------- |

@@ -1,8 +1,14 @@
 import { definePlugin } from "payload";
 import type { PayloadHandler, PayloadRequest, TypedUser } from "payload";
 
-import { isConnectionToken } from "../agent-connections/contracts";
-import { admitKey, bearerKeyOf, findKey, markRequestStart } from "./door";
+import {
+  admitConnection,
+  admitKey,
+  bearerKeyOf,
+  connectionTokenOf,
+  findKey,
+  markRequestStart,
+} from "./door";
 import { nativeMcp } from "./native";
 
 /**
@@ -17,10 +23,10 @@ const isTheConfiguredPath = (req: PayloadRequest): boolean =>
   `${req.payload.config.routes.api}/mcp`;
 
 /**
- * One URL, two paths. A key bound to ai_operator goes to the native handler;
- * every other credential, refusals included, reaches the plugin handler
- * untouched, with its body unread. Another spelling of the URL reaches neither,
- * and costs no key lookup.
+ * One URL, two paths. A key bound to ai_operator and an operator connection go to
+ * the native handler; every other credential, refusals included, reaches the plugin
+ * handler untouched, with its body unread. Another spelling of the URL reaches
+ * neither, and costs no lookup. A connection token never reaches the key lookup.
  */
 export const adminMcpDispatch =
   (pluginHandler: PayloadHandler): PayloadHandler =>
@@ -28,9 +34,17 @@ export const adminMcpDispatch =
     if (!isTheConfiguredPath(req))
       return Response.json({ message: "Not found" }, { status: 404 });
     markRequestStart(req);
+    const connectionToken = connectionTokenOf(req);
+    if (connectionToken !== null) {
+      const connection = await admitConnection(req, connectionToken);
+      // The door is off, or a Development read-only token: the plugin path decides.
+      if (connection === null) return pluginHandler(req);
+      req.payloadAPI = "MCP";
+      req.user = connection.user as unknown as TypedUser;
+      return nativeMcp(req, connection.key);
+    }
     const presented = bearerKeyOf(req);
-    if (presented === null || isConnectionToken(presented))
-      return pluginHandler(req);
+    if (presented === null) return pluginHandler(req);
     const key = await findKey(req, presented);
     if (key === null || key.user.role !== "ai_operator")
       return pluginHandler(req);

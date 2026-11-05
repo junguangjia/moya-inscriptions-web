@@ -3999,6 +3999,22 @@ Tool     issuer /token, code and PKCE -> artvenn_ct_ token and refresh token
   plugin connection path and stays as #141 measured it, so its resume takes the
   cookie and an approved row with no secret, and its refresh and lifetimes are
   unchanged.
+- Resource side. `oauthSurfaceEnabled` composes the Admin's resource runtime;
+  `connectionsEnabled` alone decides what the plugin path receives from it. In
+  Production `AGENT_RESOURCE_DATABASE_URL` must end in exactly
+  `?sslmode=verify-full`, `AGENT_DATABASE_SSL_CA_FILE` must be set and readable
+  for its pool, and the issuer and resource must be https. `CMS_ENVIRONMENT`
+  must be `production`, and `admin.env` carries no
+  `AGENT_AUTHORIZATION_ENVIRONMENT`: the issuer is held to `production` too, so
+  the two cannot disagree. Development under
+  `AGENT_AUTHORIZATION_PROFILE=operator` needs those two names equal, since
+  there they can differ. A bad setting, a wrapper key included, is a bare code
+  on stderr on the first request that loads the Payload config, not when the
+  Admin starts, and connection tokens are refused. So a release check makes one
+  request before it reads the journal for
+  `agent-connections composition refused`. The pool has a 5 s query timeout,
+  carried in its URL because the shared helper takes none, so a database gone
+  silent after a connect answers the generic 401.
 - Development database. Every decision now writes `resume_secret_digest`, a
   read-only approval and a denial too. After this migration, apply
   `infra/development/agent-connections/grant-authorization.sql` again, or a
@@ -4008,11 +4024,36 @@ Tool     issuer /token, code and PKCE -> artvenn_ct_ token and refresh token
   `ADMIN_SCHEMA_NOT_READY` until every required migration has run unchanged.
 - Article. It runs the same `main.ts`, so its refused start now names a category
   on stderr, and nothing else about it changes.
+- Door. `adminMcpDispatch` looks for an `artvenn_ct_` token first, under any
+  spelling of the scheme, so one never reaches the key lookup. `admitConnection`
+  reads everything again on each request: the token and its frozen grant, the
+  preset, the closed list, the limit from consent, the authorizing person's role
+  against `ADMIN_MCP_AUTHORIZE_CEILING`, the operator row's role, and the pause.
+  A token of another preset goes to the plugin path, which refuses it in
+  Production. Every refusal is the plugin's generic 401, with a bare code in the
+  diagnostics, including a resource runtime that refused to build and a failed
+  read of a store or of `users`. An unreadable pause answers 503, as it does for
+  a key. The person is read from `payload-user-<id>`, the form the consent views
+  stamp, and a number past the `users.id` range reads as nobody, not as a store
+  error. The door also stops a connection at 180 days from consent itself,
+  because a token refreshed just before that limit would otherwise outlive it by
+  up to an hour.
+- Audit and `admin_whoami`. `auditIdentity` builds what every row says about the
+  caller: a key's id, or the connection id and the person's email at that
+  moment. `admin_whoami` gives the `conn-` id, the expiry at that limit and the
+  authorizing account's id, never an email. It also gives `byteChannel`, which
+  names each kind of work that goes through section 20's companion, because
+  every connection is a client with no local process: a tool asked for a report
+  CSV reads why it cannot. A key can be held by either kind, so a key's answer
+  has no such field; section 20's `byteChannel` for keys arrives with the
+  companion.
 - Closed list. The name on the consent page and the callback host come from
-  `AGENT_AUTHORIZATION_CLIENTS`, never from the request. There is no
-  registration endpoint, and `features.clientIdMetadataDocument` stays off so
-  its fetch path cannot run: `Client.find` reads static clients first
-  (oidc-provider lib/models/client.js). Discovery still says
+  `AGENT_AUTHORIZATION_CLIENTS`, never from the request. The Admin reads the
+  same setting under `operator`, and refuses by a bare code when it is missing
+  or malformed; the read-only profile does not read it. There is no registration
+  endpoint, and `features.clientIdMetadataDocument` stays off so its fetch path
+  cannot run: `Client.find` reads static clients first (oidc-provider
+  lib/models/client.js). Discovery still says
   `client_id_metadata_document_supported`, added by a post-route middleware. The
   public policy names Anthropic and OpenAI, which covers this list; another
   vendor needs the policy text changed first. `parseRegisteredClients` refuses
@@ -4026,7 +4067,41 @@ Tool     issuer /token, code and PKCE -> artvenn_ct_ token and refresh token
 - Identity. One shared `ai_operator` row, seeded with no password, so
   `approvedBy`, locks and receipts need no change, and the audit names the
   person beside it. Strategy `mcp-connection`, set only by the door. `isOwner`
-  and `isHumanOwner` are unchanged.
+  and `isHumanOwner` are unchanged. A new Production install still provisions
+  through `provision-initial-owner.ts`, because `provisionInitialOwner` does not
+  count that exact row; its address on another role, or another `ai_operator`
+  account, still refuses. `seed-phase4-acceptance.mjs` and the curation tool's
+  `bootstrap-development.mjs` read it the same way. A new Development database
+  gets its first Owner from `bootstrap-synthetic.ts`, as docs/development.md
+  says: Payload's first-user page and `first-register` look for any row and
+  cannot be filtered, so they stay closed. The Admin's account list shows it.
+- Rollback. `down` keeps the row, so a chain rollback past
+  `20261103_143652_ai_operator_role` fails that migration's cast on it. While
+  the row has written nothing, it needs
+  `DELETE FROM "users" WHERE "email" = 'ai-connection@operator.invalid' AND "role" = 'ai_operator';`
+  first, by hand. Once a connection has saved anything that DELETE stops:
+  `editorial_receipts.actor_id` is NOT NULL under ON DELETE SET NULL, and a
+  Catalog delivery intent or receipt restricts it. Then set the row's role to
+  `automation` for the rollback instead, which keeps the receipts, and back to
+  `ai_operator` after `up` runs again, because `up` leaves an existing row as it
+  is and the door refuses any other role. `up` tolerates only a conflict on
+  `email`, so any other collision stops the migration instead of leaving no row.
+- One requestId on two connections. `requestKeyFor` mixes the connection id into
+  a connection's hash, so two people's tools that choose the same requestId each
+  get their own effect, at the CMS receipt and at the Backend, and on those
+  receipt routes one never reads the other's command as a replay. Two kinds of
+  write have no receipt and read the record back, so there a tool can read
+  another's identical effect as `already_applied`: a report decision (section
+  7), whose history names every credential as one AI operator, and a lock
+  takeover (see Limits). The Behavior Matrix asks only that a retry with the
+  same requestId is safe, and it is: the id outlives a token, so the same
+  connection still replays, across a refresh too. A key's derived value does not
+  change by one byte.
+- The run engine of section 8 is not built. When S8 builds it: a run names its
+  connection beside `keyId`, because a connection's `keyId` is empty and that
+  column, numeric on the audit row, cannot hold a `conn-` id. requestId's scope
+  and the rolling 24-hour figure count per credential, not per `users` row or
+  per numeric key, because every connection shares one row and has no key.
 - Binding. Under `operator`, `decideConsent` mints a one-time secret, stores its
   digest and returns it in the resume URL. Resume needs the secret and the
   provider cookie, so an approval reaches only the browser that started the
@@ -4094,11 +4169,30 @@ Limits, stated:
 - The other owners are told of a new connection by a notice in the Admin on
   their next visit, not when it happens, because the Admin has no mail adapter.
   O3 builds it.
+- Until O3 lands, the metadata pointer on a 401 follows `connectionsEnabled`, so
+  Production's door has none, and the challenge carries no `scope` anywhere.
 - A connection is always at profile full, so section 14's advice to use profile
   `read` for sessions that bulk-read untrusted content has no form here.
-- A connection has no byte channel. Uploads, originals and rendered previews
-  stay with the companion and its key, as the row "Client with no local process"
-  says.
+- A connection has no byte channel. Uploads, every download, the canonical
+  export and report CSV among them, rendered previews, new deep zoom masters,
+  local imports and password account bodies stay with the companion and its key,
+  as the row "Client with no local process" says.
+- A document lock is per account, not per connection, so tools on the shared row
+  do not block each other, and revision checks are what protect the content.
+  Measured: after A took a lock over from the Owner, B's save went through and
+  removed the lock row, A's next save on the old revision answered
+  REVISION_CONFLICT, and on a second lock B's takeover answered
+  `already_applied` and B's release removed A's lock.
+- Restoring a demoted person revives their live tokens, with no new consent,
+  because the door reads the role on each request and nothing here revokes on a
+  role change. O3's `users` hook does that revoking. O3 pins demote, restore,
+  old token still refused, and says what a failed revoke means.
+- A key's answers differ from main in wording only, "key" becoming "credential",
+  in five strings: the `initialize` instructions, the `admin_whoami`
+  description, the NOT_FOUND hint, and the summaries of `document.lock_release`
+  and `list.runs`. One offer differs too: `admin_get` and `admin_find` offer
+  `document.lock_release` only on the caller's own lock, so a key no longer sees
+  it on another AI account's lock, where it could only be refused.
 - Each person needs an account with that vendor, on a plan and in a place it
   serves. Nothing in this repository changes that.
 - No real client has been through this door. Everything said here about a

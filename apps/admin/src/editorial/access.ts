@@ -14,11 +14,17 @@ export const isAutomation = (req: PayloadRequest): boolean =>
 const strategyOf = (req: PayloadRequest): unknown =>
   (req.user as { _strategy?: unknown } | null | undefined)?._strategy;
 
-/** The role grants authority only through an MCP key: a JWT or REST key on the row grants nothing. */
-export const isAiOperator = (req: PayloadRequest): boolean =>
-  req.user?.collection === "users" &&
-  req.user.role === "ai_operator" &&
-  strategyOf(req) === "mcp-api-key";
+/**
+ * The role grants authority only through an MCP door, a key or a consented
+ * connection, and only the door sets those strategies. A JWT or REST key on the row
+ * grants nothing, and neither strategy grants anything on a row with another role.
+ */
+export const isAiOperator = (req: PayloadRequest): boolean => {
+  if (req.user?.collection !== "users" || req.user.role !== "ai_operator")
+    return false;
+  const strategy = strategyOf(req);
+  return strategy === "mcp-api-key" || strategy === "mcp-connection";
+};
 
 /** Owner authority on every gate explicitly converted (amendment 2026-11-03). */
 export const actsAsOwner = (req: PayloadRequest): boolean =>

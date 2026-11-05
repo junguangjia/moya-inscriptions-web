@@ -53,8 +53,10 @@ REST API key 用于确定性批处理，官方 MCP key 用于 MCP
 Bearer，两者与部署凭据分离。Owner 创建账号及工具范围，自动化不能解锁/管理其他账号。
 
 后台账号有三种角色：`owner`、`automation` 和 `ai_operator`。`ai_operator`
-只有持官方 MCP key 访问 `/api/mcp` 时才有权限，不能用密码登录，也不能持有 REST
-key（修订 2026-11-03）。
+只有经 MCP 门访问 `/api/mcp` 时才有权限：持官方 MCP
+key，或（登录门开启后）持一位 Owner 同意后发给工具的连接 token，这些连接共用迁移预置的一条无密码
+`ai_operator` 账号。它不能用密码登录，也不能持有 REST
+key（修订 2026-11-03、2026-11-05）。
 
 密钥规则：
 

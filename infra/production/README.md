@@ -76,17 +76,19 @@ users, or changed initial credentials fail without resetting or adopting an
 account. Provisioning is transactional and audited; it does not create contacts,
 challenges, or sessions. Use the normal website login to verify each account.
 
-The Admin Owner is a separate native Payload user. On a migrated, empty Admin
-user table, run
+The Admin Owner is a separate native Payload user. On a migrated Admin user
+table holding no account, which means only the one `ai_operator` row the
+migrations seed for the login door (it has no password), run
 `pnpm --filter admin exec payload run scripts/provision-initial-owner.ts` with
 the protected Admin configuration, `CMS_ENVIRONMENT=production`, and
 `CMS_INITIAL_OWNER_INPUT` pointing to a mode `0600`, operator-owned regular JSON
 file containing only `email` and `password` (20–128 characters). The command
-serializes setup, refuses any nonempty user table, and creates one native Owner
-without an API key. Then use normal Admin login. Outside the synthetic test
-profile, both the native public `/api/users/first-register` endpoint and the
-`/admin/create-first-user` page are closed. This command is initial
-provisioning, not a password reset or public-user privilege promotion.
+serializes setup, refuses a user table holding any row beside that exact one,
+and creates one native Owner without an API key. Then use normal Admin login.
+Outside the synthetic test profile, both the native public
+`/api/users/first-register` endpoint and the `/admin/create-first-user` page are
+closed. This command is initial provisioning, not a password reset or
+public-user privilege promotion.
 
 These instructions describe the operator boundary. Local synthetic checks do not
 establish that a release was deployed or that real acceptance passed.

@@ -132,5 +132,5 @@ export const listOps: Readonly<Record<ListOpName, AdminOpEntry>> = {
     communityOnly,
   ),
   "list.masters": readOp("Deep zoom masters.", { credential: "base" }),
-  "list.runs": readOp("This key's preview and bulk runs."),
+  "list.runs": readOp("This credential's preview and bulk runs."),
 };

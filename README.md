@@ -47,7 +47,9 @@ pnpm dev:all
 ```
 
 This setup uses a dedicated local PostgreSQL database, synthetic development
-data, and local media storage. No cloud credentials are required.
+data, and local media storage. No cloud credentials are required. To sign in to
+the Admin on a new database, make a first Owner: see First run in
+[docs/development.md](docs/development.md).
 
 | Application   | Local address                 |
 | ------------- | ----------------------------- |

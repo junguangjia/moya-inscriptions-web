@@ -1,8 +1,11 @@
 export { adminMcpDispatch, adminMcpDispatchPlugin } from "./dispatch";
 export {
+  admitConnection,
   admitKey,
   admittedKeyOf,
+  auditIdentity,
   bearerKeyOf,
+  connectionTokenOf,
   findKey,
   markRequestStart,
   withKeyDoor,
@@ -27,11 +30,15 @@ export {
   toolListingFor,
 } from "./tools";
 export type { AdminMcpTool } from "./tools";
-export { whoamiPluginTool } from "./tools/whoami";
+export { whoamiEnvelope, whoamiPluginTool } from "./tools/whoami";
 export { findEnvelope } from "./locate";
 export { findContinuation } from "./tools/find";
 export { readContinuation } from "./tools/read";
-export { EXECUTE_TOOL_NAME, executeEnvelope } from "./tools/execute";
+export {
+  EXECUTE_TOOL_NAME,
+  executeEnvelope,
+  requestKeyFor,
+} from "./tools/execute";
 export {
   ACTIONS_TOOL_NAME,
   actionDetail,

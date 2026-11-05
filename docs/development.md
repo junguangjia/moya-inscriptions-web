@@ -14,8 +14,21 @@ pnpm install
 cp infra/env/local.env.example .env.local
 pnpm dev:db:up
 pnpm dev:migrate
+mkdir -p .local
+(cd apps/admin && CMS_QA_HANDOFF_FILE="$PWD/../../.local/dev-owner.json" node --env-file=../../.env.local node_modules/payload/bin.js run scripts/bootstrap-synthetic.ts)
 pnpm dev:all
 ```
+
+The `bootstrap-synthetic.ts` line makes a first Owner, once per new database.
+Payload's own first-user page stays closed, because the migrations seed one row
+in `users`, the login door's `ai_operator` account that nobody can sign in with,
+and Payload opens that page only on a table with no rows at all. The script
+creates the Owner and also one automation account and one MCP key, and writes
+all their credentials to `.local/dev-owner.json`: mode `0600`, ignored by Git.
+That file holds the Owner's address and password, as `ownerEmail` and
+`ownerPassword`, for signing in at `/admin`. It must not already exist: the
+script writes the file last, so if one is there it stops with the accounts
+created and their passwords nowhere to read. Move an old file away first.
 
 `compose.dev.yml` creates PostgreSQL **18.4**, database `yoyi_dev`, port
 `127.0.0.1:54330` and the separate `yoyi-development_yoyi_dev_data` volume. It

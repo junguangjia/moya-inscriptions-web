@@ -50,9 +50,25 @@ try {
     )
   ).default;
   payload = await getPayload({ config });
+  const { ADMIN_MCP_OPERATOR_ROW_EMAIL } = await import(
+    pathToFileURL(
+      path.join(
+        repoRoot,
+        "packages/contracts/dist/internal/admin-mcp/index.js",
+      ),
+    ).href
+  );
+  // The migrations seed the login door's row, which nobody can sign in with, so it
+  // is not an account yet. Only that exact row, as provisionInitialOwner reads it.
   const before = await payload.count({
     collection: "users",
     overrideAccess: true,
+    where: {
+      or: [
+        { email: { not_equals: ADMIN_MCP_OPERATOR_ROW_EMAIL } },
+        { role: { not_equals: "ai_operator" } },
+      ],
+    },
   });
   if (before.totalDocs !== 0) fail("BOOTSTRAP_TARGET_NOT_FRESH");
   const owner = await payload.create({

@@ -6,7 +6,7 @@ import type { PayloadRequest } from "payload";
 import type { McpAuditEvent } from "../payload-types";
 import { writeAuditEvent } from "./audit";
 import { controlFor } from "./control/state";
-import { admittedKeyOf, takeRequestStart } from "./door";
+import { admittedKeyOf, auditIdentity, takeRequestStart } from "./door";
 import { failedEnvelope } from "./envelope";
 import { WHOAMI_TOOL_NAME } from "./tools/whoami";
 
@@ -57,9 +57,7 @@ export const guardCall = async <T>(
     class: klass,
     tool,
     ...references,
-    ...(key
-      ? { keyId: key.id, ...(key.label ? { keyLabel: key.label } : {}) }
-      : {}),
+    ...(key ? auditIdentity(key) : {}),
     ...(req.user ? { userId: String(req.user.id) } : {}),
   };
   const finish = ({ responseBytes, ...outcome }: GuardOutcome) =>

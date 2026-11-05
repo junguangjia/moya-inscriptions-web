@@ -13,6 +13,7 @@ import {
   toolGrantKey,
   connectionOverrideAuth,
   connectionsEnabled,
+  verifyConnection,
 } from "admin/agent-connections";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -369,6 +370,105 @@ describe("connectionAuth", () => {
     );
     expect(new Set(shapes).size).toBe(1);
     expect(shapes[0]).not.toBe("resolved");
+  });
+});
+
+describe("verifyConnection", () => {
+  const OPERATOR_CLIENT = "https://claude.ai/oauth/mcp-oauth-client-metadata";
+  const operator = connection({
+    preset: "operator",
+    client: "claude",
+    oauthClientId: OPERATOR_CLIENT,
+  });
+  const operatorGrant = grant({
+    clientId: OPERATOR_CLIENT,
+    scopes: ["artvenn:admin"],
+  });
+  const dependencies = (
+    verified: unknown,
+    stored: ConnectionRecord | null = record(operator),
+  ) => ({
+    verifyAccessToken: vi.fn(async () => verified as VerifiedGrant),
+    readConnection: vi.fn(async () => stored),
+    ...expected,
+    recordRefusal: vi.fn(),
+    recordVerified: vi.fn(),
+  });
+
+  it("admits an operator connection and leaves the observation to its caller", async () => {
+    const door = dependencies(operatorGrant);
+    const admitted = await verifyConnection(door, "presented");
+    expect(door.verifyAccessToken).toHaveBeenCalledWith("presented");
+    expect(door.readConnection).toHaveBeenCalledWith("conn-1");
+    expect(admitted.connection.id).toBe("conn-1");
+    expect(admitted.consent.presetAtConsent).toBe("operator");
+    expect(door.recordVerified).not.toHaveBeenCalled();
+    expect(door.recordRefusal).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a token nobody knows", null, undefined, "CONNECTION_TOKEN_INVALID"],
+    [
+      "a claim that does not parse",
+      { ...operatorGrant, extra: true },
+      undefined,
+      "CONNECTION_GRANT_MALFORMED",
+    ],
+    [
+      "a read-only scope on an operator consent",
+      { ...operatorGrant, scopes: ["artvenn:read"] },
+      undefined,
+      "CONNECTION_SCOPE_MISMATCH",
+    ],
+    [
+      "a stale generation",
+      { ...operatorGrant, generation: 2 },
+      undefined,
+      "CONNECTION_GENERATION_STALE",
+    ],
+    [
+      "a revoked connection",
+      operatorGrant,
+      record({
+        ...operator,
+        status: "revoked",
+        revokedAt: "2026-09-19T00:00:00Z",
+      }),
+      "CONNECTION_REVOKED",
+    ],
+    ["a missing connection", operatorGrant, null, "CONNECTION_NOT_FOUND"],
+  ] as const)(
+    "refuses %s with its own code",
+    async (_, verified, stored, code) => {
+      await expect(
+        verifyConnection(dependencies(verified, stored), "presented"),
+      ).rejects.toMatchObject({ code });
+    },
+  );
+
+  it("lets a store failure through for its caller to shape", async () => {
+    const outage = new Error("store unavailable");
+    const door = dependencies(operatorGrant);
+    door.readConnection.mockRejectedValueOnce(outage);
+    await expect(verifyConnection(door, "presented")).rejects.toBe(outage);
+  });
+
+  it("is what the plugin path runs: an operator connection authenticates there and lists nothing", async () => {
+    const door = dependencies(operatorGrant);
+    const settings = await connectionAuth(door)(
+      request(header(token())),
+      vi.fn(),
+    );
+    expect(settings["payload-mcp-tool"]).toEqual({});
+    expect(door.recordVerified).toHaveBeenCalledWith("conn-1");
+    const refused = dependencies(null);
+    await expect(
+      connectionAuth(refused)(request(header(token())), vi.fn()),
+    ).rejects.toThrow();
+    expect(refused.recordRefusal).toHaveBeenCalledWith(
+      "CONNECTION_TOKEN_INVALID",
+    );
+    expect(refused.recordVerified).not.toHaveBeenCalled();
   });
 });
 

@@ -21,7 +21,9 @@ import {
   adminMcpDispatchPlugin,
   admitKey,
   admittedKeyOf,
+  auditIdentity,
   bearerKeyOf,
+  connectionTokenOf,
   changedFieldNames,
   failedEnvelope,
   guardCall,
@@ -29,9 +31,11 @@ import {
   listingTable,
   markRequestStart,
   okEnvelope,
+  requestKeyFor,
   toolFor,
   toolListingFor,
   toolResult,
+  whoamiEnvelope,
   whoamiPluginTool,
   withGuard,
   withKeyDoor,
@@ -356,6 +360,15 @@ describe("tool table", () => {
       expect(toolListingFor(profile, true).map(({ name }) => name)).toEqual([
         "admin_whoami",
       ]);
+  });
+
+  it("speaks of a credential, because a key and a connection both read it", () => {
+    expect(ADMIN_MCP_INSTRUCTIONS).toContain("this credential's authority");
+    expect(ADMIN_MCP_INSTRUCTIONS).not.toMatch(/\bkey\b/u);
+    expect(toolListingFor("full", false)[0]?.description).toMatch(
+      /^Who this credential is,/u,
+    );
+    expect(CODE_GUIDE.NOT_FOUND.hint).toContain("this credential can read");
   });
 
   it("keeps critical instructions in the first 512 characters and the total under 4,096", () => {
@@ -1226,6 +1239,132 @@ describe("admin_whoami on the plugin path", () => {
       "artvenn_comments_query",
       "admin_whoami",
     ]);
+  });
+});
+
+describe("a connection's identity", () => {
+  const key = {
+    id: 12,
+    label: "Synthetic tool",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    toolProfile: "full",
+    path: "native",
+    paused: false,
+    user: { id: 3, role: "ai_operator" },
+    pluginTools: {},
+  } as const;
+  const connection = {
+    ...key,
+    id: `conn-${"a".repeat(32)}`,
+    connection: {
+      id: `conn-${"a".repeat(32)}`,
+      authorizedById: 7,
+      authorizedByEmail: "owner@example.invalid",
+    },
+  } as const;
+
+  it("names the connection and the person on an audit row, and no key", () => {
+    expect(auditIdentity(connection)).toEqual({
+      keyLabel: "Synthetic tool",
+      connectionId: connection.id,
+      authorizedBy: "owner@example.invalid",
+    });
+  });
+
+  it("leaves a key's audit row as it was", () => {
+    expect(auditIdentity(key)).toEqual({
+      keyId: 12,
+      keyLabel: "Synthetic tool",
+    });
+    expect(auditIdentity({ ...key, label: "" })).toEqual({ keyId: 12 });
+  });
+
+  it("states the id, the account and what it cannot do in admin_whoami, with no email", () => {
+    const answer = whoamiEnvelope(connection, ["admin_whoami"]);
+    expect(answer.data).toEqual({
+      path: "native",
+      user: { id: 3, role: "ai_operator" },
+      key: {
+        id: connection.id,
+        label: "Synthetic tool",
+        expiresAt: connection.expiresAt,
+        toolProfile: "full",
+        authorizedBy: 7,
+      },
+      paused: false,
+      tools: ["admin_whoami"],
+      playbook: (whoamiEnvelope(key, []).data as { playbook: string[] })
+        .playbook,
+      byteChannel: {
+        available: false,
+        unavailable: [
+          "upload",
+          "download",
+          "canonical_export",
+          "report_csv",
+          "rendered_preview",
+          "deep_zoom_master",
+          "local_import",
+          "legacy_plan",
+          "account_provision",
+        ],
+      },
+    });
+    expect(JSON.stringify(answer)).not.toContain("@");
+  });
+
+  it("derives a key's request key as it always has, and a connection's apart from it", () => {
+    // main's value, to the byte: a receipt written before this change still replays.
+    expect(requestKeyFor("synthetic-request", 0)).toBe(
+      "6a8685bb-5c3c-430e-8380-565375908e0e",
+    );
+    expect(requestKeyFor("synthetic-request", 3)).toBe(
+      "05d8ccb7-7d4b-418a-8593-a22bc2855612",
+    );
+    const mine = `conn-${"a".repeat(32)}`;
+    const theirs = `conn-${"b".repeat(32)}`;
+    const key = requestKeyFor("synthetic-request", 0, mine);
+    expect(key).toBe(requestKeyFor("synthetic-request", 0, mine));
+    expect(key).not.toBe(requestKeyFor("synthetic-request", 0, theirs));
+    expect(key).not.toBe(requestKeyFor("synthetic-request", 0));
+    expect(key).not.toBe(requestKeyFor("synthetic-request", 1, mine));
+    expect(key).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/u,
+    );
+  });
+
+  it("refuses to state a key.id that is not a key's or a connection's", () => {
+    expect(() =>
+      whoamiEnvelope({ ...connection, id: "owner@example.invalid" }, []),
+    ).toThrow();
+  });
+
+  it("repeats a failure per connection, as it does per key", () => {
+    const scope = { keyId: connection.id, tool: "admin_find" };
+    const failed = () =>
+      toolResult(
+        scope,
+        inputInvalidEnvelope([{ path: ["a"], code: "custom" }]),
+      );
+    failed();
+    failed();
+    expect(failed().structuredContent.meta).toMatchObject({ repeat: 3 });
+  });
+
+  it("finds a connection token under any spelling of the scheme, and only then", () => {
+    const token = `${connectionPrefix}_any`;
+    const of = (authorization?: string) =>
+      connectionTokenOf({
+        headers: new Headers(authorization ? { authorization } : {}),
+      } as unknown as PayloadRequest);
+    for (const scheme of ["Bearer", "bearer", "BEARER", "bEaReR"])
+      expect(of(`${scheme} ${token}`)).toBe(token);
+    expect(of(`Bearer \t ${token} `)).toBe(token);
+    expect(of()).toBeNull();
+    expect(of("Bearer ")).toBeNull();
+    expect(of("Bearer some-key")).toBeNull();
+    expect(of(`Basic ${token}`)).toBeNull();
+    expect(of(token)).toBeNull();
   });
 });
 

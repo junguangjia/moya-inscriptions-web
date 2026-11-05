@@ -649,7 +649,7 @@ export interface EditorialArticleApproval {
   createdAt: string;
 }
 /**
- * 查看 AI 与自动化密钥的每次调用。写入有开始和结束两条记录，只有开始的记录表示结果未知。
+ * 查看 AI 工具与自动化密钥的每次调用。写入有开始和结束两条记录，只有开始的记录表示结果未知。
  *
  * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "mcp-audit-events".
@@ -679,6 +679,8 @@ export interface McpAuditEvent {
   callId: string;
   keyId?: number | null;
   userId?: string | null;
+  connectionId?: string | null;
+  authorizedBy?: string | null;
   runId?: string | null;
   requestId?: string | null;
   durationMs?: number | null;
@@ -1300,6 +1302,8 @@ export interface McpAuditEventsSelect<T extends boolean = true> {
   callId?: T;
   keyId?: T;
   userId?: T;
+  connectionId?: T;
+  authorizedBy?: T;
   runId?: T;
   requestId?: T;
   durationMs?: T;
