@@ -23,6 +23,7 @@ import {
   parseConsentRow,
   parseGrantRow,
   providerAdapterKeysFrom,
+  verifyCommunityMigrationLedger,
 } from "@moya/community-postgres";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -493,6 +494,20 @@ export const registerAgentOperatorStoreTests = (
             resumeSecretDigest: "not-a-digest",
           }),
         ).rejects.toMatchObject({ code: "MALFORMED" });
+      });
+
+      it("refuses a resume mark on an undecided row, which the older check let through", async () => {
+        const undecided = await armedOperator();
+        await expect(
+          pool.query(
+            `UPDATE community.agent_connection_consents
+                SET resumed_at=CURRENT_TIMESTAMP WHERE interaction_uid=$1`,
+            [undecided.interactionUid],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "agent_connection_consents_resume_follows_decision",
+        });
       });
 
       it("keeps the column out of reach before the decision and after it, even for the owner", async () => {
@@ -1151,6 +1166,31 @@ export const registerAgentOperatorStoreTests = (
         expect(typeof (await store.find(id))?.consumed).toBe("number");
       });
 
+      it.each([
+        ["no window set", {}],
+        ["a window of 0", { refreshReuseGraceMs: 0 }],
+        ["Article's store", { namespace: "article-authoring" as const }],
+      ])(
+        "shows a consumed token as consumed when the clock steps back, with %s",
+        async (_name, options) => {
+          let clock = new Date("2031-01-01T00:00:00.000Z");
+          const Adapter = createProviderAdapter({
+            pool,
+            keys,
+            now: () => clock,
+            ...options,
+          });
+          const store = new Adapter("RefreshToken");
+          const id = `no-grace-${hex(8)}`;
+          await store.upsert(id, { jti: id }, 600);
+          await store.consume(id);
+          expect(typeof (await store.find(id))?.consumed).toBe("number");
+
+          clock = new Date(clock.getTime() - 5);
+          expect(typeof (await store.find(id))?.consumed).toBe("number");
+        },
+      );
+
       it("refuses a nonsense window, and any window for Article", () => {
         for (const refreshReuseGraceMs of [-1, 1.5, Number.NaN])
           expect(() =>
@@ -1224,8 +1264,11 @@ export const registerAgentOperatorStoreTests = (
         );
 
       beforeAll(async () => {
-        for (const role of [providerRole, consentRole, resourceRole])
+        for (const role of [providerRole, consentRole, resourceRole]) {
           await createRole(role);
+          // A used cluster's role still holds what an older file granted it.
+          await pool.query(`DROP OWNED BY ${role}`);
+        }
         await applyAs(providerRole, consentRole, resourceRole);
       });
 
@@ -1324,10 +1367,74 @@ export const registerAgentOperatorStoreTests = (
             )
           ).rows[0],
         ).toEqual({ usage: false });
+        // Wide by membership: attributes would not show it, and the grants above
+        // would then be the least of what this role can do.
+        const member = "moya_oauth_case_member";
+        const parent = "moya_oauth_case_parent";
+        await createRole(member);
+        await pool.query(`DROP OWNED BY ${member}`);
+        await createRole(parent);
+        await pool.query(`GRANT ${parent} TO ${member}`);
+        await expect(
+          applyAs(member, consentRole, resourceRole),
+        ).rejects.toThrow("must be a member of no other role");
+        expect(
+          (
+            await pool.query(
+              `SELECT has_schema_privilege($1,'community','USAGE') AS usage`,
+              [member],
+            )
+          ).rows[0],
+        ).toEqual({ usage: false });
         const { rows } = await pool.query("SELECT current_user AS me");
         await expect(
           applyAs((rows[0] as { me: string }).me, consentRole, resourceRole),
         ).rejects.toThrow("must not be the account running this file");
+      });
+
+      it("grants nothing no code uses, and the ledger read to the issuer alone", async () => {
+        for (const [role, table, column] of [
+          [providerRole, "community.agent_connection_grants", "destroy_status"],
+          [providerRole, "community.agent_connection_grants", "destroyed_at"],
+          [
+            consentRole,
+            "community.agent_connections",
+            "provider_cleanup_status",
+          ],
+          [
+            consentRole,
+            "community.agent_connections",
+            "provider_cleanup_error",
+          ],
+        ] as const) {
+          const { rows } = await pool.query(
+            `SELECT has_column_privilege($1,$2,$3,'UPDATE') AS held`,
+            [role, table, column],
+          );
+          expect(rows[0], `${role} ${column}`).toEqual({ held: false });
+        }
+        for (const [role, held] of [
+          [providerRole, true],
+          [consentRole, false],
+          [resourceRole, false],
+        ] as const) {
+          const { rows } = await pool.query(
+            `SELECT has_table_privilege($1,'community.schema_migrations','SELECT') AS held`,
+            [role],
+          );
+          expect(rows[0], role).toEqual({ held });
+        }
+        // The issuer's check at start, on what that role was actually given.
+        await expect(
+          committedAs(providerRole, (client) =>
+            verifyCommunityMigrationLedger({
+              connect: async () => ({
+                query: client.query.bind(client),
+                release: () => undefined,
+              }),
+            } as never),
+          ),
+        ).resolves.toBeUndefined();
       });
 
       it("carries a whole consent through the three roles, each doing only its half", async () => {

@@ -2,10 +2,11 @@
 -- Production (Issue #355, amendment 2026-11-05, section 5).
 --
 -- Derived from infra/development/agent-connections/grant-authorization.sql, whose
--- comments give the reason for each privilege. This file differs in three ways:
+-- comments give the reason for each privilege. This file differs in four ways:
 -- it creates no role and holds no password, it names no `agent_principals`
--- privilege because an operator connection provisions no machine principal, and
--- it knows no Backend role.
+-- privilege because an operator connection provisions no machine principal, it
+-- knows no Backend role, and it grants nothing no code here uses: no destruction
+-- or cleanup column, and the migration ledger to the provider role alone.
 --
 --   provider role  -- the OAuth issuer. Owns the protocol's own storage and mints
 --                     tokens. Never sees an Admin session, and cannot record a
@@ -17,12 +18,18 @@
 --                     and a wrapper, and stamp when a request last authenticated.
 --
 -- The roles are created first, separately, with their own passwords. None is a
--- superuser, and none is the migration account or a role the Admin or Backend
--- already runs as.
+-- superuser or a member of another role, and none is the migration account or a
+-- role the Admin or Backend already runs as.
 --
--- RUN as the database owner, after the community migrations, on one session,
--- having named all three roles. `current_setting` has no default here on purpose:
--- a missing name raises 42704 rather than granting nothing.
+-- RUN as the role that owns the community schema and its tables, which is the
+-- migration/setup login of docs/deployment/full-release-database-v1.md, not the
+-- database owner as such: any other role stops with 42501. If that login does not
+-- own the database, PostgreSQL only warns at the CONNECT grant below and grants
+-- nothing, so provision CONNECT for the three roles as that document says.
+--
+-- Run it after the community migrations, on one session, having named all three
+-- roles. `current_setting` has no default here on purpose: a missing name raises
+-- 42704 rather than granting nothing.
 --
 --   SELECT set_config('agent_connections.provider_role', '<role>', false);
 --   SELECT set_config('agent_connections.consent_role',  '<role>', false);
@@ -58,6 +65,14 @@ BEGIN
     RAISE EXCEPTION 'a login door role must hold no superuser, createdb, createrole, replication or bypassrls attribute';
   END IF;
 
+  -- An attribute is not the only way to be wider. A member of pg_write_all_data,
+  -- or of a role the App runs as, holds what this file was written to withhold.
+  IF EXISTS (SELECT 1 FROM pg_auth_members m
+               JOIN pg_roles r ON r.oid = m.member
+              WHERE r.rolname IN (provider_role, consent_role, resource_role)) THEN
+    RAISE EXCEPTION 'a login door role must be a member of no other role';
+  END IF;
+
   EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I, %I, %I',
     current_database(), provider_role, consent_role, resource_role);
   EXECUTE format('GRANT USAGE ON SCHEMA community TO %I, %I, %I',
@@ -70,14 +85,11 @@ BEGIN
        community.agent_connection_wrappers
      TO %I', provider_role);
 
-  -- The immutable consent snapshot. INSERT only, apart from the two destruction
-  -- columns: nothing may ever move generation_at_consent.
+  -- The immutable consent snapshot. INSERT only: nothing may ever move
+  -- generation_at_consent.
   EXECUTE format(
     'GRANT SELECT, INSERT ON TABLE community.agent_connection_grants TO %I',
     provider_role);
-  EXECUTE format(
-    'GRANT UPDATE (destroy_status, destroyed_at)
-       ON TABLE community.agent_connection_grants TO %I', provider_role);
 
   -- It may point a connection at the grant it just made, and nothing else.
   EXECUTE format(
@@ -107,6 +119,7 @@ BEGIN
     'GRANT EXECUTE ON FUNCTION community.agent_connection_consents_reap(INTEGER) TO %I',
     provider_role);
 
+  -- The issuer's check at start: every required migration, read-only.
   EXECUTE format(
     'GRANT SELECT ON TABLE community.schema_migrations TO %I', provider_role);
 
@@ -138,15 +151,13 @@ BEGIN
     'GRANT UPDATE (
        principal_label, human_account_id, client_family, oauth_client_id,
        environment, preset, status, generation, version, consented_at,
-       revoked_at, provider_cleanup_status, provider_cleanup_error
+       revoked_at
      ) ON TABLE community.agent_connections TO %I', consent_role);
 
   -- Read-only on the snapshot, for display. It cannot forge one.
   EXECUTE format(
     'GRANT SELECT ON TABLE community.agent_connection_grants TO %I',
     consent_role);
-  EXECUTE format(
-    'GRANT SELECT ON TABLE community.schema_migrations TO %I', consent_role);
 
   -- ------------------------------------------------------------- resource --
   --
@@ -161,7 +172,5 @@ BEGIN
   EXECUTE format(
     'GRANT UPDATE (last_verified_at) ON TABLE community.agent_connections TO %I',
     resource_role);
-  EXECUTE format(
-    'GRANT SELECT ON TABLE community.schema_migrations TO %I', resource_role);
 END
 $$;

@@ -490,6 +490,16 @@ describe("consent rules", () => {
         expect(codeOf(() => parseHosted([]))).toBe("CLIENTS_MALFORMED");
       });
 
+      it("refuses a second callback, on another host or on the same one", () => {
+        for (const second of [
+          "https://other-vendor.invalid/callback",
+          "https://tool.invalid/other-callback",
+        ])
+          expect(
+            codeOf(() => parseHosted([...hosted.redirectUris, second])),
+          ).toBe("CLIENTS_REDIRECT_NOT_HOSTED");
+      });
+
       it("leaves the loopback policies as they were when the caller allows hosted", () => {
         // Allowing a hosted entry widens nothing for an entry that did not ask.
         expect(

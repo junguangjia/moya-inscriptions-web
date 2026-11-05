@@ -281,11 +281,16 @@ export const createProviderAdapter = (options: ProviderAdapterOptions) => {
   if (refreshReuseGraceMs > 0 && options.namespace === "article-authoring")
     throw new RangeError("Article allows no refresh token reuse");
 
-  /** Inside the window, a consumed refresh token reads as never consumed. */
+  /**
+   * Inside the window, a consumed refresh token reads as never consumed. With no
+   * window this never applies: a clock stepped back would otherwise make the
+   * difference negative, and hide a replay from Article's theft check.
+   */
   const consumedAsSeen = (
     model: ProviderModel,
     consumedAt: Date | null,
   ): Date | null =>
+    refreshReuseGraceMs > 0 &&
     consumedAt !== null &&
     model === "RefreshToken" &&
     now().getTime() - consumedAt.getTime() < refreshReuseGraceMs

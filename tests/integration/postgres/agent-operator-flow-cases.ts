@@ -850,16 +850,72 @@ export const registerAgentOperatorFlowTests = (
         });
         expect(metadata).not.toHaveProperty("registration_endpoint");
         expect(metadata).not.toHaveProperty("userinfo_endpoint");
+        expect(metadata).not.toHaveProperty(
+          "pushed_authorization_request_endpoint",
+        );
+        expect(metadata).not.toHaveProperty(
+          "require_pushed_authorization_requests",
+        );
+        expect(metadata).not.toHaveProperty(
+          "dpop_signing_alg_values_supported",
+        );
         expect(metadata.scopes_supported).not.toContain("openid");
         // The same document under the OpenID name, with the same limits.
         const oidc = (await (
           await fetch(`${issuer}/.well-known/openid-configuration`)
         ).json()) as Record<string, unknown>;
         expect(oidc).not.toHaveProperty("registration_endpoint");
+        expect(oidc).not.toHaveProperty(
+          "pushed_authorization_request_endpoint",
+        );
+        expect(oidc).not.toHaveProperty("dpop_signing_alg_values_supported");
         expect(oidc.scopes_supported).toEqual([
           "artvenn:admin",
           "offline_access",
         ]);
+      });
+
+      it("has neither pushed requests nor DPoP to fail on", async () => {
+        failures.length = 0;
+        const pushed = await fetch(`${issuer}/request`, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ client_id: CODEX }),
+        });
+        expect(pushed.status).toBe(404);
+
+        const referred = new URLSearchParams({
+          client_id: CODEX,
+          request_uri: "urn:ietf:params:oauth:request_uri:synthetic",
+        });
+        const answer = await fetch(`${issuer}/auth?${referred.toString()}`, {
+          redirect: "manual",
+        });
+        expect(answer.status).toBe(400);
+
+        // A tool that sends a proof anyway gets an ordinary token for its click.
+        const started = await begin(CODEX, "http://127.0.0.1:53133/callback");
+        const { secret } = await approve(started.uid, person());
+        const back = await follow(started.jar, resumeUrl(started.uid, secret));
+        const redeemed = await fetch(`${issuer}/token`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            dpop: "synthetic-proof",
+          },
+          body: new URLSearchParams({
+            grant_type: "authorization_code",
+            client_id: started.clientId,
+            code: back.arrived?.searchParams.get("code") ?? "",
+            redirect_uri: started.redirect,
+            code_verifier: started.verifier,
+          }),
+        });
+        expect(redeemed.status).toBe(200);
+        expect(((await redeemed.json()) as TokenAnswer).access_token).toMatch(
+          /^artvenn_ct_/u,
+        );
+        expect(failures).toEqual([]);
       });
 
       it("answers a request line it cannot parse with a refusal", async () => {
@@ -982,7 +1038,7 @@ export const registerAgentOperatorFlowTests = (
         expect((await grantsOf(connectionId)).length).toBe(1);
       });
 
-      it("does not bounce a client that asks for openid, and gives it nothing for it", async () => {
+      it("does not bounce a client that asks for openid, and its id_token says only who authorized", async () => {
         const human = person();
         const { connectionId, tokens } = await connect(
           CLAUDE,
@@ -994,6 +1050,20 @@ export const registerAgentOperatorFlowTests = (
         const stored = await control.readForAuthorization(connectionId);
         expect(stored?.grant?.capabilityScopes).toEqual(["artvenn:admin"]);
         expect(stored?.grant?.protocolScopes).toEqual(["offline_access"]);
+        const claims = JSON.parse(
+          Buffer.from(
+            (tokens.id_token ?? "").split(".")[1] ?? "",
+            "base64url",
+          ).toString("utf8"),
+        ) as Record<string, unknown>;
+        expect(Object.keys(claims).sort()).toEqual([
+          "aud",
+          "exp",
+          "iat",
+          "iss",
+          "sub",
+        ]);
+        expect(claims.sub).toBe(human);
         // There is no user information to ask for with it.
         const answer = await fetch(`${issuer}/me`, {
           headers: { authorization: `Bearer ${tokens.access_token ?? ""}` },
@@ -1281,6 +1351,49 @@ export const registerAgentOperatorFlowTests = (
         expect((await refresh(CLAUDE, tokens.refresh_token ?? "")).error).toBe(
           "invalid_grant",
         );
+      });
+
+      const revokeToken = (clientId: string, token: string) =>
+        fetch(`${issuer}/token/revocation`, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ client_id: clientId, token }),
+        });
+
+      it("lets a tool end its own connection by revoking the access token it holds", async () => {
+        const { tokens } = await connect(CLAUDE, CLAUDE_CALLBACK, person());
+        const response = await revokeToken(CLAUDE, tokens.access_token ?? "");
+        expect(response.status).toBe(200);
+        expect(
+          (await wrapperRow(tokens.access_token ?? ""))?.invalidated_at,
+        ).not.toBeNull();
+        expect((await refresh(CLAUDE, tokens.refresh_token ?? "")).error).toBe(
+          "invalid_grant",
+        );
+      });
+
+      it("stops nothing for another client's access token, or for one it never issued", async () => {
+        const { tokens } = await connect(CLAUDE, CLAUDE_CALLBACK, person());
+        for (const [clientId, token] of [
+          [CHATGPT, tokens.access_token ?? ""],
+          [CLAUDE, `artvenn_ct_${randomBytes(32).toString("base64url")}`],
+        ] as const)
+          expect((await revokeToken(clientId, token)).status).toBe(200);
+        expect(
+          (await wrapperRow(tokens.access_token ?? ""))?.invalidated_at,
+        ).toBeNull();
+        expect(
+          (await refresh(CLAUDE, tokens.refresh_token ?? "")).error,
+        ).toBeUndefined();
+      });
+
+      it("does not claim to have stopped a token when it could not", async () => {
+        const { tokens } = await connect(CLAUDE, CLAUDE_CALLBACK, person());
+        failures.length = 0;
+        outage = (text) => text.includes("SET invalidated_at");
+        const response = await revokeToken(CLAUDE, tokens.access_token ?? "");
+        expect(response.status).toBe(500);
+        expect(failures).toEqual(["WRAPPER_REVOCATION_FAILED"]);
       });
 
       it("keeps the lifetimes the amendment names", async () => {
@@ -1679,6 +1792,58 @@ export const registerAgentOperatorFlowTests = (
         );
         expect(answer.page).toContain('name="viewport"');
         expect(answer.page).not.toMatch(/<script|<link|<img|https?:/u);
+      });
+
+      it("serves the logout pages as plainly, and the routes still work", async () => {
+        const plain = (answer: Awaited<ReturnType<typeof follow>>) => {
+          expect(answer.status).toBe(200);
+          expect(answer.headers.get("cache-control")).toBe("no-store");
+          expect(answer.headers.get("content-type")).toBe(
+            "text/html; charset=utf-8",
+          );
+          expect(answer.headers.get("referrer-policy")).toBe("no-referrer");
+          expect(answer.headers.get("content-security-policy")).toBe(
+            "default-src 'none'; frame-ancestors 'none'",
+          );
+          expect(answer.page).not.toMatch(
+            /<script|<link|<img|<style|@import|fonts\./u,
+          );
+        };
+        plain(await follow(newJar(), new URL(`${issuer}/session/end/success`)));
+
+        const jar = newJar();
+        const { tokens } = await connect(CLAUDE, CLAUDE_CALLBACK, person(), {
+          jar,
+        });
+        expect(jar.holds("_session")).toBe(true);
+        const asked = await follow(jar, new URL(`${issuer}/session/end`));
+        plain(asked);
+        const action = /action="([^"]+)"/u.exec(asked.page)?.[1] ?? "";
+        const xsrf = /name="xsrf" value="([^"]+)"/u.exec(asked.page)?.[1] ?? "";
+        expect(asked.page).toMatch(/form="op\.logoutForm" name="logout"/u);
+        const confirm = new URL(action);
+        expect(confirm.pathname).toBe("/session/end/confirm");
+        const confirmed = await fetch(confirm, {
+          method: "POST",
+          redirect: "manual",
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            cookie: jar.header(confirm),
+          },
+          body: new URLSearchParams({ xsrf, logout: "yes" }),
+        });
+        jar.remember(confirmed);
+        expect(jar.holds("_session")).toBe(false);
+        plain(
+          await follow(
+            jar,
+            new URL(confirmed.headers.get("location") ?? "", issuer),
+          ),
+        );
+        // What the page says: the tool is not touched by it.
+        expect(
+          (await refresh(CLAUDE, tokens.refresh_token ?? "")).error,
+        ).toBeUndefined();
       });
 
       it("treats a cookie for a different interaction as no cookie, and leaves that one alone", async () => {

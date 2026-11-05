@@ -5,7 +5,10 @@ import { RESUME_SECRET_PARAMETER } from "@moya/community-postgres";
 import { articleAuthorizationRequestAllowed } from "./article-server.js";
 import { createAuthorizationProvider } from "./provider.js";
 import { RESUME_PATH, resumeInteraction } from "./resume.js";
-import { installAccessTokenWrapper } from "./wrap.js";
+import {
+  installAccessTokenRevocation,
+  installAccessTokenWrapper,
+} from "./wrap.js";
 
 import type { PreparedAdminKeys } from "./admin-runtime-config.js";
 import type { AuthorizationConfig } from "./config.js";
@@ -99,6 +102,12 @@ export const startAuthorizationServer = async (
       ? { assertGrantCurrent: grantCurrent(pool, config) }
       : {}),
   });
+  if (config.profile === "operator")
+    installAccessTokenRevocation(bundle, {
+      ...(options.recordFailure === undefined
+        ? {}
+        : { recordFailure: options.recordFailure }),
+    });
 
   const callback = bundle.provider.callback();
   const issuer = new URL(config.issuer);

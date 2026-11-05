@@ -31,7 +31,13 @@ ALTER TABLE community.agent_connection_consents
   -- its rows must keep their meaning.
   ADD CONSTRAINT agent_connection_consents_operator_approval_has_resume_secret
     CHECK (preset <> 'operator' OR decision IS DISTINCT FROM 'approved'
-           OR resume_secret_digest IS NOT NULL);
+           OR resume_secret_digest IS NOT NULL),
+  -- The older check read `decision = 'approved'`, which is NULL on an undecided
+  -- row, so the provider role could mark such a row resumed and leave a grant id
+  -- on it. No token resulted, but it killed a consent in progress.
+  DROP CONSTRAINT agent_connection_consents_resume_follows_decision,
+  ADD CONSTRAINT agent_connection_consents_resume_follows_decision
+    CHECK (resumed_at IS NULL OR decision IS NOT DISTINCT FROM 'approved');
 
 -- The function as 20260920050000 wrote it, plus one clause: the secret is written
 -- with the decision and never moves after it. Without that clause the consent

@@ -45,6 +45,7 @@ import {
   resetResourceRuntime,
 } from "admin/agent-connections-resource";
 import { agentAdminTools } from "admin/agent-admin-mcp";
+import { requiredCommunityMigrations } from "@moya/community-postgres";
 
 /**
  * Issue #355, login door, slice O1: the Admin issuer's Production boundary, the
@@ -1034,6 +1035,8 @@ describe("the listener, through the real proxy boundary", () => {
       expect(metadata.response_types_supported).toEqual(["code"]);
       expect(metadata.registration_endpoint).toBeUndefined();
       expect(metadata.userinfo_endpoint).toBeUndefined();
+      expect(metadata.pushed_authorization_request_endpoint).toBeUndefined();
+      expect(metadata.dpop_signing_alg_values_supported).toBeUndefined();
 
       const jwks = await request({ ...base, path: "/jwks" }, true);
       const published = JSON.parse(jwks.body) as { keys: JsonWebKey[] };
@@ -1345,6 +1348,38 @@ describe("the process itself", () => {
     "../../../services/agent-authorization/dist/main.js",
   );
 
+  /**
+   * The entry point reads the migration ledger before it listens, and nothing
+   * here has a database. This answers that one read, and only it: the ledger
+   * check takes a client from the pool, and every other statement here goes
+   * through `pool.query`, which still reaches the real port.
+   */
+  const ledgerAnswers = (
+    applied: readonly (typeof requiredCommunityMigrations)[number][],
+  ) => {
+    const rows = applied.map(({ migrationId, filename, checksum }) => ({
+      migration_id: migrationId,
+      filename,
+      checksum,
+    }));
+    const preload = `
+      import { createRequire } from "node:module";
+      const pg = createRequire(${JSON.stringify(main)})("pg");
+      const { connect } = pg.Pool.prototype;
+      pg.Pool.prototype.connect = function (callback) {
+        if (callback !== undefined) return connect.call(this, callback);
+        return Promise.resolve({
+          query: async () => ({ rows: ${JSON.stringify(rows)} }),
+          release: () => undefined,
+        });
+      };
+    `;
+    return [
+      "--import",
+      `data:text/javascript,${encodeURIComponent(preload)}`,
+    ] as const;
+  };
+
   /** The real entry point with a hard deadline. It opens no database connection. */
   const run = (
     env: NodeJS.ProcessEnv,
@@ -1389,6 +1424,20 @@ describe("the process itself", () => {
     return port;
   };
 
+  /** Every role on one database, on a port nothing listens on. */
+  const unreachableDatabase = async () => {
+    const closed = await freePort();
+    const target = (role: string) =>
+      `postgres://${role}@127.0.0.1:${closed}/fixture?sslmode=disable`;
+    return {
+      AGENT_AUTHORIZATION_DATABASE_URL: target("admin_issuer"),
+      AGENT_CONSENT_DATABASE_TARGET: target("admin_consent"),
+      AGENT_RESOURCE_DATABASE_TARGET: target("admin_resource"),
+      DATABASE_TARGET: target("catalog_read"),
+      CMS_DATABASE_TARGET: target("cms_runtime"),
+    };
+  };
+
   it("starts in Production behind its gate, answers through the proxy check, and stops on a signal", async () => {
     const port = await freePort();
     const result = await run(
@@ -1412,9 +1461,50 @@ describe("the process itself", () => {
         });
         expect(health.status).toBe(200);
       },
+      ledgerAnswers(requiredCommunityMigrations),
     );
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("listeners ready");
+  }, 30_000);
+
+  it.each([
+    ["a migration missing", requiredCommunityMigrations.slice(0, -1)],
+    ["no migration at all", []],
+    [
+      "a migration changed since it ran",
+      requiredCommunityMigrations.map((entry, index) =>
+        index === 0 ? { ...entry, checksum: "0".repeat(64) } : entry,
+      ),
+    ],
+  ])(
+    "refuses to start with %s, by name",
+    async (_name, applied) => {
+      const result = await run(
+        {
+          ...environment(),
+          AGENT_AUTHORIZATION_PORT: String(await freePort()),
+        },
+        undefined,
+        ledgerAnswers(applied),
+      );
+      expect(result.code).toBe(78);
+      expect(result.stdout).not.toContain("listeners ready");
+      expect(result.stderr).toContain("startup refused ADMIN_SCHEMA_NOT_READY");
+    },
+    30_000,
+  );
+
+  it("refuses to start on a database it cannot reach, and does not call that a schema fault", async () => {
+    const result = await run({
+      ...environment(),
+      ...(await unreachableDatabase()),
+      AGENT_AUTHORIZATION_PORT: String(await freePort()),
+    });
+    expect(result.code).toBe(78);
+    expect(result.stdout).not.toContain("listeners ready");
+    expect(result.stderr).toContain(
+      "startup refused AUTHORIZATION_STARTUP_REFUSED",
+    );
   }, 30_000);
 
   it("runs the reaper from the process, and a database it cannot reach costs only a code", async () => {
@@ -1426,23 +1516,20 @@ describe("the process itself", () => {
         real(run, ms === 3600000 ? 50 : ms, ...rest);
     `;
     const port = await freePort();
-    const closed = await freePort();
-    const target = (role: string) =>
-      `postgres://${role}@127.0.0.1:${closed}/fixture?sslmode=disable`;
     const result = await run(
       {
         ...environment(),
+        ...(await unreachableDatabase()),
         AGENT_AUTHORIZATION_PORT: String(port),
-        AGENT_AUTHORIZATION_DATABASE_URL: target("admin_issuer"),
-        AGENT_CONSENT_DATABASE_TARGET: target("admin_consent"),
-        AGENT_RESOURCE_DATABASE_TARGET: target("admin_resource"),
-        DATABASE_TARGET: target("catalog_read"),
-        CMS_DATABASE_TARGET: target("cms_runtime"),
       },
       async () => {
         await new Promise((tick) => setTimeout(tick, 1_000));
       },
-      ["--import", `data:text/javascript,${encodeURIComponent(preload)}`],
+      [
+        ...ledgerAnswers(requiredCommunityMigrations),
+        "--import",
+        `data:text/javascript,${encodeURIComponent(preload)}`,
+      ],
     );
     expect(result.code).toBe(0);
     expect(result.stderr).toContain(

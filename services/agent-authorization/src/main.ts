@@ -1,6 +1,11 @@
 import pg from "pg";
 import { createPostgresPool } from "@moya/catalog-postgres";
 import {
+  CommunityMigrationStateError,
+  CommunitySchemaNotReadyError,
+  verifyCommunityMigrationLedger,
+} from "@moya/community-postgres";
+import {
   articleAuthorizationPostgresFrom,
   prepareArticleAuthorizationKeys,
 } from "./article-runtime-config.js";
@@ -83,6 +88,9 @@ const main = async (): Promise<void> => {
                 recordFailure("ADMIN_DATABASE_IDLE_ERROR"),
             });
       pools.push(pool);
+      // As the Backend does. A release run in the wrong order stops here, by
+      // name, rather than on the page of a person who has just clicked allow.
+      if (adminOperator !== null) await verifyCommunityMigrationLedger(pool);
       const server = await startAuthorizationServer({
         config: adminConfig,
         pool,
@@ -121,9 +129,15 @@ const main = async (): Promise<void> => {
         }),
       );
     }
-  } catch {
+  } catch (error) {
     await close();
-    throw new Error("AUTHORIZATION_STARTUP_REFUSED");
+    throw new Error(
+      error instanceof CommunitySchemaNotReadyError ||
+        error instanceof CommunityMigrationStateError
+        ? "ADMIN_SCHEMA_NOT_READY"
+        : "AUTHORIZATION_STARTUP_REFUSED",
+      { cause: error },
+    );
   }
   process.stdout.write("agent authorization listeners ready\n");
   let closing = false;

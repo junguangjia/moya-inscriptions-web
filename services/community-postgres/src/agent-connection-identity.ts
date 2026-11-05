@@ -236,6 +236,10 @@ const parseRedirectUris = (
 ): readonly string[] => {
   if (!Array.isArray(value) || value.length === 0)
     throw new RegisteredClientError("CLIENTS_MALFORMED");
+  // One means one. With two, the request's `redirect_uri` would choose the host
+  // the code goes to, and the consent page could name only one of them.
+  if (policy === "hosted-https" && value.length > 1)
+    throw new RegisteredClientError("CLIENTS_REDIRECT_NOT_HOSTED");
   return value.map((entry) => {
     if (typeof entry !== "string")
       throw new RegisteredClientError("CLIENTS_MALFORMED");

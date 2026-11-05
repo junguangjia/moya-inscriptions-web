@@ -93,6 +93,50 @@ export const installAccessTokenWrapper = (
   });
 };
 
+/**
+ * Revoking the access token a tool actually holds.
+ *
+ * The library looks the presented value up among its own tokens and answers 200
+ * either way, and what a tool holds is a wrapper it has never heard of. So a
+ * tool revoking its access token, which RFC 7009 allows, was told it succeeded
+ * while the token stayed live. Here it ends what revoking the refresh token ends.
+ *
+ * Another client's token gets the library's answer to a public client, 200 and
+ * nothing done, so a guess learns nothing. A fault is not a success: the tool
+ * has to know the token may still be live.
+ */
+export const installAccessTokenRevocation = (
+  bundle: Pick<ProviderBundle, "provider" | "wrappers">,
+  diagnostics: Pick<WrapDiagnostics, "recordFailure"> = {},
+): void => {
+  const { provider, wrappers } = bundle;
+  const lifecycle = providerGrantLifecycle(provider);
+
+  provider.use(async (ctx: ProviderContext, next: () => Promise<void>) => {
+    await next();
+
+    if (ctx.oidc?.route !== "revocation" || ctx.status !== 200) return;
+    const presented = ctx.oidc.params?.token;
+    if (typeof presented !== "string") return;
+
+    try {
+      const wrapper = await wrappers.resolve(presented);
+      if (wrapper === undefined) return;
+      const issued = await provider.AccessToken.find(wrapper.jti);
+      if (issued === undefined || issued.clientId !== ctx.oidc.client?.clientId)
+        return;
+      await wrappers.invalidateByGrant(wrapper.grantId, new Date());
+      await lifecycle.revokeIssued(wrapper.grantId);
+      await lifecycle.destroyGrant(wrapper.grantId);
+    } catch {
+      diagnostics.recordFailure?.("WRAPPER_REVOCATION_FAILED");
+      // In this order: Koa turns an emptied body on a 500 into a 204.
+      ctx.body = undefined;
+      ctx.status = 500;
+    }
+  });
+};
+
 /** Destroying a provider grant, in the shape the grant destroyer expects. */
 export const providerGrantLifecycle = (provider: OidcProvider) => ({
   destroyGrant: async (grantId: string): Promise<void> => {

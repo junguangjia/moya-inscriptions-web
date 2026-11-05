@@ -18,8 +18,10 @@ export const plainPageHtml = (
   title: string,
   body: string,
   code?: string,
+  controls = "",
 ): string =>
   `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">` +
   `<meta name="viewport" content="width=device-width, initial-scale=1">` +
   `<title>${title}</title></head><body><h1>${title}</h1><p>${body}</p>` +
+  controls +
   `${code === undefined ? "" : `<p><small>${code}</small></p>`}</body></html>`;

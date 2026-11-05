@@ -111,7 +111,11 @@ export interface ProviderInteraction {
 }
 
 export interface ProviderContext {
-  readonly oidc?: { route?: string };
+  readonly oidc?: {
+    route?: string;
+    params?: { token?: unknown };
+    client?: { clientId: string };
+  };
   status?: number;
   body?:
     | {
@@ -213,6 +217,11 @@ const requestedResourceMatches = (
   return articleResourceMatches(source?.resource, configured);
 };
 
+interface PlainPageContext {
+  set: (headers: object) => void;
+  body: unknown;
+}
+
 /** Only under `operator`: what makes this issuer fit to face the internet. */
 const operatorConfiguration = (
   config: AuthorizationConfig,
@@ -261,6 +270,31 @@ const operatorConfiguration = (
     revocation: { enabled: true },
     userinfo: { enabled: false },
     devInteractions: { enabled: false },
+    // On by default in the library, and each needs a model the adapter does not
+    // store. Left on, discovery offers them and every use answers 500.
+    pushedAuthorizationRequests: { enabled: false },
+    dPoP: { enabled: false },
+    // The routes stay, because two administrators on one browser pass through
+    // them. The library's own pages import the web font its error page does.
+    rpInitiatedLogout: {
+      enabled: true,
+      logoutSource: async (ctx: PlainPageContext, form: string) => {
+        ctx.set(plainPageHeaders);
+        ctx.body = plainPageHtml(
+          "退出这个浏览器的登录",
+          "已经连接的工具不受影响。不想退出的话，关闭这个页面就好。",
+          undefined,
+          `${form}<p><button type="submit" form="op.logoutForm" name="logout" value="yes">退出</button></p>`,
+        );
+      },
+      postLogoutSuccessSource: async (ctx: PlainPageContext) => {
+        ctx.set(plainPageHeaders);
+        ctx.body = plainPageHtml(
+          "已经退出",
+          "这个浏览器已经退出。已经连接的工具不受影响，可以关闭这个页面。",
+        );
+      },
+    },
   },
   ttl: OPERATOR_TTL,
   // Consent is the only thing that builds a grant, and a connection with no way
@@ -273,10 +307,7 @@ const operatorConfiguration = (
   // The library's own error page imports a web font from a third party. This
   // one says the same in a sentence, with the code in small text. Only the code:
   // the description can repeat parts of the request.
-  renderError: async (
-    ctx: { set: (headers: object) => void; body: unknown },
-    out: { error?: unknown },
-  ) => {
+  renderError: async (ctx: PlainPageContext, out: { error?: unknown }) => {
     ctx.set(plainPageHeaders);
     ctx.body = plainPageHtml(
       "这次连接没有完成",
