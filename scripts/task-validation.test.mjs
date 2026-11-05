@@ -997,17 +997,91 @@ describe("the real CI wiring preserves required-check closure", () => {
     );
   });
 
-  it("runs the PostgreSQL integration and Payload suites on both supported majors", () => {
-    const { jobs } = workflowJobs();
+  // PostgreSQL 18 is paused in CI behind ONE workflow-level switch (Owner,
+  // 2026-11-05: Production runs 16 and no 18 upgrade is planned). These pins
+  // fail if the switch disappears, if a PostgreSQL 18 step runs without it,
+  // or if any PostgreSQL 16 step disappears or becomes conditional.
+  it("runs every PostgreSQL 16 check and keeps PostgreSQL 18 behind one switch", () => {
+    const { workflow, jobs } = workflowJobs();
     // One services entry: from its key to the next service key or the steps.
     const service = (body, name) =>
       body
         .split(`\n      ${name}:\n`)[1]
         ?.split(/\n {6}[\w-]+:\n|\n {4}steps:/u)[0] ?? "";
-    const pg16Marker =
-      /docker exec -i "\$\{\{ job\.services\.postgres16\.id \}\}" psql/u;
-    for (const job of ["test", "cms"]) {
+    // Each step as { name, condition, text }, comments dropped, so a comment
+    // can neither satisfy nor trip a pattern.
+    const steps = (body) =>
+      body
+        .slice(body.indexOf("\n    steps:\n"))
+        .split(/\n {6}- /u)
+        .slice(1)
+        .map((text) => {
+          const code = text.replaceAll(/^\s*#.*$/gmu, "");
+          return {
+            name: /^name: (.+)$/mu.exec(code)?.[1] ?? "",
+            condition: /^ {8}if: (.+)$/mu.exec(code)?.[1] ?? null,
+            text: code,
+          };
+        });
+    const ON = "env.CI_POSTGRES_18 == 'on'";
+    const NOT_ON = "env.CI_POSTGRES_18 != 'on'";
+
+    // The switch: one workflow-level value, currently "off". Turning
+    // PostgreSQL 18 back on is this value; update this pin with it.
+    const top = workflow.slice(0, workflow.indexOf("\njobs:\n"));
+    assert.match(top, /^env:\n {2}CI_POSTGRES_18: "off"\n/mu);
+    assert.equal(workflow.split("CI_POSTGRES_18:").length - 1, 1);
+    assert.match(top, /2026-11-05/u, "the comment dates the Owner's pause");
+    // Only the two exact forms test it, and only in step conditions (the env
+    // context is not available to a job-level `if:` at all).
+    for (const line of workflow
+      .split("\n")
+      .filter((text) => text.includes("CI_POSTGRES_18")))
+      assert.match(
+        line,
+        /^(?: {2}CI_POSTGRES_18: "off"| {8}if: env\.CI_POSTGRES_18 [!=]= 'on'|\s*#.*)$/u,
+        line,
+      );
+
+    const uses16 = (step) =>
+      /127\.0\.0\.1:5433\/|job\.services\.postgres16\.id/u.test(step.text);
+    // A verify.mjs database stage that names no database of its own inherits
+    // the test job's, which is the PostgreSQL 18 service.
+    const uses18 = (step) =>
+      /127\.0\.0\.1:5432\/|job\.services\.postgres\.id/u.test(step.text) ||
+      (/run: node scripts\/verify\.mjs (?:test|postgres)\b/u.test(step.text) &&
+        !uses16(step));
+    const expected = {
+      test: {
+        paused: [
+          "Mark the CI PostgreSQL service as a disposable test target",
+          "Complete CI test milestone",
+        ],
+        pg16: [
+          "Mark the CI PostgreSQL 16 service as a disposable test target",
+          "Complete CI test milestone on PostgreSQL 16",
+          "PostgreSQL 16 migrations and integration",
+        ],
+      },
+      cms: {
+        paused: [
+          "Mark the CI PostgreSQL service as a disposable test target",
+          "Real Payload migrations and PostgreSQL integration",
+          "Native Owner create, publish, autosave, batch approval and restore",
+          "Development OAuth consent, revocation and a real Backend tool read",
+        ],
+        pg16: [
+          "Mark the CI PostgreSQL 16 service as a disposable test target",
+          "Real Payload migrations and PostgreSQL 16 integration",
+          "Admin MCP L0 at seeded scale on PostgreSQL 16",
+          "Native Owner browser flow on PostgreSQL 16",
+          "Development OAuth consent and Backend tool read on PostgreSQL 16",
+        ],
+      },
+    };
+    for (const [job, { paused, pg16 }] of Object.entries(expected)) {
       const body = jobs.get(job);
+      // Both service containers stay defined: re-enabling needs no edit here.
       assert.match(
         service(body, "postgres"),
         /image: postgres:18\.4-alpine\n/u,
@@ -1018,37 +1092,122 @@ describe("the real CI wiring preserves required-check closure", () => {
         /image: postgres:16\.15-alpine\n/u,
       );
       assert.match(service(body, "postgres16"), /- 5433:5432\n/u);
-      assert.match(body, pg16Marker, job);
+      const all = steps(body);
+      const names = all.map((step) => step.name);
+      for (const name of [...paused, ...pg16])
+        assert.equal(names.filter((n) => n === name).length, 1, name);
+      // Every step that reaches the PostgreSQL 18 service is paused by the
+      // switch, and the listed ones are exactly those steps.
+      assert.deepEqual(
+        all.filter(uses18).map((step) => step.name),
+        paused,
+        job,
+      );
+      for (const step of all.filter(uses18))
+        assert.equal(step.condition, ON, step.name);
+      // Every PostgreSQL 16 step runs unconditionally, except the milestone's
+      // PostgreSQL 16 twin, which runs exactly when the 18 milestone does not.
+      assert.deepEqual(
+        all.filter(uses16).map((step) => step.name),
+        pg16,
+        job,
+      );
+      for (const step of all.filter(uses16)) {
+        assert.ok(!uses18(step), `${step.name} must use one service only`);
+        assert.equal(
+          step.condition,
+          step.name === "Complete CI test milestone on PostgreSQL 16"
+            ? NOT_ON
+            : null,
+          step.name,
+        );
+      }
+      // Each service is marked disposable before the first step that uses it.
+      const first = (predicate) => all.findIndex(predicate);
+      const marker = (name) => names.indexOf(name);
+      assert.ok(
+        marker(
+          "Mark the CI PostgreSQL 16 service as a disposable test target",
+        ) === first(uses16),
+        job,
+      );
+      assert.ok(
+        marker("Mark the CI PostgreSQL service as a disposable test target") ===
+          first(uses18),
+        job,
+      );
     }
-    // test: the PostgreSQL 16 slice follows the unchanged PostgreSQL 18
-    // milestone, after its own disposable marker, against the 5433 service.
+
+    // test: the job-level database the paused milestone inherits is the 18
+    // service; its PostgreSQL 16 twin and the 16 slice name 5433 and 160015.
     const test = jobs.get("test");
-    const milestone = test.indexOf(
-      "run: node scripts/verify.mjs test --ci-milestone\n",
-    );
-    const pg16 = test.indexOf(
-      "run: node scripts/verify.mjs postgres --profile complete\n",
-    );
-    assert.ok(milestone > 0 && pg16 > milestone);
-    assert.ok(test.search(pg16Marker) > milestone);
-    assert.ok(test.search(pg16Marker) < pg16);
-    const pg16Step = test.slice(test.lastIndexOf("- name:", pg16), pg16);
+    const jobEnv = test.slice(0, test.indexOf("\n    services:\n") + 1);
     assert.match(
-      pg16Step,
-      /TEST_DATABASE_URL: postgresql:\/\/\S+@127\.0\.0\.1:5433\/moya_test\n/u,
+      jobEnv,
+      /^ {6}TEST_DATABASE_URL: postgresql:\/\/\S+@127\.0\.0\.1:5432\/moya_test\n/mu,
     );
-    assert.match(pg16Step, /TEST_DATABASE_EXPECTED_VERSION_NUM: "160015"\n/u);
-    // cms: Payload migrations/integration and the native Owner browser flow
-    // each run once more against the 5433 service, after its marker.
-    const cms = jobs.get("cms");
+    for (const name of [
+      "Complete CI test milestone on PostgreSQL 16",
+      "PostgreSQL 16 migrations and integration",
+    ]) {
+      const { text } = steps(test).find((step) => step.name === name);
+      for (const variable of ["DATABASE_URL", "TEST_DATABASE_URL"])
+        assert.match(
+          text,
+          new RegExp(
+            `^ {10}${variable}: postgresql://\\S+@127\\.0\\.0\\.1:5433/moya_test\\n`,
+            "mu",
+          ),
+          `${name}: ${variable}`,
+        );
+      assert.match(text, /TEST_DATABASE_EXPECTED_VERSION_NUM: "160015"\n/u);
+    }
+    const order = steps(test).map((step) => step.name);
+    assert.ok(
+      order.indexOf("Complete CI test milestone") <
+        order.indexOf("Complete CI test milestone on PostgreSQL 16") &&
+        order.indexOf("Complete CI test milestone on PostgreSQL 16") <
+          order.indexOf("PostgreSQL 16 migrations and integration"),
+    );
+    assert.ok(
+      steps(test)
+        .find(
+          (step) => step.name === "Complete CI test milestone on PostgreSQL 16",
+        )
+        .text.includes("run: node scripts/verify.mjs test --ci-milestone\n"),
+    );
+    assert.ok(
+      steps(test)
+        .find(
+          (step) => step.name === "PostgreSQL 16 migrations and integration",
+        )
+        .text.includes(
+          "run: node scripts/verify.mjs postgres --profile complete\n",
+        ),
+    );
+
+    // cms: Payload migrations/integration, the native Owner browser flow and
+    // the agent-connections acceptance each run against the 5433 service.
+    const cms = steps(jobs.get("cms"));
     const pg16Url =
       "CMS_TEST_DATABASE_URL: postgresql://cms_qa@127.0.0.1:5433/cms_synthetic_test\n";
-    for (const command of [
-      "pnpm test:cms --profile complete",
-      "pnpm test:cms:browser --profile complete",
+    for (const [name, command] of [
+      [
+        "Real Payload migrations and PostgreSQL 16 integration",
+        "pnpm test:cms --profile complete",
+      ],
+      [
+        "Native Owner browser flow on PostgreSQL 16",
+        "pnpm test:cms:browser --profile complete",
+      ],
+      [
+        "Development OAuth consent and Backend tool read on PostgreSQL 16",
+        "pnpm test:cms:agent-connections --profile complete",
+      ],
     ]) {
-      const step = cms.indexOf(`${pg16Url}        run: ${command}\n`);
-      assert.ok(step > cms.search(pg16Marker), command);
+      const { text } = cms.find((step) => step.name === name);
+      assert.ok(text.includes(pg16Url), name);
+      assert.ok(text.includes(`run: ${command}\n`), name);
     }
   });
 

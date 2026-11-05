@@ -102,8 +102,19 @@ it("keeps routine budgets fixed and permits only the explicit complete CI test m
     new URL("../../.github/workflows/ci.yml", import.meta.url),
     "utf8",
   );
-  expect(workflow.match(/--ci-milestone/g)).toHaveLength(1);
-  expect(workflow).toContain(
-    "run: node scripts/verify.mjs test --ci-milestone",
-  );
+  // Two milestone steps, both in the test job, and exactly one runs: the
+  // PostgreSQL 18 one, or its PostgreSQL 16 twin while 18 is paused in CI
+  // (Owner, 2026-11-05). scripts/task-validation.test.mjs pins the rest.
+  expect(workflow.match(/--ci-milestone/g)).toHaveLength(2);
+  const testJob = workflow.split("\n  test:\n")[1]?.split("\n  cms:\n")[0];
+  expect(
+    testJob?.match(/run: node scripts\/verify\.mjs test --ci-milestone\n/g),
+  ).toHaveLength(2);
+  expect(
+    [
+      ...(testJob ?? "").matchAll(
+        /^ {8}if: (.+)\n {8}(?:env:\n(?: {10}.+\n)+ {8})?run: node scripts\/verify\.mjs test --ci-milestone$/gmu,
+      ),
+    ].map((match) => match[1]),
+  ).toEqual(["env.CI_POSTGRES_18 == 'on'", "env.CI_POSTGRES_18 != 'on'"]);
 });
