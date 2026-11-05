@@ -35,6 +35,7 @@ import {
   ArticleAuthoringService,
   CommunitySessionService,
   hashSessionToken,
+  isCommunityConflictError,
 } from "@moya/api";
 import {
   PostgresArticleAuthoringAdapter,
@@ -1397,13 +1398,61 @@ export const registerArticleDelegationSdkCases = (fixture: {
         });
       });
 
-      it("keeps the resume digest away from the resource role", async () => {
+      it("refuses a wrong or retired secret in the browser holding the cookie", async () => {
+        const holder = browserContext();
+        const { uid } = await begin(holder);
+        const resumeUrl = await approve(uid);
+        const wrong = new URL(resumeUrl);
+        wrong.searchParams.set("secret", randomBytes(32).toString("base64url"));
+        expectRefused((await holder.navigate(wrong)).url);
+        expect(await row(uid)).toMatchObject({
+          resume_secret_digest: digestOf(resumeUrl),
+          resumed_at: null,
+          provider_grant_id: null,
+        });
+
+        const replayed = browserContext();
+        const started = await begin(replayed);
+        const ticket = await review(started.uid);
+        const requestId = randomUUID();
+        const lost = await decide(started.uid, ticket, requestId);
+        const { resumeUrl: retired } = (await lost.json()) as {
+          resumeUrl: string;
+        };
+        const current = await decide(started.uid, ticket, requestId);
+        expect(current.status).toBe(200);
+        expectRefused((await replayed.navigate(retired)).url);
+        expect((await row(started.uid)).resumed_at).toBeNull();
+      });
+
+      it("finalizes a grant only for the current secret", async () => {
+        const { uid } = await begin(browserContext());
+        const resumeUrl = await approve(uid);
         await expect(
-          fixture.pool.query(
-            "UPDATE community.article_authoring_consents SET resume_secret_digest=NULL WHERE interaction_uid=$1",
-            ["synthetic-no-such-interaction"],
+          issuer.bundle.consents.finalizeGrant(
+            uid,
+            randomBytes(32).toString("base64url"),
+            "synthetic-grant-never-made",
+            new Date(),
           ),
-        ).rejects.toMatchObject({ code: "42501" });
+        ).rejects.toSatisfy(isCommunityConflictError);
+        expect(await row(uid)).toMatchObject({
+          resume_secret_digest: digestOf(resumeUrl),
+          resumed_at: null,
+          provider_grant_id: null,
+        });
+      });
+
+      it("lets only the issuer and human control roles write the resume digest", async () => {
+        const writable = async (pool: Pool) =>
+          (
+            await pool.query<{ writable: boolean }>(
+              "SELECT has_column_privilege(current_user,'community.article_authoring_consents','resume_secret_digest','UPDATE') AS writable",
+            )
+          ).rows[0]!.writable;
+        expect(await writable(fixture.controlPool)).toBe(true);
+        expect(await writable(fixture.issuerPool)).toBe(true);
+        expect(await writable(fixture.pool)).toBe(false);
       });
     });
   });

@@ -437,8 +437,9 @@ export const createArticleAuthorizationProvider = async (options: {
     try {
       interaction = await provider.interactionDetails(request, response);
     } catch (error) {
-      // Only a true absence voids below. A lookup failure says nothing about
-      // this browser and must not cost the author a good consent.
+      // No interaction the provider can read for this browser: no cookie, a bad
+      // one or an expired one. Only those void below. A lookup failure says
+      // nothing about this browser and must not cost the author a good consent.
       if (!(error instanceof loaded.errors.SessionNotFound)) throw error;
     }
     if (
