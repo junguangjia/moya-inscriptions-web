@@ -2737,9 +2737,11 @@ AGENT_CONNECTIONS_ENABLED.
 
 - PostgreSQL 16 is the acceptance target: task-owned containers on
   `postgres:16.15-alpine` with `TEST_DATABASE_EXPECTED_VERSION_NUM=160015`
-  (.github/workflows/ci.yml:202,268). Shared compose stays at 18.4 because tests
-  pin it (tests/unit/architecture/current-truth-config.test.ts:159). The
-  existing CI PostgreSQL 18 jobs are not changed.
+  (the `postgres16` services in .github/workflows/ci.yml). Shared compose stays
+  at 18.4 because tests pin it
+  (tests/unit/architecture/current-truth-config.test.ts:159). CI's PostgreSQL
+  18 steps are paused behind `CI_POSTGRES_18` since the Owner's word of
+  2026-11-05, 「可以修改规则暂时不测18，因为现在主体在16」.
 - Protocol-level tests, real JSON-RPC over HTTP, not direct handler calls, using
   the official client from tests/package.json on the native route, including GET
   with an AI key.

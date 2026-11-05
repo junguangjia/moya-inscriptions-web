@@ -18,6 +18,15 @@ concurrency:
 permissions:
   contents: read
 
+# The one switch for every step that uses a PostgreSQL 18 service. Paused by
+# the Owner on 2026-11-05: 「可以修改规则暂时不测18，因为现在主体在16」.
+# While it is not "on", those steps are skipped and the test milestone and the
+# agent-connections acceptance run on the PostgreSQL 16 service; every other
+# PostgreSQL 16 step is unchanged. Set it to "on" to run PostgreSQL 18 again.
+# The 18 service containers stay defined, so they still start (unused).
+env:
+  CI_POSTGRES_18: "off"
+
 jobs:
   classify_e2e:
     name: classify-task
@@ -237,30 +246,44 @@ jobs:
           restore-keys: |
             library-${{ runner.os }}-${{ hashFiles('.nvmrc', 'pnpm-lock.yaml', 'turbo.json', 'tsconfig.base.json') }}-
       - name: Mark the CI PostgreSQL service as a disposable test target
+        if: env.CI_POSTGRES_18 == 'on'
         run: >-
           docker exec -i "${{ job.services.postgres.id }}" psql -v
           ON_ERROR_STOP=1 -U moya_test -d moya_test -f -
           <infra/test/disposable-test-target.sql
 
-      # Persistent opt-in for full PR and merged-main test runs only.
-      # Preparation, all tests and cleanup run to completion (Owner,
-      # 2026-10-07); the job's timeout-minutes is the containment and the
-      # milestone's own ceiling only stops a hung run inside it.
-      - name: Complete CI test milestone
-        run: node scripts/verify.mjs test --ci-milestone
-
-      - name: Catalog workflow client regressions
-        if: env.MOYA_VERIFY_WORKSPACES != ''
-        run: pnpm test:catalog-workflow-client
-
+      # Before both milestones: the PostgreSQL 16 one below uses this service.
       - name: Mark the CI PostgreSQL 16 service as a disposable test target
         run: >-
           docker exec -i "${{ job.services.postgres16.id }}" psql -v
           ON_ERROR_STOP=1 -U moya_test -d moya_test -f -
           <infra/test/disposable-test-target.sql
 
+      # Persistent opt-in for full PR and merged-main test runs only.
+      # Preparation, all tests and cleanup run to completion (Owner,
+      # 2026-10-07); the job's timeout-minutes is the containment and the
+      # milestone's own ceiling only stops a hung run inside it. Exactly one of
+      # the two milestone steps runs: this one on the job's PostgreSQL 18
+      # database, or the next one on PostgreSQL 16 while 18 is paused.
+      - name: Complete CI test milestone
+        if: env.CI_POSTGRES_18 == 'on'
+        run: node scripts/verify.mjs test --ci-milestone
+
+      - name: Complete CI test milestone on PostgreSQL 16
+        if: env.CI_POSTGRES_18 != 'on'
+        env:
+          DATABASE_URL: postgresql://moya_test:synthetic-ci-postgres-password@127.0.0.1:5433/moya_test
+          TEST_DATABASE_URL: postgresql://moya_test:synthetic-ci-postgres-password@127.0.0.1:5433/moya_test
+          TEST_DATABASE_EXPECTED_VERSION_NUM: "160015"
+        run: node scripts/verify.mjs test --ci-milestone
+
+      - name: Catalog workflow client regressions
+        if: env.MOYA_VERIFY_WORKSPACES != ''
+        run: pnpm test:catalog-workflow-client
+
       # The same migrations and PostgreSQL integration suite on the minimum
-      # supported major, as their own explicit complete profile.
+      # supported major, as their own explicit complete profile. While 18 is
+      # paused it repeats the milestone's PostgreSQL slice on the same database.
       - name: PostgreSQL 16 migrations and integration
         env:
           DATABASE_URL: postgresql://moya_test:synthetic-ci-postgres-password@127.0.0.1:5433/moya_test
@@ -319,12 +342,14 @@ jobs:
           restore-keys: |
             library-${{ runner.os }}-${{ hashFiles('.nvmrc', 'pnpm-lock.yaml', 'turbo.json', 'tsconfig.base.json') }}-
       - name: Mark the CI PostgreSQL service as a disposable test target
+        if: env.CI_POSTGRES_18 == 'on'
         run: >-
           docker exec -i "${{ job.services.postgres.id }}" psql -v
           ON_ERROR_STOP=1 -U cms_qa -d cms_synthetic_test -f -
           <infra/test/disposable-test-target.sql
       # Each CMS check is an independent explicit CMS COMPLETE profile.
       - name: Real Payload migrations and PostgreSQL integration
+        if: env.CI_POSTGRES_18 == 'on'
         env:
           # Explicitly fictional, isolated CI database; no cloud access.
           CMS_TEST_DATABASE_URL: postgresql://cms_qa@127.0.0.1:5432/cms_synthetic_test
@@ -352,6 +377,7 @@ jobs:
           pnpm --filter @moya/tests exec playwright install --with-deps --only-shell chromium
           pnpm --filter admin build
       - name: Native Owner create, publish, autosave, batch approval and restore
+        if: env.CI_POSTGRES_18 == 'on'
         env:
           CMS_TEST_DATABASE_URL: postgresql://cms_qa@127.0.0.1:5432/cms_synthetic_test
         run: pnpm test:cms:browser --profile complete
@@ -359,16 +385,23 @@ jobs:
         env:
           CMS_TEST_DATABASE_URL: postgresql://cms_qa@127.0.0.1:5433/cms_synthetic_test
         run: pnpm test:cms:browser --profile complete
-      # Mandatory, and last so the Production Admin browser check above runs
-      # against a tree this harness has not touched. The harness owns
-      # everything it uses: a database it creates beside the one named below,
-      # its own SQL roles, its own authorization listener, its own Backend,
-      # its own Admin dist directory and its own browser -- and it drops all
-      # of them. It writes no artifact: the tokens and the Owner handoff stay
-      # in a mode-restricted session directory that is removed on the way out.
+      # After both Production Admin browser checks, so they run against a tree
+      # this harness has not touched. The harness owns everything it uses: a
+      # database it creates beside the one named below, its own SQL roles, its
+      # own authorization listener, its own Backend, its own Admin dist
+      # directory and its own browser -- and it drops all of them. It writes no
+      # artifact: the tokens and the Owner handoff stay in a mode-restricted
+      # session directory that is removed on the way out.
       - name: Development OAuth consent, revocation and a real Backend tool read
+        if: env.CI_POSTGRES_18 == 'on'
         env:
           CMS_TEST_DATABASE_URL: postgresql://cms_qa@127.0.0.1:5432/cms_synthetic_test
+        run: pnpm test:cms:agent-connections --profile complete
+      # Mandatory, unconditional and last: the same acceptance on the minimum
+      # supported major. Until 2026-11-05 it ran on PostgreSQL 18 only.
+      - name: Development OAuth consent and Backend tool read on PostgreSQL 16
+        env:
+          CMS_TEST_DATABASE_URL: postgresql://cms_qa@127.0.0.1:5433/cms_synthetic_test
         run: pnpm test:cms:agent-connections --profile complete
 
   build:

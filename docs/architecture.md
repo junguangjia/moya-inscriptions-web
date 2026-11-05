@@ -225,8 +225,9 @@ explicit migration command
 ```
 
 Startup does not execute DDL. Supported PostgreSQL majors are 16 (the minimum
-Production major) and 18. CI runs both (16.15 and 18.4); local Compose uses
-18.4.
+Production major) and 18. CI runs 16.15; its 18.4 steps are paused behind
+`CI_POSTGRES_18` in `.github/workflows/ci.yml` since 2026-11-05. Local Compose
+uses 18.4.
 
 The controlled write path is:
 
