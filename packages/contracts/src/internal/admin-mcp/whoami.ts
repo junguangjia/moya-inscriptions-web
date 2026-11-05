@@ -25,6 +25,7 @@ export const ADMIN_MCP_BYTE_WORK = [
   "rendered_preview",
   "deep_zoom_master",
   "local_import",
+  "legacy_plan",
   "account_provision",
 ] as const;
 

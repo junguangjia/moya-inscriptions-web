@@ -282,7 +282,8 @@ describe("Admin MCP identity (admin-mcp-completion-v1, section 2)", () => {
     ]);
     expect(door).toContain("authorizedByEmail: person.email,");
 
-    // Only what names a field leaves the key: never the key or its connection whole.
+    // No answer spreads the key or its connection. Other ways of passing one whole are
+    // not caught here; the pin above on who reads the field is what holds.
     for (const file of await adminSources()) {
       if (!file.startsWith("src/admin-mcp/")) continue;
       expect([
@@ -309,7 +310,7 @@ describe("Admin MCP identity (admin-mcp-completion-v1, section 2)", () => {
     );
   });
 
-  it("counts an empty install the same way everywhere: only the seeded row is ignored", async () => {
+  it("counts an empty install the same way in the usual spelling: only the seeded row is ignored", async () => {
     const scripts = async (directory: string): Promise<string[]> => {
       const entries = await readdir(path.join(repositoryRoot, directory), {
         withFileTypes: true,

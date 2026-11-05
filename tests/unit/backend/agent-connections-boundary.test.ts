@@ -704,6 +704,9 @@ describe("the login door's gate", () => {
       expect(
         (pools.configs.at(-1) as { connectionString: string }).connectionString,
       ).toContain("query_timeout=5000");
+      expect(
+        (pools.configs.at(-1) as { connectionString: string }).connectionString,
+      ).toContain("statement_timeout=4000");
       await expect(
         runtime?.verifyAccessToken(`${CONNECTION_TOKEN_PREFIX}silent`),
       ).rejects.toThrow("Query read timeout");

@@ -4076,19 +4076,27 @@ Tool     issuer /token, code and PKCE -> artvenn_ct_ token and refresh token
   says: Payload's first-user page and `first-register` look for any row and
   cannot be filtered, so they stay closed. The Admin's account list shows it.
 - Rollback. `down` keeps the row, so a chain rollback past
-  `20261103_143652_ai_operator_role` fails that migration's cast on it. It needs
+  `20261103_143652_ai_operator_role` fails that migration's cast on it. While
+  the row has written nothing, it needs
   `DELETE FROM "users" WHERE "email" = 'ai-connection@operator.invalid' AND "role" = 'ai_operator';`
-  first, by hand, and a Catalog delivery intent or receipt naming the row has to
-  be rebound before that, because those foreign keys restrict. `up` tolerates
-  only a conflict on `email`, so any other collision stops the migration instead
-  of leaving no row.
+  first, by hand. Once a connection has saved anything that DELETE stops:
+  `editorial_receipts.actor_id` is NOT NULL under ON DELETE SET NULL, and a
+  Catalog delivery intent or receipt restricts it. Then set the row's role to
+  `automation` for the rollback instead, which keeps the receipts, and back to
+  `ai_operator` after `up` runs again, because `up` leaves an existing row as it
+  is and the door refuses any other role. `up` tolerates only a conflict on
+  `email`, so any other collision stops the migration instead of leaving no row.
 - One requestId on two connections. `requestKeyFor` mixes the connection id into
   a connection's hash, so two people's tools that choose the same requestId each
-  get their own effect, at the CMS receipt and at the Backend, and one never
-  reads the other's command as a replay. The Behavior Matrix asks only that a
-  retry with the same requestId is safe, and it is: the id outlives a token, so
-  the same connection still replays, across a refresh too. A key's derived value
-  does not change by one byte.
+  get their own effect, at the CMS receipt and at the Backend, and on those
+  receipt routes one never reads the other's command as a replay. Two kinds of
+  write have no receipt and read the record back, so there a tool can read
+  another's identical effect as `already_applied`: a report decision (section
+  7), whose history names every credential as one AI operator, and a lock
+  takeover (see Limits). The Behavior Matrix asks only that a retry with the
+  same requestId is safe, and it is: the id outlives a token, so the same
+  connection still replays, across a refresh too. A key's derived value does not
+  change by one byte.
 - The run engine of section 8 is not built. When S8 builds it: a run names its
   connection beside `keyId`, because a connection's `keyId` is empty and that
   column, numeric on the audit row, cannot hold a `conn-` id. requestId's scope

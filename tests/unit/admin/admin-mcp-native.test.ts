@@ -1305,6 +1305,7 @@ describe("a connection's identity", () => {
           "rendered_preview",
           "deep_zoom_master",
           "local_import",
+          "legacy_plan",
           "account_provision",
         ],
       },

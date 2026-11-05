@@ -518,6 +518,7 @@ describe("admin_whoami on a connection", () => {
       "rendered_preview",
       "deep_zoom_master",
       "local_import",
+      "legacy_plan",
       "account_provision",
     ]);
   });
@@ -840,7 +841,7 @@ describe("one requestId, on two connections", () => {
     });
   });
 
-  it("never answers another person's command as a replay", async () => {
+  it("never answers another person's command as a replay on a receipt route", async () => {
     const first = connect();
     const second = connect({ subject: subjectOf((await secondPerson()).id) });
     const call = {

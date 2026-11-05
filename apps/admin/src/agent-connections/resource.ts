@@ -58,6 +58,8 @@ export const RESOURCE_DATABASE_SETTING = "AGENT_RESOURCE_DATABASE_URL";
 export const AGENT_DATABASE_CA_SETTING = "AGENT_DATABASE_SSL_CA_FILE";
 /** The door's reads are single rows, so past this the database has gone silent. */
 const RESOURCE_QUERY_TIMEOUT_MS = 5_000;
+/** Shorter, so a read stuck on a lock ends at the server before the client gives up. */
+const RESOURCE_STATEMENT_TIMEOUT_MS = 4_000;
 
 export class ResourceRuntimeError extends Error {
   readonly code: string;
@@ -127,13 +129,19 @@ const servedEnvironment = (
 /**
  * A connect has its limit, and a database that goes silent after one would otherwise
  * hold a token request open. The shared helper takes no query timeout, so it goes
- * where pg reads one: the URL. A timed-out client leaves the pool.
+ * where pg reads one: the URL. A timed-out client leaves the pool, and its backend
+ * stays while it waits on a lock, which would grow past the pool's limit, so the
+ * server has a shorter limit of its own.
  */
 const withQueryTimeout = (
   config: ReturnType<typeof parsePostgresConfig>,
 ): ReturnType<typeof parsePostgresConfig> => {
   const url = new URL(config.connectionString);
   url.searchParams.set("query_timeout", String(RESOURCE_QUERY_TIMEOUT_MS));
+  url.searchParams.set(
+    "statement_timeout",
+    String(RESOURCE_STATEMENT_TIMEOUT_MS),
+  );
   return { ...config, connectionString: url.toString() };
 };
 
