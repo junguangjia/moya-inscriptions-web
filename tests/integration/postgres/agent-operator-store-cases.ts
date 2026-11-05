@@ -340,6 +340,39 @@ export const registerAgentOperatorStoreTests = (
         expect(await listedIds()).toContain(abandoned.id);
       });
 
+      it("omits a connection past the hard limit from its grant's consent, as the door does", async () => {
+        // A grant is an immutable snapshot, so an old consent is written as one.
+        const grantedAgo = async (
+          connection: StoredConnection,
+          days: number,
+        ) => {
+          const grantId = `grant-${hex(12)}`;
+          await pool.query(
+            `INSERT INTO community.agent_connection_grants
+               (grant_id, connection_id, generation_at_consent, oauth_client_id,
+                human_subject, issuer, resource, preset_at_consent, consented_at)
+             VALUES ($1,$2,1,$3,$4,'https://issuer.invalid',
+                     'https://resource.invalid/api/mcp','operator',
+                     CURRENT_TIMESTAMP - make_interval(days => $5))`,
+            [
+              grantId,
+              connection.id,
+              connection.oauthClientId,
+              connection.humanAccountId,
+              days,
+            ],
+          );
+          await pointAt(connection, grantId);
+        };
+        const expired = await authorized(1);
+        const live = await authorized(1);
+        await grantedAgo(expired, 181);
+        await grantedAgo(live, 179);
+        const ids = await listedIds();
+        expect(ids).not.toContain(expired.id);
+        expect(ids).toContain(live.id);
+      });
+
       it("omits a connection awaiting consent and a revoked one", async () => {
         const waiting = await openConnection();
         expect(await listedIds()).not.toContain(waiting.id);

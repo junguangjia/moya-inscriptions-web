@@ -532,6 +532,53 @@ describe("every surface maps to an op, a tool or a stated exclusion", () => {
       );
   });
 
+  it("keeps the AI connection surfaces reserved, and /start with the Development boundary", () => {
+    for (const surface of [
+      "endpoint POST /agent-connections/consent",
+      "endpoint GET /agent-connections",
+      "endpoint POST /agent-connections/disconnect",
+      "view agentConnections",
+      "view agentConnectionsConsent",
+      "page /admin/agent-connections",
+    ])
+      expect(ADMIN_SURFACES[surface], surface).toMatchObject({
+        excluded: "reserved",
+      });
+    expect(
+      ADMIN_SURFACES["endpoint POST /agent-connections/start"],
+    ).toMatchObject({ excluded: "dev-only" });
+    for (const name of ADMIN_OP_NAMES)
+      expect(name).not.toMatch(/connection|consent/u);
+  });
+
+  it("composes the reserved routes in Production, without /start", () => {
+    const paths = (settings: Record<string, string>) =>
+      agentConnectionEndpoints(settings as NodeJS.ProcessEnv)
+        .map(
+          ({ method, path: route }) =>
+            `endpoint ${method.toUpperCase()} ${route}`,
+        )
+        .sort();
+    const production = [
+      "endpoint GET /agent-connections",
+      "endpoint POST /agent-connections/consent",
+      "endpoint POST /agent-connections/disconnect",
+    ];
+    expect(
+      paths({ NODE_ENV: "production", ADMIN_MCP_OAUTH_ENABLED: "true" }),
+    ).toEqual(production);
+    expect(
+      paths({ NODE_ENV: "development", AGENT_CONNECTIONS_ENABLED: "true" }),
+    ).toEqual([...production, "endpoint POST /agent-connections/start"].sort());
+    expect(paths({ NODE_ENV: "production" })).toEqual([]);
+    expect(
+      paths({ NODE_ENV: "production", AGENT_CONNECTIONS_ENABLED: "true" }),
+    ).toEqual([]);
+    expect(
+      paths({ NODE_ENV: "development", ADMIN_MCP_OAUTH_ENABLED: "true" }),
+    ).toEqual([]);
+  });
+
   it("has no tool for plaintext contact or for hard deletion", () => {
     for (const name of ADMIN_OP_NAMES)
       expect(name).not.toMatch(

@@ -1,4 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { RESUME_SECRET_PARAMETER } from "@moya/community-postgres";
 import { z } from "zod";
 
 import {
@@ -8,6 +9,7 @@ import {
 } from "./contracts";
 
 import type { ConnectionPreset } from "./contracts";
+import type { RegisteredClient } from "@moya/community-postgres";
 
 /**
  * Agent Connections V1 (Issue #141 r15 §5) — the consent transaction, without
@@ -27,11 +29,18 @@ import type { ConnectionPreset } from "./contracts";
  *   admin after a same-site step            probe_strict=S
  *
  * So the page the provider sends the browser to cannot authenticate anybody,
- * and no redirect chain fixes that. The human takes one same-origin step of
- * their own; the page after it has a session, and only that page mints the
- * ticket. A POST that cannot produce the ticket did not come from a page this
- * server rendered to this human — which is the CSRF property, obtained without
- * weakening a cookie and without a same-site bounce nobody tested.
+ * and no redirect chain fixes that. One same-origin step follows; the page after
+ * it has a session, and only that page mints the ticket. A POST that cannot
+ * produce the ticket did not come from a page this server rendered to this
+ * human — which is the CSRF property, obtained without weakening a cookie.
+ *
+ * Under the Development read-only profile that step is the human's own click.
+ * Under `operator` the landing takes it with a meta refresh, measured to carry
+ * the session (the record's section 22), so a navigation started elsewhere can
+ * reach the review and arm a ticket. That is harmless for the reasons above: the
+ * ticket is readable only on this origin, the POST that spends it also needs a
+ * click, a same-origin `Origin` and the Strict cookie, and the provider resumes
+ * only with the one-time secret that POST returned, beside its own cookie.
  */
 
 /** A refusal with a bare code. Never a message that could carry a value. */
@@ -131,22 +140,69 @@ export interface ConsentDisplay {
   readonly protocol: readonly string[];
   readonly preset: ConnectionPreset;
   readonly expiresAt: string;
+  /** Under `operator`, what the page says in the person's words. */
+  readonly tool?: ConsentTool;
 }
 
 /**
- * The r15 milestone is READ-ONLY, and this is where a request that asks for
- * more is REFUSED rather than quietly narrowed.
- *
- * Silently dropping `artvenn:manage` would hand back a token that works,
- * having ignored what was asked for — the caller would believe it had
- * management and find out by being denied later, and the Owner would have
- * approved a screen that did not say so. An unsupported capability is an
- * error, exactly as an unsupported resource is.
+ * The tool as an administrator reads about it. All of it comes from the closed
+ * list, never from the request: a stranger can start a real request for a listed
+ * client, and can choose neither what it is called nor where the browser returns.
  */
-export const admitReadOnlyCapabilities = (
+export interface ConsentTool {
+  readonly label: string;
+  /** Who its model provider is, where the content it reads goes. */
+  readonly vendor: string;
+  /** The hostnames the browser may return to, a local tool's loopback included. */
+  readonly callbackHosts: readonly string[];
+  /** The callback is on this computer, not on the vendor's site. */
+  readonly local: boolean;
+}
+
+/**
+ * The model provider behind each family on the closed list. The public policy names
+ * these two, so another vendor needs the policy text changed first, and then a line
+ * here. A family with no line stops at the consent page, which could not otherwise
+ * say where the content goes.
+ */
+const TOOL_VENDORS: ReadonlyMap<string, string> = new Map([
+  ["claude", "Anthropic"],
+  ["claude-code", "Anthropic"],
+  ["codex", "OpenAI"],
+  ["chatgpt", "OpenAI"],
+]);
+
+const consentToolOf = (
+  registered: RegisteredClient | undefined,
+): ConsentTool => {
+  if (registered === undefined) throw new ConsentError("CLIENT_NOT_REGISTERED");
+  const vendor = TOOL_VENDORS.get(registered.family);
+  if (vendor === undefined) throw new ConsentError("CLIENT_VENDOR_NOT_NAMED");
+  return {
+    label: registered.label,
+    vendor,
+    callbackHosts: [
+      ...new Set(registered.redirectUris.map((uri) => new URL(uri).hostname)),
+    ],
+    local: registered.callbackPolicy !== "hosted-https",
+  };
+};
+
+/**
+ * A request that asks for more than its preset is REFUSED rather than quietly
+ * narrowed, and this is where.
+ *
+ * Silently dropping `artvenn:manage` from a read-only request would hand back a
+ * token that works, having ignored what was asked for — the caller would believe
+ * it had management and find out by being denied later, and the Owner would have
+ * approved a screen that did not say so. An unsupported capability is an error,
+ * exactly as an unsupported resource is.
+ */
+const admitCapabilities = (
+  preset: ConnectionPreset,
   requested: readonly string[],
 ): readonly string[] => {
-  const allowed = new Set<string>(PRESET_CAPABILITY_SCOPES["read-only"]);
+  const allowed = new Set<string>(PRESET_CAPABILITY_SCOPES[preset]);
   const protocolOnly = new Set<string>(PROTOCOL_ONLY_SCOPES);
   const capabilities: string[] = [];
   for (const scope of requested) {
@@ -158,6 +214,10 @@ export const admitReadOnlyCapabilities = (
   return [...new Set(capabilities)].sort();
 };
 
+export const admitReadOnlyCapabilities = (
+  requested: readonly string[],
+): readonly string[] => admitCapabilities("read-only", requested);
+
 /**
  * Builds the display from the stored interaction, refusing anything that does
  * not belong on a consent screen.
@@ -165,6 +225,10 @@ export const admitReadOnlyCapabilities = (
  * `deadline` is passed rather than read from a clock so the caller decides
  * what "now" is; a page that renders an already-dead interaction as live is
  * the failure this prevents.
+ *
+ * `servedPreset` is what this deployment grants, and the row must say the same.
+ * `registered` is the closed list's entry for the row's client, which only the
+ * `operator` wording reads.
  */
 export const describeConsent = (input: {
   readonly interactionUid: string;
@@ -173,6 +237,8 @@ export const describeConsent = (input: {
   readonly capabilityScopes: readonly string[];
   readonly protocolScopes: readonly string[];
   readonly preset: ConnectionPreset;
+  readonly servedPreset: ConnectionPreset;
+  readonly registered: RegisteredClient | undefined;
   readonly expiresAt: string;
   readonly environment: string;
   readonly now: Date;
@@ -188,19 +254,22 @@ export const describeConsent = (input: {
   // The milestone gate, one layer above the CHECK constraint that also
   // refuses it. Both exist because a UI that could offer management would be
   // a defect even while the database refused to store it.
-  if (input.preset !== "read-only")
+  if (input.preset !== input.servedPreset || input.preset === "management")
     throw new ConsentError("PRESET_NOT_AVAILABLE");
   return {
     interaction: interaction.data,
     client: client.data,
     resource: resourceOf(input.resource),
     environment: input.environment,
-    capabilities: admitReadOnlyCapabilities(input.capabilityScopes),
+    capabilities: admitCapabilities(input.preset, input.capabilityScopes),
     protocol: [...input.protocolScopes]
       .filter((scope) => PROTOCOL_ONLY_SCOPES.includes(scope))
       .sort(),
     preset: input.preset,
     expiresAt: new Date(deadline).toISOString(),
+    ...(input.preset === "operator"
+      ? { tool: consentToolOf(input.registered) }
+      : {}),
   };
 };
 
@@ -246,12 +315,15 @@ export const consentReviewPath = (interactionUid: string): string => {
  * own interaction with its own cookie.
  *
  * The Owner's session never travels here: the decision is already stored, and
- * this navigation carries nothing but the uid. Built from the CONFIGURED
- * issuer, never from anything the caller sent.
+ * this navigation carries the uid and, for an `operator` approval, the one-time
+ * resume secret. Only the browser that clicked allow receives that secret, and
+ * the issuer needs it beside its own cookie. Built from the CONFIGURED issuer,
+ * never from anything the caller sent.
  */
 export const providerResumeUrl = (
   issuer: string,
   interactionUid: string,
+  resumeSecret: string | null = null,
 ): string => {
   const interaction = interactionUidSchema.safeParse(interactionUid);
   if (!interaction.success) throw new ConsentError("INTERACTION_MALFORMED");
@@ -271,6 +343,8 @@ export const providerResumeUrl = (
     `${base.pathname.replace(/\/$/u, "")}${CONSENT_LANDING_PREFIX}/${encodeURIComponent(interaction.data)}/resume`,
     base,
   );
+  if (resumeSecret !== null)
+    resume.searchParams.set(RESUME_SECRET_PARAMETER, resumeSecret);
   return resume.href;
 };
 

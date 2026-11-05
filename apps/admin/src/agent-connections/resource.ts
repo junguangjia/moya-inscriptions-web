@@ -11,7 +11,12 @@ import {
   wrapperKeysFrom,
 } from "@moya/community-postgres";
 
-import { connectionsEnabled, oauthSurfaceEnabled } from "./composition";
+import {
+  connectionsEnabled,
+  environmentRefusal,
+  oauthSurfaceEnabled,
+  servedPreset,
+} from "./composition";
 
 import type { ConnectionAuthDependencies } from "./authorization";
 import type { ConnectionRecord, VerifiedGrant } from "./contracts";
@@ -49,9 +54,10 @@ import type { RegisteredClient } from "@moya/community-postgres";
  * What it does NOT do, and must not be described as doing: it does not ask the
  * authorization service whether the underlying provider token still exists.
  * Those are separate processes with separate roles, and this one has no read
- * on the provider's token store by design. A provider-side revocation reaches
- * this boundary when the grant destroyer invalidates the wrappers, which is
- * what a disconnect runs — not instantly by lookup.
+ * on the provider's token store by design. A disconnect reaches this boundary
+ * through the generation `admitGrant` compares on each request. A revocation at
+ * the provider, such as a tool revoking its own token or a detected replay,
+ * reaches it when the issuer stamps the wrappers, not by lookup.
  */
 
 export const RESOURCE_DATABASE_SETTING = "AGENT_RESOURCE_DATABASE_URL";
@@ -100,40 +106,13 @@ const frozen = (value: string | undefined, code: string): URL => {
 };
 
 /**
- * The name a connection row must carry to be admitted here. In Production it is
- * `production`: the issuer refuses any other name under NODE_ENV=production, so the
- * two cannot disagree and `admin.env` carries no copy of the issuer's setting.
- * Development's `operator` profile can name anything, and there the issuer compares
- * its own `AGENT_AUTHORIZATION_ENVIRONMENT` with that same column when a token
- * refreshes, so the two settings have to agree. Unset, or unequal, is a refusal by
- * name: a token from another environment never gets in on a default, and a refresh
- * never starts failing with no reason anyone can read.
- */
-const servedEnvironment = (
-  environment: NodeJS.ProcessEnv,
-  production: boolean,
-  operator: boolean,
-): string => {
-  const served = environment.CMS_ENVIRONMENT ?? "development";
-  if (production && served !== "production")
-    throw new ResourceRuntimeError("ENVIRONMENT_DISAGREES_WITH_NODE_ENV");
-  if (
-    !production &&
-    operator &&
-    environment.AGENT_AUTHORIZATION_ENVIRONMENT !== served
-  )
-    throw new ResourceRuntimeError("ENVIRONMENT_DISAGREES_WITH_ISSUER");
-  return served;
-};
-
-/**
  * A connect has its limit, and a database that goes silent after one would otherwise
  * hold a token request open. The shared helper takes no query timeout, so it goes
  * where pg reads one: the URL. A timed-out client leaves the pool, and its backend
  * stays while it waits on a lock, which would grow past the pool's limit, so the
  * server has a shorter limit of its own.
  */
-const withQueryTimeout = (
+export const withQueryTimeout = (
   config: ReturnType<typeof parsePostgresConfig>,
 ): ReturnType<typeof parsePostgresConfig> => {
   const url = new URL(config.connectionString);
@@ -169,8 +148,7 @@ export const createResourceRuntime = (
 ): ResourceRuntime | null => {
   if (!oauthSurfaceEnabled(environment)) return null;
   const production = environment.NODE_ENV === "production";
-  const operator =
-    production || environment.AGENT_AUTHORIZATION_PROFILE === "operator";
+  const operator = servedPreset(environment) === "operator";
 
   const databaseUrl = environment[RESOURCE_DATABASE_SETTING];
   if (!databaseUrl)
@@ -211,7 +189,10 @@ export const createResourceRuntime = (
     (issuer.protocol !== "https:" || resource.protocol !== "https:")
   )
     throw new ResourceRuntimeError("PRODUCTION_HTTPS_REQUIRED");
-  const served = servedEnvironment(environment, production, operator);
+  const refusedEnvironment = environmentRefusal(environment);
+  if (refusedEnvironment !== null)
+    throw new ResourceRuntimeError(refusedEnvironment);
+  const served = environment.CMS_ENVIRONMENT ?? "development";
   const clients = operator ? operatorClients(environment) : new Map();
 
   // A missing key is a refusal, never a silently generated one: a new key would

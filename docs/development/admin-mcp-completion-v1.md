@@ -3973,7 +3973,8 @@ Behavior Matrix states the behaviour; this section says how it fits together.
 Sections 1 to 21 describe the key door, which stays for automation and the
 companion. Nothing here is built until its slice merges: O1 issuer, stores and
 migration; O2 door and audit; O3 consent, page and hooks; O4 Production
-templates and the real-client record.
+templates and the real-client record. The end of this section says what has been
+proved and what O4 still owes.
 
 An administrator adds one address or clicks one button in their tool, signs in
 with their usual Admin account and clicks allow. No key is issued to a person.
@@ -4050,16 +4051,17 @@ Tool     issuer /token, code and PKCE -> artvenn_ct_ token and refresh token
   has no such field; section 20's `byteChannel` for keys arrives with the
   companion.
 - Closed list. The name on the consent page and the callback host come from
-  `AGENT_AUTHORIZATION_CLIENTS`, never from the request. The Admin reads the
-  same setting under `operator`, and refuses by a bare code when it is missing
-  or malformed; the read-only profile does not read it. There is no registration
-  endpoint, and `features.clientIdMetadataDocument` stays off so its fetch path
-  cannot run: `Client.find` reads static clients first (oidc-provider
-  lib/models/client.js). Discovery still says
-  `client_id_metadata_document_supported`, added by a post-route middleware. The
-  public policy names Anthropic and OpenAI, which covers this list; another
-  vendor needs the policy text changed first. `parseRegisteredClients` refuses
-  `hosted-https` unless its caller allows it, so Article stays loopback only.
+  `AGENT_AUTHORIZATION_CLIENTS`, never from the request. The Admin's door reads
+  the same setting under `operator`, and refuses by a bare code when it is
+  missing or malformed; under the read-only profile only its consent side reads
+  it, with no hosted entry allowed. There is no registration endpoint, and
+  `features.clientIdMetadataDocument` stays off so its fetch path cannot run:
+  `Client.find` reads static clients first (oidc-provider lib/models/client.js).
+  Discovery still says `client_id_metadata_document_supported`, added by a
+  post-route middleware. The public policy names Anthropic and OpenAI, which
+  covers this list; another vendor needs the policy text changed first.
+  `parseRegisteredClients` refuses `hosted-https` unless its caller allows it,
+  so Article stays loopback only.
 - Native on every entry, hosted ones too. `native_client_prompt`
   (lib/helpers/interaction_policy/prompts/consent.js) is what forces a screen on
   every connect. A `web` client with a live provider session and grant gets
@@ -4104,13 +4106,56 @@ Tool     issuer /token, code and PKCE -> artvenn_ct_ token and refresh token
   column, numeric on the audit row, cannot hold a `conn-` id. requestId's scope
   and the rolling 24-hour figure count per credential, not per `users` row or
   per numeric key, because every connection shares one row and has no key.
+- Consent side. `oauthSurfaceEnabled` also composes the consent runtime, its
+  routes and the discovery documents; `/agent-connections/start` stays with
+  `connectionsEnabled`. Its pool of 2 is under the same rules as the resource
+  side's: in Production `AGENT_CONSENT_DATABASE_URL` must end in exactly
+  `?sslmode=verify-full` with `AGENT_DATABASE_SSL_CA_FILE` set, on https;
+  loopback in Development; the same environment rule; the same 5 s query limit.
+  The routes answer only an Owner browser session, and a change also checks
+  Origin against `CMS_PUBLIC_URL`. Under `operator` the list is every live
+  connection with who authorized it, and any owner may disconnect any of them.
+  The read-only profile keeps its own page data and disconnects only its own.
+- Pages. Payload skips the login redirect for custom views, so the review page
+  and the AI connections page do their own: a browser with no session and no
+  `Authorization` header goes to the login page and comes back to the same
+  interaction. Anything else that is not an Owner browser session, a key, a
+  connection token, a header JWT or an automation session, gets one sentence and
+  nothing is armed. That answer is HTTP 200, as the control page's is, because a
+  server component here has no way to set a 403; the routes behind them
+  answer 403. Under `operator` the page names no client id, URL or scope, which
+  stay in `data-*` attributes for tests. The Development read-only profile keeps
+  the page its harness reads.
+- Landing. Under `operator` it continues by itself with a meta refresh, beside a
+  plain link for a browser that declines one. Measured 2026-11-05 on headless
+  Chromium 151 and WebKit 26.5: the `SameSite=Strict` session comes back on that
+  step from a cross-site link, a popup and an address bar, and on the real Admin
+  a signed-in person reached the review without seeing the login page. The
+  read-only profile keeps the click #141 measured. The link is an `<a>`, so
+  nothing prefetches the page that arms a ticket.
+- AI connections page. Its address and Claude button come from `CMS_PUBLIC_URL`
+  plus `/api/mcp`, and a tool connects only if that equals
+  `AGENT_AUTHORIZATION_RESOURCE`, since discovery names the resource, so a
+  release has to keep the two equal. The page carries the list's resource in
+  `data-agent-connections-resource` for that check. The Claude link and the step
+  lists for other tools come from the vendors' documents as read at design time,
+  and the real-client record corrects them if a vendor differs.
+- Reserved audit rows. An allow, a deny and a disconnect each write two rows of
+  class `reserved`, `op` `agent-connections.approve`, `.deny` or `.disconnect`,
+  with `userId` the person acting. The `start` row comes first, and if it cannot
+  be written the change does not happen. The `finish` row says how it ended, a
+  refused ticket included. If only that one is lost, a category is logged, the
+  change stands, and the ledger reads as for any call: a start with no finish is
+  an unknown outcome. Nothing is written for a malformed body or a uid nobody
+  opened.
 - Binding. Under `operator`, `decideConsent` mints a one-time secret, stores its
   digest and returns it in the resume URL. Resume needs the secret and the
   provider cookie, so an approval reaches only the browser that started the
   request. The clients are public and have no secret of their own, so the closed
   list alone does not stop a stranger from starting a request. The secret is the
   `secret` query parameter of the issuer's resume route, so the issuer's Nginx
-  log format must not carry the query string.
+  log format must not carry the query string. A refused resume is a plain page
+  in Chinese with its bare code in small text, to read out to someone.
 - What a client asks for changes nothing. Under `operator` the issuer opens the
   consent as `artvenn:admin`, and rewrites the scope the provider resumes with,
   because a request asking for nothing we grant otherwise ends in
@@ -4170,9 +4215,23 @@ Limits, stated:
   reach that route today; adding one needs this closed first.
 - The other owners are told of a new connection by a notice in the Admin on
   their next visit, not when it happens, because the Admin has no mail adapter.
-  O3 builds it.
-- Until O3 lands, the metadata pointer on a 401 follows `connectionsEnabled`, so
-  Production's door has none, and the challenge carries no `scope` anywhere.
+  It sits in the workspace header slot, on every page, and reads the reserved
+  list. What a person has seen is in their own Payload preferences, under
+  `agent-connections-seen`, so it needs no migration and follows them between
+  devices. An owner who does not open the Admin hears nothing, and a failed read
+  shows nothing.
+- An allow raises the generation at the click, before the browser resumes, so
+  that person's earlier connection to the same tool has already ended if the
+  allow is then voided or abandoned. The page's list is honest about what is
+  left: it shows a connection only when its current grant was built at its
+  current generation, so that row is not listed. The tool has to connect again.
+  Nor does it list one past the 180-day limit from its grant's consent, which
+  the door counts from the same column.
+- A grant the issuer revoked itself, by a detected replay or by a tool revoking
+  its own token, stays on the page's list until an owner disconnects it or the
+  tool connects again, because the consent role cannot read the provider's rows
+  or a wrapper. Its tokens already answer 401. Showing that would mean a new
+  read for one rare row, so the page does not.
 - A connection is always at profile full, so section 14's advice to use profile
   `read` for sessions that bulk-read untrusted content has no form here.
 - A connection has no byte channel. Uploads, every download, the canonical
@@ -4185,10 +4244,19 @@ Limits, stated:
   removed the lock row, A's next save on the old revision answered
   REVISION_CONFLICT, and on a second lock B's takeover answered
   `already_applied` and B's release removed A's lock.
-- Restoring a demoted person revives their live tokens, with no new consent,
-  because the door reads the role on each request and nothing here revokes on a
-  role change. O3's `users` hook does that revoking. O3 pins demote, restore,
-  old token still refused, and says what a failed revoke means.
+- A role change or password change revokes that person's connections through the
+  `users` hook, in the save, after its audit row, so demoting someone and
+  restoring them leaves the old token refused and refresh answering
+  `invalid_grant`. Connecting again is a fresh consent. If that revoke fails, a
+  category (`AGENT_CONNECTION_REVOKE_FAILED`) is logged and the change stands,
+  as the Matrix requires. Then the connection stays authorized until someone
+  disconnects it. For a password change its tokens keep working. For a demotion
+  the door still refuses them while the person is not an owner, but restoring
+  the role brings them back with no new consent, and nothing tells the owner who
+  restores it. A change made while the door is off revokes nothing and leaves
+  the same window, and so does one under the read-only profile, which stays as
+  #141 measured it. The hook sees a save through Payload, so a direct database
+  change stops a demoted person only through the door's own read of the role.
 - A key's answers differ from main in wording only, "key" becoming "credential",
   in five strings: the `initialize` instructions, the `admin_whoami`
   description, the NOT_FOUND hint, and the summaries of `document.lock_release`
@@ -4200,3 +4268,59 @@ Limits, stated:
 - No real client has been through this door. Everything said here about a
   client's behaviour comes from documents until the real-client record says
   otherwise.
+
+Proof, as of O3. `scripts/editorial/verify-agent-connections.mjs` runs under
+`AGENT_AUTHORIZATION_PROFILE=operator` beside its read-only run, on PostgreSQL
+16 in CI, with `CMS_ENVIRONMENT` equal to `AGENT_AUTHORIZATION_ENVIRONMENT`, a
+real issuer, a real Admin under `next dev`, the four real client ids and each
+service on its own database role.
+
+- `tests/cms/agent-connections-generic-client.mjs` is the first token an issuer
+  issued through a real consent to reach this door. The official SDK starts from
+  the one address, takes the 401, offers a vendor's URL as its client id and
+  hands over the link; a person signs in and allows; the SDK redeems the code,
+  lists exactly what an `ai_operator` key at full lists, makes one call that the
+  audit names with the connection and the person, refreshes, is sent back to a
+  person by a disconnect, and connects again. Every address its own requests
+  reached, discovery, transport and refresh, is checked to be loopback. That
+  covers the client's side only. That the issuer never fetches a client id URL
+  is pinned in `agent-operator-flow-cases.ts`, which spies on the issuer's
+  fetch.
+- `tests/cms/agent-connections-browser.mjs` runs on Chromium and WebKit at phone
+  width: signed out and back to the same review, the landing going on by itself
+  with nothing armed until the review's one request, deny, wording, both resume
+  refusals with two browser contexts, no ticket for an automation session, a
+  connection token or any key, with an Owner session as the control, any owner's
+  disconnect with its audit rows, a second computer, and a demotion and a
+  password change on the real stores. It also reads the frame refusal the Admin
+  itself sends on both page groups (`frame-ancestors 'none'` and
+  `X-Frame-Options: DENY`), and checks that 允许 ignores a click or a key that
+  comes with a window switch, waiting about a second each time the page is shown
+  and focused. Each decision is exactly one consent POST, and the summary says
+  how many clicks each one took. A hosted tool's last redirect is the one hop it
+  does not take in a browser: Playwright cannot intercept a redirect, and
+  following it would reach the vendor. So from the resume route on, a hosted
+  flow walks the issuer's answers with the browser's own cookies and stops at
+  the vendor's address, and loopback tools take every hop.
+- `tests/cms/agent-connections-surfaces.test.ts` holds the routes' 403s with the
+  Owner control and the audit rows before the change, and the `users` hook
+  through Payload's own REST route, a failed revoke included. Its stores are
+  synthetic.
+
+O4 still owes: the Nginx block for the issuer host and its limits, with a log
+format that does not carry the query string; `frame-ancestors 'none'` for all of
+`/admin` at the Nginx layer, because the Admin's own refusal holds only for a
+document load and a tab change inside a framed Admin page is not one; the
+issuer's systemd unit; the environment templates, in which the address on the AI
+connections page, `CMS_PUBLIC_URL` plus `/api/mcp`, and
+`AGENT_AUTHORIZATION_RESOURCE` must be equal, because a tool connects only then;
+release checks that the origin of `AGENT_AUTHORIZATION_CONSENT_URL` equals the
+origin of `CMS_PUBLIC_URL`, because the Admin checks every allow, deny and
+disconnect against that origin and would refuse them all otherwise, and that the
+Admin's and the issuer's copies of `AGENT_AUTHORIZATION_CLIENTS` are identical;
+the documents section 7 of the amendment names; the private release toolkit; and
+the real-client record, per task and client, failures included, in which
+Claude's link and the step lists on the AI connections page meet a real client
+for the first time, and which says whether each hosted tool's own state check
+refuses a link started in an administrator's own browser. Everything above ran
+under `next dev`, so a Production build with the door on first runs in O4.

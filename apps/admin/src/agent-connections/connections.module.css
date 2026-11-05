@@ -418,7 +418,7 @@
   border: 1px solid var(--theme-elevation-200, #ddd);
   border-radius: 4px;
   padding: 1px 8px;
-  background: #fff;
+  background: var(--yoyi-color-background-elevated);
   color: var(--yoyi-color-text-secondary);
   font-size: 11px;
   line-height: 1.8;
@@ -441,6 +441,7 @@
   border: 1px solid var(--theme-elevation-200, #ddd);
   border-radius: 10px;
   padding: 0;
+  background: var(--yoyi-color-background-elevated);
   color: var(--theme-elevation-900, #1a1a1a);
 }
 
@@ -499,5 +500,318 @@
 
   .detailList dt {
     margin-top: 8px;
+  }
+}
+
+/* The login door's pages: the landing, consent, the slim page and the notice.
+   Shared tokens only, and written for a phone first. */
+.landingBody {
+  margin: 0;
+  background: var(--yoyi-color-background-page);
+  color: var(--yoyi-color-text-primary);
+  font-family: var(--yoyi-font-interface);
+}
+
+.landing {
+  display: grid;
+  gap: var(--yoyi-space-4);
+  max-width: 36rem;
+  margin: 0 auto;
+  padding: var(--yoyi-space-9) var(--yoyi-space-5);
+}
+
+.consent {
+  display: grid;
+  gap: var(--yoyi-space-4);
+  max-width: 40rem;
+  color: var(--yoyi-color-text-primary);
+}
+
+.consentTitle {
+  margin: 0;
+  font-family: var(--yoyi-font-editorial);
+  font-size: var(--yoyi-type-section-title-size);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.consentText {
+  margin: 0;
+  font-size: var(--yoyi-type-body-size);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.consentWarning {
+  margin: 0;
+  border: 1px solid var(--yoyi-color-warning);
+  border-radius: var(--yoyi-radius-md);
+  padding: var(--yoyi-space-4);
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-warning) 10%,
+    var(--yoyi-color-background-surface)
+  );
+  font-size: var(--yoyi-type-body-size);
+  line-height: 1.7;
+}
+
+.consentActions {
+  display: grid;
+  gap: var(--yoyi-space-3);
+}
+
+.consentAllow,
+.consentDeny {
+  min-height: 48px;
+  border: 1px solid var(--yoyi-color-border-default);
+  border-radius: var(--yoyi-radius-md);
+  padding: 0 var(--yoyi-space-7);
+  background: var(--yoyi-color-background-elevated);
+  color: var(--yoyi-color-text-primary);
+  font: inherit;
+  font-size: var(--yoyi-type-button-size);
+  cursor: pointer;
+}
+
+.consentAllow {
+  border-color: var(--yoyi-color-seal-red);
+  background: var(--yoyi-color-seal-red);
+  color: var(--yoyi-color-text-inverse);
+}
+
+.consentAllow:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--yoyi-color-seal-red-hover);
+}
+
+.consentDeny:hover:not(:disabled) {
+  background: var(--yoyi-color-background-muted);
+}
+
+/* 允许's moment after the page is shown reads as disabled, and keeps its focus. */
+.consentAllow:disabled,
+.consentAllow[aria-disabled="true"],
+.consentDeny:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* A refusal's code, small enough not to read as the message. */
+.code {
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-caption-size);
+  overflow-wrap: anywhere;
+}
+
+.quietLink {
+  color: inherit;
+  font-size: var(--yoyi-type-label-size);
+  text-decoration: underline;
+}
+
+.connectClaude {
+  display: grid;
+  justify-items: start;
+  gap: var(--yoyi-space-3);
+}
+
+.connectButton {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  border-radius: var(--yoyi-radius-md);
+  padding: 0 var(--yoyi-space-6);
+  background: var(--yoyi-color-seal-red);
+  color: var(--yoyi-color-text-inverse);
+  font-size: var(--yoyi-type-button-size);
+  text-decoration: none;
+}
+
+.connectButton:hover {
+  background: var(--yoyi-color-seal-red-hover);
+}
+
+.address {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--yoyi-space-2) var(--yoyi-space-3);
+}
+
+.stepGrid {
+  display: grid;
+  gap: var(--yoyi-space-3);
+}
+
+.stepCard {
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-md);
+  padding: var(--yoyi-space-3) var(--yoyi-space-4);
+  font-size: var(--yoyi-type-label-size);
+}
+
+.stepCard > summary {
+  min-height: 24px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.stepList {
+  display: grid;
+  gap: var(--yoyi-space-3);
+  margin: var(--yoyi-space-3) 0 0;
+  padding-inline-start: var(--yoyi-space-6);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.stepCopy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--yoyi-space-2) var(--yoyi-space-3);
+}
+
+/* Names a second way through one tool's steps, such as its terminal. */
+.stepLabel {
+  margin: var(--yoyi-space-4) 0 0;
+  font-weight: 600;
+}
+
+/* One card per connection on a phone, one row each from a tablet up. */
+.connectionTable,
+.connectionTable tbody,
+.connectionTable tr,
+.connectionTable td {
+  display: block;
+}
+
+.connectionTable {
+  font-size: var(--yoyi-type-label-size);
+}
+
+.connectionTable thead,
+.visuallyHidden {
+  position: absolute;
+  overflow: hidden;
+  width: 1px;
+  height: 1px;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.connectionTable tr {
+  display: grid;
+  gap: var(--yoyi-space-2);
+  padding: var(--yoyi-space-4) 0;
+  border-bottom: 1px solid var(--yoyi-color-border-subtle);
+}
+
+.connectionTable td {
+  overflow-wrap: anywhere;
+}
+
+.connectionTable td[data-label]::before {
+  content: attr(data-label) "：";
+  color: var(--yoyi-color-text-secondary);
+}
+
+.connectionTable td[data-agent-connection-client] {
+  font-size: var(--yoyi-type-card-title-size);
+  font-weight: 600;
+}
+
+.connectionTable td[data-agent-connection-client]::before {
+  content: none;
+}
+
+.ownerNotice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--yoyi-space-2) var(--yoyi-space-4);
+  padding: var(--yoyi-space-3) var(--yoyi-space-5);
+  border-bottom: 1px solid var(--yoyi-color-border-subtle);
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-info) 10%,
+    var(--yoyi-color-background-surface)
+  );
+  color: var(--yoyi-color-text-primary);
+  font-size: var(--yoyi-type-label-size);
+  line-height: 1.6;
+}
+
+.ownerNoticeActions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--yoyi-space-4);
+}
+
+@media (min-width: 40rem) {
+  .consentActions {
+    grid-auto-flow: column;
+    justify-content: start;
+  }
+
+  .stepGrid {
+    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+    align-items: start;
+  }
+
+  .connectionTable {
+    display: table;
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .connectionTable thead {
+    position: static;
+    display: table-header-group;
+    width: auto;
+    height: auto;
+    clip-path: none;
+  }
+
+  .connectionTable tbody {
+    display: table-row-group;
+  }
+
+  .connectionTable tr {
+    display: table-row;
+  }
+
+  .connectionTable th,
+  .connectionTable td {
+    display: table-cell;
+    padding: var(--yoyi-space-3);
+    border-bottom: 1px solid var(--yoyi-color-border-subtle);
+    text-align: left;
+    vertical-align: middle;
+  }
+
+  .connectionTable th {
+    color: var(--yoyi-color-text-secondary);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .connectionTable td[data-label]::before {
+    content: none;
+  }
+
+  .connectionTable td[data-agent-connection-client] {
+    font-size: inherit;
+  }
+}
+
+@media (min-width: 1025px) {
+  .ownerNotice {
+    margin-inline-start: var(--archive-nav-width);
+  }
+
+  .ownerNotice[data-nav-open="false"] {
+    margin-inline-start: 0;
   }
 }

@@ -153,7 +153,7 @@ const PRESET_LABEL: Readonly<Record<string, string>> = {
 };
 
 /** A timestamp a person can read, with the exact value kept in `title`. */
-const whenText = (value: string | null): string => {
+export const whenText = (value: string | null): string => {
   if (value === null) return "—";
   const at = Date.parse(value);
   if (Number.isNaN(at)) return value;
@@ -165,7 +165,7 @@ const whenText = (value: string | null): string => {
   return new Date(at).toLocaleDateString();
 };
 
-const CopyValue = ({
+export const CopyValue = ({
   label,
   value,
 }: {

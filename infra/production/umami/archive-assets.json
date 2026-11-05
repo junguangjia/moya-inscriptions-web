@@ -2,7 +2,7 @@
   "version": 1,
   "sources": {
     "packages/design-tokens/src/theme.css": "62c0496afbbd07112fce0fe8127a640665d33fe9468a2500930651bc27341478",
-    "apps/admin/src/workspace/routes.ts": "34a4c0a46ca1782ae11b0f282b9dc3fc8a9f797e96256ba8dc56050362967bd1",
+    "apps/admin/src/workspace/routes.ts": "3db8e96695b7fec141b4c344ea7b400f4731468e9e794721dfeec3e837756d93",
     "packages/ui/src/assets/icons/home.svg": "e9273d0ad3923611970593046872ef21439c8bd666a498179f09833d7019c5ec",
     "packages/ui/src/assets/icons/inscriptions.svg": "671209be8eeb555d45c39c202a0bc11b6104ee8a315211e0262e8b9fc7cc2b86",
     "packages/ui/src/assets/icons/discussion.svg": "3fad72aa0e3478b758a0c51a61f55aed6831e4e06c9b7a6373b9f2797df7ac45",

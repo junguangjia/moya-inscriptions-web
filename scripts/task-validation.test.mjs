@@ -1076,6 +1076,7 @@ describe("the real CI wiring preserves required-check closure", () => {
           "Admin MCP L0 at seeded scale on PostgreSQL 16",
           "Native Owner browser flow on PostgreSQL 16",
           "Development OAuth consent and Backend tool read on PostgreSQL 16",
+          "Login door consent in two browsers and the official SDK client",
         ],
       },
     };

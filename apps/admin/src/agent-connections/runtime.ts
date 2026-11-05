@@ -5,14 +5,21 @@ import {
 } from "@moya/catalog-postgres";
 import {
   PostgresAgentAdministrationAdapter,
+  RegisteredClientError,
   createAgentConnectionStore,
   createConsentStore,
 } from "@moya/community-postgres";
 
 import { ConnectionAuthority } from "./authority";
-import { connectionsEnabled } from "./composition";
+import {
+  environmentRefusal,
+  oauthSurfaceEnabled,
+  servedPreset,
+} from "./composition";
 import { parseRegisteredClients } from "./consent";
+import { AGENT_DATABASE_CA_SETTING, withQueryTimeout } from "./resource";
 
+import type { ServedPreset } from "./composition";
 import type { RegisteredClient } from "./consent";
 
 import type { PrincipalRegistry } from "./principal";
@@ -30,9 +37,9 @@ import type { ConsentStore } from "@moya/community-postgres";
  * grant, touch a token store, or create an interaction. A pool that could do
  * those would make the grant file decorative.
  *
- * A misconfiguration is a refusal at composition time, never a runtime branch
- * inside a handler: if this cannot be built, the endpoints are absent rather
- * than present-and-failing.
+ * A misconfiguration is a refusal with a bare code when this is first built, on
+ * the first request that needs it, never a runtime branch inside a handler. The
+ * Admin keeps running, and these surfaces answer that they are unavailable.
  */
 
 export const CONSENT_DATABASE_SETTING = "AGENT_CONSENT_DATABASE_URL";
@@ -54,10 +61,15 @@ export interface ConsentRuntime {
   readonly clients: ReadonlyMap<string, RegisteredClient>;
   readonly authority: ConnectionAuthority;
   readonly connections: ReturnType<typeof createAgentConnectionStore>;
+  /** What a consent here grants. Every decision and new connection takes it. */
+  readonly preset: ServedPreset;
   /**
-   * The machine-principal registry a consent provisions into.
+   * The machine-principal registry a read-only consent provisions into. An
+   * operator connection acts as the one `ai_operator` row and provisions nothing,
+   * and Production's consent role holds no grant on this table.
    *
-   * REQUIRED, and a consent FAILS when the control-plane role cannot write it.
+   * Under read-only it is REQUIRED, and a consent FAILS when the control-plane
+   * role cannot write it.
    * An earlier version of this comment called it optional and claimed a
    * deployment without the grant would keep today's behaviour; that was wrong
    * in two ways, and running it proved both. The adapter is always
@@ -132,7 +144,9 @@ const frozenResource = (value: string, code: string): string => {
 export const createConsentRuntime = (
   environment: NodeJS.ProcessEnv = process.env,
 ): ConsentRuntime | null => {
-  if (!connectionsEnabled(environment)) return null;
+  if (!oauthSurfaceEnabled(environment)) return null;
+  const production = environment.NODE_ENV === "production";
+  const preset = servedPreset(environment);
 
   const databaseUrl = environment[CONSENT_DATABASE_SETTING];
   if (!databaseUrl) throw new ConsentRuntimeError("CONSENT_DATABASE_REQUIRED");
@@ -156,28 +170,57 @@ export const createConsentRuntime = (
   } catch {
     throw new ConsentRuntimeError("CONSENT_DATABASE_MALFORMED");
   }
-  // Development-only surface, loopback-only database. This is not a
-  // convenience: the gate above already required development, and a control
-  // plane reaching a database somewhere else would be the first step of
-  // exactly the exposure this milestone is fenced against.
-  if (!["127.0.0.1", "localhost", "[::1]"].includes(connectionString.hostname))
+  // Development stays on loopback. Production's database is across a network, so
+  // the fence there is verified TLS, by exact spelling, as the resource side has it.
+  if (production) {
+    if (connectionString.search !== "?sslmode=verify-full")
+      throw new ConsentRuntimeError("CONSENT_DATABASE_TLS_REQUIRED");
+    if (!environment[AGENT_DATABASE_CA_SETTING])
+      throw new ConsentRuntimeError("CONSENT_DATABASE_CA_REQUIRED");
+    if (!issuer.startsWith("https:") || !resource.startsWith("https:"))
+      throw new ConsentRuntimeError("PRODUCTION_HTTPS_REQUIRED");
+  } else if (
+    !["127.0.0.1", "localhost", "[::1]"].includes(connectionString.hostname)
+  )
     throw new ConsentRuntimeError("CONSENT_DATABASE_NOT_LOOPBACK");
 
-  const clients = parseRegisteredClients(
-    environment[AUTHORIZATION_CLIENTS_SETTING] ?? "",
-  );
+  const refusedEnvironment = environmentRefusal(environment);
+  if (refusedEnvironment !== null)
+    throw new ConsentRuntimeError(refusedEnvironment);
 
-  const pool = createPostgresPool(
-    parsePostgresConfig({
+  // Only `operator` reads a hosted callback, and only because this list is closed.
+  let clients: ReadonlyMap<string, RegisteredClient>;
+  try {
+    clients = parseRegisteredClients(
+      environment[AUTHORIZATION_CLIENTS_SETTING] ?? "",
+      { allowHosted: preset === "operator" },
+    );
+  } catch (error) {
+    throw new ConsentRuntimeError(
+      error instanceof RegisteredClientError ? error.code : "CLIENTS_MALFORMED",
+    );
+  }
+
+  let poolConfig: ReturnType<typeof parsePostgresConfig>;
+  try {
+    poolConfig = parsePostgresConfig({
       DATABASE_URL: databaseUrl,
-      DATABASE_POOL_MAX: "4",
-    }),
-  );
+      DATABASE_POOL_MAX: "2",
+      ...(production
+        ? { DATABASE_SSL_CA_FILE: environment[AGENT_DATABASE_CA_SETTING] }
+        : {}),
+    });
+  } catch {
+    throw new ConsentRuntimeError("CONSENT_DATABASE_REFUSED");
+  }
+  // A person waits on these statements, so a silent database has its limit here too.
+  const pool = createPostgresPool(withQueryTimeout(poolConfig));
   const connections = createAgentConnectionStore({ pool });
   return {
     consents: createConsentStore({ pool }),
     clients,
     connections,
+    preset,
     // The same control-plane pool, so provisioning authenticates as the
     // consent role and is bounded by the grant that role holds — not by a
     // second, wider connection opened for convenience.
@@ -192,16 +235,34 @@ export const createConsentRuntime = (
 
 /**
  * One runtime per process. Built lazily so importing this module never opens a
- * pool, and memoized so a page render and an endpoint share one.
+ * pool, and memoized so a page render and an endpoint share one. A refusal is kept
+ * as well, as the resource side keeps its own, and says its bare code once.
  */
 let cached: ConsentRuntime | null | undefined;
+let refusal: unknown;
 
 export const consentRuntime = (): ConsentRuntime | null => {
-  if (cached === undefined) cached = createConsentRuntime();
+  if (refusal !== undefined) throw refusal;
+  if (cached === undefined) {
+    try {
+      cached = createConsentRuntime();
+    } catch (error) {
+      refusal = error;
+      process.stderr.write(
+        `agent-connections composition refused: ${
+          error instanceof ConsentRuntimeError
+            ? error.code
+            : "CONSENT_UNAVAILABLE"
+        }\n`,
+      );
+      throw error;
+    }
+  }
   return cached;
 };
 
 /** Testing seam. Never called by the composition root. */
 export const resetConsentRuntime = (): void => {
   cached = undefined;
+  refusal = undefined;
 };

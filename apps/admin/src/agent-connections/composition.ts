@@ -4,6 +4,7 @@ import { connectionAuth } from "./authorization";
 import { isConnectionToken } from "./contracts";
 
 import type { ConnectionAuthDependencies } from "./authorization";
+import type { ConnectionPreset } from "./contracts";
 import type { MCPAccessSettings } from "@payloadcms/plugin-mcp";
 import type { PayloadRequest } from "payload";
 
@@ -52,6 +53,47 @@ export const oauthSurfaceEnabled = (
   connectionsEnabled(environment) ||
   (environment.NODE_ENV === "production" &&
     environment[OAUTH_SURFACE_SETTING] === "true");
+
+/** What a consent can grant on a deployment. `management` stays unreachable. */
+export type ServedPreset = Extract<ConnectionPreset, "read-only" | "operator">;
+
+/**
+ * The preset this deployment serves, by the rule the issuer's own configuration
+ * reads: Production is always `operator`, and Development is `read-only` unless it
+ * asks otherwise, so it means what it always meant.
+ */
+export const servedPreset = (
+  environment: NodeJS.ProcessEnv = process.env,
+): ServedPreset =>
+  environment.NODE_ENV === "production" ||
+  environment.AGENT_AUTHORIZATION_PROFILE === "operator"
+    ? "operator"
+    : "read-only";
+
+/**
+ * Why this deployment's name for itself cannot be used, or null. A connection row
+ * carries that name, and it has to be admitted here and at the issuer. In Production
+ * it is `production`: the issuer refuses any other name under NODE_ENV=production, so
+ * the two cannot disagree and `admin.env` carries no copy of the issuer's setting.
+ * Development's `operator` profile can name anything, and there the issuer compares
+ * its own `AGENT_AUTHORIZATION_ENVIRONMENT` with that same column when a token
+ * refreshes, so the two settings have to agree. Unset, or unequal, is a refusal by
+ * name: a token from another environment never gets in on a default, and a refresh
+ * never starts failing with no reason anyone can read.
+ */
+export const environmentRefusal = (
+  environment: NodeJS.ProcessEnv,
+): string | null => {
+  const served = environment.CMS_ENVIRONMENT ?? "development";
+  if (environment.NODE_ENV === "production")
+    return served === "production"
+      ? null
+      : "ENVIRONMENT_DISAGREES_WITH_NODE_ENV";
+  return servedPreset(environment) === "operator" &&
+    environment.AGENT_AUTHORIZATION_ENVIRONMENT !== served
+    ? "ENVIRONMENT_DISAGREES_WITH_ISSUER"
+    : null;
+};
 
 export type OverrideAuth = (
   req: PayloadRequest,

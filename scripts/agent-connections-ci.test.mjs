@@ -32,6 +32,8 @@ const read = (file) =>
 const STEP = "Development OAuth consent and Backend tool read on PostgreSQL 16";
 const STEP_18 =
   "Development OAuth consent, revocation and a real Backend tool read";
+const OPERATOR_STEP =
+  "Login door consent in two browsers and the official SDK client";
 const COMMAND = "pnpm test:cms:agent-connections --profile complete";
 const PRODUCTION_BROWSER = "pnpm test:cms:browser --profile complete";
 const PG16_URL =
@@ -143,6 +145,51 @@ describe("the agent-connections acceptance runs in CI", () => {
     );
   });
 
+  it("runs the login door's operator profile beside the read-only one", () => {
+    const job = cmsJob();
+    const readOnly = job.indexOf(`- name: ${STEP}`);
+    const at = job.indexOf(`- name: ${OPERATOR_STEP}`);
+    assert.ok(at > readOnly && readOnly > 0, "the named step must follow it");
+    const step = job.slice(at);
+    assert.match(step, /AGENT_AUTHORIZATION_PROFILE: operator\n/u);
+    assert.match(
+      step,
+      /CMS_TEST_DATABASE_URL: \S+:5433\/cms_synthetic_test\n/u,
+    );
+    assert.ok(step.includes("playwright install --with-deps webkit"));
+    assert.ok(step.includes(COMMAND));
+    // The read-only step keeps running without that setting.
+    assert.doesNotMatch(
+      job.slice(readOnly, at),
+      /AGENT_AUTHORIZATION_PROFILE/u,
+    );
+
+    const harness = read("scripts/editorial/verify-agent-connections.mjs");
+    // The Admin refuses to compose under `operator` unless these two names agree.
+    assert.match(
+      harness,
+      /AGENT_AUTHORIZATION_ENVIRONMENT: OPERATOR\s*\?\s*session\.env\.CMS_ENVIRONMENT\s*:\s*"development"/u,
+    );
+    for (const child of [
+      "tests/cms/agent-connections-browser.mjs",
+      "tests/cms/agent-connections-generic-client.mjs",
+    ])
+      assert.match(
+        read(child),
+        /process\.env\.AGENT_AUTHORIZATION_PROFILE === "operator"\) \{\n {2}await operatorAcceptance\(\);/u,
+        child,
+      );
+    // Compared exactly, in both engines, so a skipped stage is a failure.
+    assert.ok(harness.includes('["chromium", "webkit"].flatMap'));
+    assert.ok(harness.includes("GENERIC_CLIENT_RESULT_INCOMPLETE"));
+    // The major the step names is held by the harness, not by the port alone.
+    assert.match(step, /TEST_DATABASE_EXPECTED_VERSION_NUM: "160015"\n/u);
+    assert.match(
+      harness,
+      /process\.env\.TEST_DATABASE_EXPECTED_VERSION_NUM;[\s\S]{0,400}throw new Error\("AGENT_CONNECTIONS_POSTGRES_VERSION_MISMATCH"\)/u,
+    );
+  });
+
   it("keeps the Production Admin browser coverage it was added beside", () => {
     const job = cmsJob();
     assert.ok(job.includes(`run: ${PRODUCTION_BROWSER}`));
@@ -190,6 +237,7 @@ describe("the agent-connections acceptance runs in CI", () => {
       "scripts/editorial/verify-agent-connections.mjs",
       "scripts/editorial/agent-connections-backend.mjs",
       "tests/cms/agent-connections-browser.mjs",
+      "tests/cms/agent-connections-operator-kit.mjs",
       "services/agent-authorization/src/main.ts",
       "apps/admin/src/agent-connections/resource.ts",
     ]) {

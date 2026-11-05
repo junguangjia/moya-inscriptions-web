@@ -17,6 +17,7 @@ import {
   EditorialReceipts,
   editorialEndpoints,
 } from "./src/editorial";
+import { oauthSurfaceEnabled } from "./src/agent-connections/composition";
 import { agentConnectionEndpoints } from "./src/agent-connections/endpoints";
 import { agentConnectionAuthenticateHeader } from "./src/agent-connections/discovery";
 import { communityEndpoints } from "./src/community/endpoints";
@@ -76,6 +77,7 @@ export default buildConfig({
         path: "/src/workspace/Navigation#WorkspaceNavigation",
         clientProps: {
           developmentAgentsEnabled: process.env.NODE_ENV === "development",
+          agentConnectionsEnabled: oauthSurfaceEnabled(),
         },
       },
       header: [
@@ -83,6 +85,7 @@ export default buildConfig({
           path: "/src/workspace/Navigation#WorkspaceTabs",
           clientProps: {
             developmentAgentsEnabled: process.env.NODE_ENV === "development",
+            agentConnectionsEnabled: oauthSurfaceEnabled(),
           },
         },
       ],
@@ -183,8 +186,9 @@ export default buildConfig({
           path: "/community-moderation/work-submissions",
           exact: true,
         },
-        // Agent Connections (Development): the Owner's own list of AI
-        // connections, and the review page the consent landing continues to.
+        // Agent Connections: the list of AI connections, and the review page the
+        // consent landing continues to. Each is reserved to an Owner browser
+        // session and refuses by itself while the login door is off.
         // The LANDING itself is deliberately not here -- it lives outside
         // /admin because it must render for a browser that withheld the
         // SameSite=Strict session on the provider's cross-site redirect.

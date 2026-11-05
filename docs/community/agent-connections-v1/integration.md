@@ -1,8 +1,11 @@
-# ArtVenn agent connections — integration guide (v1, read-only)
+# ArtVenn agent connections — integration guide (v1)
 
-**Version 1.** Development-only surface. Read-only. This describes the contract
-a compatible MCP client implements to connect; registering a new client is a
-configuration change, not a source change.
+**Version 1.** This describes the contract a compatible MCP client implements to
+connect; registering a new client is a configuration change, not a source
+change. There are two profiles. Everything up to
+[The operator profile](#the-operator-profile) describes the read-only one, a
+Development-only surface. That last section says what differs under the login
+door (Issue #355), which also composes in Production, on its own opt-in.
 
 ## What this is
 
@@ -162,3 +165,76 @@ implementing MCP over streamable HTTP with OAuth 2.1 + PKCE and a registered
 loopback callback can connect. Which specific clients have been exercised, and
 how far, is recorded separately — configured, protocol-tested and desktop-tested
 are three different facts.
+
+## The operator profile
+
+The login door, under the signed
+[2026-11-05 amendment](../../governance/amendments/2026-11-05-admin-mcp-oauth-door.md).
+An administrator adds one address or clicks one button in their tool, signs in
+with their usual Admin account and clicks allow. No key is issued to a person.
+Section 22 of
+[the task record](../../development/admin-mcp-completion-v1.md#22-login-door)
+says how it fits together. A client implements the same contract as above, with
+these differences.
+
+| Read-only profile                                 | Operator profile                                                                                                                                                     |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Scope `artvenn:read`                              | Scope `artvenn:admin`, named by the `401`'s `scope` parameter and by `scopes_supported`. What a client asks for changes nothing: the consent is opened at this scope |
+| Four read tools on the plugin path                | The native `admin_*` tools at profile full, the same list as an `ai_operator` key at full, on the same `/api/mcp`                                                    |
+| `AGENT_AUTHORIZATION_CLIENTS` loopback entries    | A closed list of four, with a hosted `https` callback allowed by the policy `hosted-https`                                                                           |
+| Access token 300 s, refresh token library default | Access token 1 hour, refresh token 30 days from last use and rotated on each use, connection 180 days from consent                                                   |
+| Disconnect is enforced at the door                | Also at the token endpoint: a refresh after a disconnect answers `invalid_grant`                                                                                     |
+| Only the person who connected disconnects         | Any owner sees and disconnects any connection                                                                                                                        |
+
+The list:
+
+| Tool        | `family`      | `clientId`                                          | Callback                                              |
+| ----------- | ------------- | --------------------------------------------------- | ----------------------------------------------------- |
+| Claude      | `claude`      | https://claude.ai/oauth/mcp-oauth-client-metadata   | https://claude.ai/api/mcp/auth_callback               |
+| Claude Code | `claude-code` | https://claude.ai/oauth/claude-code-client-metadata | localhost and 127.0.0.1, any port, /callback          |
+| Codex       | `codex`       | https://chatgpt.com/oauth/codex/client.json         | 127.0.0.1 and localhost, any port, /callback          |
+| ChatGPT     | `chatgpt`     | https://chatgpt.com/oauth/client.json               | https://chatgpt.com/connector_platform_oauth_redirect |
+
+As read from the vendors' own documents at design time. Discovery says
+`client_id_metadata_document_supported`, so a client that offers its client id
+as a URL can start from the MCP address alone. The URL is matched against the
+list and **never fetched**, and a URL off the list answers `invalid_client`.
+There is no `registration_endpoint`. `openid` is not advertised.
+
+What a client should expect:
+
+- **A person always sees the consent page.** A live session or an earlier grant
+  skips nothing, for a hosted client too, so a client never receives a silent
+  token.
+- **One person and one client id is one connection.** Connecting the same tool
+  from a second computer ends the first: its access and refresh tokens stop.
+- **A token stops for reasons a client cannot see coming.** A disconnect, a tool
+  taken off the list, the person leaving role owner or changing their password
+  in the Admin. The next request answers one generic `401` with the metadata
+  pointer, and refresh answers `invalid_grant` once the connection has been
+  revoked. Treat that as a request to send the person through the browser again.
+  When that revoke succeeded, a role restored later brings nothing back. A
+  revoke that failed, or a change made while the door was off, lets the old
+  tokens come back with the role, as
+  [section 22 of the record](../../development/admin-mcp-completion-v1.md#22-login-door)
+  states under its limits. Pause leaves only `admin_whoami`.
+- **`resource` must equal the address.** The Admin's page offers
+  `CMS_PUBLIC_URL` plus `/api/mcp`, and discovery names
+  `AGENT_AUTHORIZATION_RESOURCE`, so a release keeps the two equal.
+- **A connection has no local process.** Uploads, downloads and rendered
+  previews stay with the companion and its key. `admin_whoami` names them under
+  `byteChannel`, so a client can say why it cannot do that work.
+
+The consent request itself needs nothing extra from a client. The browser that
+started it has to be the browser that clicks allow: the issuer finishes only
+with that browser's own cookie and a one-time secret the Admin hands to the
+browser that clicked. A link sent to somebody else ends on a plain page and
+hands nobody a code.
+
+`AGENT_AUTHORIZATION_PROFILE=operator` turns this on in Development, beside
+`AGENT_CONNECTIONS_ENABLED=true`, with `AGENT_AUTHORIZATION_ENVIRONMENT` equal
+to `CMS_ENVIRONMENT`. `pnpm test:cms:agent-connections --profile complete` runs
+the same acceptance under that setting: a real issuer, a real consent in
+Chromium and WebKit, and the official SDK to a tool call. Which vendors' real
+clients have been through it is recorded separately, in the same three-way terms
+as above.
