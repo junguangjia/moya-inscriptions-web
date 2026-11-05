@@ -1,10 +1,14 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+// This file audits the normal-mode Detail. #260 gave a desktop browser its own
+// layout key, whose default opens the calligraphy reader whatever the phone and
+// tablet key says, so both keys choose the normal layout.
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() =>
-    localStorage.setItem("yoyi.home-feed-layout.v2", "double"),
-  );
+  await page.addInitScript(() => {
+    localStorage.setItem("yoyi.home-feed-layout.v2", "double");
+    localStorage.setItem("yoyi.desktop-feed-layout.v1", "double");
+  });
 });
 
 async function openDetail(page: Page) {

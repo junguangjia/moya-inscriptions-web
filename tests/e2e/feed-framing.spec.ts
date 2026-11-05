@@ -226,6 +226,8 @@ async function openHome(
     await target.addInitScript((value) => {
       try {
         window.localStorage.setItem("yoyi.home-feed-layout.v2", value);
+        // #260: a desktop browser reads its own layout key.
+        window.localStorage.setItem("yoyi.desktop-feed-layout.v1", value);
       } catch {
         // Storage may be unavailable; the layout then follows the platform.
       }
