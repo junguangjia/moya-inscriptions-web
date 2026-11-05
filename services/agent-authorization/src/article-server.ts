@@ -3,6 +3,7 @@ import type { IncomingMessage } from "node:http";
 import type { ArticleAuthorizationConfig } from "./article-provider.js";
 import {
   ARTICLE_RESUME_PATH,
+  ARTICLE_RESUME_QUERY,
   createArticleAuthorizationProvider,
 } from "./article-provider.js";
 
@@ -75,8 +76,10 @@ export const startArticleAuthorizationServer = async (
       return;
     }
     const resume = ARTICLE_RESUME_PATH.exec(url.pathname);
-    if (resume !== null && request.method === "GET" && url.search === "") {
-      void bundle.resume(request, response, resume[1]!).catch(() => {
+    const query = ARTICLE_RESUME_QUERY.exec(url.search);
+    if (resume !== null && query !== null && request.method === "GET") {
+      const secret = query[1] ?? null;
+      void bundle.resume(request, response, resume[1]!, secret).catch(() => {
         options.recordFailure?.("ARTICLE_RESUME_FAILED");
         if (!response.headersSent) {
           response.writeHead(500);
