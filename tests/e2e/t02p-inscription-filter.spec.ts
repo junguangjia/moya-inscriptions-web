@@ -178,6 +178,12 @@ const expectOwnTextContrast = async (control: Locator) => {
   ).toBeGreaterThanOrEqual(4.5);
 };
 
+// #260 moved desktop Search from the bottom dock into the right rail.
+const navigationSearchTrigger = (shell: Locator) =>
+  shell.locator(
+    ":is([data-primary-navigation-dock], [data-desktop-navigation]) [data-search-trigger]",
+  );
+
 test("QA filter is isolated and exists only while the Home Inscriptions feed is active", async ({
   page,
 }, testInfo) => {
@@ -192,9 +198,7 @@ test("QA filter is isolated and exists only while the Home Inscriptions feed is 
   }
 
   const { shell, surface } = await openQa(page);
-  await expect(
-    shell.locator("[data-primary-navigation-dock] [data-search-trigger]"),
-  ).toBeVisible();
+  await expect(navigationSearchTrigger(shell)).toBeVisible();
   await expect(shell.locator("[data-inscription-filter]")).toHaveCount(0);
 
   await selectHomeFeed(surface, shell, "碑刻", "inscriptions");
@@ -212,18 +216,14 @@ test("QA filter is isolated and exists only while the Home Inscriptions feed is 
   expect(await visibleCatalogSnapshot(shell)).toEqual(initialSnapshot);
 
   await selectHomeFeed(surface, shell, "书帖", "calligraphy");
-  await expect(
-    shell.locator("[data-primary-navigation-dock] [data-search-trigger]"),
-  ).toBeVisible();
+  await expect(navigationSearchTrigger(shell)).toBeVisible();
   await expect(shell.locator("[data-inscription-filter]")).toHaveCount(0);
   await expect(page.locator("[data-filter-panel]")).toHaveCount(0);
   await expect(page.locator("[data-filter-popover]")).toHaveCount(0);
   await expect(page.locator("[data-filter-sheet]")).toHaveCount(0);
 
   await selectHomeFeed(surface, shell, "发现", "discover");
-  await expect(
-    shell.locator("[data-primary-navigation-dock] [data-search-trigger]"),
-  ).toBeVisible();
+  await expect(navigationSearchTrigger(shell)).toBeVisible();
   await expect(shell.locator("[data-inscription-filter]")).toHaveCount(0);
 
   await selectHomeFeed(surface, shell, "碑刻", "inscriptions");

@@ -294,7 +294,16 @@ test("Profile empty collections share collapse and preserve long body offsets", 
   await scrollTo(page, 100000);
   await pinned(page);
   const g = await geometry(page);
-  expect(Math.abs(g.top - g.collapse)).toBeLessThanOrEqual(1);
+  // #260 gave the desktop collections a bottom padding the page scrolls past.
+  const pagePadding =
+    (await page
+      .locator("[data-product-shell]")
+      .getAttribute("data-platform")) === "pc"
+      ? await page
+          .getByRole("region", { name: "用户内容", exact: true })
+          .evaluate((node) => parseFloat(getComputedStyle(node).paddingBottom))
+      : 0;
+  expect(Math.abs(g.top - pagePadding - g.collapse)).toBeLessThanOrEqual(1);
 });
 
 /** Where the identity rests, where it is, and the stage shown. */
