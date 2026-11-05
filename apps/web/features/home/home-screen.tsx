@@ -205,18 +205,22 @@ export const HomeScreen = ({
   activeFeedRef.current = activeFeed;
   useEffect(() => onFeedChange?.(activeFeed), [activeFeed, onFeedChange]);
 
+  // The pager writes the incoming feed's height before it commits, and a shorter
+  // feed clamps the document's scroll, so the outgoing position is read first.
+  const saveLeavingFeedScroll = useCallback(() => {
+    if (platform === "pc") {
+      scrollPositionsRef.current[activeFeedRef.current] = readActiveScrollTop();
+    }
+  }, [platform, readActiveScrollTop]);
   const commitFeed = useCallback(
     (feed: HomeFeed) => {
       if (feed === activeFeed) return;
-      if (platform === "pc") {
-        scrollPositionsRef.current[activeFeed] = readActiveScrollTop();
-      }
       setActiveFeed(feed);
       if (platform === "pc") {
         restoreActiveScrollTop(scrollPositionsRef.current[feed]);
       }
     },
-    [activeFeed, platform, readActiveScrollTop, restoreActiveScrollTop],
+    [activeFeed, platform, restoreActiveScrollTop],
   );
 
   const panels = {
@@ -305,6 +309,7 @@ export const HomeScreen = ({
       <HomeFeedPager
         ref={pagerRef}
         activeFeed={activeFeed}
+        onBeforeCommit={saveLeavingFeedScroll}
         onCommit={commitFeed}
         onProgress={updateTabProgress}
         panels={panels}

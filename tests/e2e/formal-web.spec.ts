@@ -339,6 +339,31 @@ test("Formal root composes truthful runtime list states", async ({ page }) => {
   await expect(calligraphy).not.toContainText("视觉 QA 合成");
 });
 
+test("Formal PC feeds keep their scroll across a shorter feed", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "desktop-chromium",
+    "The document scroller belongs to the PC presentation.",
+  );
+  // Short enough that Discover scrolls and the mock timeline's rows do not fill
+  // the room: the pager's height for a shorter feed clamps the document.
+  await page.setViewportSize({ width: 1280, height: 420 });
+  const { shell } = await openFormalRoot(page);
+  const discover = shell.locator('[data-home-feed-panel="discover"]');
+  await expect(discover.locator("[data-catalog-id]").first()).toBeVisible();
+  const scrollY = () => page.evaluate(() => window.scrollY);
+  const room = await page.evaluate(
+    () => document.documentElement.scrollHeight - window.innerHeight,
+  );
+  expect(room).toBeGreaterThan(100);
+  await page.evaluate((top) => window.scrollTo(0, top), room);
+  await expect.poll(scrollY).toBe(room);
+  await selectHomeFeed(page, "时间轴", "timeline");
+  await selectHomeFeed(page, "发现", "discover");
+  await expect.poll(scrollY).toBe(room);
+});
+
 test("Formal timeline keeps the policy notice readable and closable", async ({
   page,
 }) => {

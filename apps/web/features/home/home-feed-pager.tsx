@@ -31,6 +31,7 @@ const withFilingFooter = (content: ReactNode) => (
 
 export interface HomeFeedPagerProps {
   readonly activeFeed: HomeFeed;
+  readonly onBeforeCommit?: () => void;
   readonly onCommit: (feed: HomeFeed) => void;
   readonly onProgress?: (progress: number) => void;
   readonly primaryVisible?: boolean;
