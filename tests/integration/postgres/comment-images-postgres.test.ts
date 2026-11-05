@@ -1252,7 +1252,7 @@ describe("#358 review regressions: current authority and attachment lifetime", (
     );
     // A purge job can already have been claimed while refs still protected the item.
     await db.setup.query(
-      "INSERT INTO community.publishing_jobs(id,kind,subject_id,state,run_after) VALUES($1,'purge_item',$2,'queued',CURRENT_TIMESTAMP)",
+      "INSERT INTO community.publishing_jobs(id,kind,subject_id,state,run_after) VALUES($1,'purge_item',$2,'queued',CURRENT_TIMESTAMP - interval '1 minute')",
       [opaque("publishing-job"), image],
     );
     await publishing.claimJobs(

@@ -1,0 +1,54 @@
+/* The quiet notice of the editor and the media section. It sits in the feed's
+ * own flow, so it scrolls away with the content and covers nothing. One line or
+ * two, down to a 320px screen, it is the same 48px tall (two 22px lines fill
+ * the 44px controls), so resizing never moves the feed under a reader. */
+.notice {
+  display: flex;
+  align-items: center;
+  margin: 0 env(safe-area-inset-right, 0px) var(--yoyi-space-4)
+    env(safe-area-inset-left, 0px);
+  padding: var(--yoyi-space-1) 0 var(--yoyi-space-1) var(--yoyi-space-3);
+  color: var(--yoyi-color-text-secondary);
+  background: var(--yoyi-color-background-muted);
+  border-radius: var(--yoyi-radius-md);
+  font-size: var(--yoyi-type-label-size);
+  line-height: 22px;
+}
+
+.notice p {
+  min-width: 0;
+  margin: 0;
+}
+
+.link,
+.close {
+  display: inline-flex;
+  min-height: 44px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--yoyi-radius-sm);
+}
+
+.link {
+  padding-inline: var(--yoyi-space-2);
+  color: var(--yoyi-color-text-primary);
+  text-underline-offset: 3px;
+}
+
+.close {
+  width: 44px;
+  margin-left: auto;
+  padding: 0;
+  color: var(--yoyi-color-text-tertiary);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.link:focus-visible,
+.close:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: -2px;
+}
