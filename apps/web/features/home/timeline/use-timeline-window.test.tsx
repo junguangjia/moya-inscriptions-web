@@ -27,17 +27,20 @@ const scrollTo = vi.fn();
 const settled = vi.fn();
 
 interface HarnessProps {
+  readonly active?: boolean;
   readonly enabled?: boolean;
   /** A PC: no scroll surface around the list, so the document scrolls. */
   readonly documentScroller?: boolean;
 }
 
 const Harness = ({
+  active = true,
   documentScroller = false,
   enabled = true,
 }: HarnessProps) => {
   const listRef = useRef<HTMLDivElement>(null);
   const view = useTimelineWindow({
+    active,
     enabled,
     estimate,
     listRef,
@@ -338,6 +341,41 @@ describe("useTimelineWindow", () => {
       expect(current.totalHeight).toBe(10_030);
       expect(scrollBy).not.toHaveBeenCalled();
     });
+  });
+
+  it("holds the row under the chrome when the visible feed changes width", () => {
+    render();
+    listTop = -983;
+    fireScroll();
+    scrollTo.mockClear();
+    listWidth = 430;
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(scrollTo).toHaveBeenCalled();
+  });
+
+  it("never scrolls for a width change while another feed is on screen", () => {
+    render({ active: false });
+    listTop = -983;
+    fireScroll();
+    scrollTo.mockClear();
+    listWidth = 430;
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(current.width).toBe(430);
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("does not hold a row on the first read after being re-enabled", () => {
+    render();
+    render({ enabled: false });
+    scrollTo.mockClear();
+    listWidth = 430;
+    render({ enabled: true });
+    expect(current.width).toBe(430);
+    expect(scrollTo).not.toHaveBeenCalled();
   });
 
   it("drops measured heights when the width changes", () => {

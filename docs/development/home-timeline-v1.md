@@ -1,4 +1,4 @@
-# Home timeline — Issue #384 r1
+# Home timeline — Issue #384 r2
 
 ## Owner direction and scope
 

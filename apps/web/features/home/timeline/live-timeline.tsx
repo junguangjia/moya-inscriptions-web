@@ -22,10 +22,16 @@ const IMAGE_RETRY_AFTER_MS = 60_000;
 
 let sessionEntries: readonly TimelineEntry[] | null = null;
 let sessionFetchedAt = 0;
-let pending: Promise<readonly TimelineEntry[]> | null = null;
+let pending: {
+  readonly epoch: number;
+  readonly read: Promise<readonly TimelineEntry[]>;
+} | null = null;
 
 const loadTimeline = (): Promise<readonly TimelineEntry[]> => {
-  pending ??= authorClient
+  // A read that overlaps an account change is refused when it lands.
+  const epoch = authorClient.accountEpoch();
+  if (pending?.epoch === epoch) return pending.read;
+  const read: Promise<readonly TimelineEntry[]> = authorClient
     .timeline()
     .then(({ entries }) => {
       if (entries.length > 0) sessionEntries = entries;
@@ -33,9 +39,10 @@ const loadTimeline = (): Promise<readonly TimelineEntry[]> => {
       return entries;
     })
     .finally(() => {
-      pending = null;
+      if (pending?.read === read) pending = null;
     });
-  return pending;
+  pending = { epoch, read };
+  return read;
 };
 
 const populated = (

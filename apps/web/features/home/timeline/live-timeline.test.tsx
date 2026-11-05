@@ -10,7 +10,10 @@ import type { Root } from "react-dom/client";
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-const client = vi.hoisted(() => ({ timeline: vi.fn() }));
+const client = vi.hoisted(() => ({
+  accountEpoch: vi.fn(() => 0),
+  timeline: vi.fn(),
+}));
 const author = vi.hoisted(() => ({ checking: false }));
 vi.mock("../../authors/author-context", () => ({
   useAuthors: () => author,
@@ -71,6 +74,7 @@ const feedState = () =>
 beforeEach(() => {
   vi.resetModules();
   author.checking = false;
+  client.accountEpoch.mockReturnValue(0);
   client.timeline.mockReset();
   container = document.createElement("div");
   document.body.append(container);
@@ -83,6 +87,29 @@ afterEach(() => {
 });
 
 describe("LiveTimeline", () => {
+  it("starts a new read when the account changed during the first one", async () => {
+    let refuse: (reason: Error) => void = () => undefined;
+    client.timeline.mockReturnValueOnce(
+      new Promise((_, reject) => {
+        refuse = reject;
+      }),
+    );
+    const LiveTimeline = await load();
+    act(() => root.render(<LiveTimeline active />));
+    author.checking = true;
+    act(() => root.render(<LiveTimeline active />));
+    client.accountEpoch.mockReturnValue(1);
+    client.timeline.mockResolvedValue({ entries });
+    author.checking = false;
+    act(() => root.render(<LiveTimeline active />));
+    await flush();
+    expect(client.timeline).toHaveBeenCalledTimes(2);
+    expect(feedState()).toBe("populated");
+    await act(async () => refuse(new Error("account changed")));
+    await flush();
+    expect(feedState()).toBe("populated");
+  });
+
   it("waits for the account check before its first read", async () => {
     author.checking = true;
     client.timeline.mockResolvedValue({ entries });

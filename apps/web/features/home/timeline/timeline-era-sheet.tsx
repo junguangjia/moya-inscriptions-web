@@ -266,7 +266,7 @@ export const TimelineEraSheet = ({
               data-timeline-reign-none=""
               role="status"
             >
-              没找到，试试年份
+              换成年份试试
             </p>
           ) : null}
           {reign !== null && reign.matches.length > 1 ? (

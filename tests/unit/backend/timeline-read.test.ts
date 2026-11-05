@@ -1,4 +1,8 @@
-import { AuthorCommunityService, CommunityNotFoundError } from "@moya/api";
+import {
+  AuthorCommunityService,
+  CatalogQueryUnavailableError,
+  CommunityNotFoundError,
+} from "@moya/api";
 import {
   createBackendApplication,
   createBackendServer,
@@ -319,27 +323,93 @@ describe("timeline service", () => {
     expect(timeline.entries[2]!.catalogId).toBe("catalog-bad");
   });
 
-  it("still fails closed when no linked image can resolve", async () => {
-    const resolveMany = vi.fn(async () => {
-      throw new Error("storage outage");
-    });
+  const linkedImage = (id: string) => ({
+    type: "catalog" as const,
+    id: id as MediaId,
+    objectKey: `display/${id}`,
+    width: 1200,
+    height: 800,
+  });
+
+  it("fails closed when no linked image resolves, even beside one with none", async () => {
+    const resolveMany = vi.fn(
+      async (locators: Parameters<StorageUrlResolver["resolveMany"]>[0]) => {
+        if (locators.length > 0) throw new Error("storage outage");
+        return new Map();
+      },
+    );
     await expect(
       serviceFor(
         {
-          entries: [entry("linked", "catalog-linked")],
+          entries: [
+            entry("one", "catalog-one"),
+            entry("two", "catalog-two"),
+            entry("textual", "catalog-textual"),
+          ],
           cards: [
-            card("catalog-linked", {
-              type: "catalog",
-              id: "media-one" as MediaId,
-              objectKey: "display/media-one",
-              width: 1200,
-              height: 800,
-            }),
+            card("catalog-one", linkedImage("media-one")),
+            card("catalog-two", linkedImage("media-two")),
+            card("catalog-textual", null),
           ],
         },
         { resolveMany },
       ).timeline(),
     ).rejects.toThrow("storage outage");
+  });
+
+  it("fails an availability error at once, without retrying per row", async () => {
+    const resolveMany = vi.fn(async () => {
+      throw new CatalogQueryUnavailableError();
+    });
+    await expect(
+      serviceFor(
+        {
+          entries: [entry("one", "catalog-one"), entry("two", "catalog-two")],
+          cards: [
+            card("catalog-one", linkedImage("media-one")),
+            card("catalog-two", linkedImage("media-two")),
+          ],
+        },
+        { resolveMany },
+      ).timeline(),
+    ).rejects.toBeInstanceOf(CatalogQueryUnavailableError);
+    expect(resolveMany).toHaveBeenCalledOnce();
+  });
+
+  it("isolates one bad record among many in a few reads, one at a time", async () => {
+    let concurrent = 0;
+    let peak = 0;
+    const resolveMany = vi.fn(
+      async (locators: Parameters<StorageUrlResolver["resolveMany"]>[0]) => {
+        concurrent += 1;
+        peak = Math.max(peak, concurrent);
+        await Promise.resolve();
+        concurrent -= 1;
+        if (locators.some(({ mediaId }) => mediaId === "media-13"))
+          throw new Error("COS object key invalid");
+        return new Map(
+          locators.map(({ mediaId }) => [
+            mediaId,
+            "https://media.example.invalid/approved.webp",
+          ]),
+        );
+      },
+    );
+    const ids = Array.from({ length: 60 }, (_, at) => at);
+    const timeline = await serviceFor(
+      {
+        entries: ids.map((at) => entry(`row-${at}`, `catalog-${at}`)),
+        cards: ids.map((at) =>
+          card(`catalog-${at}`, linkedImage(`media-${at}`)),
+        ),
+      },
+      { resolveMany },
+    ).timeline();
+    expect(timeline.entries.filter(({ media }) => media !== null)).toHaveLength(
+      59,
+    );
+    expect(peak).toBe(1);
+    expect(resolveMany.mock.calls.length).toBeLessThan(16);
   });
 
   it("never reaches media resolution for rows without a link", async () => {

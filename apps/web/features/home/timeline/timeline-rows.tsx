@@ -13,7 +13,6 @@ import {
   placeholderStyle,
   responsiveImage,
 } from "../../media/responsive-media";
-import { MediaFallback } from "../card-media-parts";
 import { formatGap, formatYear, formatYearRange } from "./timeline-format";
 import {
   TIMELINE_NOW_YEAR,
@@ -99,14 +98,7 @@ const TimelineRowMedia = ({
   const box = timelineMediaBox(media, layout, listWidth);
   const content = () => {
     if (!armed) return null;
-    if (failed)
-      return (
-        <MediaFallback
-          aspectRatio={String(box.width / box.height)}
-          label={`图像无法加载：${entry.title}`}
-          state="failed"
-        />
-      );
+    if (failed) return null;
     const image = responsiveImage(
       {
         ...media,

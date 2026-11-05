@@ -58,6 +58,8 @@ export interface TimelineWindowOptions<Row extends TimelineWindowRow> {
   readonly enabled: boolean;
   readonly estimate: (row: Row, width: number) => number;
   readonly listRef: RefObject<HTMLElement | null>;
+  /** This feed is on screen; programmatic scrolls reach the active scroller. */
+  readonly active: boolean;
   readonly onScrollSettled?: (() => void) | undefined;
   /** A new layout discards the heights measured under the old one. */
   readonly resetKey: string;
@@ -96,6 +98,7 @@ const activeAnchor = (anchor: JumpAnchor | null) =>
   anchor !== null && performance.now() < anchor.until ? anchor.index : null;
 
 export const useTimelineWindow = <Row extends TimelineWindowRow>({
+  active,
   enabled,
   estimate,
   listRef,
@@ -132,6 +135,7 @@ export const useTimelineWindow = <Row extends TimelineWindowRow>({
   );
 
   const latest = useRef({
+    active,
     corrections,
     enabled,
     heights,
@@ -145,6 +149,7 @@ export const useTimelineWindow = <Row extends TimelineWindowRow>({
     view,
   });
   latest.current = {
+    active,
     corrections,
     enabled,
     heights,
@@ -164,16 +169,22 @@ export const useTimelineWindow = <Row extends TimelineWindowRow>({
     const list = listRef.current;
     if (!enabled || list === null) return undefined;
     const scroller = scrollerOf(list);
+    let subscribed = false;
     const readView = (paintNow: boolean) => {
       const listWidth = list.getBoundingClientRect().width;
       const height = scroller ? scroller.clientHeight : window.innerHeight;
       if (listWidth === 0 || height === 0) return;
       const state = latest.current;
       if (listWidth !== state.measuredWidth) {
-        // A new width reflows every row: hold the one under the chrome.
+        // A new width reflows every row: hold the one under the chrome. Not on
+        // a subscription's first read, whose scroll offset may be another
+        // feed's or a pending restore's, and not from a hidden panel, because
+        // the shell would scroll the feed the reader is on.
         if (
+          subscribed &&
           state.measuredWidth !== 0 &&
           state.enabled &&
+          state.active &&
           activeAnchor(anchor.current) === null
         ) {
           const index = rowIndexAtOffset(
@@ -228,6 +239,7 @@ export const useTimelineWindow = <Row extends TimelineWindowRow>({
     resize?.observe(list);
     if (scroller !== null) resize?.observe(scroller);
     refresh();
+    subscribed = true;
     return () => {
       read.current = null;
       if (settle !== null) window.clearTimeout(settle);
@@ -328,7 +340,7 @@ export const useTimelineWindow = <Row extends TimelineWindowRow>({
   // the chrome until that settles. The reader's own input releases it.
   useLayoutEffect(() => {
     const target = activeAnchor(anchor.current);
-    if (target !== null && latest.current.enabled)
+    if (target !== null && latest.current.enabled && latest.current.active)
       latest.current.scrollTo(scrollTopForIndex(target));
   }, [offsets, scrollTopForIndex]);
   useEffect(() => {

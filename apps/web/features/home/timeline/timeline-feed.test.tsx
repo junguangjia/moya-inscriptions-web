@@ -579,9 +579,9 @@ describe("the 纪年 sheet", () => {
     const dialog = openEra();
     type(input(dialog, "年号"), "没有");
     submit(input(dialog, "年号"));
-    expect(dialog.textContent).toContain("没找到，试试年份");
+    expect(dialog.textContent).toContain("换成年份试试");
     type(input(dialog, "年号"), "没");
-    expect(dialog.textContent).not.toContain("没找到，试试年份");
+    expect(dialog.textContent).not.toContain("换成年份试试");
     expect(openedDialog()).not.toBeNull();
   });
 
@@ -634,21 +634,22 @@ describe("the 纪年 sheet", () => {
 });
 
 describe("what the timeline says", () => {
-  it("keeps source and absence words off the sheets", async () => {
-    const forbidden = /来源|出处|第一批|名录|未收|未系年|暂无|还没有|尚未/u;
-    render(
-      true,
-      small([
-        entry({ startYear: 700, endYear: 700 }),
-        entry({
-          fullTitle: "虚构无年之碑",
-          onAxis: false,
-          precision: "dynasty",
-          startYear: 618,
-          endYear: 907,
-        }),
-      ]),
-    );
+  const forbidden =
+    /来源|出处|第一批|名录|未收|未系年|暂无|还没有|尚未|没有|没找到|无法/u;
+  const list = [
+    entry({ startYear: 700, endYear: 700 }),
+    entry({
+      fullTitle: "虚构无年之碑",
+      onAxis: false,
+      precision: "dynasty",
+      startYear: 618,
+      endYear: 907,
+    }),
+  ];
+
+  it("keeps source and absence words off the rows and the sheets", async () => {
+    render(true, small(list));
+    expect(container.textContent).not.toMatch(forbidden);
     click(query("[data-timeline-position]"));
     const era = openedDialog();
     expect(era?.textContent).not.toMatch(forbidden);
@@ -659,6 +660,66 @@ describe("what the timeline says", () => {
     );
     expect(openedDialog()?.textContent).toContain("空心红圈");
     expect(openedDialog()?.textContent).not.toMatch(forbidden);
+  });
+
+  it("keeps them off the shelf and the entry card", () => {
+    render(true, small(list));
+    click(query("[data-timeline-row='shelf'] button"));
+    const shelf = openedDialog();
+    expect(shelf?.textContent).not.toMatch(forbidden);
+    click(
+      [...(shelf?.querySelectorAll("button") ?? [])].find((button) =>
+        button.textContent?.includes("虚构无年之碑"),
+      ),
+    );
+    expect(shelf?.querySelector("[data-timeline-card]")).not.toBeNull();
+    expect(shelf?.textContent).not.toMatch(forbidden);
+  });
+
+  it("leaves a failed image's box empty, with no failure text", () => {
+    render(
+      true,
+      small([
+        entry({
+          startYear: 700,
+          endYear: 700,
+          media: {
+            id: "media-1",
+            kind: "image",
+            src: "https://media.example.invalid/expired.webp",
+            alt: "虚构南寺碑",
+            width: 1200,
+            height: 800,
+          },
+        } as Partial<TimelineEntry>),
+      ]),
+    );
+    const image = query("[data-timeline-media] img");
+    act(() => {
+      image?.dispatchEvent(new Event("error"));
+    });
+    const box = query("[data-timeline-media]");
+    expect(box?.getAttribute("data-timeline-media")).toBe("failed");
+    expect(box?.textContent).toBe("");
+  });
+});
+
+describe("a sheet over the pager", () => {
+  it("keeps wheel gestures from reaching the pager", () => {
+    render(true, small([entry({ startYear: 700, endYear: 700 })]));
+    click(query("[data-timeline-position]"));
+    const onWheel = vi.fn();
+    const dialog = openedDialog();
+    const panel = dialog?.querySelector("[data-sheet-variant]");
+    expect(panel).toBeTruthy();
+    container.addEventListener("wheel", onWheel);
+    const wheel = new WheelEvent("wheel", { bubbles: true, deltaX: 40 });
+    const stop = vi.spyOn(wheel, "stopPropagation");
+    act(() => {
+      panel?.dispatchEvent(wheel);
+    });
+    container.removeEventListener("wheel", onWheel);
+    expect(stop).toHaveBeenCalled();
   });
 });
 

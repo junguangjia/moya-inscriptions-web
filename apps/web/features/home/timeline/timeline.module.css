@@ -554,16 +554,18 @@
    takes the table's column under the chrome and the room the list kept for it.
    The two values repeat --timeline-wide-chrome and --timeline-wide-table-x,
    which are set on .root and do not reach this sibling. */
-[data-home-feed-panel]:has(> .root[data-timeline-platform="pc"])
-  > [data-panel-preface] {
-  margin-top: 76px;
-  margin-left: 228px;
-}
+@supports selector(:has(*)) {
+  [data-home-feed-panel]:has(> .root[data-timeline-platform="pc"])
+    > [data-panel-preface] {
+    margin-top: 76px;
+    margin-left: 228px;
+  }
 
-[data-panel-preface]
-  + .root[data-timeline-layout="wide"][data-timeline-platform="pc"]
-  .list {
-  margin-top: 0;
+  [data-panel-preface]
+    + .root[data-timeline-layout="wide"][data-timeline-platform="pc"]
+    .list {
+    margin-top: 0;
+  }
 }
 
 /* Loading, failed and not yet activated: the spine alone. */

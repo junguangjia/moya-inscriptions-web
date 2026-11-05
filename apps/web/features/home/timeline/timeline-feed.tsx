@@ -244,6 +244,7 @@ export const TimelineFeed = ({
 
   const view = useTimelineWindow({
     // Panels scroll alone, but the document's scroll belongs to the active feed.
+    active,
     enabled: ready && (active || platform !== "pc"),
     estimate,
     listRef,

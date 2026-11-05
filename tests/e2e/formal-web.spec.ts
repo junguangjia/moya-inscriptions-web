@@ -342,6 +342,8 @@ test("Formal root composes truthful runtime list states", async ({ page }) => {
 test("Formal timeline keeps the policy notice readable and closable", async ({
   page,
 }) => {
+  // The notice ends itself on 2026-12-05; this case stays inside its window.
+  await page.clock.setFixedTime(new Date("2026-11-10T00:00:00+08:00"));
   const { shell } = await openFormalRoot(page);
   await selectHomeFeed(page, "时间轴", "timeline");
   const timeline = shell.locator('[data-home-feed-panel="timeline"]');

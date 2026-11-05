@@ -2680,11 +2680,14 @@ test("Auto mode keeps an iPhone-like runtime on phone across viewport changes", 
   const home = activeHomeSurface(surface);
   const discoverTop = await writeHomePanelScroll(home, "discover", 600);
   await writeHomePanelScroll(home, "timeline", 300);
+  const reading = home.locator("[data-timeline-position]");
+  const readingRow = await reading.innerText();
 
   // A new width reflows the timeline's rows. It holds the row at the top, whose
   // offset then differs, so only Discover's masonry offset stays exact.
   await page.setViewportSize({ height: 500, width: 1200 });
   await expectPresentationPlatform(surface, "phone");
+  await expect(reading).toHaveText(readingRow);
   await expect
     .poll(() =>
       readHomePanelEvidence(home, "discover").then((state) => state.scrollTop),
@@ -2698,6 +2701,7 @@ test("Auto mode keeps an iPhone-like runtime on phone across viewport changes", 
   await page.setViewportSize({ height: 700, width: 320 });
   await expectPresentationPlatform(surface, "phone");
   await expect(home).toHaveAttribute("data-active-home-feed", "timeline");
+  await expect(reading).toHaveText(readingRow);
   await expect
     .poll(() =>
       readHomePanelEvidence(home, "discover").then((state) => state.scrollTop),
