@@ -257,8 +257,8 @@ export const McpControlClient = ({
           <h2>紧急暂停</h2>
           <p className={styles.lead}>
             {page.pause
-              ? "已暂停。所有密钥只能调用 admin_whoami，下一次请求起生效。"
-              : "运行中。暂停后所有密钥只能调用 admin_whoami，后台页面不受影响。"}
+              ? "已暂停。所有 AI 连接和密钥只能调用 admin_whoami，下一次请求起生效。"
+              : "运行中。暂停后所有 AI 连接和密钥只能调用 admin_whoami，后台页面不受影响。"}
           </p>
           <div className={styles.actions}>
             <button
@@ -328,9 +328,9 @@ export const McpControlClient = ({
         </section>
 
         <section className={styles.card}>
-          <h2>即将到期的密钥</h2>
+          <h2>即将到期的自动化密钥</h2>
           {page.expiringKeys.length === 0 ? (
-            <p className={styles.lead}>7 天内没有到期的密钥。</p>
+            <p className={styles.lead}>7 天内没有到期的自动化密钥。</p>
           ) : (
             <div className={styles.tableWrap}>
               <table className={styles.table}>
@@ -415,6 +415,7 @@ export const McpControlClient = ({
             </>
           )}
           <div className={styles.links}>
+            <a href="/admin/agent-connections">AI 连接</a>
             <a href="/admin/collections/mcp-audit-events">AI 操作记录</a>
             <a href="/admin/collections/payload-mcp-api-keys">自动化密钥</a>
           </div>

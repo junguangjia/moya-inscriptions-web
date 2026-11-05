@@ -90,7 +90,7 @@ const plainPage = (
   response.statusCode = 400;
   for (const [name, value] of Object.entries(plainPageHeaders))
     response.setHeader(name, value);
-  response.end(plainPageHtml(title, body));
+  response.end(plainPageHtml(title, body, code));
   return { handled: true, code };
 };
 

@@ -108,7 +108,8 @@ export const workspaces = [
       {
         label: "AI 连接",
         href: "/admin/agent-connections",
-        developmentOnly: true,
+        // Development as ever, and Production once the login door is on.
+        connectionsSurface: true,
       },
     ],
   },
@@ -151,8 +152,16 @@ export function workspacePageLabel(href: string): string {
 export const contentTab = (value: string | null): ContentTab =>
   value === "featured" || value === "users" ? value : "works";
 
-export const workspacePages = (workspace: Workspace, development = false) =>
-  workspace.pages.filter((page) => !("developmentOnly" in page) || development);
+export const workspacePages = (
+  workspace: Workspace,
+  development = false,
+  connections = false,
+) =>
+  workspace.pages.filter((page) =>
+    "connectionsSurface" in page
+      ? development || connections
+      : !("developmentOnly" in page) || development,
+  );
 
 export function currentWorkspace(
   pathname: string,

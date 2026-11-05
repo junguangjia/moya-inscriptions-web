@@ -61,7 +61,7 @@ export const resolveConnection = async (
     client: client.family,
     oauthClientId,
     environment: runtime.environment,
-    preset: "read-only",
+    preset: runtime.preset,
     status: "awaiting-consent",
     generation: 0,
     revokedAt: null,

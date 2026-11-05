@@ -16,24 +16,22 @@ import type { AgentConnection, ConnectionPreset } from "./contracts";
  * an already-open MCP session, without finding and deleting either, and
  * without trusting a clock.
  *
- * The refresh token is the exception, and the r11 version of this comment was
- * wrong about it. A refresh token is redeemed AT THE PROVIDER, which knows
- * nothing about this generation, so a disconnect does not deny it: the
- * provider still issues from it (measured — see the r12 spike, check C2). Two
- * things are therefore required. The first is decided and measured in the r12
- * spike; NEITHER is built in the product yet, and this file holds only the
- * generation arithmetic, not the anchoring:
+ * The refresh token is the exception, because it is redeemed AT THE PROVIDER,
+ * which does not read this generation by itself. Two things answer that, and the
+ * second differs by profile:
  *
- *  1. the generation must be anchored to the provider GRANT at consent, so a
- *     token refreshed after a disconnect still carries the old generation and
- *     is refused (spike C4). That is what makes reconnecting a fresh consent
- *     rather than a resurrection;
- *  2. `revokeConnection` must also destroy the provider-side grant, so the
- *     refresh token stops being redeemable at all rather than merely minting
- *     tokens this boundary then rejects. That needs the grant reference on the
- *     connection record and is NOT built yet.
+ *  1. the generation is anchored to the provider GRANT at consent: `resume.ts`
+ *     freezes the consent's generation on the grant row, and every wrapper is bound
+ *     to it. So a token refreshed after a disconnect still carries the old
+ *     generation and the door refuses it. That is what makes reconnecting a fresh
+ *     consent rather than a resurrection;
+ *  2. under `operator` the token endpoint also reads the connection and its grant,
+ *     so a refresh after a disconnect answers `invalid_grant`. The Development
+ *     read-only profile stays as #141 measured it: the provider still redeems the
+ *     refresh token, and the door refuses what it mints.
  *
- * Until (2) exists, do not describe a disconnect as denying the refresh token.
+ * Under neither profile does a disconnect delete the provider's own rows. This file
+ * holds only the generation arithmetic.
  */
 
 export interface ConsentRecord {
@@ -154,11 +152,9 @@ export const revokeConnection = (
  * session from before the disconnect is admitted, and anything the old refresh
  * token mints still carries the pre-disconnect generation and is refused.
  *
- * The refresh token ITSELF remains redeemable at the provider until grant
- * destruction exists. This is the resurrection path, so the standing rule
- * applies here most of all: do not describe a disconnect OR a reconnect as
- * denying the refresh token until that is built. The r11 wording made exactly
- * that claim, here, and it was false.
+ * Under the read-only profile the refresh token ITSELF stays redeemable at the
+ * provider, as the note at the top of this file says. Under `operator` the token
+ * endpoint refuses it, because it reads this same generation.
  */
 export const reconnectConnection = (
   connection: AgentConnection,

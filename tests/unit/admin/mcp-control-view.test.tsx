@@ -173,6 +173,13 @@ describe("the control page", () => {
     expect(html).toContain('data-mcp-policy="covered"');
   });
 
+  it("links to the AI connections page, and labels its key list for automation", () => {
+    const html = page();
+    expect(html).toContain('href="/admin/agent-connections"');
+    expect(html).toContain("即将到期的自动化密钥");
+    expect(html).toContain("暂停后所有 AI 连接和密钥只能调用 admin_whoami");
+  });
+
   it("offers a resume while paused", () => {
     const html = page({ pause: true });
     expect(html).toContain('data-mcp-pause="true"');

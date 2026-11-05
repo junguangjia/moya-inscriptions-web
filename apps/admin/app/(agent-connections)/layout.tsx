@@ -1,5 +1,9 @@
 import type { ReactNode } from "react";
 
+import "@moya/design-tokens/theme.css";
+
+import styles from "../../src/agent-connections/connections.module.css";
+
 /**
  * The consent landing lives OUTSIDE the Payload admin shell on purpose.
  *
@@ -20,7 +24,7 @@ export default function AgentConnectionsLayout({
 }) {
   return (
     <html lang="zh-CN">
-      <body>{children}</body>
+      <body className={styles.landingBody}>{children}</body>
     </html>
   );
 }

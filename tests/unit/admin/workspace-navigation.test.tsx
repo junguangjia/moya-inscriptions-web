@@ -218,6 +218,73 @@ describe("flat Admin workspace navigation", () => {
       expect(link.getAttribute("data-prefetch")).toBe("false");
   });
 
+  it("shows AI 连接 in Production once the login door is on, and never AI 操作", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false }) as unknown as Response),
+    );
+    location("/admin/editorial-workflow");
+    render(createElement(WorkspaceTabs, { agentConnectionsEnabled: true }));
+    const connection = screen.getByRole("link", { name: "AI 连接" });
+    expect(connection.getAttribute("href")).toBe("/admin/agent-connections");
+    expect(connection.getAttribute("data-prefetch")).toBe("false");
+    expect(screen.queryByRole("link", { name: "AI 操作" })).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it("reads nothing for the notice while the login door is off", () => {
+    const read = vi.fn();
+    vi.stubGlobal("fetch", read);
+    location("/admin/editorial-workflow");
+    render(createElement(WorkspaceTabs));
+    expect(read).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("tells an owner of a new connection on the dashboard, which has no tabs", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          ({
+            ok: true,
+            json: async () => ({
+              result: {
+                connections: [
+                  {
+                    mine: false,
+                    tool: "Claude",
+                    authorizedBy: "other@editorial.example.invalid",
+                    consentedAt: "2026-11-04T00:00:00.000Z",
+                  },
+                ],
+              },
+            }),
+          }) as unknown as Response,
+      ),
+    );
+    runtime.getPreference.mockResolvedValue(null);
+    location("/admin");
+    render(createElement(WorkspaceTabs, { agentConnectionsEnabled: true }));
+    expect((await screen.findByRole("status")).textContent).toContain(
+      "授权了「Claude」",
+    );
+    vi.unstubAllGlobals();
+  });
+
+  it("offers an account other than an owner no notice", () => {
+    const read = vi.fn();
+    vi.stubGlobal("fetch", read);
+    runtime.user = { collection: "users", role: "automation" };
+    location("/admin");
+    const view = render(
+      createElement(WorkspaceTabs, { agentConnectionsEnabled: true }),
+    );
+    expect(view.container.textContent).toBe("");
+    expect(read).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
   it.each([
     null,
     { collection: "users", role: "automation" },

@@ -38,7 +38,14 @@ import {
  * own authorization listener, its own Admin, its own browser. It never touches
  * the retained Development database, another task's container, or the shared
  * browser runner's configuration.
+ *
+ * It runs one profile at a time. Unset, the read-only one #141 measured. With
+ * AGENT_AUTHORIZATION_PROFILE=operator, the login door (Issue #355): a real issuer,
+ * a real consent in two browser engines, and the official SDK to a tool call on the
+ * door, with every tool on the closed list under its real client id.
  */
+
+const OPERATOR = process.env.AGENT_AUTHORIZATION_PROFILE === "operator";
 
 /** Cold `next dev` compiles on demand; bounded by the session regardless. */
 const ADMIN_START_MS = 120_000;
@@ -71,6 +78,40 @@ const expectedStages = [
  * cross that boundary in a mode-restricted file, never on stdout.
  */
 const RESTART_STAGE = "restart-preserves-the-result";
+
+/** The login door's browser sequence, in each engine, compared exactly as above. */
+const operatorBrowserStages = ["chromium", "webkit"].flatMap((engine) =>
+  [
+    "signed-out-returns-to-the-same-review",
+    "review-says-it-plainly-at-phone-width",
+    "deny-tells-the-tool-access-denied",
+    "signed-in-continues-by-itself-and-arms-once",
+    "allow-reaches-the-door-at-profile-full",
+    "hosted-tool-returns-to-its-own-callback",
+    "connecting-again-always-asks-again",
+    "second-computer-ends-the-first",
+    "approval-does-not-resume-in-another-browser",
+    "nothing-arms-without-an-owner-browser-session",
+    "any-owner-sees-and-disconnects-with-the-audit-first",
+    "reconnect-after-disconnect-is-a-fresh-consent",
+    "demote-and-restore-leaves-the-old-token-refused",
+    "a-password-change-stops-that-persons-connections",
+    "the-connections-page-works-at-phone-width",
+  ].map((stage) => `${engine}-${stage}`),
+);
+
+const operatorClientStages = [
+  "the-challenge-names-the-metadata-and-the-scope",
+  "the-sdk-starts-from-one-url-with-a-vendor-client-id",
+  "a-person-signs-in-and-allows",
+  "the-sdk-redeems-the-code-for-a-token-and-a-refresh-token",
+  "the-issued-token-lists-exactly-profile-full",
+  "one-call-is-audited-naming-the-connection-and-the-person",
+  "the-sdk-refreshes-with-no-person-and-the-token-rotates",
+  "a-disconnect-sends-the-sdk-back-to-a-person",
+  "connecting-again-is-a-fresh-consent-that-works",
+  "nothing-reached-a-vendor",
+];
 
 const freePort = () =>
   new Promise((resolve, reject) => {
@@ -255,7 +296,7 @@ async function main() {
     budget.sessionBudgetMs,
   );
   console.log(
-    `Agent connections profile ${budget.profile}: ceiling ${budget.ceilingMs}ms (${budget.ceilingSource}); session ${budget.sessionBudgetMs}ms`,
+    `Agent connections ${OPERATOR ? "operator" : "read-only"} profile ${budget.profile}: ceiling ${budget.ceilingMs}ms (${budget.ceilingSource}); session ${budget.sessionBudgetMs}ms`,
   );
   let created = false;
   let control;
@@ -496,6 +537,47 @@ async function main() {
     // registry parser.
     const hostClientId = "artvenn-acceptance-hostname";
     const hostRedirectUri = `http://localhost:${hostRedirectPort}/callback`;
+    // The closed list as the record's section 22 has it, under the real client ids,
+    // because a family off the consent page's map stops at its first refusal. Nothing
+    // reaches a vendor: the provider never fetches one, and the browser side answers
+    // a hosted callback itself. A loopback entry's port is only what the parser
+    // requires, since the provider ignores it for a native client.
+    const operatorClients = JSON.stringify([
+      {
+        clientId: "https://claude.ai/oauth/mcp-oauth-client-metadata",
+        family: "claude",
+        label: "Claude",
+        callbackPolicy: "hosted-https",
+        redirectUris: ["https://claude.ai/api/mcp/auth_callback"],
+      },
+      {
+        clientId: "https://claude.ai/oauth/claude-code-client-metadata",
+        family: "claude-code",
+        label: "Claude Code",
+        callbackPolicy: "loopback-host",
+        redirectUris: [
+          "http://localhost:49152/callback",
+          "http://127.0.0.1:49152/callback",
+        ],
+      },
+      {
+        clientId: "https://chatgpt.com/oauth/codex/client.json",
+        family: "codex",
+        label: "Codex",
+        callbackPolicy: "loopback-host",
+        redirectUris: [
+          "http://127.0.0.1:49152/callback",
+          "http://localhost:49152/callback",
+        ],
+      },
+      {
+        clientId: "https://chatgpt.com/oauth/client.json",
+        family: "chatgpt",
+        label: "ChatGPT",
+        callbackPolicy: "hosted-https",
+        redirectUris: ["https://chatgpt.com/connector_platform_oauth_redirect"],
+      },
+    ]);
     const clients = JSON.stringify([
       {
         clientId,
@@ -568,8 +650,20 @@ async function main() {
       AGENT_AUTHORIZATION_RESOURCE: resource,
       AGENT_AUTHORIZATION_CONSENT_URL: adminOrigin,
       AGENT_AUTHORIZATION_PORT: String(authPort),
-      AGENT_AUTHORIZATION_CLIENTS: clients,
-      AGENT_AUTHORIZATION_ENVIRONMENT: "development",
+      AGENT_AUTHORIZATION_CLIENTS: OPERATOR ? operatorClients : clients,
+      // Under `operator` the Admin compares these two names, because a connection row
+      // carries one and the issuer reads it when a token refreshes. The read-only
+      // profile keeps the two names it has always run with.
+      AGENT_AUTHORIZATION_ENVIRONMENT: OPERATOR
+        ? session.env.CMS_ENVIRONMENT
+        : "development",
+      ...(OPERATOR
+        ? {
+            AGENT_AUTHORIZATION_PROFILE: "operator",
+            AGENT_AUTHORIZATION_COOKIE_KEY:
+              randomBytes(32).toString("base64url"),
+          }
+        : {}),
       // Each service authenticates as its OWN role, so the grant plan is the
       // thing under test rather than a paragraph about one.
       AGENT_AUTHORIZATION_DATABASE_URL: asRole("provider_role"),
@@ -631,6 +725,9 @@ async function main() {
           ...shared,
           PORT: String(adminPort),
           HOSTNAME: "127.0.0.1",
+          // The address a browser's Origin is checked against on a change, as in
+          // Production.
+          CMS_PUBLIC_URL: adminOrigin,
           // Its own build directory, so the harness never contends with a
           // dev server somebody else is running and never has to stop one.
           MOYA_ADMIN_DIST_DIR: distDir,
@@ -661,6 +758,9 @@ async function main() {
         AGENT_ACCEPTANCE_SEEDED_HANDLE: seededHandle,
         AGENT_ACCEPTANCE_SEEDED_USER_ID: seededUserId,
         AGENT_ACCEPTANCE_SEEDED_DISPLAY_NAME: seededDisplayName,
+        // The one thing the login door's sequence reads that no page shows: whether
+        // a ticket was armed. As the owner, on this harness's own database.
+        AGENT_ACCEPTANCE_DATABASE_URL: target.href,
       },
     );
     const browserCode = await browser.closed;
@@ -687,8 +787,8 @@ async function main() {
           stage: /^[a-z][a-z-]{0,95}$/.test(summary?.stage ?? "")
             ? summary.stage
             : "unrecognized-browser-result",
-          completed: expectedStages.filter((stage) =>
-            summary?.completed?.includes(stage),
+          completed: (OPERATOR ? operatorBrowserStages : expectedStages).filter(
+            (stage) => summary?.completed?.includes(stage),
           ),
           // A bare refusal code names a rule, never a value.
           refusalCode: /^[A-Z][A-Z0-9_]{2,63}$/.test(summary?.refusalCode ?? "")
@@ -705,7 +805,8 @@ async function main() {
     }
     if (
       !Array.isArray(summary.completed) ||
-      JSON.stringify(summary.completed) !== JSON.stringify(expectedStages)
+      JSON.stringify(summary.completed) !==
+        JSON.stringify(OPERATOR ? operatorBrowserStages : expectedStages)
     )
       throw new Error("AGENT_CONNECTIONS_RESULT_INCOMPLETE");
     // The acceptance gate for this milestone, checked BEFORE the restart work
@@ -713,7 +814,7 @@ async function main() {
     // positive read or a setup refusal all arrive here as something other
     // than VERIFIED, and all of them fail — the earlier authentication stages
     // passing is exactly the situation this refuses to accept as evidence.
-    if (summary.backendToolRead !== "VERIFIED")
+    if (!OPERATOR && summary.backendToolRead !== "VERIFIED")
       throw new Error("BACKEND_TOOL_READ_NOT_VERIFIED");
     session.assertActive();
 
@@ -721,48 +822,51 @@ async function main() {
     // repository records. A separate child because it drives the
     // authorization service directly and completes no flow — the registry's
     // unit tests decide what may be REGISTERED, and only this can say what
-    // the provider will REDEEM.
-    const policy = session.start(
-      ["tests/cms/agent-connections-callback-policy.mjs"],
-      root,
-      {
-        ...shared,
-        AGENT_ACCEPTANCE_ISSUER: issuer,
-        AGENT_ACCEPTANCE_RESOURCE: resource,
-        AGENT_ACCEPTANCE_CLIENT_ID: clientId,
-        AGENT_ACCEPTANCE_REDIRECT_URI: redirectUri,
-        AGENT_ACCEPTANCE_HOST_CLIENT_ID: hostClientId,
-        AGENT_ACCEPTANCE_HOST_REDIRECT: hostRedirectUri,
-      },
-    );
-    const policyCode = await policy.closed;
-    const policyResult = policy
-      .output()
-      .trim()
-      .split("\n")
-      .map((line) => {
-        try {
-          return JSON.parse(line);
-        } catch {
-          return null;
-        }
-      })
-      .filter((item) => item && typeof item.ok === "boolean")
-      .at(-1);
-    if (policyCode !== 0 || policyResult?.ok !== true) {
-      console.log(
-        JSON.stringify({
-          syntheticAgentConnections: "FAIL",
-          check: "callback-policy",
-          stage: /^[a-z][a-z-]{0,95}$/.test(policyResult?.stage ?? "")
-            ? policyResult.stage
-            : "unrecognized-policy-result",
-        }),
+    // the provider will REDEEM. Its clients are the read-only profile's;
+    // `agent-operator-flow-cases.ts` runs each listed client against the provider.
+    if (!OPERATOR) {
+      const policy = session.start(
+        ["tests/cms/agent-connections-callback-policy.mjs"],
+        root,
+        {
+          ...shared,
+          AGENT_ACCEPTANCE_ISSUER: issuer,
+          AGENT_ACCEPTANCE_RESOURCE: resource,
+          AGENT_ACCEPTANCE_CLIENT_ID: clientId,
+          AGENT_ACCEPTANCE_REDIRECT_URI: redirectUri,
+          AGENT_ACCEPTANCE_HOST_CLIENT_ID: hostClientId,
+          AGENT_ACCEPTANCE_HOST_REDIRECT: hostRedirectUri,
+        },
       );
-      throw new Error("CALLBACK_POLICY_CHECK_FAILED");
+      const policyCode = await policy.closed;
+      const policyResult = policy
+        .output()
+        .trim()
+        .split("\n")
+        .map((line) => {
+          try {
+            return JSON.parse(line);
+          } catch {
+            return null;
+          }
+        })
+        .filter((item) => item && typeof item.ok === "boolean")
+        .at(-1);
+      if (policyCode !== 0 || policyResult?.ok !== true) {
+        console.log(
+          JSON.stringify({
+            syntheticAgentConnections: "FAIL",
+            check: "callback-policy",
+            stage: /^[a-z][a-z-]{0,95}$/.test(policyResult?.stage ?? "")
+              ? policyResult.stage
+              : "unrecognized-policy-result",
+          }),
+        );
+        throw new Error("CALLBACK_POLICY_CHECK_FAILED");
+      }
+      summary.completed.push(...(policyResult.completed ?? []));
+      session.assertActive();
     }
-    summary.completed.push(...(policyResult.completed ?? []));
-    session.assertActive();
 
     // An UNFAMILIAR client, using the official MCP SDK, told nothing but the
     // server URL and its own registration. The browser acceptance above
@@ -809,6 +913,12 @@ async function main() {
       );
       throw new Error("GENERIC_CLIENT_CHECK_FAILED");
     }
+    if (
+      OPERATOR &&
+      JSON.stringify(genericResult.completed) !==
+        JSON.stringify(operatorClientStages)
+    )
+      throw new Error("GENERIC_CLIENT_RESULT_INCOMPLETE");
     summary.completed.push(...(genericResult.completed ?? []));
     session.assertActive();
 
@@ -910,17 +1020,33 @@ async function main() {
         user?.handle === seededHandle
       );
     };
+    /** The same question on the door, where a connection's tools are native. */
+    const answersOnTheDoor = async (token, sessionId) => {
+      const answer = await call(
+        token,
+        {
+          method: "tools/call",
+          params: { name: "admin_whoami", arguments: {} },
+        },
+        sessionId,
+      );
+      return (
+        answer.status === 200 &&
+        answer.payload.result?.structuredContent?.ok === true
+      );
+    };
+    const reads = OPERATOR ? answersOnTheDoor : readsSeededUser;
 
     const live = await probe(tokens.live);
     if (live.status !== 200) throw new Error("RESTART_LOST_LIVE_ACCESS");
     // Authentication surviving a restart is not the claim; READING survives.
-    if (!(await readsSeededUser(tokens.live, live.sessionId)))
+    if (!(await reads(tokens.live, live.sessionId)))
       throw new Error("RESTART_LOST_BACKEND_READ");
     const stale = await probe(tokens.stale);
     if (stale.status === 200)
       throw new Error("RESTART_RESTORED_REVOKED_ACCESS");
     // And the revoked token cannot read either, whatever the transport did.
-    if (await readsSeededUser(tokens.stale, live.sessionId))
+    if (await reads(tokens.stale, live.sessionId))
       throw new Error("RESTART_RESTORED_REVOKED_READ");
     summary.completed.push(RESTART_STAGE);
   } catch (error) {
@@ -1010,6 +1136,7 @@ async function main() {
       // can only ever print VERIFIED here now; the value stays in the summary
       // because a reader should not have to know that to trust it.
       backendToolRead: summary.backendToolRead ?? "NOT_RUN",
+      agentProfile: OPERATOR ? "operator" : "read-only",
     }),
   );
 }

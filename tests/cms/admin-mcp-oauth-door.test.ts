@@ -40,7 +40,7 @@ import {
 // Behavior Matrix rows "Operator connection token on /api/mcp", "OAuth surface
 // off", "POST /api/mcp with no token, surface on", "Pause on", "Reserved surface by
 // any key or Authorization header" apart from its AI connection surfaces, which do
-// not exist in this composition and which O3 pins, "Disconnect by any owner", "Access
+// not exist in this composition, "Disconnect by any owner", "Access
 // token expires while connected", "Authorizing account leaves role owner", "Tool
 // removed from the list", "Audit row for a connection call" and "admin_whoami on a
 // connection", the way Production composes them: the login door on and the plugin
@@ -1151,6 +1151,27 @@ describe("the metadata pointer on a 401", () => {
       expect(challenge, label).toContain(POINTER);
       expect(challenge, label).not.toContain("error=");
     }
+  });
+
+  it("carries the pointer and the scope under Production's own gate", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("ADMIN_MCP_OAUTH_ENABLED", "true");
+    vi.stubEnv("AGENT_AUTHORIZATION_ISSUER", door.runtime.issuer);
+    vi.stubEnv("AGENT_AUTHORIZATION_RESOURCE", door.runtime.resource);
+    for (const headers of [{}, bearer(syntheticToken())]) {
+      const answer = await post(headers, "tools/list");
+      expect(answer.status).toBe(401);
+      const challenge = answer.headers.get("www-authenticate") ?? "";
+      expect(challenge).toContain(POINTER);
+      expect(challenge).toContain('scope="artvenn:admin"');
+      expect(challenge).not.toContain("error=");
+    }
+    // Development's setting does not open Production's door.
+    vi.stubEnv("ADMIN_MCP_OAUTH_ENABLED", "false");
+    vi.stubEnv("AGENT_CONNECTIONS_ENABLED", "true");
+    expect(
+      (await post({}, "tools/list")).headers.get("www-authenticate"),
+    ).toBeNull();
   });
 
   it("keeps a key's named refusal, with the pointer beside it", async () => {

@@ -51,10 +51,9 @@ const ownerGates: Record<string, { count: number; why: string }> = {
     count: 1,
     why: "refuses a key bound to the Owner; grants nothing",
   },
-  "src/agent-connections/View.tsx": { count: 3, why: "human UI" },
-  "src/agent-connections/endpoints.ts": {
-    count: 2,
-    why: "Owner consent screen route",
+  "src/agent-connections/account-hooks.ts": {
+    count: 1,
+    why: "notices a person leaving role owner; grants nothing",
   },
   "src/analytics/View.tsx": { count: 4, why: "human UI" },
   "src/analytics/endpoints.ts": {
@@ -233,6 +232,9 @@ describe("Admin MCP identity (admin-mcp-completion-v1, section 2)", () => {
     const stamp = "`payload-user-${String(";
     expect(await read("src/agent-connections/View.tsx")).toContain(stamp);
     expect(await read("src/agent-connections/endpoints.ts")).toContain(stamp);
+    expect(await read("src/agent-connections/account-hooks.ts")).toContain(
+      stamp,
+    );
     expect(await read("src/admin-mcp/door.ts")).toContain(
       "/^payload-user-([1-9][0-9]*)$/u",
     );

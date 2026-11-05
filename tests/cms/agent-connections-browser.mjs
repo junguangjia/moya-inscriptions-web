@@ -3,9 +3,31 @@ import { createHash, randomBytes } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import process from "node:process";
 import console from "node:console";
+import { setTimeout as delay } from "node:timers/promises";
 import { URL } from "node:url";
 import http from "node:http";
-import { chromium } from "@playwright/test";
+import { chromium, webkit } from "@playwright/test";
+import {
+  closePostgresPool,
+  createPostgresPool,
+  parsePostgresConfig,
+} from "@moya/catalog-postgres";
+
+import {
+  adminApi,
+  authorizationRequest,
+  bearer,
+  clickConsent,
+  closedList,
+  hex,
+  issueAiKey,
+  listTools,
+  redeemCode,
+  refreshTokens,
+  signIn,
+  toolSide,
+  until,
+} from "./agent-connections-operator-kit.mjs";
 
 /**
  * Agent Connections V1 (Issue #141 r15 §8, §10) — the acceptance sequence, in
@@ -194,6 +216,13 @@ const exchange = async (code, verifier) =>
       }),
     })
   ).json();
+
+// The login door has its own sequence, at the end of this file. The read-only one
+// below stays as #141 measured it.
+if (process.env.AGENT_AUTHORIZATION_PROFILE === "operator") {
+  await operatorAcceptance();
+  process.exit();
+}
 
 try {
   assert.equal(process.env.CMS_ENVIRONMENT, "synthetic");
@@ -565,4 +594,797 @@ try {
 } finally {
   await browser?.close();
   await callbacks?.close();
+}
+
+/**
+ * The login door (amendment 2026-11-05), in two real browser engines at phone width,
+ * against a real issuer, a real Admin and PostgreSQL. Every tool it names is on the
+ * closed list with its real client id, and nothing reaches a vendor.
+ *
+ * Each engine runs the whole sequence with accounts of its own. The Owner signs in
+ * fresh in each, so the signed-out path is real. What is read from the database is
+ * only what no page shows: whether a ticket was armed. Everything else is read the
+ * way a person or a tool would read it.
+ */
+async function operatorAcceptance() {
+  const PHONE = { width: 390, height: 844 };
+  const NOT_FOR_YOU = "只有管理员账号可以使用这一页。";
+  const REVIEW_PATH = "/admin/agent-connections/consent";
+  const list = closedList();
+  const client = (family) => list.get(family);
+  // A loopback tool's callback, on any port, as the provider allows a native client.
+  const loopback = redirectUri;
+
+  let pool;
+  let side;
+  let openBrowser;
+  try {
+    assert.equal(process.env.CMS_ENVIRONMENT, "synthetic");
+    assert.equal(
+      process.env.AGENT_AUTHORIZATION_ENVIRONMENT,
+      process.env.CMS_ENVIRONMENT,
+    );
+    const access = JSON.parse(
+      await readFile(process.env.CMS_QA_ACCESS_FILE, "utf8"),
+    );
+    pool = createPostgresPool(
+      parsePostgresConfig({
+        DATABASE_URL: process.env.AGENT_ACCEPTANCE_DATABASE_URL,
+      }),
+    );
+    side = await toolSide(loopback);
+    const ticketOf = async (uid) =>
+      (
+        await pool.query(
+          "SELECT ticket_digest FROM community.agent_connection_consents WHERE interaction_uid=$1",
+          [uid],
+        )
+      ).rows[0]?.ticket_digest ?? null;
+    const authorize = (family, callback = loopback) =>
+      authorizationRequest({
+        clientId: client(family).clientId,
+        issuer,
+        redirectUri: callback,
+        resource,
+      });
+    const door = (token) => listTools(resource, bearer(token));
+    const refreshOf = (family, tokens) =>
+      refreshTokens(
+        issuer,
+        resource,
+        client(family).clientId,
+        tokens.refresh_token,
+      );
+    const overflow = (page) =>
+      page.evaluate(
+        () =>
+          globalThis.document.documentElement.scrollWidth -
+          globalThis.document.documentElement.clientWidth,
+      );
+
+    for (const [name, engine] of [
+      ["chromium", chromium],
+      ["webkit", webkit],
+    ]) {
+      openBrowser = await engine.launch({ headless: true });
+      const browser = openBrowser;
+      // A context a person would have: phones are the first audience.
+      const person = async (options = {}) => {
+        const context = await browser.newContext({
+          viewport: PHONE,
+          ...options,
+        });
+        const page = await context.newPage();
+        // `next dev` compiles a route on its first request.
+        page.setDefaultTimeout(120_000);
+        return { context, page, api: adminApi(context, origin) };
+      };
+      /**
+       * A click on a hosted tool's review, up to the tool's own callback and not onto
+       * its site. A browser follows that last redirect by itself, and Playwright cannot
+       * intercept a redirect, so from the resume route on this walks the issuer's answers
+       * with the browser's own cookies and stops at the vendor's address. Loopback tools
+       * take every hop in the real browser, the resume route included.
+       */
+      const decideHosted = async ({ context, page }, decision) => {
+        const pattern = `${issuer}/agent-connections/consent/*/resume*`;
+        let arrival;
+        let failure;
+        const walk = async (route) => {
+          try {
+            let answer = await route.fetch({ maxRedirects: 0 });
+            let at = route.request().url();
+            while (answer.status() >= 300 && answer.status() < 400) {
+              const next = new URL(answer.headers().location, at);
+              if (next.origin !== new URL(issuer).origin) {
+                arrival = next;
+                await route.fulfill({
+                  status: 200,
+                  contentType: "text/plain",
+                  body: "ok",
+                });
+                return;
+              }
+              at = next.href;
+              answer = await context.request.get(at, { maxRedirects: 0 });
+            }
+            failure = new Error(
+              "the issuer did not send the browser to the tool",
+            );
+          } catch (error) {
+            failure = error;
+          }
+          await route.abort().catch(() => undefined);
+        };
+        await context.route(pattern, walk);
+        await clickConsent(page, decision);
+        await until(
+          () => arrival !== undefined || failure !== undefined,
+          "no answer for the hosted tool",
+        );
+        await context.unroute(pattern, walk);
+        if (failure !== undefined) throw failure;
+        return arrival;
+      };
+      const fromTool = async (page, flow) => {
+        await page.goto(side.linkTo(flow.url));
+        await page.click("#go");
+      };
+      const review = (page) => page.locator("[data-agent-consent]");
+      const reviewUid = (page) =>
+        review(page).getAttribute("data-agent-consent");
+      const allowAtLoopback = async (page, flow) => {
+        await clickConsent(page, "approve");
+        // The page shows a bare refusal code when the decision fails, so a failure
+        // here names a rule rather than only a missing arrival.
+        const refused = page.locator("[data-agent-consent-error]");
+        const arrival = await Promise.race([
+          side.take(),
+          refused
+            .waitFor({ state: "visible", timeout: 40_000 })
+            .then(async () => ({
+              code: null,
+              error: await refused.getAttribute("data-agent-consent-error"),
+            })),
+        ]);
+        if (arrival.error !== null) refusalCode = arrival.error;
+        assert.equal(arrival.error, null);
+        const tokens = await redeemCode(issuer, resource, flow, arrival.code);
+        assert.equal(tokens.status, 200);
+        assert.match(tokens.access_token, /^artvenn_ct_/u);
+        assert.ok(tokens.refresh_token);
+        return tokens;
+      };
+      /** One whole connection for a person already signed in, on a loopback tool. */
+      const connect = async (page, family) => {
+        const flow = authorize(family);
+        await fromTool(page, flow);
+        await review(page).waitFor({ state: "visible" });
+        return allowAtLoopback(page, flow);
+      };
+
+      const owner = await person();
+      const ownerApi = owner.api;
+
+      stage = `${name}-signed-out-returns-to-the-same-review`;
+      const firstFlow = authorize("codex");
+      await fromTool(owner.page, firstFlow);
+      await owner.page.waitForURL((url) => url.pathname === "/admin/login");
+      const returnPath = new URL(owner.page.url()).searchParams.get("redirect");
+      assert.ok(returnPath?.startsWith(`${REVIEW_PATH}?interaction=`));
+      await signIn(owner.page, access.ownerEmail, access.ownerPassword);
+      await owner.page.waitForURL((url) => url.pathname === REVIEW_PATH);
+      await review(owner.page).waitFor({ state: "visible" });
+      assert.equal(
+        `${REVIEW_PATH}?interaction=${await reviewUid(owner.page)}`,
+        returnPath,
+      );
+      completed.push(stage);
+
+      stage = `${name}-review-says-it-plainly-at-phone-width`;
+      const local = await review(owner.page).innerText();
+      for (const phrase of [
+        "「Codex」想连接由于艺后台",
+        "不用你逐条确认",
+        "发送给 Codex 的提供方 OpenAI",
+        "它不能：管理账号和密钥、动暂停开关、看或改操作记录、改敏感开关",
+        access.ownerEmail,
+        "浏览器只会回到这台电脑上的程序（127.0.0.1、localhost）",
+        "如果是别人发来的链接，请点拒绝",
+      ])
+        assert.ok(local.includes(phrase), phrase);
+      for (const raw of [client("codex").clientId, resource, "artvenn:admin"])
+        assert.ok(!local.includes(raw), raw);
+      assert.equal(
+        await review(owner.page).getAttribute("data-agent-consent-client"),
+        client("codex").clientId,
+      );
+      assert.equal(
+        await review(owner.page).getAttribute("data-agent-consent-resource"),
+        resource,
+      );
+      assert.equal(await overflow(owner.page), 0);
+      for (const button of [
+        "[data-agent-consent-approve]",
+        "[data-agent-consent-deny]",
+      ]) {
+        const box = await owner.page.locator(button).boundingBox();
+        assert.ok(box && box.x >= 0 && box.x + box.width <= PHONE.width);
+      }
+      completed.push(stage);
+
+      stage = `${name}-deny-tells-the-tool-access-denied`;
+      const deniedUid = await reviewUid(owner.page);
+      await clickConsent(owner.page, "deny");
+      assert.deepEqual(await side.take(), {
+        code: null,
+        error: "access_denied",
+      });
+      const denied = await ownerApi.audit({
+        "where[targetId][equals]": deniedUid,
+      });
+      assert.deepEqual(
+        denied.map(({ phase, op, ok, code, userId }) => ({
+          phase,
+          op,
+          ok: ok ?? null,
+          code: code ?? null,
+          userId,
+        })),
+        [
+          {
+            phase: "start",
+            op: "agent-connections.deny",
+            ok: null,
+            code: null,
+            userId: String(access.ownerId),
+          },
+          {
+            phase: "finish",
+            op: "agent-connections.deny",
+            ok: true,
+            code: "OK",
+            userId: String(access.ownerId),
+          },
+        ],
+      );
+      completed.push(stage);
+
+      stage = `${name}-signed-in-continues-by-itself-and-arms-once`;
+      const secondFlow = authorize("codex");
+      const reviewRequests = [];
+      const visited = [];
+      const onRequest = (request) => {
+        const url = new URL(request.url());
+        if (url.pathname === REVIEW_PATH)
+          reviewRequests.push(
+            `${request.resourceType()}:${url.searchParams.has("_rsc") ? "rsc" : "plain"}`,
+          );
+      };
+      const onNavigated = (frame) => {
+        if (frame === owner.page.mainFrame())
+          visited.push(new URL(frame.url()).pathname);
+      };
+      owner.page.on("request", onRequest);
+      owner.page.on("framenavigated", onNavigated);
+      let release;
+      const released = new Promise((resolve) => {
+        release = resolve;
+      });
+      const hold = async (route) => {
+        await released;
+        await route.continue();
+      };
+      await owner.page.route(`**${REVIEW_PATH}?**`, hold);
+      await fromTool(owner.page, secondFlow);
+      const landing = owner.page.locator("[data-agent-consent-landing]");
+      await landing.waitFor({ state: "visible" });
+      const heldUid = await landing.getAttribute("data-agent-consent-landing");
+      // The landing went on by itself, with nobody clicking. While the only request
+      // for the review is held here, nothing has armed anything: no prefetch did.
+      await until(
+        () => reviewRequests.length > 0,
+        "the landing did not continue",
+      );
+      assert.equal(await ticketOf(heldUid), null);
+      release();
+      await owner.page.waitForURL((url) => url.pathname === REVIEW_PATH);
+      await owner.page.unroute(`**${REVIEW_PATH}?**`, hold);
+      await review(owner.page).waitFor({ state: "visible" });
+      assert.equal(await reviewUid(owner.page), heldUid);
+      assert.deepEqual(reviewRequests, ["document:plain"]);
+      assert.ok(!visited.includes("/admin/login"));
+      assert.notEqual(await ticketOf(heldUid), null);
+      owner.page.off("request", onRequest);
+      owner.page.off("framenavigated", onNavigated);
+      completed.push(stage);
+
+      stage = `${name}-allow-reaches-the-door-at-profile-full`;
+      const codexTokens = await allowAtLoopback(owner.page, secondFlow);
+      const onDoor = await door(codexTokens.access_token);
+      assert.equal(onDoor.status, 200);
+      assert.ok(onDoor.names.includes("admin_whoami"));
+      assert.deepEqual(
+        onDoor.names.filter((tool) => /^(editorial|artvenn)_/u.test(tool)),
+        [],
+      );
+      // Refresh rotates, with no person involved.
+      const rotated = await refreshOf("codex", codexTokens);
+      assert.equal(rotated.status, 200);
+      assert.notEqual(rotated.refresh_token, codexTokens.refresh_token);
+      assert.equal((await door(rotated.access_token)).status, 200);
+      completed.push(stage);
+
+      stage = `${name}-hosted-tool-returns-to-its-own-callback`;
+      const [hostedCallback] = client("claude").redirectUris;
+      const hostedFlow = authorize("claude", hostedCallback);
+      await fromTool(owner.page, hostedFlow);
+      await review(owner.page).waitFor({ state: "visible" });
+      const hosted = await review(owner.page).innerText();
+      for (const phrase of [
+        "「Claude」想连接由于艺后台",
+        "发送给 Claude 的提供方 Anthropic",
+        "浏览器会回到：claude.ai",
+      ])
+        assert.ok(hosted.includes(phrase), phrase);
+      for (const raw of [client("claude").clientId, hostedCallback, resource])
+        assert.ok(!hosted.includes(raw), raw);
+      const hostedArrival = await decideHosted(owner, "approve");
+      assert.equal(
+        `${hostedArrival.origin}${hostedArrival.pathname}`,
+        hostedCallback,
+      );
+      const firstComputer = await redeemCode(
+        issuer,
+        resource,
+        hostedFlow,
+        hostedArrival.searchParams.get("code"),
+      );
+      assert.equal(firstComputer.status, 200);
+      assert.equal((await door(firstComputer.access_token)).status, 200);
+      completed.push(stage);
+
+      stage = `${name}-connecting-again-always-asks-again`;
+      // Never a silent token, for a hosted tool with a live session and grant too.
+      const askedAgain = authorize("claude", hostedCallback);
+      await fromTool(owner.page, askedAgain);
+      await review(owner.page).waitFor({ state: "visible" });
+      assert.equal(
+        (await decideHosted(owner, "deny")).searchParams.get("error"),
+        "access_denied",
+      );
+      // A refusal takes nothing from what the same person already connected.
+      assert.equal((await door(firstComputer.access_token)).status, 200);
+      completed.push(stage);
+
+      stage = `${name}-second-computer-ends-the-first`;
+      const secondComputer = await person();
+      const elsewhere = authorize("claude", hostedCallback);
+      await fromTool(secondComputer.page, elsewhere);
+      await secondComputer.page.waitForURL(
+        (url) => url.pathname === "/admin/login",
+      );
+      await signIn(
+        secondComputer.page,
+        access.ownerEmail,
+        access.ownerPassword,
+      );
+      await review(secondComputer.page).waitFor({ state: "visible" });
+      const secondArrival = await decideHosted(secondComputer, "approve");
+      const secondTokens = await redeemCode(
+        issuer,
+        resource,
+        elsewhere,
+        secondArrival.searchParams.get("code"),
+      );
+      assert.equal(secondTokens.status, 200);
+      assert.equal((await door(secondTokens.access_token)).status, 200);
+      assert.equal((await door(firstComputer.access_token)).status, 401);
+      assert.equal(
+        (await refreshOf("claude", firstComputer)).error,
+        "invalid_grant",
+      );
+      // One person and one tool is one connection, however many computers.
+      assert.equal(
+        (await ownerApi.connections()).filter(
+          ({ family, mine }) => family === "claude" && mine,
+        ).length,
+        1,
+      );
+      await secondComputer.context.close();
+      completed.push(stage);
+
+      stage = `${name}-approval-does-not-resume-in-another-browser`;
+      // A stranger starts a real request in their own browser and sends the page to
+      // an administrator, who clicks allow in theirs.
+      const stranger = await person();
+      const phished = authorize("claude-code");
+      await stranger.page.goto(phished.url);
+      await stranger.page.waitForURL((url) => url.pathname === "/admin/login");
+      const phishedUid = new URL(
+        new URL(stranger.page.url()).searchParams.get("redirect"),
+        origin,
+      ).searchParams.get("interaction");
+      const resumePath = `/agent-connections/consent/${phishedUid}/resume`;
+
+      await owner.page.goto(
+        `${origin}/agent-connections/consent/${phishedUid}`,
+      );
+      await review(owner.page).waitFor({ state: "visible" });
+      assert.equal(await reviewUid(owner.page), phishedUid);
+      let resumeRequest;
+      let letResume;
+      const resumeHeld = new Promise((resolve) => {
+        letResume = resolve;
+      });
+      const holdResume = async (route) => {
+        resumeRequest = route.request().url();
+        await resumeHeld;
+        await route.continue();
+      };
+      await owner.page.route(`**${resumePath}*`, holdResume);
+      await clickConsent(owner.page, "approve");
+      await until(
+        () => resumeRequest !== undefined,
+        "the allow did not resume",
+      );
+      assert.ok(new URL(resumeRequest).searchParams.get("secret"));
+
+      // The cookie alone, before the click's own browser even arrives.
+      const cookieAlone = await stranger.page.goto(`${issuer}${resumePath}`);
+      assert.equal(cookieAlone.status(), 400);
+      assert.equal(
+        await stranger.page.locator("h1").innerText(),
+        "这次连接没有完成",
+      );
+      assert.equal(
+        await stranger.page.locator("small").innerText(),
+        "RESUME_SECRET_REQUIRED",
+      );
+
+      // The secret alone: the browser that clicked is told it did not start here.
+      letResume();
+      await owner.page.waitForURL((url) => url.pathname === resumePath);
+      await owner.page.unroute(`**${resumePath}*`, holdResume);
+      assert.equal(
+        await owner.page.locator("h1").innerText(),
+        "这次连接已作废",
+      );
+      assert.ok(
+        (await owner.page.locator("body").innerText()).includes(
+          "不是从这个浏览器发起的",
+        ),
+      );
+      assert.equal(
+        await owner.page.locator("small").innerText(),
+        "CONSENT_VOIDED",
+      );
+      assert.equal(await overflow(owner.page), 0);
+
+      // Afterwards the stranger's browser holds a cookie and an empty hand, and
+      // even a leaked secret is spent.
+      const noSecret = await stranger.page.goto(`${issuer}${resumePath}`);
+      assert.equal(noSecret.status(), 400);
+      await stranger.page.goto(resumeRequest).catch(() => undefined);
+      assert.ok(
+        (await side.settled()).every(({ code }) => code === null),
+        "a code reached the tool",
+      );
+      assert.equal(
+        (
+          await pool.query(
+            "SELECT count(*)::int AS grants FROM community.agent_connection_grants g JOIN community.agent_connection_consents c ON g.grant_id = c.grant_id WHERE c.interaction_uid=$1",
+            [phishedUid],
+          )
+        ).rows[0].grants,
+        0,
+      );
+      // Nothing to list as connected, and the audit keeps who clicked allow.
+      assert.ok(
+        !(await ownerApi.connections()).some(
+          ({ family, mine }) => family === "claude-code" && mine,
+        ),
+      );
+      assert.ok(
+        (await ownerApi.audit({ "where[targetId][equals]": phishedUid })).some(
+          ({ op, phase, userId }) =>
+            op === "agent-connections.approve" &&
+            phase === "start" &&
+            userId === String(access.ownerId),
+        ),
+      );
+      await stranger.context.close();
+      completed.push(stage);
+
+      stage = `${name}-nothing-arms-without-an-owner-browser-session`;
+      const unopened = await person();
+      await unopened.page.goto(
+        authorize("chatgpt", client("chatgpt").redirectUris[0]).url,
+      );
+      await unopened.page.waitForURL((url) => url.pathname === "/admin/login");
+      const unarmedPath = new URL(unopened.page.url()).searchParams.get(
+        "redirect",
+      );
+      const unarmedUid = new URL(unarmedPath, origin).searchParams.get(
+        "interaction",
+      );
+      await unopened.context.close();
+      assert.equal(await ticketOf(unarmedUid), null);
+
+      const ownerSession = await ownerApi.call("POST", "users/login", {
+        email: access.ownerEmail,
+        password: access.ownerPassword,
+      });
+      assert.equal(ownerSession.status, 200);
+      const aiKey = await issueAiKey(ownerApi);
+      const armedNothing = async (label, session) => {
+        const answer = await session.page.goto(`${origin}${unarmedPath}`);
+        // The page's own answer is the control page's: a sentence, not a status.
+        assert.equal(answer.status(), 200, label);
+        await session.page.getByText(NOT_FOR_YOU).waitFor({ state: "visible" });
+        assert.equal(await review(session.page).count(), 0, label);
+        assert.equal(new URL(session.page.url()).pathname, REVIEW_PATH, label);
+        assert.equal(await overflow(session.page), 0, label);
+        assert.equal(await ticketOf(unarmedUid), null, label);
+        for (const [method, route, body] of [
+          ["GET", "agent-connections", undefined],
+          [
+            "POST",
+            "agent-connections/consent",
+            { interaction: unarmedUid, ticket: hex(32), decision: "deny" },
+          ],
+          ["POST", "agent-connections/disconnect", { id: `conn-${hex(16)}` }],
+        ]) {
+          const refused = await session.api.call(method, route, body);
+          assert.deepEqual(
+            [label, route, refused.status, refused.json?.error],
+            [label, route, 403, "OWNER_ONLY"],
+          );
+        }
+        await session.context.close();
+      };
+
+      const automation = await person();
+      assert.equal(
+        (
+          await automation.api.call("POST", "users/login", {
+            email: access.automationEmail,
+            password: access.automationPassword,
+          })
+        ).status,
+        200,
+      );
+      await armedNothing("an automation session", automation);
+      for (const [label, headers] of [
+        ["a connection token", bearer(secondTokens.access_token)],
+        ["an AI key", bearer(aiKey)],
+        ["an automation MCP key", bearer(access.bearer)],
+        [
+          "an automation REST key",
+          { authorization: `users API-Key ${access.restKey}` },
+        ],
+        [
+          "an Owner token as a JWT",
+          { authorization: `JWT ${ownerSession.json.token}` },
+        ],
+      ])
+        await armedNothing(label, await person({ extraHTTPHeaders: headers }));
+      // The positive control: the same page and the same routes in an Owner's own
+      // browser session, so the refusals above are not everything refusing.
+      await owner.page.goto(`${origin}${unarmedPath}`);
+      await review(owner.page).waitFor({ state: "visible" });
+      assert.notEqual(await ticketOf(unarmedUid), null);
+      assert.equal(
+        (await ownerApi.call("GET", "agent-connections")).status,
+        200,
+      );
+      completed.push(stage);
+
+      stage = `${name}-any-owner-sees-and-disconnects-with-the-audit-first`;
+      const secondOwnerEmail = `second-${name}-${hex()}@editorial.example.invalid`;
+      const secondOwnerPassword = hex(24);
+      const madeOwner = await ownerApi.call("POST", "users", {
+        email: secondOwnerEmail,
+        password: secondOwnerPassword,
+        role: "owner",
+        scopeCatalogIds: [],
+      });
+      assert.equal(madeOwner.status, 201);
+      const secondOwnerId = madeOwner.json.doc.id;
+      const other = await person();
+      const othersFlow = authorize("claude-code");
+      await fromTool(other.page, othersFlow);
+      await other.page.waitForURL((url) => url.pathname === "/admin/login");
+      await signIn(other.page, secondOwnerEmail, secondOwnerPassword);
+      await review(other.page).waitFor({ state: "visible" });
+      const othersTokens = await allowAtLoopback(other.page, othersFlow);
+      assert.equal((await door(othersTokens.access_token)).status, 200);
+
+      // Told on the next visit, once.
+      await owner.page.goto(`${origin}/admin`);
+      const notice = owner.page.locator("[data-agent-connections-notice]");
+      await notice.waitFor({ state: "visible" });
+      assert.ok((await notice.innerText()).includes(secondOwnerEmail));
+      await owner.page
+        .locator("[data-agent-connections-notice-dismiss]")
+        .click();
+      await notice.waitFor({ state: "hidden" });
+      await until(
+        async () =>
+          (
+            await ownerApi.call(
+              "GET",
+              "payload-preferences/agent-connections-seen",
+            )
+          ).json?.value?.seenAt !== undefined,
+        "the dismissal was not saved",
+      );
+
+      await owner.page.goto(`${origin}/admin/agent-connections`);
+      const row = owner.page.locator(
+        '[data-agent-connection-family="claude-code"]',
+        { hasText: secondOwnerEmail },
+      );
+      await row.waitFor({ state: "visible" });
+      await delay(1000);
+      assert.equal(await notice.count(), 0);
+      const othersConnection = await row.getAttribute("data-agent-connection");
+      assert.equal(await overflow(owner.page), 0);
+      await row.locator("[data-agent-connection-disconnect]").click();
+      await owner.page
+        .locator("[data-agent-connections-confirm-accept]")
+        .click();
+      await owner.page
+        .locator('[role="status"][data-tone="success"]')
+        .waitFor({ state: "visible" });
+      await row.waitFor({ state: "hidden" });
+      assert.equal((await door(othersTokens.access_token)).status, 401);
+      assert.equal(
+        (await refreshOf("claude-code", othersTokens)).error,
+        "invalid_grant",
+      );
+      assert.deepEqual(
+        (
+          await ownerApi.audit({
+            "where[targetId][equals]": othersConnection,
+          })
+        ).map(({ class: rowClass, op, phase, ok, userId, connectionId }) => ({
+          rowClass,
+          op,
+          phase,
+          ok: ok ?? null,
+          userId,
+          connectionId,
+        })),
+        [
+          {
+            rowClass: "reserved",
+            op: "agent-connections.disconnect",
+            phase: "start",
+            ok: null,
+            userId: String(access.ownerId),
+            connectionId: othersConnection,
+          },
+          {
+            rowClass: "reserved",
+            op: "agent-connections.disconnect",
+            phase: "finish",
+            ok: true,
+            userId: String(access.ownerId),
+            connectionId: othersConnection,
+          },
+        ],
+      );
+      completed.push(stage);
+
+      stage = `${name}-reconnect-after-disconnect-is-a-fresh-consent`;
+      const reconnected = await connect(other.page, "claude-code");
+      assert.equal((await door(reconnected.access_token)).status, 200);
+      assert.equal((await door(othersTokens.access_token)).status, 401);
+      completed.push(stage);
+
+      stage = `${name}-demote-and-restore-leaves-the-old-token-refused`;
+      const changeOther = (data) =>
+        ownerApi.call("PATCH", `users/${String(secondOwnerId)}`, data);
+      assert.equal((await changeOther({ role: "automation" })).status, 200);
+      assert.equal((await door(reconnected.access_token)).status, 401);
+      assert.equal((await changeOther({ role: "owner" })).status, 200);
+      assert.equal((await door(reconnected.access_token)).status, 401);
+      assert.equal(
+        (await refreshOf("claude-code", reconnected)).error,
+        "invalid_grant",
+      );
+      completed.push(stage);
+
+      stage = `${name}-a-password-change-stops-that-persons-connections`;
+      const beforePassword = await connect(other.page, "claude-code");
+      assert.equal((await door(beforePassword.access_token)).status, 200);
+      const nextPassword = hex(24);
+      assert.equal((await changeOther({ password: nextPassword })).status, 200);
+      assert.equal((await door(beforePassword.access_token)).status, 401);
+      assert.equal(
+        (await refreshOf("claude-code", beforePassword)).error,
+        "invalid_grant",
+      );
+      // Nobody else's, and the new password works.
+      assert.equal((await door(secondTokens.access_token)).status, 200);
+      assert.equal(
+        (
+          await adminApi(other.context, origin).call("POST", "users/login", {
+            email: secondOwnerEmail,
+            password: nextPassword,
+          })
+        ).status,
+        200,
+      );
+      await other.context.close();
+      completed.push(stage);
+
+      stage = `${name}-the-connections-page-works-at-phone-width`;
+      await owner.page.goto(`${origin}/admin/agent-connections`);
+      const page = owner.page.locator("[data-agent-connections]");
+      await page.locator("[data-agent-connections-connect]").waitFor({
+        state: "visible",
+      });
+      // A release keeps these equal, and a tool connects only if they are.
+      assert.equal(
+        await page.getAttribute("data-agent-connections-resource"),
+        resource,
+      );
+      const connector = new URL(
+        await owner.page
+          .locator("[data-agent-connections-claude]")
+          .getAttribute("href"),
+      );
+      assert.equal(connector.searchParams.get("connectorUrl"), resource);
+      for (const family of ["claude-code", "codex", "chatgpt"])
+        assert.equal(
+          await owner.page
+            .locator(`[data-agent-connections-steps="${family}"]`)
+            .count(),
+          1,
+          family,
+        );
+      assert.ok(
+        await owner.page
+          .locator(
+            '[data-agent-connections-pause] a[href="/admin/mcp-control"]',
+          )
+          .isVisible(),
+      );
+      assert.equal(await overflow(owner.page), 0);
+      completed.push(stage);
+
+      // What the restart check reads: one token from before the second computer,
+      // and the one that replaced it.
+      await writeFile(
+        process.env.AGENT_ACCEPTANCE_TOKEN_FILE,
+        JSON.stringify({
+          stale: firstComputer.access_token,
+          live: secondTokens.access_token,
+        }),
+        { mode: 0o600 },
+      );
+      await owner.context.close();
+      await browser.close();
+      openBrowser = undefined;
+    }
+    console.log(JSON.stringify({ ok: true, stage, completed }));
+  } catch (error) {
+    console.log(
+      JSON.stringify({
+        ok: false,
+        stage,
+        completed,
+        refusalCode,
+        category:
+          error instanceof Error ? error.constructor.name : "UnknownError",
+      }),
+    );
+    process.exitCode = 1;
+  } finally {
+    await openBrowser?.close().catch(() => undefined);
+    await side?.close();
+    if (pool) await closePostgresPool(pool);
+  }
 }

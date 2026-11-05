@@ -1,4 +1,5 @@
-import { connectionsEnabled } from "./composition";
+import { oauthSurfaceEnabled, servedPreset } from "./composition";
+import { PRESET_CAPABILITY_SCOPES } from "./contracts";
 
 /**
  * Agent Connections V1 (Issue #141) — what a standards-based client is allowed
@@ -41,7 +42,10 @@ export interface ProtectedResourceMetadata {
   readonly bearer_methods_supported: readonly string[];
 }
 
-const frozen = (value: string | undefined): URL | null => {
+const frozen = (
+  value: string | undefined,
+  environment: NodeJS.ProcessEnv,
+): URL | null => {
   if (!value) return null;
   let url: URL;
   try {
@@ -50,7 +54,9 @@ const frozen = (value: string | undefined): URL | null => {
     return null;
   }
   if (
-    !["http:", "https:"].includes(url.protocol) ||
+    !(
+      environment.NODE_ENV === "production" ? ["https:"] : ["http:", "https:"]
+    ).includes(url.protocol) ||
     url.search ||
     url.hash ||
     url.username ||
@@ -71,18 +77,21 @@ const frozen = (value: string | undefined): URL | null => {
 export const protectedResourceMetadata = (
   environment: NodeJS.ProcessEnv = process.env,
 ): ProtectedResourceMetadata | null => {
-  if (!connectionsEnabled(environment)) return null;
-  const resource = frozen(environment.AGENT_AUTHORIZATION_RESOURCE);
-  const issuer = frozen(environment.AGENT_AUTHORIZATION_ISSUER);
+  if (!oauthSurfaceEnabled(environment)) return null;
+  const resource = frozen(
+    environment.AGENT_AUTHORIZATION_RESOURCE,
+    environment,
+  );
+  const issuer = frozen(environment.AGENT_AUTHORIZATION_ISSUER, environment);
   if (resource === null || issuer === null || issuer.pathname !== "/")
     return null;
   return {
     resource: resource.href,
     authorization_servers: [issuer.origin],
-    // Exactly what this milestone grants. `artvenn:manage` is deliberately
+    // Exactly what a consent here grants. `artvenn:manage` is deliberately
     // absent: advertising a scope the consent screen refuses would be an
     // invitation to a request that cannot be approved.
-    scopes_supported: ["artvenn:read"],
+    scopes_supported: [...PRESET_CAPABILITY_SCOPES[servedPreset(environment)]],
     bearer_methods_supported: ["header"],
   };
 };
@@ -101,8 +110,8 @@ export const protectedResourceMetadata = (
 export const authorizationServerMetadataUrl = (
   environment: NodeJS.ProcessEnv = process.env,
 ): string | null => {
-  if (!connectionsEnabled(environment)) return null;
-  const issuer = frozen(environment.AGENT_AUTHORIZATION_ISSUER);
+  if (!oauthSurfaceEnabled(environment)) return null;
+  const issuer = frozen(environment.AGENT_AUTHORIZATION_ISSUER, environment);
   if (issuer === null || issuer.pathname !== "/") return null;
   return `${issuer.origin}/.well-known/oauth-authorization-server`;
 };
@@ -110,10 +119,11 @@ export const authorizationServerMetadataUrl = (
 /**
  * The `WWW-Authenticate` value a 401 from the MCP endpoint should carry.
  *
- * It names the metadata document and nothing else. Deliberately no
- * `error="invalid_token"`: the boundary answers ONE shape whatever went wrong,
- * so an operator cannot tell a forged token from a revoked connection from a
- * store outage by probing it, and that property is older than this function.
+ * It names the metadata document and the scope a client should ask for, and
+ * nothing else. Deliberately no `error="invalid_token"`: the boundary answers ONE
+ * shape whatever went wrong, so an operator cannot tell a forged token from a
+ * revoked connection from a store outage by probing it, and that property is older
+ * than this function.
  */
 export const wwwAuthenticate = (
   environment: NodeJS.ProcessEnv = process.env,
@@ -122,14 +132,15 @@ export const wwwAuthenticate = (
   if (metadata === null) return null;
   const resource = new URL(metadata.resource);
   const pointer = `resource_metadata="${resource.origin}${METADATA_PATH}${resource.pathname}"`;
+  const scope = `scope="${metadata.scopes_supported.join(" ")}"`;
   // Scheme and parameters joined, never written as one literal. See
   // CHALLENGE_SCHEME above for why that distinction is worth keeping.
-  return [CHALLENGE_SCHEME, pointer].join(" ");
+  return [CHALLENGE_SCHEME, `${pointer}, ${scope}`].join(" ");
 };
 
 /**
- * A Payload `afterError` hook that adds the metadata pointer to a 401 from the
- * MCP endpoint, and touches nothing else.
+ * A Payload `afterError` hook that adds the challenge to a 401 from the MCP
+ * endpoint, and touches nothing else.
  *
  * Narrow on purpose: the path must be the resource this Admin serves, and the
  * status must be 401. Every other error on every other route leaves with
