@@ -31,8 +31,8 @@ BEGIN
   EXECUTE format('GRANT INSERT ON community.article_authoring_grants TO %I',issuer);
   EXECUTE format('GRANT SELECT ON community.article_authoring_consents TO %I,%I',issuer,control);
   EXECUTE format('GRANT INSERT(interaction_uid,oauth_client_id,resource,scopes,expires_at) ON community.article_authoring_consents TO %I',issuer);
-  EXECUTE format('GRANT UPDATE(reviewed_owner_id,review_ticket_digest,decision,decision_request_id,decided_at,owner_id,connection_id,granted_generation) ON community.article_authoring_consents TO %I',control);
-  EXECUTE format('GRANT UPDATE(resumed_at,provider_grant_id) ON community.article_authoring_consents TO %I',issuer);
+  EXECUTE format('GRANT UPDATE(reviewed_owner_id,review_ticket_digest,decision,decision_request_id,decided_at,owner_id,connection_id,granted_generation,resume_secret_digest) ON community.article_authoring_consents TO %I',control);
+  EXECUTE format('GRANT UPDATE(resumed_at,provider_grant_id,resume_secret_digest) ON community.article_authoring_consents TO %I',issuer);
   EXECUTE format('GRANT SELECT,INSERT,UPDATE,DELETE ON community.article_authoring_provider_artifacts TO %I',issuer);
   EXECUTE format('GRANT SELECT ON community.article_authoring_wrappers TO %I,%I,%I',issuer,control,resource);
   EXECUTE format('GRANT INSERT,DELETE ON community.article_authoring_wrappers TO %I',issuer);

@@ -189,6 +189,30 @@ const requestedArticleResourceMatches = (
 export const ARTICLE_CONSENT_PREFIX = "/article-authoring/consent";
 export const ARTICLE_RESUME_PATH =
   /^\/article-authoring\/consent\/([A-Za-z0-9_-]{1,256})\/resume$/u;
+/** Empty, or the one secret the decision minted. Any other query is not resume. */
+export const ARTICLE_RESUME_QUERY = /^(?:\?secret=([A-Za-z0-9_-]{43}))?$/u;
+
+const CONSENT_VOIDED_PAGE = `<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>这次授权已作废</title>
+<h1>这次授权已作废</h1>
+<p>授权只能在发起它的浏览器里完成，而这里不是那个浏览器。为了保护你的账户，这次授权已经作废，没有任何工具因此获得权限。</p>
+<p>如果是你本人在连接工具，请回到该工具重新发起，并在同一个浏览器里完成。如果你没有发起过，可能是别人发来的链接，关闭此页即可。</p>
+</html>
+`;
+
+const sendConsentVoided = (response: ServerResponse): void => {
+  response.writeHead(403, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+    "referrer-policy": "no-referrer",
+    "content-security-policy": "default-src 'none'",
+    "x-content-type-options": "nosniff",
+  });
+  response.end(CONSENT_VOIDED_PAGE);
+};
 
 export const createArticleAuthorizationProvider = async (options: {
   readonly config: ArticleAuthorizationConfig;
@@ -205,7 +229,10 @@ export const createArticleAuthorizationProvider = async (options: {
     throw new Error("ARTICLE_AUTHORIZATION_KEYS_REFUSED");
   const require_ = createRequire(import.meta.url);
   const loaded = (await import(require_.resolve("oidc-provider"))) as {
-    errors: { InvalidTarget: new (description: string) => Error };
+    errors: {
+      InvalidTarget: new (description: string) => Error;
+      SessionNotFound: new (description: string) => Error;
+    };
     default: new (
       issuer: string,
       configuration: unknown,
@@ -384,10 +411,17 @@ export const createArticleAuthorizationProvider = async (options: {
   );
   const lifecycle = providerGrantLifecycle(provider);
 
+  /**
+   * An approval is finished only by the browser that began the request AND
+   * clicked: the provider's cookie proves the first, the secret the second. A
+   * stranger can begin a real request and send the author its consent link, so
+   * the cookie alone must never inherit what the author approved.
+   */
   const resume = async (
     request: IncomingMessage,
     response: ServerResponse,
     uid: string,
+    secret: string | null,
   ): Promise<void> => {
     const deny = () =>
       provider.interactionFinished(
@@ -399,15 +433,33 @@ export const createArticleAuthorizationProvider = async (options: {
         },
         { mergeWithLastSubmission: false },
       );
-    let interaction: ProviderInteraction;
+    let interaction: ProviderInteraction | null = null;
     try {
       interaction = await provider.interactionDetails(request, response);
-    } catch {
+    } catch (error) {
+      // No interaction the provider can read for this browser: no cookie, a bad
+      // one or an expired one. Only those void below. A lookup failure says
+      // nothing about this browser and must not cost the author a good consent.
+      if (!(error instanceof loaded.errors.SessionNotFound)) throw error;
+    }
+    if (
+      interaction?.uid !== uid &&
+      secret !== null &&
+      (await consents.voidResume(uid, secret))
+    ) {
+      sendConsentVoided(response);
+      return;
+    }
+    if (interaction === null) {
       response.writeHead(400);
       response.end();
       return;
     }
-    const consent = await consents.read(uid);
+    if (secret === null) {
+      await deny();
+      return;
+    }
+    const consent = await consents.readForResume(uid, secret);
     if (
       interaction.uid !== uid ||
       !articleResourceMatches(interaction.params.resource, config.resource) ||
@@ -445,7 +497,7 @@ export const createArticleAuthorizationProvider = async (options: {
       grant.addOIDCScope("offline_access");
     const grantId = await grant.save();
     try {
-      await consents.finalizeGrant(uid, grantId, new Date());
+      await consents.finalizeGrant(uid, secret, grantId, new Date());
     } catch {
       await lifecycle.revokeIssued(grantId).catch(() => undefined);
       await lifecycle.destroyGrant(grantId).catch(() => undefined);
