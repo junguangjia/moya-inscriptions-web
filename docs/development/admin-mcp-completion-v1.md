@@ -1,9 +1,12 @@
 # admin-mcp-completion-v1
 
-- Task record: Issue #355 r2.
+- Task record: Issue #355 r3.
 - Authority:
   [`2026-11-03 Admin MCP completion`](../governance/amendments/2026-11-03-admin-mcp-completion.md),
-  signed by the Owner on 2026-11-03.
+  signed by the Owner on 2026-11-03. The login door rows of the Behavior Matrix
+  and section 22 rest on
+  [`2026-11-05 Admin MCP login door`](../governance/amendments/2026-11-05-admin-mcp-oauth-door.md),
+  signed under the Owner's delegation of 2026-11-05, quoted in its section 1.
 - Delivery: each slice is independently reviewed and merged. Production
   deployment is a separate Owner approval. Live acceptance is read-only.
 
@@ -12,12 +15,18 @@
 Frozen for this task. When an implementation or a test conflicts with this
 matrix, the matrix wins.
 
+A row ending in `[O1]` to `[O4]` is the login door's, and is a target until
+every slice it names has merged; section 22 lists the slices. In a row without a
+marker, a clause about an operator connection or the AI connections page arrives
+with O2 and O3, and one about the issuer host with O4.
+
 | Scenario                                                                                               | Development                                                                                                                                                     | Production                                                                                                   | Must Preserve                                                                                                                                                      |
 | ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| ai_operator key lists tools                                                                            | Tools by key profile (read, operate, full), native JSON answers, four annotations each, a result schema on all but admin_view_media, deterministic order        | Same                                                                                                         | AI keys never list editorial_* or artvenn_*; at most 15 top-level tools                                                                                            |
-| Automation key or connection token on /api/mcp                                                         | Plugin path as today                                                                                                                                            | Plugin path as today                                                                                         | Unchanged behaviour; automation gains only expiry, pause, audit                                                                                                    |
+| ai_operator key lists tools                                                                            | Tools by key profile (read, operate, full), native JSON answers, four annotations each, a result schema on all but admin_view_media, deterministic order        | Same                                                                                                         | AI keys and operator connections never list editorial_* or artvenn_*; at most 15 top-level tools; an operator connection lists at profile full                     |
+| Automation key on /api/mcp                                                                             | Plugin path as today                                                                                                                                            | Plugin path as today                                                                                         | Unchanged behaviour; automation gains only expiry, pause, audit                                                                                                    |
+| Development read-only connection token on /api/mcp                                                     | Plugin path as today                                                                                                                                            | Refused as today                                                                                             | Never the native path; never Owner identity                                                                                                                        |
 | JSON-RPC array on the native path                                                                      | -32600                                                                                                                                                          | Same                                                                                                         | Plugin path keeps per-req serialization                                                                                                                            |
-| GET /api/mcp with an AI key                                                                            | 405 from the native handler                                                                                                                                     | Same                                                                                                         | Other credentials keep the plugin's answer                                                                                                                         |
+| GET /api/mcp with an AI key                                                                            | 405 from the native handler, for an operator connection too                                                                                                     | Same                                                                                                         | Other credentials keep the plugin's answer                                                                                                                         |
 | Client sends an unsupported protocol version header                                                    | HTTP 400, client falls back to initialize                                                                                                                       | Same                                                                                                         | Highest version served is 2025-11-25                                                                                                                               |
 | Read-profile key calls a write tool                                                                    | Absent from tools/list; call refused                                                                                                                            | Same                                                                                                         | Profile chosen by the Owner when issuing the key                                                                                                                   |
 | admin_view_media result                                                                                | Text plus image, no structuredContent, no outputSchema                                                                                                          | Same                                                                                                         | The exception is pinned by a test; the official client accepts it                                                                                                  |
@@ -54,13 +63,13 @@ matrix, the matrix wins.
 | Draft preview, structured                                                                              | admin_get view=preview: same projection as the page, issues, diff, media ids, relative renderPath                                                               | Same                                                                                                         | No absolute URL; no MCP key opens the Web preview route                                                                                                            |
 | Rendered image of a Catalog draft                                                                      | files_render_preview: single-use ticket in the local process, real Web page in a local browser, bounded image plus 0600 PNG                                     | Same; needs the companion and local Chrome or Chromium                                                       | Web unchanged; ticket accepted only by GET /api/editorial/preview/:id and anonymous elsewhere; Owner preview by session cookie unchanged; no browser on the server |
 | Rendered image of an Article or Collection                                                             | NO_PREVIEW_PAGE; structured draft read available                                                                                                                | Same                                                                                                         | Parity: the Owner has no preview page for these either                                                                                                             |
-| Pause on                                                                                               | Only admin_whoami remains, for all keys, next request; transfer door refuses; running work stops at the next target                                             | Same                                                                                                         | Owner Admin unaffected; Owner and automation REST keys on /api/editorial/* are not covered                                                                         |
+| Pause on                                                                                               | Only admin_whoami remains, for all keys and operator connections, next request; transfer door refuses; running work stops at the next target                    | Same                                                                                                         | Owner Admin unaffected; Owner and automation REST keys on /api/editorial/* are not covered; a Development read-only connection lists nothing                       |
 | Expired key                                                                                            | 401 KEY_EXPIRED                                                                                                                                                 | Same                                                                                                         | Renewal capped at 30 days                                                                                                                                          |
-| Forged or disabled key                                                                                 | Generic 401                                                                                                                                                     | Same                                                                                                         | No oracle                                                                                                                                                          |
+| Forged or disabled key                                                                                 | Generic 401; with the surface on, every 401 on the path carries the metadata pointer                                                                            | Same                                                                                                         | No oracle                                                                                                                                                          |
 | Owner-bound MCP key                                                                                    | 401 KEY_OWNER_BOUND                                                                                                                                             | Same; existing Owner-bound keys stop at deploy                                                               | Keys bind only to ai_operator or automation                                                                                                                        |
 | Automation key                                                                                         | Same editorial_* tools and scope; artvenn_* as today                                                                                                            | Same editorial_* tools and scope                                                                             | No new right; gains expiry, pause, audit                                                                                                                           |
-| Reserved surface by any key or Authorization header                                                    | Refused, including Authorization JWT and Bearer with an Owner token                                                                                             | Refused                                                                                                      | Only an Owner cookie session passes; other Owner credentials still read their own /api/users/me                                                                    |
-| JWT or REST key on the ai_operator row                                                                 | No authority                                                                                                                                                    | No authority                                                                                                 | Authority requires the MCP strategy                                                                                                                                |
+| Reserved surface by any key or Authorization header                                                    | Refused, including connection tokens, Authorization JWT and Bearer with an Owner token; surfaces include AI connection consent, list and disconnect             | Refused                                                                                                      | Only an Owner cookie session passes; other Owner credentials still read their own /api/users/me                                                                    |
+| JWT or REST key on the ai_operator row                                                                 | No authority                                                                                                                                                    | No authority                                                                                                 | Authority requires an MCP door strategy                                                                                                                            |
 | Audit record update or delete                                                                          | Refused for everyone                                                                                                                                            | Refused for everyone                                                                                         | Append-only by grant and trigger                                                                                                                                   |
 | Sensitive tools, all of dm, evidence, rawIp off                                                        | Absent; Backend refuses, including binary evidence routes                                                                                                       | Absent; Backend refuses                                                                                      | Only the Owner flips                                                                                                                                               |
 | Owner opens a sensitive switch                                                                         | Typed compliance confirmation on the control page; effective at once with no release, env change or restart; audit row                                          | Same; off until the Owner does this after the policy change                                                  | The policy constant shows status and refuses nothing                                                                                                               |
@@ -106,10 +115,32 @@ matrix, the matrix wins.
 | Pilot prepare, apply, media                                                                            | files_import kind=pilot spawns the built CLI with env from a local 0600 file; approval and scope guards run first                                               | Never on Production                                                                                          | assertPilotApproval and the database identity check stay; no URL, credential or SQL in tool arguments                                                              |
 | cms:legacy                                                                                             | Dry run through the companion and legacy-plan; apply through the run engine with the MCP key                                                                    | Same                                                                                                         | Protected file check stays; CLI unchanged                                                                                                                          |
 | Catalog search rebuild                                                                                 | Per-record short transactions, removal of unpublished rows, resumable; status op                                                                                | Same                                                                                                         | No SHARE lock, no full delete, no database credential; CLI unchanged                                                                                               |
-| Over the path rate limit                                                                               | Not applied by Nginx in local runs; template test only                                                                                                          | 429                                                                                                          | Per-path total only; transfer has its own zone                                                                                                                     |
-| Admin control page and audit list                                                                      | Owner cookie session sees them; anonymous and key requests refused                                                                                              | Same                                                                                                         | Other Admin pages unchanged                                                                                                                                        |
+| Over the path rate limit                                                                               | Not applied by Nginx in local runs; template test only                                                                                                          | 429; the issuer host is limited per address and as a whole, also 429                                         | Per-path total only on /api/mcp; transfer has its own zone                                                                                                         |
+| Admin control page and audit list                                                                      | Owner cookie session sees them and the AI connections page; anonymous, key and connection token requests refused                                                | Same                                                                                                         | Other Admin pages unchanged                                                                                                                                        |
 | Approval duplicate, bulk edit of accounts or keys                                                      | Refused over REST                                                                                                                                               | Same                                                                                                         | Single edits by the Owner still work                                                                                                                               |
-| `artvenn_*`, `agent/*`, AI operations, AI connections                                                  | Available as today                                                                                                                                              | NOT_FOUND as today                                                                                           | Development-only boundary unchanged                                                                                                                                |
+| `artvenn_*`, `agent/*`, AI operations, the plugin connection path                                      | Available as today                                                                                                                                              | NOT_FOUND as today                                                                                           | Development-only boundary unchanged; `/agent-connections/start` stays with it; the login door's surfaces are the rows below                                        |
+| Operator connection token on /api/mcp [O2]                                                             | Native path, profile full, same tools and answers as an ai_operator key                                                                                         | Same, when `ADMIN_MCP_OAUTH_ENABLED` is on                                                                   | Never the plugin path; never Owner identity; never lists editorial_* or artvenn_*                                                                                  |
+| OAuth surface off [O2, O3]                                                                             | Well-known paths 404; connection token generic 401                                                                                                              | Same, today's behaviour                                                                                      | Admin starts normally on bad connection config; connection tokens refused; a bare code on stderr                                                                   |
+| POST /api/mcp with no token, surface on [O2, O3]                                                       | 401 with `resource_metadata` and `scope`                                                                                                                        | Same                                                                                                         | Key callers keep their answers                                                                                                                                     |
+| Unlisted client_id, including an https URL [O1]                                                        | `invalid_client`; no fetch; no consent row                                                                                                                      | Same                                                                                                         | No registration endpoint in metadata                                                                                                                               |
+| Listed client, listed callback, signed-out person [O3]                                                 | Landing, login, back to review with the same interaction                                                                                                        | Same                                                                                                         | Nothing granted before a click; the landing reads no database                                                                                                      |
+| Consent reached without an Owner browser session [O3]                                                  | Refused, no ticket armed                                                                                                                                        | Same                                                                                                         | Key, header JWT and automation session all refused                                                                                                                 |
+| Allow [O3]                                                                                             | Reserved audit row, then decision, then grant from the frozen row; browser returns to the listed callback, whose hostname the page named, loopback included     | Same                                                                                                         | One decision per interaction; ticket single-use; Origin checked; other owners are told                                                                             |
+| Deny [O3]                                                                                              | Tool told `access_denied`; no connection power                                                                                                                  | Same                                                                                                         | Reserved audit row                                                                                                                                                 |
+| Resume with the provider cookie but no one-time secret [O1, O3]                                        | Under `operator`: refused with a plain page; no grant, no code. Read-only has no secret: the cookie and an approved row resume, as #141 measured                | Same                                                                                                         | Under `operator`, a cookie alone never finishes a consent; a test with two browser contexts pins it                                                                |
+| Resume with the one-time secret but no provider cookie [O1, O3]                                        | Under `operator`: consent void; plain page says it did not start in this browser and to tell the other owners; no code. Read-only: plain page, no void          | Same                                                                                                         | The stranger's browser cannot finish it afterwards; the audit row keeps who clicked allow                                                                          |
+| Resume with neither cookie nor secret [O1]                                                             | Plain page; nothing changes, under `operator` and read-only alike                                                                                               | Same                                                                                                         | Never a blank page                                                                                                                                                 |
+| Same person and tool connect again without disconnecting, including from a second computer [O1, O3]    | Fresh consent screen, generation raised; old tokens stop, so the first computer ends                                                                            | Same                                                                                                         | Consent is never skipped, for any listed client; one person and one client id is one connection                                                                    |
+| Disconnect by any owner [O1, O2, O3]                                                                   | Next request 401; refresh `invalid_grant`                                                                                                                       | Same                                                                                                         | Reserved audit row                                                                                                                                                 |
+| Reconnect after disconnect from the same browser [O1, O3]                                              | Fresh consent screen, then works                                                                                                                                | Same                                                                                                         | Never a silent token                                                                                                                                               |
+| Access token expires while connected [O1, O2]                                                          | 401, tool refreshes, no person involved                                                                                                                         | Same                                                                                                         | Refresh rotates                                                                                                                                                    |
+| Two refreshes with one token inside 30 s [O1]                                                          | Both succeed                                                                                                                                                    | Same                                                                                                         | After 30 s replay revokes the grant and live access tokens                                                                                                         |
+| Connection idle past 30 days, or past 180 days from consent [O1]                                       | `invalid_grant`; the tool asks the person to sign in again                                                                                                      | Same                                                                                                         | Fresh consent; no standing permission                                                                                                                              |
+| Authorizing account leaves role owner, or changes password in the Admin [O2, O3]                       | Connections stop at the next request or at once                                                                                                                 | Same                                                                                                         | Password change is never blocked: a failed revoke logs a category and the connection stays until disconnected                                                      |
+| Tool removed from the list [O1, O2]                                                                    | Next request 401; no new consent                                                                                                                                | Same                                                                                                         | Needs a restart of both services                                                                                                                                   |
+| Audit row for a connection call [O2]                                                                   | Tool name, connection id, authorizing person's email, `userId` the AI row, `keyId` empty                                                                        | Same                                                                                                         | Read only in an Owner browser session; AI cannot read it                                                                                                           |
+| admin_whoami on a connection [O2]                                                                      | `key.id` is `conn-...`, profile, expiry, authorizing account id, no email                                                                                       | Same                                                                                                         | No secret; playbook unchanged                                                                                                                                      |
+| Article issuer                                                                                         | Not changed by this work                                                                                                                                        | Not changed by this work                                                                                     | Separate host, keys, tables, clients; loopback only                                                                                                                |
 | Article MCP                                                                                            | Token refused on /api/mcp, key refused on Article path                                                                                                          | Same                                                                                                         | Issue #177 isolation                                                                                                                                               |
 | Public policy pages                                                                                    | Current text until P1                                                                                                                                           | Text confirmed by the Owner on 2026-11-03, live with the first batch and before any AI credential is placed  | Exact wording as merged in P1; no sentence offering review by an administrator                                                                                     |
 | Public site, registration, access mode                                                                 | Unchanged                                                                                                                                                       | Unchanged, except that the first batch raises the registration agreement version and notifies existing users | No release changes the access mode                                                                                                                                 |
@@ -132,7 +163,7 @@ covers its new endpoints.
 ```
 AI client
   -> POST /api/mcp (Nginx path limit)
-  -> dispatch: ai_operator key -> native handler; every other credential -> plugin, unchanged
+  -> dispatch: ai_operator key or operator connection -> native handler; every other credential -> plugin, unchanged
   -> door (adminMcpAuth) -> tool list for this key
   -> guard (audit start, pause, switches, validate)
   -> registry op
@@ -644,9 +675,10 @@ One URL, two paths. A small local Payload plugin, listed after `editorialMcp()`
 the key. The default lookup is not exported (plugin
 dist/endpoints/resolveAccessSettings.js:3-36), so its 25 lines are reproduced:
 HMAC index, find, `user._strategy='mcp-api-key'`, `user.collection`. A key bound
-to role `ai_operator` goes to the native handler. Everything else, including
-connection tokens, automation keys and refusals, goes to the plugin handler
-untouched.
+to role `ai_operator` goes to the native handler, and so does an operator
+connection token, by the branch in section 22. Everything else, including
+Development read-only connection tokens, automation keys and refusals, goes to
+the plugin handler untouched.
 
 Only the exact path is served. Payload matches a route without regard to case
 and strips `/globals`, and Next decodes the slug, so `/api/MCP`, `/api/Mcp`,
@@ -748,6 +780,7 @@ precedent apps/admin/src/agent-connections/authorization.ts:189):
 | ai_operator, profile read    | native | whoami, find, get, read, analytics, actions, view_media, job                           |
 | ai_operator, profile operate | native | read plus preview, execute                                                             |
 | ai_operator, profile full    | native | operate plus execute_irreversible, and sensitive_read when dm, evidence or rawIp is on |
+| operator connection          | native | as ai_operator, profile full                                                           |
 | any key while paused         | either | admin_whoami only                                                                      |
 
 `keyFields` (mcp.ts:45-56) filters `admin_*` out of the plugin checkbox group,
@@ -2763,8 +2796,8 @@ Also:
   off.
 - Backend audit tables for works, threads and DM access have no read path for
   anyone today.
-- Only Claude Code and Codex are verified; no hosted or phone client, because no
-  Production OAuth exists.
+- Only Claude Code and Codex are verified; no hosted or phone client, until the
+  login door in section 22 has been run against them.
 
 Accepted limits, recorded and not fixed:
 
@@ -3928,3 +3961,146 @@ Recorded when built in S7, on settlement, in tests/cms/admin-mcp-bench/.
   not. That is how the first version of this read was caught: its check for a
   later success read every finished job in one statement, on every call. A read
   past a stop has its own test, one statement more and no scan.
+
+## 22. Login door
+
+Authority:
+[`2026-11-05 Admin MCP login door`](../governance/amendments/2026-11-05-admin-mcp-oauth-door.md),
+signed under the Owner's delegation of 2026-11-05, quoted in its section 1. The
+Behavior Matrix states the behaviour; this section says how it fits together.
+Sections 1 to 21 describe the key door, which stays for automation and the
+companion. Nothing here is built until its slice merges: O1 issuer, stores and
+migration; O2 door and audit; O3 consent, page and hooks; O4 Production
+templates and the real-client record.
+
+An administrator adds one address or clicks one button in their tool, signs in
+with their usual Admin account and clicks allow. No key is issued to a person.
+
+```
+Tool     POST /api/mcp, no token -> 401 naming the metadata document
+         metadata document -> issuer host -> its discovery document
+Browser  issuer /auth -> consent row, provider cookie -> landing, reads nothing
+         -> /admin/agent-connections/consent, after login if signed out
+         -> allow: ticket, Origin, Owner browser session
+         -> reserved audit row, decision, generation raised, one-time secret
+         -> issuer resume route: provider cookie and secret both required
+         -> grant from the frozen row, code, the listed callback
+Tool     issuer /token, code and PKCE -> artvenn_ct_ token and refresh token
+         POST /api/mcp -> dispatch, door -> native path as ai_operator
+```
+
+- Gate. Production: `ADMIN_MCP_OAUTH_ENABLED=true`, profile always `operator`.
+  Development: the issuer needs `AGENT_AUTHORIZATION_ENABLED=true`, profile from
+  `AGENT_AUTHORIZATION_PROFILE`, default `read-only`, and the Admin's side needs
+  `AGENT_CONNECTIONS_ENABLED=true` once O2 and O3 land. `connectionsEnabled`
+  stays Development-only and still gates the plugin path, so Production's plugin
+  path keeps refusing connection tokens. The login door rows' Development column
+  describes Development under profile `operator`. The read-only profile is the
+  plugin connection path and stays as #141 measured it, so its resume takes the
+  cookie and an approved row with no secret, and its refresh and lifetimes are
+  unchanged.
+- Development database. Every decision now writes `resume_secret_digest`, a
+  read-only approval and a denial too. After this migration, apply
+  `infra/development/agent-connections/grant-authorization.sql` again, or a
+  long-lived Development database answers 42501 at the click.
+- Migration ledger. Under `operator` the issuer reads the ledger before it
+  listens, as the Backend does, and refuses to start with
+  `ADMIN_SCHEMA_NOT_READY` until every required migration has run unchanged.
+- Article. It runs the same `main.ts`, so its refused start now names a category
+  on stderr, and nothing else about it changes.
+- Closed list. The name on the consent page and the callback host come from
+  `AGENT_AUTHORIZATION_CLIENTS`, never from the request. There is no
+  registration endpoint, and `features.clientIdMetadataDocument` stays off so
+  its fetch path cannot run: `Client.find` reads static clients first
+  (oidc-provider lib/models/client.js). Discovery still says
+  `client_id_metadata_document_supported`, added by a post-route middleware. The
+  public policy names Anthropic and OpenAI, which covers this list; another
+  vendor needs the policy text changed first. `parseRegisteredClients` refuses
+  `hosted-https` unless its caller allows it, so Article stays loopback only.
+- Native on every entry, hosted ones too. `native_client_prompt`
+  (lib/helpers/interaction_policy/prompts/consent.js) is what forces a screen on
+  every connect. A `web` client with a live provider session and grant gets
+  none, and after a disconnect would reconnect into `invalid_grant`. An https
+  callback on a native client matches exactly; only `http:` loopback ignores the
+  port.
+- Identity. One shared `ai_operator` row, seeded with no password, so
+  `approvedBy`, locks and receipts need no change, and the audit names the
+  person beside it. Strategy `mcp-connection`, set only by the door. `isOwner`
+  and `isHumanOwner` are unchanged.
+- Binding. Under `operator`, `decideConsent` mints a one-time secret, stores its
+  digest and returns it in the resume URL. Resume needs the secret and the
+  provider cookie, so an approval reaches only the browser that started the
+  request. The clients are public and have no secret of their own, so the closed
+  list alone does not stop a stranger from starting a request. The secret is the
+  `secret` query parameter of the issuer's resume route, so the issuer's Nginx
+  log format must not carry the query string.
+- What a client asks for changes nothing. Under `operator` the issuer opens the
+  consent as `artvenn:admin`, and rewrites the scope the provider resumes with,
+  because a request asking for nothing we grant otherwise ends in
+  `access_denied` after the person clicked allow. `openid` stays only if asked
+  for and is never advertised. A client that asks for it gets an `id_token` with
+  `sub`, `aud`, `exp`, `iat` and `iss`, plus `nonce` if it sent one, and
+  `auth_time`, the provider session's login time, if it sent `max_age` or
+  `prompt=login`. Nothing else about the person: `sub` is the authorizing
+  account id, which `admin_whoami` gives the tool anyway.
+- Revoking. Under `operator`, `/token/revocation` takes the refresh token or a
+  live `artvenn_ct_` access token a tool holds, and either ends the grant: its
+  access tokens stop and refresh answers `invalid_grant`. Past its hour,
+  revoking an access token changes nothing, so the refresh token is what ends a
+  connection then. The connection stays listed until an owner disconnects it or
+  the tool connects again. Another client's token answers 200 and nothing
+  changes, as the library answers a public client.
+- Refresh after a disconnect. Under `operator` the token endpoint answers
+  `invalid_grant` by reading the connection and its grant, as Article does. The
+  Development read-only profile stays as #141 measured it: its disconnect is
+  enforced at the door.
+- Lifetimes. Access token 1 hour. Refresh token 30 days from last use, rotated
+  on each use. Grant 180 days from consent. Code 60 s. Consent window 30 min.
+  Provider session 1 hour. A refresh token's replay is tolerated for 30 s on
+  this issuer only; Article has none. Expired artifacts and undecided consent
+  rows go hourly, in the issuer's own process.
+
+| Tool        | `family`      | `clientId`                                          | Callback                                              | `callbackPolicy` |
+| ----------- | ------------- | --------------------------------------------------- | ----------------------------------------------------- | ---------------- |
+| Claude      | `claude`      | https://claude.ai/oauth/mcp-oauth-client-metadata   | https://claude.ai/api/mcp/auth_callback               | `hosted-https`   |
+| Claude Code | `claude-code` | https://claude.ai/oauth/claude-code-client-metadata | localhost and 127.0.0.1, any port, /callback          | `loopback-host`  |
+| Codex       | `codex`       | https://chatgpt.com/oauth/codex/client.json         | 127.0.0.1 and localhost, any port, /callback          | `loopback-host`  |
+| ChatGPT     | `chatgpt`     | https://chatgpt.com/oauth/client.json               | https://chatgpt.com/connector_platform_oauth_redirect | `hosted-https`   |
+
+As read from the vendors' own documents when this was designed. The parser
+requires a port on a loopback entry; the provider ignores it for a native
+client.
+
+Limits, stated:
+
+- The binding covers a stranger who started the request in their own browser. A
+  link that starts a new request in the administrator's own browser ends at the
+  tool's callback, where only the tool's own state check can refuse it. For a
+  hosted tool that is unproven until tested with two vendor accounts, and the
+  result goes here.
+- One person and one client id is one connection
+  (`agent_connections_human_client_unique`), so a second computer ends the
+  first.
+- Revoking a refresh token runs the library's own route, which deletes the token
+  it looks up first. After a fault on the deletes that follow, the first answer
+  is 500 and the retry answers 200 with nothing left to find. Refresh answers
+  `invalid_grant`, but `grant.revoked` never fires, so the wrapper is not
+  stamped and that access token lives until its hour ends.
+- A revoke that fails during a password change leaves the connection until
+  someone disconnects it. Payload's reset-password route runs only
+  `beforeValidate` (payload dist/auth/operations/resetPassword.js), so a `users`
+  change hook never sees it. No mail adapter is configured, so a person cannot
+  reach that route today; adding one needs this closed first.
+- The other owners are told of a new connection by a notice in the Admin on
+  their next visit, not when it happens, because the Admin has no mail adapter.
+  O3 builds it.
+- A connection is always at profile full, so section 14's advice to use profile
+  `read` for sessions that bulk-read untrusted content has no form here.
+- A connection has no byte channel. Uploads, originals and rendered previews
+  stay with the companion and its key, as the row "Client with no local process"
+  says.
+- Each person needs an account with that vendor, on a plan and in a place it
+  serves. Nothing in this repository changes that.
+- No real client has been through this door. Everything said here about a
+  client's behaviour comes from documents until the real-client record says
+  otherwise.

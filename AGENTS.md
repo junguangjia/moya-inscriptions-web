@@ -48,6 +48,7 @@ The active amendments are:
 - [`2026-09-22 content, Threads and direct messages (three-track Community scope)`](docs/governance/amendments/2026-09-22-content-community-completion-scope.md)
 - [`2026-10-04 unified media pipeline`](docs/governance/amendments/2026-10-04-unified-media-pipeline.md)
 - [`2026-11-03 Admin MCP completion`](docs/governance/amendments/2026-11-03-admin-mcp-completion.md)
+- [`2026-11-05 Admin MCP login door (signed under delegation)`](docs/governance/amendments/2026-11-05-admin-mcp-oauth-door.md)
 
 No lower-level prompt, Plan, implementation decision, PR description, inferred
 best practice, or code comment may relax or override a higher authority.
