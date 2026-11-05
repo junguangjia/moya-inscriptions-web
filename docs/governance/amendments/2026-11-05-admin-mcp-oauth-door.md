@@ -105,11 +105,11 @@ second computer ends the first.
 ## 4. Who stops it
 
 Any owner may see and disconnect any connection, and the other owners are told
-when one is approved. Pause stops all of them at the next request. A connection
-stops when the authorizing account leaves role `owner` or changes its password
-in the Admin, and when its tool leaves the list. A revoke that fails during a
-password change does not block the change: it is logged, and the connection
-stays until someone disconnects it.
+of a new one by a notice on their next visit to the Admin. Pause stops all of
+them at the next request. A connection stops when the authorizing account leaves
+role `owner` or changes its password in the Admin, and when its tool leaves the
+list. A revoke that fails during a password change does not block the change: it
+is logged, and the connection stays until someone disconnects it.
 
 ## 5. Migrations approved (Constitution section 17, item 3)
 

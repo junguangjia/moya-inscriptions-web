@@ -125,9 +125,12 @@ export const installAccessTokenRevocation = (
       const issued = await provider.AccessToken.find(wrapper.jti);
       if (issued === undefined || issued.clientId !== ctx.oidc.client?.clientId)
         return;
+      // The row just looked up goes last, so a retry after a fault here still
+      // finds it and finishes. Not `revokeIssued`, whose order Article shares.
       await wrappers.invalidateByGrant(wrapper.grantId, new Date());
-      await lifecycle.revokeIssued(wrapper.grantId);
+      await provider.RefreshToken.revokeByGrantId?.(wrapper.grantId);
       await lifecycle.destroyGrant(wrapper.grantId);
+      await provider.AccessToken.revokeByGrantId?.(wrapper.grantId);
     } catch {
       diagnostics.recordFailure?.("WRAPPER_REVOCATION_FAILED");
       // In this order: Koa turns an emptied body on a 500 into a 204.

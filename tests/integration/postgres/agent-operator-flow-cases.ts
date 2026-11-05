@@ -12,6 +12,7 @@ import {
 import {
   authorizationConfigFrom,
   prepareAdminAuthorizationKeys,
+  providerGrantLifecycle,
   reapExpiredArtifacts,
   startAuthorizationServer,
 } from "@moya/agent-authorization";
@@ -360,6 +361,7 @@ export const registerAgentOperatorFlowTests = (
         readonly scope?: string | null;
         readonly resource?: string | null;
         readonly repeatResource?: boolean;
+        readonly extra?: Readonly<Record<string, string>>;
       } = {},
     ): Promise<Started> => {
       const verifier = randomBytes(32).toString("base64url");
@@ -370,6 +372,8 @@ export const registerAgentOperatorFlowTests = (
       );
       if (options.repeatResource === true)
         url.searchParams.append("resource", RESOURCE);
+      for (const [name, value] of Object.entries(options.extra ?? {}))
+        url.searchParams.set(name, value);
       const response = await fetch(url, {
         redirect: "manual",
         headers: { cookie: jar.header(url) },
@@ -591,6 +595,7 @@ export const registerAgentOperatorFlowTests = (
         readonly jar?: Jar;
         readonly scope?: string | null;
         readonly resource?: string | null;
+        readonly extra?: Readonly<Record<string, string>>;
       } = {},
     ) => {
       const started = await begin(clientId, redirect, options);
@@ -1040,35 +1045,59 @@ export const registerAgentOperatorFlowTests = (
 
       it("does not bounce a client that asks for openid, and its id_token says only who authorized", async () => {
         const human = person();
+        const scope = "openid artvenn:admin offline_access";
         const { connectionId, tokens } = await connect(
           CLAUDE,
           CLAUDE_CALLBACK,
           human,
-          { scope: "openid artvenn:admin offline_access" },
+          { scope },
         );
         expect(tokens.access_token).toMatch(/^artvenn_ct_/u);
         const stored = await control.readForAuthorization(connectionId);
         expect(stored?.grant?.capabilityScopes).toEqual(["artvenn:admin"]);
         expect(stored?.grant?.protocolScopes).toEqual(["offline_access"]);
-        const claims = JSON.parse(
-          Buffer.from(
-            (tokens.id_token ?? "").split(".")[1] ?? "",
-            "base64url",
-          ).toString("utf8"),
-        ) as Record<string, unknown>;
-        expect(Object.keys(claims).sort()).toEqual([
-          "aud",
-          "exp",
-          "iat",
-          "iss",
-          "sub",
-        ]);
+        const claimsOf = (from: TokenAnswer) =>
+          JSON.parse(
+            Buffer.from(
+              (from.id_token ?? "").split(".")[1] ?? "",
+              "base64url",
+            ).toString("utf8"),
+          ) as Record<string, unknown>;
+        const always = ["aud", "exp", "iat", "iss", "sub"];
+        const claims = claimsOf(tokens);
+        expect(Object.keys(claims).sort()).toEqual(always);
         expect(claims.sub).toBe(human);
         // There is no user information to ask for with it.
         const answer = await fetch(`${issuer}/me`, {
           headers: { authorization: `Bearer ${tokens.access_token ?? ""}` },
         });
         expect(answer.status).toBe(404);
+
+        // All the request can add, and none of it about the person. A refresh
+        // issues the same set.
+        const nonce = hex(8);
+        for (const [extra, added] of [
+          [{ nonce }, ["nonce"]],
+          [{ max_age: "3600" }, ["auth_time"]],
+          [{ nonce, max_age: "3600" }, ["auth_time", "nonce"]],
+          [{ prompt: "login" }, ["auth_time"]],
+        ] as const) {
+          const who = person();
+          const asked = await connect(CLAUDE, CLAUDE_CALLBACK, who, {
+            scope,
+            extra,
+          });
+          const expected = [...always, ...added].sort();
+          const issued = claimsOf(asked.tokens);
+          expect(Object.keys(issued).sort()).toEqual(expected);
+          expect(issued.sub).toBe(who);
+          expect(issued.nonce).toBe("nonce" in extra ? nonce : undefined);
+          const renewed = await refresh(
+            CLAUDE,
+            asked.tokens.refresh_token ?? "",
+          );
+          expect(Object.keys(claimsOf(renewed)).sort()).toEqual(expected);
+        }
       });
 
       it.each([
@@ -1395,6 +1424,62 @@ export const registerAgentOperatorFlowTests = (
         expect(response.status).toBe(500);
         expect(failures).toEqual(["WRAPPER_REVOCATION_FAILED"]);
       });
+
+      const sweepOf =
+        (model: string) => (text: string, values: readonly unknown[]) =>
+          text.includes("WHERE grant_id=$1 AND model=$2") &&
+          values.includes(model);
+
+      it.each([
+        [
+          "stamping the wrappers",
+          (text) => text.includes("SET invalidated_at"),
+        ],
+        ["deleting the refresh tokens", sweepOf("RefreshToken")],
+        [
+          "destroying the grant",
+          (text, values) =>
+            text.startsWith("DELETE") && values.includes("Grant"),
+        ],
+        ["deleting the access tokens", sweepOf("AccessToken")],
+      ] satisfies [
+        string,
+        (text: string, values: readonly unknown[]) => boolean,
+      ][])(
+        "ends the connection on the retry after a fault while %s",
+        async (_step, fault) => {
+          const { connectionId, tokens } = await connect(
+            CLAUDE,
+            CLAUDE_CALLBACK,
+            person(),
+          );
+          const presented = tokens.access_token ?? "";
+          failures.length = 0;
+          outage = fault;
+          expect((await revokeToken(CLAUDE, presented)).status).toBe(500);
+          expect(failures).toEqual(["WRAPPER_REVOCATION_FAILED"]);
+          outage = null;
+
+          expect((await revokeToken(CLAUDE, presented)).status).toBe(200);
+          expect((await wrapperRow(presented))?.invalidated_at).not.toBeNull();
+          expect(
+            await refresh(CLAUDE, tokens.refresh_token ?? ""),
+          ).toMatchObject({ status: 400, error: "invalid_grant" });
+          // And nothing the provider keeps is left behind.
+          const [grant] = await grantsOf(connectionId);
+          const { rows } = await pool.query(
+            `SELECT model FROM community.agent_connection_provider_artifacts
+              WHERE grant_id=$1 AND model IN ('AccessToken','RefreshToken')`,
+            [grant?.grant_id],
+          );
+          expect(rows).toEqual([]);
+          expect(
+            await providerGrantLifecycle(server.bundle.provider).isAbsent(
+              grant?.grant_id ?? "",
+            ),
+          ).toBe(true);
+        },
+      );
 
       it("keeps the lifetimes the amendment names", async () => {
         const jar = newJar();

@@ -3570,6 +3570,8 @@ Tool     issuer /token, code and PKCE -> artvenn_ct_ token and refresh token
 - Migration ledger. Under `operator` the issuer reads the ledger before it
   listens, as the Backend does, and refuses to start with
   `ADMIN_SCHEMA_NOT_READY` until every required migration has run unchanged.
+- Article. It runs the same `main.ts`, so its refused start now names a category
+  on stderr, and nothing else about it changes.
 - Closed list. The name on the consent page and the callback host come from
   `AGENT_AUTHORIZATION_CLIENTS`, never from the request. There is no
   registration endpoint, and `features.clientIdMetadataDocument` stays off so
@@ -3601,13 +3603,17 @@ Tool     issuer /token, code and PKCE -> artvenn_ct_ token and refresh token
   because a request asking for nothing we grant otherwise ends in
   `access_denied` after the person clicked allow. `openid` stays only if asked
   for and is never advertised. A client that asks for it gets an `id_token` with
-  no claim beyond `sub`, `aud`, `exp`, `iat` and `iss`. Its `sub` is the
-  authorizing account id, which `admin_whoami` gives the tool anyway.
-- Revoking. Under `operator`, `/token/revocation` takes the refresh token or the
-  `artvenn_ct_` access token a tool holds, and either ends the grant: its access
-  tokens stop and refresh answers `invalid_grant`. The connection stays listed
-  until an owner disconnects it or the tool connects again. Another client's
-  token answers 200 and nothing changes, as the library answers a public client.
+  `sub`, `aud`, `exp`, `iat` and `iss`, plus `nonce` if it sent one, and
+  `auth_time`, the provider session's login time, if it sent `max_age` or
+  `prompt=login`. Nothing else about the person: `sub` is the authorizing
+  account id, which `admin_whoami` gives the tool anyway.
+- Revoking. Under `operator`, `/token/revocation` takes the refresh token or a
+  live `artvenn_ct_` access token a tool holds, and either ends the grant: its
+  access tokens stop and refresh answers `invalid_grant`. Past its hour,
+  revoking an access token changes nothing, so the refresh token is what ends a
+  connection then. The connection stays listed until an owner disconnects it or
+  the tool connects again. Another client's token answers 200 and nothing
+  changes, as the library answers a public client.
 - Refresh after a disconnect. Under `operator` the token endpoint answers
   `invalid_grant` by reading the connection and its grant, as Article does. The
   Development read-only profile stays as #141 measured it: its disconnect is
@@ -3639,6 +3645,11 @@ Limits, stated:
 - One person and one client id is one connection
   (`agent_connections_human_client_unique`), so a second computer ends the
   first.
+- Revoking a refresh token runs the library's own route, which deletes the token
+  it looks up first. After a fault on the deletes that follow, the first answer
+  is 500 and the retry answers 200 with nothing left to find. Refresh answers
+  `invalid_grant`, but `grant.revoked` never fires, so the wrapper is not
+  stamped and that access token lives until its hour ends.
 - A revoke that fails during a password change leaves the connection until
   someone disconnects it. Payload's reset-password route runs only
   `beforeValidate` (payload dist/auth/operations/resetPassword.js), so a `users`
