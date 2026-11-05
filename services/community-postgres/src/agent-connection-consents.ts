@@ -1,3 +1,5 @@
+import { createHash, randomBytes } from "node:crypto";
+
 import {
   AgentConnectionRowError,
   asInvariant,
@@ -40,7 +42,7 @@ import {
  * to this human, which is the CSRF property — obtained without touching a
  * cookie attribute and without a same-site bounce nobody tested.
  *
- * The four methods below are TWO roles' halves, and the split is the design:
+ * The methods below are TWO roles' halves, and the split is the design:
  *
  *   `open`   PROVIDER. Writes only what the provider will enforce — the exact
  *            client, resource, scopes and deadline of a live interaction. It
@@ -48,19 +50,24 @@ import {
  *            it holds no privilege on `decision`.
  *   `arm`    CONTROL PLANE. Writes who is deciding, about which connection,
  *            and the digest of the secret it just handed that browser.
- *   `decide` CONTROL PLANE. The decision, once.
+ *   `decide` CONTROL PLANE. The decision, once, with the digest of the one-time
+ *            resume secret when it is an approval.
  *   `resume` PROVIDER. Marks the interaction spent and records its grant.
+ *   `voidResume` PROVIDER. Marks it spent with no grant, when the secret came
+ *            back in a browser that did not start the request.
+ *   `reapExpired` PROVIDER. Removes rows nobody decided, past their deadline.
  *
  * So there is no shared secret between the Admin and the provider and no HTTP
  * hop where one asserts the other's facts: the row IS the integration, and
  * each half is bounded by a column grant rather than by trust.
  *
- * Three refusals are the database's, not this module's, and that is on
- * purpose (probed on the live schema, r15):
+ * These refusals are the database's, not this module's, and that is on
+ * purpose (the last two probed on the live schema, r15):
  *
- *   * `preset = 'management'`        -> CHECK `..._read_only_milestone`
- *   * a second decision              -> trigger "a consent decision is final"
- *   * a second resume                -> trigger "a resumed interaction is spent"
+ *   * `preset = 'management'`         -> CHECK `..._reachable_presets`
+ *   * an operator approval, no secret -> CHECK `..._has_resume_secret`
+ *   * a second decision               -> trigger "a consent decision is final"
+ *   * a second resume                 -> trigger "a resumed interaction is spent"
  *
  * The single-use property is therefore not a `SELECT ... then UPDATE` this
  * code could lose a race on. Be exact about the mechanism, because an earlier
@@ -74,8 +81,8 @@ import {
 /** A decision, spelled exactly as the CHECK constraint spells it. */
 export type ConsentDecision = "approved" | "denied";
 
-/** The presets the column allows. Only one is reachable this milestone. */
-export type ConsentPreset = "read-only" | "management";
+/** The presets the column allows. `management` stays unreachable at the CHECK. */
+export type ConsentPreset = "read-only" | "management" | "operator";
 
 /**
  * A consent as the Admin reads it back. Nothing here is a credential: the
@@ -94,6 +101,12 @@ export interface StoredConsent {
   readonly preset: ConsentPreset;
   /** Null until the review page mints one. The provider never sees it. */
   readonly ticketArmed: boolean;
+  /**
+   * Whether this approval carries a one-time resume secret. Presence, never the
+   * digest: only `resumeSecretMatches`, `resume` and `voidResume` compare it, in
+   * their own WHERE clause.
+   */
+  readonly resumeSecretArmed: boolean;
   readonly grantedGeneration: number | null;
   readonly issuedAt: string;
   readonly expiresAt: string;
@@ -132,8 +145,33 @@ export interface ConsentArming {
 }
 
 const DECISIONS = new Set<string>(["approved", "denied"]);
-const PRESETS = new Set<string>(["read-only", "management"]);
+const PRESETS = new Set<string>(["read-only", "management", "operator"]);
 const DIGEST = /^[0-9a-f]{64}$/u;
+
+/**
+ * The one-time resume secret, as the Admin hands it to the browser that clicked
+ * allow and the authorization service reads it back. Here because those two
+ * cannot import each other and have to agree on it, like the rest of this store.
+ * 32 random bytes, base64url, so it travels in a query string unescaped.
+ */
+const RESUME_SECRET = /^[A-Za-z0-9_-]{43}$/u;
+
+/** The query parameter it travels in on the issuer's resume route. */
+export const RESUME_SECRET_PARAMETER = "secret";
+
+export const isResumeSecret = (value: unknown): value is string =>
+  typeof value === "string" && RESUME_SECRET.test(value);
+
+export const digestResumeSecret = (secret: string): string =>
+  createHash("sha256").update(secret, "utf8").digest("hex");
+
+export const mintResumeSecret = (): {
+  readonly secret: string;
+  readonly digest: string;
+} => {
+  const secret = randomBytes(32).toString("base64url");
+  return { secret, digest: digestResumeSecret(secret) };
+};
 
 const UID_MAX_BYTES = 256;
 const CLIENT_ID_MAX_BYTES = 1024;
@@ -145,6 +183,7 @@ const CONSENT_COLUMNS = [
   // Presence, never the value: a digest is not a credential, but there is no
   // reason for one to travel further than the WHERE clause that checks it.
   "(ticket_digest IS NOT NULL) AS ticket_armed",
+  "(resume_secret_digest IS NOT NULL) AS resume_secret_armed",
   "connection_id",
   "human_account_id",
   "oauth_client_id",
@@ -211,6 +250,25 @@ export const parseConsentRow = (
       row.connection_id === null)
   )
     throw new AgentConnectionRowError("DECISION_NOT_ATTRIBUTED", "decision");
+  const resumeSecretArmed = row.resume_secret_armed;
+  if (typeof resumeSecretArmed !== "boolean")
+    throw new AgentConnectionRowError("NOT_A_BOOLEAN", "resume_secret_armed");
+  // The pair the CHECK constraints couple. A row that somehow escaped them must
+  // not read back as an approval only a cookie is needed to finish.
+  if (resumeSecretArmed && decision !== "approved")
+    throw new AgentConnectionRowError(
+      "RESUME_SECRET_WITHOUT_APPROVAL",
+      "resume_secret_digest",
+    );
+  if (
+    row.preset === "operator" &&
+    decision === "approved" &&
+    !resumeSecretArmed
+  )
+    throw new AgentConnectionRowError(
+      "OPERATOR_APPROVAL_WITHOUT_RESUME_SECRET",
+      "resume_secret_digest",
+    );
   return {
     interactionUid: boundedBytes(
       row.interaction_uid,
@@ -218,6 +276,7 @@ export const parseConsentRow = (
       "interaction_uid",
     ),
     ticketArmed,
+    resumeSecretArmed,
     connectionId:
       row.connection_id === null || row.connection_id === undefined
         ? null
@@ -270,8 +329,9 @@ export interface ConsentStoreOptions {
    *                     neither record a decision nor say who made one.
    *   consent role   -- SELECT; UPDATE (ticket_digest, human_account_id,
    *                     connection_id, decision, decided_at,
-   *                     granted_generation). NO INSERT: it cannot conjure an
-   *                     interaction nobody requested, and no resume.
+   *                     granted_generation, resume_secret_digest). NO INSERT:
+   *                     it cannot conjure an interaction nobody requested, and
+   *                     no resume.
    *
    * An earlier version of this note listed the consent role as holding INSERT
    * and omitted the three identity columns it does hold. It also described a
@@ -394,6 +454,10 @@ export const createConsentStore = (options: ConsentStoreOptions) => {
      * A null return means one of those did not hold. It deliberately does not
      * say WHICH: the caller has no legitimate use for a distinction that would
      * also tell a prober whether a ticket was merely expired or wrong.
+     *
+     * `resumeSecretDigest` is written in this one statement, so there is no
+     * moment when an approval exists and its secret does not. An approval of an
+     * `operator` interaction without one is refused by the database.
      */
     async decide(input: {
       readonly interactionUid: string;
@@ -401,6 +465,7 @@ export const createConsentStore = (options: ConsentStoreOptions) => {
       readonly humanAccountId: string;
       readonly decision: ConsentDecision;
       readonly grantedGeneration: number | null;
+      readonly resumeSecretDigest?: string | null;
     }): Promise<StoredConsent | null> {
       if (!DIGEST.test(input.ticketDigest))
         throw new AgentConnectionRowError("MALFORMED", "ticket_digest");
@@ -412,13 +477,22 @@ export const createConsentStore = (options: ConsentStoreOptions) => {
           "GENERATION_NOT_COUPLED_TO_APPROVAL",
           "granted_generation",
         );
+      const resumeSecretDigest = input.resumeSecretDigest ?? null;
+      if (resumeSecretDigest !== null && !DIGEST.test(resumeSecretDigest))
+        throw new AgentConnectionRowError("MALFORMED", "resume_secret_digest");
+      if (resumeSecretDigest !== null && input.decision !== "approved")
+        throw new AgentConnectionRowError(
+          "RESUME_SECRET_WITHOUT_APPROVAL",
+          "resume_secret_digest",
+        );
       let result;
       try {
         result = await pool.query(
           `UPDATE community.agent_connection_consents
               SET decision=$4,
                   decided_at=CURRENT_TIMESTAMP,
-                  granted_generation=$5
+                  granted_generation=$5,
+                  resume_secret_digest=$6
             WHERE interaction_uid=$1
               AND ticket_digest=$2
               AND human_account_id=$3
@@ -431,6 +505,7 @@ export const createConsentStore = (options: ConsentStoreOptions) => {
             input.humanAccountId,
             input.decision,
             input.grantedGeneration,
+            resumeSecretDigest,
           ],
         );
       } catch (error) {
@@ -442,15 +517,20 @@ export const createConsentStore = (options: ConsentStoreOptions) => {
 
     /**
      * Marks an approved interaction spent, and records the grant it produced.
-     * The PROVIDER role's method, and the only write it has on this table.
+     * The PROVIDER role's method, and its usual write on this table.
      *
      * `resumed_at IS NULL` in the WHERE clause is the replay defence; the
      * trigger is the same defence one layer down, for a caller holding a role
      * that can write the column at all.
+     *
+     * The digest must be the one the approval stored: a row with a secret never
+     * resumes without it, and a row with none never resumes with one. So a caller
+     * that forgets to pass it gets a refusal rather than a cookie-only finish.
      */
     async resume(input: {
       readonly interactionUid: string;
       readonly grantId: string;
+      readonly resumeSecretDigest?: string | null;
     }): Promise<StoredConsent | null> {
       let result;
       try {
@@ -461,14 +541,83 @@ export const createConsentStore = (options: ConsentStoreOptions) => {
             WHERE interaction_uid=$1
               AND decision='approved'
               AND resumed_at IS NULL
+              AND resume_secret_digest IS NOT DISTINCT FROM $3
           RETURNING ${CONSENT_SELECT}`,
-          [input.interactionUid, input.grantId],
+          [
+            input.interactionUid,
+            input.grantId,
+            input.resumeSecretDigest ?? null,
+          ],
         );
       } catch (error) {
         return asInvariant(error);
       }
       const row = result.rows[0] as Record<string, unknown> | undefined;
       return row === undefined ? null : parseConsentRow(row);
+    },
+
+    /**
+     * Whether this is the secret the approval stored. The check `resume` needs
+     * BEFORE it builds a grant; `resume` then repeats it in its own WHERE clause.
+     * False for a wrong secret, an absent row and a row with no secret alike,
+     * because a caller has no legitimate use for telling those apart.
+     */
+    async resumeSecretMatches(
+      interactionUid: string,
+      resumeSecretDigest: string,
+    ): Promise<boolean> {
+      const { rows } = await pool.query(
+        `SELECT 1 FROM community.agent_connection_consents
+          WHERE interaction_uid=$1 AND resume_secret_digest=$2`,
+        [interactionUid, resumeSecretDigest],
+      );
+      return rows.length === 1;
+    },
+
+    /**
+     * Spends an approval with no grant, because its secret came back in a browser
+     * that did not start the request. That is the shape of a phished click: the
+     * browser holding the provider's cookie belongs to whoever sent the link. No
+     * grant is written, and the cookie's owner finds the row spent afterwards.
+     *
+     * Conditional on the digest, so only the holder of the real secret can void
+     * an approval, and a stranger guessing at a uid changes nothing. Null means
+     * it changed nothing: a wrong secret, or an interaction already spent.
+     */
+    async voidResume(input: {
+      readonly interactionUid: string;
+      readonly resumeSecretDigest: string;
+    }): Promise<StoredConsent | null> {
+      let result;
+      try {
+        result = await pool.query(
+          `UPDATE community.agent_connection_consents
+              SET resumed_at=CURRENT_TIMESTAMP
+            WHERE interaction_uid=$1
+              AND decision='approved'
+              AND resumed_at IS NULL
+              AND resume_secret_digest=$2
+          RETURNING ${CONSENT_SELECT}`,
+          [input.interactionUid, input.resumeSecretDigest],
+        );
+      } catch (error) {
+        return asInvariant(error);
+      }
+      const row = result.rows[0] as Record<string, unknown> | undefined;
+      return row === undefined ? null : parseConsentRow(row);
+    },
+
+    /**
+     * Removes interactions nobody decided, a day past their deadline. Through a
+     * fixed function, because the provider role holds no DELETE on this table
+     * and a decided row is the ledger. Returns how many went.
+     */
+    async reapExpired(maxRows = 1000): Promise<number> {
+      const { rows } = await pool.query(
+        "SELECT community.agent_connection_consents_reap($1) AS reaped",
+        [maxRows],
+      );
+      return Number((rows[0] as { reaped: unknown }).reaped);
     },
   };
 };

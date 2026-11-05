@@ -13,6 +13,8 @@ import { registerAgentAuthorizationFlowTests } from "./agent-authorization-flow-
 import { registerAgentConnectionConsentTests } from "./agent-connection-consent-cases.js";
 import { registerAgentConnectionProviderTests } from "./agent-connection-provider-cases.js";
 import { registerAgentConnectionStoreTests } from "./agent-connection-store-cases.js";
+import { registerAgentOperatorFlowTests } from "./agent-operator-flow-cases.js";
+import { registerAgentOperatorStoreTests } from "./agent-operator-store-cases.js";
 import { registerAgentConnectionTenStepTests } from "./agent-connection-ten-step-cases.js";
 import { registerAgentConnectionWrapperTests } from "./agent-connection-wrapper-cases.js";
 import { registerAgentConnectionTests } from "./agent-connections-cases.js";
@@ -1151,6 +1153,8 @@ registerAgentConnectionWrapperTests(pool);
 registerAgentConnectionTenStepTests(pool);
 registerAgentConnectionProviderTests(pool);
 registerAgentConnectionConsentTests(pool);
+registerAgentOperatorStoreTests(pool);
+registerAgentOperatorFlowTests(pool);
 registerAgentAuthorizationFlowTests(pool);
 
 registerWorkPublishingContentTests(pool);

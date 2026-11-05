@@ -1,10 +1,17 @@
 export {
   AUTHORIZATION_ENABLED_SETTING,
+  AUTHORIZATION_PROFILE_SETTING,
   AuthorizationConfigError,
+  OPERATOR_ENABLED_SETTING,
   authorizationConfigFrom,
   authorizationEnabled,
 } from "./config.js";
-export type { AuthorizationConfig } from "./config.js";
+export type { AuthorizationConfig, AuthorizationProfile } from "./config.js";
+export {
+  adminAuthorizationPostgresFrom,
+  prepareAdminAuthorizationKeys,
+} from "./admin-runtime-config.js";
+export { reapExpiredArtifacts, startArtifactReaper } from "./reaper.js";
 export { createAuthorizationProvider } from "./provider.js";
 export type {
   OidcProvider,

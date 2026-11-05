@@ -39,8 +39,8 @@ import { CONNECTION_CLIENT_PATTERN } from "./agent-connection-identity.js";
 export type StoredConnectionStatus =
   "awaiting-consent" | "authorized" | "revoked";
 
-/** The two consent presets, spelled exactly as the CHECK constraint spells them. */
-export type StoredConnectionPreset = "read-only" | "management";
+/** The consent presets, spelled exactly as the CHECK constraint spells them. */
+export type StoredConnectionPreset = "read-only" | "management" | "operator";
 
 /**
  * Descriptive vendor family. Never identity.
@@ -187,7 +187,7 @@ const GRANT_COLUMNS = [
 const CONNECTION_SELECT = CONNECTION_COLUMNS.join(", ");
 
 const STATUSES = new Set(["awaiting-consent", "authorized", "revoked"]);
-const PRESETS = new Set(["read-only", "management"]);
+const PRESETS = new Set(["read-only", "management", "operator"]);
 const DESTROY_STATUSES = new Set([
   "not-requested",
   "pending",
@@ -390,6 +390,19 @@ export const parseGrantRow = (
   ),
   destroyedAt: instantOrNull(row.destroyed_at, "destroyed_at"),
 });
+
+/** A connection as both page lists read it. */
+const parseListedRow = (entry: unknown): ListedConnection => {
+  const row = entry as Record<string, unknown>;
+  return {
+    ...parseConnectionRow(row),
+    lastVerifiedAt: instantOrNull(row.last_verified_at, "last_verified_at"),
+    currentGrantId:
+      row.current_grant_id === null || row.current_grant_id === undefined
+        ? null
+        : boundedBytes(row.current_grant_id, 256, "current_grant_id"),
+  };
+};
 
 /** Strips one table's alias prefix back to bare column names for parsing. */
 const unprefix = (
@@ -770,20 +783,56 @@ export const createAgentConnectionStore = (
      * request authenticated is a fact about the past, and filtering it would
      * make a revoked connection's last sighting disappear.
      *
-     * It deliberately does NOT touch `version`. This fires once per admitted
+     * It deliberately does NOT touch `version`. This fires for each admitted
      * MCP request and takes a row lock the disconnect's compare-and-set also
      * wants; leaving `version` alone is what stops an observation from making
      * a concurrent lifecycle transition lose its race. Recorded because it
      * reads as an omission and is a decision.
+     *
+     * Throttled to once a minute, as the key door's `touchLastUsed` is, so a
+     * busy tool does not write a row per call. A request inside that minute
+     * matches nothing and takes no lock. True means this call stamped the row;
+     * false means it was stamped recently, or there is no such connection.
      */
     async markVerified(connectionId: string): Promise<boolean> {
       const { rowCount } = await pool.query(
         `UPDATE community.agent_connections
             SET last_verified_at=CURRENT_TIMESTAMP
-          WHERE id=$1`,
+          WHERE id=$1
+            AND (last_verified_at IS NULL
+                 OR last_verified_at < CURRENT_TIMESTAMP - interval '60 seconds')`,
         [connectionId],
       );
       return rowCount === 1;
+    },
+
+    /**
+     * Every live connection, whoever authorized it, newest consent first. What
+     * the operator page lists, because any owner may see and disconnect any of
+     * them.
+     *
+     * Live means the connection's current grant was built at its current
+     * generation. `decideConsent` raises the generation and sets `authorized`
+     * BEFORE the browser resumes, so an allow that was voided or abandoned
+     * leaves a row saying `authorized` with no token behind it, and the tokens
+     * it replaced already refused. Listing that row as connected would be
+     * false, and there is nothing behind it to disconnect.
+     */
+    async listAuthorized(): Promise<readonly ListedConnection[]> {
+      const { rows } = await pool.query(
+        `SELECT ${CONNECTION_COLUMNS.map((column) => `c.${column}`).join(", ")},
+                c.last_verified_at, c.current_grant_id
+           FROM community.agent_connections c
+           JOIN community.agent_connection_grants g
+             ON g.connection_id = c.id
+            AND g.grant_id = c.current_grant_id
+            AND g.generation_at_consent = c.generation
+          WHERE c.status='authorized'
+            AND c.revoked_at IS NULL
+          ORDER BY c.consented_at DESC, c.id DESC
+          LIMIT 200`,
+      );
+      return rows.map((entry) => parseListedRow(entry));
     },
 
     /**
@@ -808,20 +857,7 @@ export const createAgentConnectionStore = (
           LIMIT 200`,
         [humanAccountId],
       );
-      return rows.map((entry) => {
-        const row = entry as Record<string, unknown>;
-        return {
-          ...parseConnectionRow(row),
-          lastVerifiedAt: instantOrNull(
-            row.last_verified_at,
-            "last_verified_at",
-          ),
-          currentGrantId:
-            row.current_grant_id === null || row.current_grant_id === undefined
-              ? null
-              : boundedBytes(row.current_grant_id, 256, "current_grant_id"),
-        };
-      });
+      return rows.map((entry) => parseListedRow(entry));
     },
 
     /**

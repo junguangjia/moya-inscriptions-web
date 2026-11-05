@@ -46,12 +46,17 @@ export const oauthClientIdSchema = z.string().refine(isOauthClientId, {
 });
 
 /**
- * Two presets, and no third. `read-only` is the default for a new connection;
+ * Three presets, and no fourth. `read-only` is the default for a new connection;
  * `management` still requires the Owner to approve every operation in the
  * Admin, so it grants the right to PREPARE and RUN an approved operation,
- * never the right to approve one.
+ * never the right to approve one. `operator` is what an administrator grants by
+ * signing in; it holds no tool here, so the plugin path never serves it.
  */
-export const connectionPresetSchema = z.enum(["read-only", "management"]);
+export const connectionPresetSchema = z.enum([
+  "read-only",
+  "management",
+  "operator",
+]);
 export type ConnectionPreset = z.infer<typeof connectionPresetSchema>;
 
 /**
@@ -72,6 +77,7 @@ export const PRESET_SCOPES: Readonly<
     "operations:execute",
     "operations:undo",
   ],
+  operator: [],
 };
 
 /**
@@ -110,6 +116,7 @@ export const PRESET_TOOLS: Readonly<
     "artvenn_operations_cancel",
     "artvenn_operations_prepare_undo",
   ],
+  operator: [],
 };
 
 /**
@@ -154,7 +161,11 @@ export const toolGrants = (preset: ConnectionPreset): Record<string, boolean> =>
  * authorization for an MCP resource, not an identity-token product. Adding it
  * would need a tested client integration that actually requires it.
  */
-export const capabilityScopeSchema = z.enum(["artvenn:read", "artvenn:manage"]);
+export const capabilityScopeSchema = z.enum([
+  "artvenn:read",
+  "artvenn:manage",
+  "artvenn:admin",
+]);
 export type CapabilityScope = z.infer<typeof capabilityScopeSchema>;
 
 /** Accepted for the refresh lifecycle; grants nothing. */
@@ -168,6 +179,7 @@ export const PRESET_CAPABILITY_SCOPES: Readonly<
 > = Object.freeze({
   "read-only": Object.freeze(["artvenn:read"] as const),
   management: Object.freeze(["artvenn:read", "artvenn:manage"] as const),
+  operator: Object.freeze(["artvenn:admin"] as const),
 });
 
 /** The exact capability set a token for this preset must carry. */

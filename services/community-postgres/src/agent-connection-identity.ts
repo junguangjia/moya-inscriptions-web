@@ -129,6 +129,9 @@ export const isOauthClientId = (value: unknown): value is string =>
  *                     the default for anything that does not say otherwise.
  *   `loopback-host`   additionally admits the literal host `localhost`, and
  *                     then requires an explicit port and a real path.
+ *   `hosted-https`    one exact `https:` callback on a vendor's public host,
+ *                     for a tool that runs in the vendor's cloud. Refused
+ *                     unless the caller allows it (`parseRegisteredClients`).
  *
  * `loopback-host` exists because real native clients publish a `localhost`
  * callback — Cursor Desktop's is exactly `http://localhost:8787/callback` —
@@ -138,6 +141,7 @@ export const isOauthClientId = (value: unknown): value is string =>
 export const CALLBACK_POLICIES = Object.freeze([
   "loopback-ip",
   "loopback-host",
+  "hosted-https",
 ] as const);
 export type CallbackPolicy = (typeof CALLBACK_POLICIES)[number];
 
@@ -162,19 +166,47 @@ export interface RegisteredClient {
   readonly redirectUris: readonly string[];
 }
 
-/** Hosts each policy will accept. Never a wildcard, never a suffix match. */
-const POLICY_HOSTS: Readonly<Record<CallbackPolicy, readonly string[]>> = {
+/** Hosts each loopback policy will accept. Never a wildcard, never a suffix match. */
+const POLICY_HOSTS: Readonly<
+  Record<Exclude<CallbackPolicy, "hosted-https">, readonly string[]>
+> = {
   "loopback-ip": ["127.0.0.1", "[::1]"],
   "loopback-host": ["127.0.0.1", "[::1]", "localhost"],
 };
 
 /**
+ * One hosted callback: an exact `https:` URL on a named public host, with a real
+ * path and nothing else. `oidc-provider` matches it byte for byte, because its
+ * ephemeral-port exception covers only `http:` loopback, so this is the one
+ * policy where what the registry stores is what the provider enforces.
+ *
+ * The host pattern needs two labels and a final label that starts with a
+ * letter, so an address, a bare intranet name and `localhost` are all refused;
+ * the provider's own client schema also refuses `https:` loopback on a native
+ * client, at startup. The round trip refuses `:443`, which the parser drops.
+ * The entry itself is searched for `?` and `#`, because a bare one reads back
+ * as an empty `search` or `hash` and survives the round trip.
+ */
+const HOSTED_CALLBACK_HOST = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z][a-z0-9-]*$/u;
+
+const isHostedCallback = (url: URL, entry: string): boolean =>
+  url.protocol === "https:" &&
+  HOSTED_CALLBACK_HOST.test(url.hostname) &&
+  url.username === "" &&
+  url.password === "" &&
+  url.port === "" &&
+  !/[?#]/u.test(entry) &&
+  url.pathname !== "/" &&
+  url.href === entry;
+
+/**
  * A client's redirect URIs, exactly as the provider will have to match them.
  *
- * A native client's loopback redirect is the only shape this milestone has a
- * use for, and anything else is refused rather than passed through: a redirect
- * target is where an authorization code is delivered, so a registry that
- * accepted a remote host would be the whole flow's weakest link.
+ * A native client's loopback redirect is the default shape, and anything else
+ * is refused rather than passed through: a redirect target is where an
+ * authorization code is delivered, so a registry that accepted a remote host
+ * by default would be the whole flow's weakest link. `hosted-https` is the one
+ * exception, asked for in writing per registration and allowed per caller.
  *
  * WHAT EACH REGISTRATION BUYS BY CHOOSING `loopback-host`, stated as a
  * tradeoff rather than as a reassurance:
@@ -204,7 +236,6 @@ const parseRedirectUris = (
 ): readonly string[] => {
   if (!Array.isArray(value) || value.length === 0)
     throw new RegisteredClientError("CLIENTS_MALFORMED");
-  const hosts = POLICY_HOSTS[policy];
   return value.map((entry) => {
     if (typeof entry !== "string")
       throw new RegisteredClientError("CLIENTS_MALFORMED");
@@ -214,9 +245,14 @@ const parseRedirectUris = (
     } catch {
       throw new RegisteredClientError("CLIENTS_MALFORMED");
     }
+    if (policy === "hosted-https") {
+      if (!isHostedCallback(url, entry))
+        throw new RegisteredClientError("CLIENTS_REDIRECT_NOT_HOSTED");
+      return entry;
+    }
     if (
       url.protocol !== "http:" ||
-      !hosts.includes(url.hostname) ||
+      !POLICY_HOSTS[policy].includes(url.hostname) ||
       url.hash !== "" ||
       url.search !== "" ||
       url.username !== "" ||
@@ -244,9 +280,13 @@ const parseRedirectUris = (
  * that silently dropped a client would make the Admin show nothing where the
  * provider will happily authorize something, and the Owner would be consenting
  * to a screen that had quietly omitted it.
+ *
+ * `allowHosted` defaults to false, so a caller that does not say otherwise,
+ * Article among them, stays loopback only and refuses a hosted entry at startup.
  */
 export const parseRegisteredClients = (
   value: string,
+  options: { readonly allowHosted?: boolean } = {},
 ): ReadonlyMap<string, RegisteredClient> => {
   let parsed: unknown;
   try {
@@ -283,6 +323,8 @@ export const parseRegisteredClients = (
       : "loopback-ip";
     if (!isCallbackPolicy(callbackPolicy))
       throw new RegisteredClientError("CLIENTS_MALFORMED");
+    if (callbackPolicy === "hosted-https" && options.allowHosted !== true)
+      throw new RegisteredClientError("CLIENTS_HOSTED_NOT_ALLOWED");
     const redirectUris = parseRedirectUris(record.redirectUris, callbackPolicy);
     if (
       !isOauthClientId(record.clientId) ||

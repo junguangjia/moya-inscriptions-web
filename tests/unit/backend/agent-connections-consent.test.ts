@@ -372,6 +372,153 @@ describe("consent rules", () => {
       ).toEqual(["http://127.0.0.1:8787/callback"]);
     });
 
+    describe("the hosted-https policy", () => {
+      const hosted = {
+        clientId: "https://tool.invalid/oauth/client.json",
+        family: "some-tool",
+        label: "Some tool",
+        callbackPolicy: "hosted-https",
+        redirectUris: ["https://tool.invalid/api/mcp/auth_callback"],
+      };
+      const parseHosted = (redirectUris: unknown) =>
+        parseRegisteredClients(JSON.stringify([{ ...hosted, redirectUris }]), {
+          allowHosted: true,
+        });
+      const codeOf = (run: () => unknown): string | undefined => {
+        try {
+          run();
+        } catch (error) {
+          expect(error).toBeInstanceOf(RegisteredClientError);
+          return (error as RegisteredClientError).code;
+        }
+        return undefined;
+      };
+
+      it("is refused unless the caller allows it, so Article stays loopback only", () => {
+        // The default is the point: a caller that says nothing never accepts a
+        // remote callback, however well formed the entry is.
+        for (const options of [undefined, {}, { allowHosted: false }])
+          expect(
+            codeOf(() =>
+              parseRegisteredClients(JSON.stringify([hosted]), options),
+            ),
+          ).toBe("CLIENTS_HOSTED_NOT_ALLOWED");
+      });
+
+      it("reads the first list exactly as the record states it", () => {
+        const list = [
+          {
+            clientId: "https://claude.ai/oauth/mcp-oauth-client-metadata",
+            family: "claude",
+            label: "Claude",
+            callbackPolicy: "hosted-https",
+            redirectUris: ["https://claude.ai/api/mcp/auth_callback"],
+          },
+          {
+            clientId: "https://claude.ai/oauth/claude-code-client-metadata",
+            family: "claude-code",
+            label: "Claude Code",
+            callbackPolicy: "loopback-host",
+            redirectUris: [
+              "http://localhost:49152/callback",
+              "http://127.0.0.1:49152/callback",
+            ],
+          },
+          {
+            clientId: "https://chatgpt.com/oauth/codex/client.json",
+            family: "codex",
+            label: "Codex",
+            callbackPolicy: "loopback-host",
+            redirectUris: [
+              "http://127.0.0.1:49152/callback",
+              "http://localhost:49152/callback",
+            ],
+          },
+          {
+            clientId: "https://chatgpt.com/oauth/client.json",
+            family: "chatgpt",
+            label: "ChatGPT",
+            callbackPolicy: "hosted-https",
+            redirectUris: [
+              "https://chatgpt.com/connector_platform_oauth_redirect",
+            ],
+          },
+        ];
+        expect([
+          ...parseRegisteredClients(JSON.stringify(list), {
+            allowHosted: true,
+          }).values(),
+        ]).toEqual(list);
+      });
+
+      it("takes one exact https URL on a named host, and refuses every other spelling", () => {
+        expect(codeOf(() => parseHosted(hosted.redirectUris))).toBeUndefined();
+        for (const redirect of [
+          // Scheme.
+          "http://tool.invalid/callback",
+          // No port, not even the default one the parser would drop.
+          "https://tool.invalid:8443/callback",
+          "https://tool.invalid:443/callback",
+          // No query, no fragment, no userinfo: none of them can be matched
+          // exactly against what the provider appends or the URL parser strips.
+          "https://tool.invalid/callback?x=1",
+          "https://tool.invalid/callback?",
+          "https://tool.invalid/callback#fragment",
+          "https://tool.invalid/callback#",
+          "https://user@tool.invalid/callback",
+          `https://${["user", "other"].join(":")}@tool.invalid/callback`,
+          // A real path.
+          "https://tool.invalid/",
+          "https://tool.invalid",
+          // Written exactly as it round-trips.
+          "https://TOOL.invalid/callback",
+          "https://tool.invalid/a/../callback",
+          // A named public host: never loopback, an address or a bare name.
+          "https://localhost/callback",
+          "https://127.0.0.1/callback",
+          "https://[::1]/callback",
+          "https://203.0.113.9/callback",
+          "https://intranet/callback",
+        ])
+          expect([redirect, codeOf(() => parseHosted([redirect]))]).toEqual([
+            redirect,
+            "CLIENTS_REDIRECT_NOT_HOSTED",
+          ]);
+        expect(codeOf(() => parseHosted(["not a url"]))).toBe(
+          "CLIENTS_MALFORMED",
+        );
+        expect(codeOf(() => parseHosted([]))).toBe("CLIENTS_MALFORMED");
+      });
+
+      it("leaves the loopback policies as they were when the caller allows hosted", () => {
+        // Allowing a hosted entry widens nothing for an entry that did not ask.
+        expect(
+          codeOf(() =>
+            parseRegisteredClients(
+              JSON.stringify([
+                { ...entry, redirectUris: ["https://tool.invalid/callback"] },
+              ]),
+              { allowHosted: true },
+            ),
+          ),
+        ).toBe("CLIENTS_REDIRECT_NOT_LOOPBACK");
+        expect(
+          codeOf(() =>
+            parseRegisteredClients(
+              JSON.stringify([
+                {
+                  ...entry,
+                  callbackPolicy: "loopback-host",
+                  redirectUris: ["https://tool.invalid/callback"],
+                },
+              ]),
+              { allowHosted: true },
+            ),
+          ),
+        ).toBe("CLIENTS_REDIRECT_NOT_LOOPBACK");
+      });
+    });
+
     it("refuses an unknown callback policy rather than falling back to one", () => {
       for (const callbackPolicy of ["", "anything", "loopback", 1, null])
         expect(() =>

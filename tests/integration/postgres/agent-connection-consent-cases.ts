@@ -408,9 +408,13 @@ export const registerAgentConnectionConsentTests = (
     });
 
     it("refuses a management consent at the database, not in a branch a UI could skip", async () => {
-      await expect(
-        consents.open(providerFacts({ preset: "management" })),
-      ).rejects.toBeInstanceOf(AgentConnectionInvariantError);
+      const refused = consents.open(providerFacts({ preset: "management" }));
+      await expect(refused).rejects.toBeInstanceOf(
+        AgentConnectionInvariantError,
+      );
+      await expect(refused).rejects.toThrow(
+        "agent_connection_consents_reachable_presets",
+      );
     });
 
     it("freezes what the provider will enforce, even against the table owner", async () => {
@@ -466,6 +470,9 @@ export const registerAgentConnectionConsentTests = (
               SET human_account_id='user-owner'`,
           `UPDATE community.agent_connection_consents SET connection_id=NULL`,
           `UPDATE community.agent_connection_consents SET ticket_digest=NULL`,
+          `UPDATE community.agent_connection_consents SET resume_secret_digest=NULL`,
+          // It reaps through the fixed function, never by a DELETE of its own.
+          `DELETE FROM community.agent_connection_consents`,
         ])
           expect(await asRole(providerRole, statement)).toEqual(denied);
 
@@ -476,6 +483,7 @@ export const registerAgentConnectionConsentTests = (
           ["decided_at", "CURRENT_TIMESTAMP"],
           ["granted_generation", "1"],
           ["ticket_digest", `'${"a".repeat(64)}'`],
+          ["resume_secret_digest", `'${"a".repeat(64)}'`],
           ["human_account_id", "'user-owner'"],
           ["connection_id", `'${connection.id}'`],
           ["resumed_at", "CURRENT_TIMESTAMP"],
@@ -530,6 +538,7 @@ export const registerAgentConnectionConsentTests = (
           `SELECT lookup_digest FROM community.agent_connection_wrappers LIMIT 1`,
           `UPDATE community.agent_connection_consents
               SET resumed_at=CURRENT_TIMESTAMP`,
+          `SELECT community.agent_connection_consents_reap(1)`,
           // It cannot conjure an authorization request nobody made.
           `INSERT INTO community.agent_connection_consents
              (interaction_uid, oauth_client_id, resource, preset, expires_at)
@@ -556,6 +565,7 @@ export const registerAgentConnectionConsentTests = (
           `UPDATE community.agent_connection_wrappers SET invalidated_at=NULL`,
           `SELECT interaction_uid FROM community.agent_connection_consents LIMIT 1`,
           `SELECT 1 FROM community.agent_connection_provider_artifacts LIMIT 1`,
+          `SELECT community.agent_connection_consents_reap(1)`,
         ])
           expect(await asRole(resourceRole, statement)).toEqual(denied);
 
@@ -655,6 +665,40 @@ export const registerAgentConnectionConsentTests = (
             `SELECT interaction_uid FROM community.agent_connection_consents
               WHERE interaction_uid=$1`,
             [facts.interactionUid],
+          ),
+        ).toEqual({ ok: true });
+        // The digest with the decision is the consent role's to write, and the
+        // provider's to read and compare.
+        expect(
+          await asRole(
+            consentRole,
+            `UPDATE community.agent_connection_consents
+                SET ticket_digest=$2, human_account_id='user-owner',
+                    connection_id=$3, decision='approved',
+                    decided_at=CURRENT_TIMESTAMP, granted_generation=1,
+                    resume_secret_digest=$4
+              WHERE interaction_uid=$1`,
+            [
+              facts.interactionUid,
+              digestOf(ticket()),
+              connection.id,
+              digestOf(ticket()),
+            ],
+          ),
+        ).toEqual({ ok: true });
+        expect(
+          await asRole(
+            providerRole,
+            `SELECT resume_secret_digest
+               FROM community.agent_connection_consents
+              WHERE interaction_uid=$1`,
+            [facts.interactionUid],
+          ),
+        ).toEqual({ ok: true });
+        expect(
+          await asRole(
+            providerRole,
+            `SELECT community.agent_connection_consents_reap(1)`,
           ),
         ).toEqual({ ok: true });
         expect(
