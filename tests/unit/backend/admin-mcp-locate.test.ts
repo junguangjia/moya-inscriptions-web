@@ -602,6 +602,7 @@ describe("the field lists", () => {
 describe("op skeletons", () => {
   const scope = {
     tools: ["admin_get", "admin_read", "admin_view_media", "admin_execute"],
+    userId: 9,
     switches: {},
   };
   const catalogFacts = {
@@ -710,17 +711,25 @@ describe("op skeletons", () => {
         lastEditedAt: "2026-11-04T10:00:00.000Z",
       },
     });
-    // Only a key's own kind can give a lock back.
+    // Only the caller's own account can give a lock back: another AI row's would
+    // answer DOCUMENT_LOCKED, with a next that waits out the lock for nothing.
     expect(ops({ lock })).not.toContain("document.lock_release");
-    expect(ops({ lock: { ...lock, by: "ai" } })).toContain(
+    expect(ops({ lock: { ...lock, by: "ai" } })).not.toContain(
       "document.lock_release",
     );
+    expect(
+      ops({ lock: { ...lock, by: "ai", holderUserId: scope.userId } }),
+    ).toContain("document.lock_release");
   });
 
   it("offers nothing on a tool this key does not hold", () => {
     expect(
       withBuilt(["catalog.publish"], () =>
-        actionsFor(catalogFacts, { tools: ["admin_get"], switches: {} }),
+        actionsFor(catalogFacts, {
+          tools: ["admin_get"],
+          userId: scope.userId,
+          switches: {},
+        }),
       ).map(({ tool }) => tool),
     ).toEqual(["admin_get"]);
   });

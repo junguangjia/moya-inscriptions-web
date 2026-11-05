@@ -59,7 +59,7 @@ const config = buildConfig({
 // with no migrations, so the row goes in here, by the migration's own statement.
 const seedOperatorRow = () =>
   nativePool.query(
-    `INSERT INTO "users" ("role", "email") VALUES ('ai_operator', '${ADMIN_MCP_OPERATOR_ROW_EMAIL}') ON CONFLICT DO NOTHING`,
+    `INSERT INTO "users" ("role", "email") VALUES ('ai_operator', '${ADMIN_MCP_OPERATOR_ROW_EMAIL}') ON CONFLICT ("email") DO NOTHING`,
   );
 const allAccounts = async () =>
   (await payload.count({ collection: "users", overrideAccess: true }))

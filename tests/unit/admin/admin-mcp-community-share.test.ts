@@ -231,7 +231,7 @@ describe("admin_find on a Backend that answers call by call", () => {
     }
   });
 
-  const SCOPE = { tools: [], switches: {} };
+  const SCOPE = { tools: [], userId: 9, switches: {} };
   const idOf = (prefix: string) =>
     `${prefix}-${randomBytes(16).toString("hex")}`;
   const linkTo = (parameters: string) => `https://x.example/?${parameters}`;

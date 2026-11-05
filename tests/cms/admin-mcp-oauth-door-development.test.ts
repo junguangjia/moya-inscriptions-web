@@ -173,8 +173,20 @@ describe("the login door beside the Development plugin path", () => {
   it("passes a read-only token to the plugin path, as it was", async () => {
     const { id, presented } = connect("read-only");
     expect(await listed(presented)).toEqual(READ_ONLY_TOOLS);
-    // The plugin path's own observation, per request, and none from the door.
-    expect(new Set(door.verified)).toEqual(new Set([id]));
+    // The plugin path's own observation, exactly one per request: a door that also
+    // stamped this token would make it two.
+    door.verified.length = 0;
+    const listing = await fetch(server.endpoint, {
+      method: "POST",
+      headers: {
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+        ...bearer(presented),
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    expect(listing.status).toBe(200);
+    expect(door.verified).toEqual([id]);
     const got = await fetch(server.endpoint, {
       headers: {
         accept: "application/json, text/event-stream",

@@ -56,6 +56,8 @@ import type { RegisteredClient } from "@moya/community-postgres";
 
 export const RESOURCE_DATABASE_SETTING = "AGENT_RESOURCE_DATABASE_URL";
 export const AGENT_DATABASE_CA_SETTING = "AGENT_DATABASE_SSL_CA_FILE";
+/** The door's reads are single rows, so past this the database has gone silent. */
+const RESOURCE_QUERY_TIMEOUT_MS = 5_000;
 
 export class ResourceRuntimeError extends Error {
   readonly code: string;
@@ -96,11 +98,14 @@ const frozen = (value: string | undefined, code: string): URL => {
 };
 
 /**
- * The name a connection row must carry to be admitted here. Under `operator` the
- * issuer compares its own `AGENT_AUTHORIZATION_ENVIRONMENT` with that same column
- * when a token refreshes, so the two settings have to agree. Unset, or unequal, is
- * a refusal by name: a token from another environment never gets in on a default,
- * and a refresh never starts failing with no reason anyone can read.
+ * The name a connection row must carry to be admitted here. In Production it is
+ * `production`: the issuer refuses any other name under NODE_ENV=production, so the
+ * two cannot disagree and `admin.env` carries no copy of the issuer's setting.
+ * Development's `operator` profile can name anything, and there the issuer compares
+ * its own `AGENT_AUTHORIZATION_ENVIRONMENT` with that same column when a token
+ * refreshes, so the two settings have to agree. Unset, or unequal, is a refusal by
+ * name: a token from another environment never gets in on a default, and a refresh
+ * never starts failing with no reason anyone can read.
  */
 const servedEnvironment = (
   environment: NodeJS.ProcessEnv,
@@ -110,9 +115,26 @@ const servedEnvironment = (
   const served = environment.CMS_ENVIRONMENT ?? "development";
   if (production && served !== "production")
     throw new ResourceRuntimeError("ENVIRONMENT_DISAGREES_WITH_NODE_ENV");
-  if (operator && environment.AGENT_AUTHORIZATION_ENVIRONMENT !== served)
+  if (
+    !production &&
+    operator &&
+    environment.AGENT_AUTHORIZATION_ENVIRONMENT !== served
+  )
     throw new ResourceRuntimeError("ENVIRONMENT_DISAGREES_WITH_ISSUER");
   return served;
+};
+
+/**
+ * A connect has its limit, and a database that goes silent after one would otherwise
+ * hold a token request open. The shared helper takes no query timeout, so it goes
+ * where pg reads one: the URL. A timed-out client leaves the pool.
+ */
+const withQueryTimeout = (
+  config: ReturnType<typeof parsePostgresConfig>,
+): ReturnType<typeof parsePostgresConfig> => {
+  const url = new URL(config.connectionString);
+  url.searchParams.set("query_timeout", String(RESOURCE_QUERY_TIMEOUT_MS));
+  return { ...config, connectionString: url.toString() };
 };
 
 const operatorClients = (
@@ -157,6 +179,10 @@ export const createResourceRuntime = (
   if (production) {
     if (connectionString.search !== "?sslmode=verify-full")
       throw new ResourceRuntimeError("RESOURCE_DATABASE_TLS_REQUIRED");
+    // Unset, the pool trusts only the system roots, and a private CA's database
+    // would read as an outage on every token, with no setting named.
+    if (!environment[AGENT_DATABASE_CA_SETTING])
+      throw new ResourceRuntimeError("RESOURCE_DATABASE_CA_REQUIRED");
   } else if (
     !["127.0.0.1", "localhost", "[::1]"].includes(connectionString.hostname)
   )
@@ -180,10 +206,15 @@ export const createResourceRuntime = (
   const served = servedEnvironment(environment, production, operator);
   const clients = operator ? operatorClients(environment) : new Map();
 
-  // A missing key is a startup refusal, never a silently generated one: a new
-  // key would make every previously sealed wrapper unreadable, which looks
-  // exactly like every connection being revoked at once.
-  const keys = wrapperKeysFrom(environment);
+  // A missing key is a refusal, never a silently generated one: a new key would
+  // make every previously sealed wrapper unreadable, which looks exactly like
+  // every connection being revoked at once. A bare code, and nothing of the value.
+  let keys: ReturnType<typeof wrapperKeysFrom>;
+  try {
+    keys = wrapperKeysFrom(environment);
+  } catch {
+    throw new ResourceRuntimeError("WRAPPER_KEY_REFUSED");
+  }
 
   let poolConfig: ReturnType<typeof parsePostgresConfig>;
   try {
@@ -197,7 +228,7 @@ export const createResourceRuntime = (
   } catch {
     throw new ResourceRuntimeError("RESOURCE_DATABASE_REFUSED");
   }
-  const pool = createPostgresPool(poolConfig);
+  const pool = createPostgresPool(withQueryTimeout(poolConfig));
   const connections = createAgentConnectionStore({ pool });
   const wrappers = createWrapperStore({ pool, keys });
 
@@ -317,14 +348,15 @@ export const resetResourceRuntime = (): void => {
  * A REFUSAL HERE MUST NOT TAKE DOWN THE ADMIN. This is called inside
  * `buildConfig`, during module evaluation of the Payload config, so a thrown
  * `ResourceRuntimeError` — a missing wrapper key, say — would stop editorial,
- * media, community and every legacy API-key caller from starting at all.
+ * media, community and every legacy API-key caller from loading at all.
  * `connectionOverrideAuth(null)` could never do that, and an independent
  * review pointed out that wiring it had quietly introduced the possibility
  * while a comment still promised legacy callers were unaffected.
  *
  * So a misconfiguration fails CLOSED and LOUD rather than fatal: the
  * connection surface is absent, connection tokens are refused, everything
- * else starts, and the operator gets a bare code on stderr. Silence would be
+ * else runs, and the operator gets a bare code on stderr, on the first request
+ * that loads the Payload config, not when the process starts. Silence would be
  * the wrong trade in the other direction.
  */
 export const connectionAuthDependencies = (
@@ -333,8 +365,8 @@ export const connectionAuthDependencies = (
 ): ConnectionAuthDependencies | null => {
   try {
     // Built whenever the login door is on, whichever path it serves, so a bad
-    // setting is a bare code when the Admin starts and not on someone's first
-    // connect.
+    // setting is a bare code on the first request that loads the Payload config,
+    // whatever that request is, and not on someone's first connect.
     const runtime = resourceRuntime();
     return connectionsEnabled() ? runtime : null;
   } catch (error) {

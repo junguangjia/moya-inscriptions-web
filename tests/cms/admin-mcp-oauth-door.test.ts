@@ -1,4 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 
 import { sql, type PostgresAdapter } from "@payloadcms/db-postgres";
 import {
@@ -37,10 +39,12 @@ import {
 
 // Behavior Matrix rows "Operator connection token on /api/mcp", "OAuth surface
 // off", "POST /api/mcp with no token, surface on", "Pause on", "Reserved surface by
-// any key or Authorization header", "Disconnect by any owner", "Access token expires
-// while connected", "Authorizing account leaves role owner", "Tool removed from the
-// list", "Audit row for a connection call" and "admin_whoami on a connection", the
-// way Production composes them: the login door on and the plugin path closed. Only
+// any key or Authorization header" apart from its AI connection surfaces, which do
+// not exist in this composition and which O3 pins, "Disconnect by any owner", "Access
+// token expires while connected", "Authorizing account leaves role owner", "Tool
+// removed from the list", "Audit row for a connection call" and "admin_whoami on a
+// connection", the way Production composes them: the login door on and the plugin
+// path closed. Only
 // the lookups behind the door are synthetic, the token and the connection store,
 // because the real ones need an authorization service. The door, the dispatch, the
 // guard, the tools and the `users` rows are real, over real JSON-RPC on a real socket.
@@ -262,6 +266,24 @@ const setPause = (pause: boolean) =>
 const setRow = (id: TypedUser["id"], data: Record<string, unknown>) =>
   payload.db.updateOne({ collection: "users", id, data });
 
+/** A draft of the Owner's, and what an admin_execute save of it would send. */
+const draftTarget = async (name: string, title = "Edited") => {
+  const catalogId = `oauth-door-${name}-${run}`;
+  const sourceId = `oauth-door-source-${name}-${run}`;
+  const draft = await saveDraft(
+    await createLocalReq({ user: owner }, payload),
+    {
+      idempotencyKey: `${run}:${name}`,
+      content: syntheticCatalogDraft(catalogId, sourceId),
+    },
+  );
+  return {
+    id: draft.id,
+    expectedRevision: draft.revision,
+    content: { catalogId, sourceId, kind: "calligraphy", title },
+  };
+};
+
 const auditRowsOf = async (connectionId: string) =>
   (
     await db().execute(sql`
@@ -415,6 +437,36 @@ describe("an operator connection token", () => {
     expect(await array.json()).toMatchObject({ error: { code: -32600 } });
   });
 
+  it("reads the frozen grant: moving the connection's writable columns moves nothing", async () => {
+    const moved = {
+      preset: "read-only",
+      oauthClientId: "https://unlisted.artvenn.invalid/oauth/client.json",
+      consentedAt: new Date(Date.now() - 400 * DAY_MS).toISOString(),
+      humanAccountId: subjectOf(automation.id),
+    } as const;
+    for (const change of [
+      ...Object.entries(moved).map(([column, value]) => ({ [column]: value })),
+      moved,
+    ]) {
+      const { id, presented, consentedAt } = connect();
+      editConnection(id, change);
+      const { data } = await whoami(presented);
+      expect(data.key, JSON.stringify(change)).toMatchObject({
+        label: CLIENT_LABEL,
+        authorizedBy: owner.id,
+        expiresAt: new Date(
+          Date.parse(consentedAt) + ADMIN_MCP_CONNECTION_LIFETIME_MS,
+        ).toISOString(),
+      });
+      expect((await auditRowsOf(id)).at(-1)).toMatchObject({
+        tool: "admin_whoami",
+        ok: true,
+        connection_id: id,
+        authorized_by: email("owner"),
+      });
+    }
+  });
+
   it("stamps an observation only once the request is admitted", async () => {
     const { id, presented } = connect();
     expect((await post(bearer(presented), "tools/list")).status).toBe(200);
@@ -460,8 +512,13 @@ describe("admin_whoami on a connection", () => {
     });
     expect(ADMIN_MCP_BYTE_WORK).toEqual([
       "upload",
-      "original_download",
+      "download",
+      "canonical_export",
+      "report_csv",
       "rendered_preview",
+      "deep_zoom_master",
+      "local_import",
+      "account_provision",
     ]);
   });
 
@@ -600,27 +657,6 @@ describe("what a connection can never reach", () => {
     }
   });
 
-  it("refuses the token on the AI connection surfaces", async () => {
-    const { presented } = connect();
-    for (const [method, route] of [
-      ["GET", "agent-connections"],
-      ["POST", "agent-connections/consent"],
-      ["POST", "agent-connections/disconnect"],
-      ["POST", "agent-connections/start"],
-    ] as const) {
-      const answer = await rest(
-        route,
-        method,
-        bearer(presented),
-        method === "GET" ? undefined : {},
-      );
-      expect(
-        [method, route, [403, 404].includes(answer.status)],
-        String(answer.status),
-      ).toEqual([method, route, true]);
-    }
-  });
-
   it("names no reserved surface as an op", async () => {
     const { presented } = connect();
     for (const op of ["users.update", "mcp-control.pause", "mcp-audit.read"])
@@ -693,22 +729,6 @@ describe("the audit, for a connection", () => {
 
   it("carries both fields on a write's start, its finish and its per-target row", async () => {
     const { id, presented } = connect();
-    const draftTarget = async (name: string) => {
-      const catalogId = `oauth-door-${name}-${run}`;
-      const sourceId = `oauth-door-source-${name}-${run}`;
-      const draft = await saveDraft(
-        await createLocalReq({ user: owner }, payload),
-        {
-          idempotencyKey: `${run}:${name}`,
-          content: syntheticCatalogDraft(catalogId, sourceId),
-        },
-      );
-      return {
-        id: draft.id,
-        expectedRevision: draft.revision,
-        content: { catalogId, sourceId, kind: "calligraphy", title: "Edited" },
-      };
-    };
     const answer = await callTool(presented, "admin_execute", {
       requestId: randomUUID(),
       op: "editorial.save-draft",
@@ -761,6 +781,126 @@ describe("the audit, for a connection", () => {
         user_id: String(aiKeyOwner.id),
       },
     ]);
+  });
+});
+
+describe("one requestId, on two connections", () => {
+  const secondPerson = () =>
+    payload.create({
+      collection: "users",
+      overrideAccess: true,
+      data: {
+        email: email(`second-owner-${randomUUID()}`),
+        password,
+        role: "owner",
+        scopeCatalogIds: [],
+      },
+    });
+
+  /** The token a refresh hands the tool: new, on the same connection. */
+  const refreshed = (presented: string) => {
+    const next = syntheticToken();
+    door.tokens.set(next, door.tokens.get(presented));
+    door.tokens.delete(presented);
+    return next;
+  };
+
+  const titleOf = async (id: number) =>
+    (await payload.findByID({ collection: "catalogs", id, draft: true })).title;
+
+  it("gives each its own effect at the receipt, and replays one's own retry across a refresh", async () => {
+    const first = connect();
+    const second = connect({ subject: subjectOf((await secondPerson()).id) });
+    const requestId = `one-request-${run}`;
+    const save = (secret: string, input: object) =>
+      callTool(secret, "admin_execute", {
+        requestId,
+        op: "editorial.save-draft",
+        input,
+      });
+    const mine = await draftTarget("requestid-first", "First person's");
+    const theirs = await draftTarget("requestid-second", "Second person's");
+
+    expect(await save(first.presented, mine)).toMatchObject({
+      ok: true,
+      data: { applied: [mine.id] },
+    });
+    expect(await save(second.presented, theirs)).toMatchObject({
+      ok: true,
+      data: { applied: [theirs.id] },
+    });
+    expect(await titleOf(mine.id)).toBe("First person's");
+    expect(await titleOf(theirs.id)).toBe("Second person's");
+
+    const retried = await save(refreshed(first.presented), mine);
+    expect(retried).toMatchObject({
+      ok: true,
+      data: { already_applied: [mine.id] },
+      meta: { replayed: true },
+    });
+  });
+
+  it("never answers another person's command as a replay", async () => {
+    const first = connect();
+    const second = connect({ subject: subjectOf((await secondPerson()).id) });
+    const call = {
+      requestId: `one-command-${run}`,
+      op: "editorial.save-draft",
+      input: await draftTarget("requestid-shared", "Only once"),
+    };
+    expect(
+      await callTool(first.presented, "admin_execute", call),
+    ).toMatchObject({ ok: true });
+    const answer = await callTool(second.presented, "admin_execute", call);
+    expect(answer).toMatchObject({ ok: false, code: "REVISION_CONFLICT" });
+    expect(answer.meta).not.toHaveProperty("replayed");
+  });
+
+  it("sends the Backend each one's own key, and the same key on a retry", async () => {
+    const seen: unknown[] = [];
+    const backend = createServer((incoming, outgoing) => {
+      if (incoming.method === "POST")
+        seen.push(incoming.headers["x-operator-request-id"]);
+      incoming.resume();
+      outgoing.writeHead(500, { "content-type": "application/json" });
+      outgoing.end("{}");
+    });
+    await new Promise<void>((resolve) =>
+      backend.listen(0, "127.0.0.1", resolve),
+    );
+    try {
+      vi.stubEnv(
+        "COMMUNITY_OPERATOR_BASE_URL",
+        `http://127.0.0.1:${(backend.address() as AddressInfo).port}/`,
+      );
+      for (const name of [
+        "COMMUNITY_OPERATOR_AI_TOKEN",
+        "OPERATOR_AI_BASE_TOKEN",
+      ])
+        vi.stubEnv(name, randomBytes(32).toString("base64url"));
+      const first = connect();
+      const second = connect({ subject: subjectOf((await secondPerson()).id) });
+      const hide = (secret: string) =>
+        callTool(secret, "admin_execute", {
+          requestId: `one-backend-${run}`,
+          op: "community.moderate-comment",
+          input: {
+            id: `comment-${"a".repeat(32)}`,
+            action: "hide",
+            reason: "Synthetic reason",
+          },
+        });
+      const unknown = { code: "OUTCOME_UNKNOWN" };
+      expect(await hide(first.presented)).toMatchObject(unknown);
+      expect(await hide(second.presented)).toMatchObject(unknown);
+      expect(await hide(refreshed(first.presented))).toMatchObject(unknown);
+    } finally {
+      backend.closeAllConnections();
+      await new Promise((resolve) => backend.close(resolve));
+    }
+    expect(seen).toHaveLength(3);
+    expect(seen[0]).not.toEqual(seen[1]);
+    expect(seen[2]).toEqual(seen[0]);
   });
 });
 
@@ -870,6 +1010,10 @@ describe("a refusal at the door", () => {
       email("owner"),
       `${subjectOf(owner.id)} `,
       subjectOf(`0${owner.id}`),
+      // At and past the id column's range: nobody, and never a store error.
+      subjectOf(2_147_483_647),
+      subjectOf(2_147_483_648),
+      subjectOf("99999999999999999999"),
     ])
       await expectRefused(
         connect({ subject }).presented,

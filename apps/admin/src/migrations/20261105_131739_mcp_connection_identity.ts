@@ -14,10 +14,13 @@ export async function up({ db }: MigrateUpArgs): Promise<void> {
   await db.execute(sql`
    ALTER TABLE "mcp_audit_events" ADD COLUMN "connection_id" varchar;
   ALTER TABLE "mcp_audit_events" ADD COLUMN "authorized_by" varchar;
-  INSERT INTO "users" ("role", "email") VALUES ('ai_operator', 'ai-connection@operator.invalid') ON CONFLICT DO NOTHING;`);
+  INSERT INTO "users" ("role", "email") VALUES ('ai_operator', 'ai-connection@operator.invalid') ON CONFLICT ("email") DO NOTHING;`);
 }
 
-// The row stays: a lock or receipt may name it, and `up` tolerates it.
+// The row stays: a lock or receipt may name it, and `up` tolerates it. So a rollback
+// of the chain past 20261103_143652_ai_operator_role fails that migration's cast on
+// this row, and needs this first, by hand, since `users` refuses a delete over REST:
+//   DELETE FROM "users" WHERE "email" = 'ai-connection@operator.invalid' AND "role" = 'ai_operator';
 export async function down({ db }: MigrateDownArgs): Promise<void> {
   await db.execute(sql`
    ALTER TABLE "mcp_audit_events" DROP COLUMN "connection_id";

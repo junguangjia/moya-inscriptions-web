@@ -11,11 +11,21 @@ export const ADMIN_MCP_DOOR_REFUSALS = [
   "KEY_OWNER_BOUND",
 ] as const;
 
-/** What a client with no local process cannot do. Everything else is an HTTP tool. */
+/**
+ * The work that goes through the companion, so a client with no local process cannot
+ * do it (the record's section 20): bytes and a password never travel in a tool result.
+ * Each is a Behavior Matrix row, and `download` is any other file to disk. Image views
+ * and every other HTTP tool stay.
+ */
 export const ADMIN_MCP_BYTE_WORK = [
   "upload",
-  "original_download",
+  "download",
+  "canonical_export",
+  "report_csv",
   "rendered_preview",
+  "deep_zoom_master",
+  "local_import",
+  "account_provision",
 ] as const;
 
 /** `admin_whoami` data. No email: AI gets account ids. The key secret never appears. */

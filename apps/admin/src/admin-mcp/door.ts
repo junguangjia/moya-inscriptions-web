@@ -43,7 +43,7 @@ export interface AdminMcpKey {
   readonly connection?: {
     readonly id: string;
     readonly authorizedById: User["id"];
-    /** For the audit row. AI reads account ids, never this. */
+    /** For the audit row, read only by auditIdentity. AI reads account ids, never this. */
     readonly authorizedByEmail: string;
   };
   readonly label?: string;
@@ -233,10 +233,13 @@ export const connectionTokenOf = (req: PayloadRequest): string | null => {
 
 /** The person the consent views stamp, as a `users` id. */
 const AUTHORIZER_SUBJECT = /^payload-user-([1-9][0-9]*)$/u;
+/** `users.id` is an int4, and a number past it would fail the statement, not find nobody. */
+const USERS_ID_MAX = 2_147_483_647;
 
 /** The authorizing person and the operator row, in one statement, uncached. */
 const connectionRows = async (req: PayloadRequest, subject: string) => {
-  const personId = AUTHORIZER_SUBJECT.exec(subject)?.[1];
+  const digits = AUTHORIZER_SUBJECT.exec(subject)?.[1];
+  const personId = Number(digits) <= USERS_ID_MAX ? digits : undefined;
   const { docs } = await req.payload.find({
     collection: "users",
     depth: 0,
@@ -274,7 +277,7 @@ export const admitConnection = async (
   try {
     runtime = resourceRuntime();
   } catch {
-    // Its code went to stderr when the Admin started.
+    // Its code went to stderr on the first request that loaded the Payload config.
     return refuse(req, category, null);
   }
   if (runtime === null) return null;

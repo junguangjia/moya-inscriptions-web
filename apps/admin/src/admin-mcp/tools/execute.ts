@@ -47,10 +47,26 @@ export const EXECUTE_DESCRIPTION = `Run one reversible write, or the same one on
 // its token budget (section 5). A wrong name answers UNKNOWN_OP with near ones.
 export const executeListedInput = z.strictObject(adminExecuteListedShape);
 
-/** A key per target, stable across retries: a uuid, so a Backend route takes it too. */
-const requestKeyFor = (requestId: string, index: number) => {
+/**
+ * A key per target, stable across retries: a uuid, so a Backend route takes it too.
+ * Every connection acts as one `users` row, so its id goes in the hash, or two people's
+ * tools that chose one requestId would meet at the CMS receipt and at the Backend. That
+ * id outlives a token, so the same connection still replays. A key has its own row, and
+ * its value does not change.
+ */
+export const requestKeyFor = (
+  requestId: string,
+  index: number,
+  connectionId?: string,
+) => {
   const hash = createHash("sha256")
-    .update(JSON.stringify([requestId, index]))
+    .update(
+      JSON.stringify(
+        connectionId === undefined
+          ? [requestId, index]
+          : [requestId, index, connectionId],
+      ),
+    )
     .digest("hex");
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
 };
@@ -733,7 +749,7 @@ const runCall = async (
     const context: AdminOpContext = {
       req,
       key,
-      requestKey: requestKeyFor(call.requestId, reached),
+      requestKey: requestKeyFor(call.requestId, reached, key.connection?.id),
     };
     const outcome = await runTarget(entry, command, reached, context);
     outcomes.push(outcome);

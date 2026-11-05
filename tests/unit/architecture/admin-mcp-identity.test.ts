@@ -265,6 +265,88 @@ describe("Admin MCP identity (admin-mcp-completion-v1, section 2)", () => {
     });
   });
 
+  it("lets only auditIdentity read the authorizer's email, and no answer carry it", async () => {
+    const found: Record<string, number> = {};
+    for (const file of await adminSources()) {
+      const count = occurrences(await read(file), /authorizedByEmail/gu);
+      if (count) found[file] = count;
+    }
+    // Its type, where the door sets it, and the one read.
+    expect(found).toEqual({ "src/admin-mcp/door.ts": 3 });
+    const door = await read("src/admin-mcp/door.ts");
+    const identity =
+      /export const auditIdentity = [\s\S]*?\n\}\);/u.exec(door)?.[0] ?? "";
+    expect(identity).toContain("connection.authorizedByEmail");
+    expect(door.match(/\w+\.authorizedByEmail/gu)).toEqual([
+      "connection.authorizedByEmail",
+    ]);
+    expect(door).toContain("authorizedByEmail: person.email,");
+
+    // Only what names a field leaves the key: never the key or its connection whole.
+    for (const file of await adminSources()) {
+      if (!file.startsWith("src/admin-mcp/")) continue;
+      expect([
+        file,
+        /\.\.\.\s*(?:\w+\.)?(?:key|connection)\b(?!\s*\.)/u.test(
+          await read(file),
+        ),
+      ]).toEqual([file, false]);
+    }
+    expect(
+      (await read("src/admin-mcp/tools/whoami.ts")).match(
+        /\bkey\.connection\.\w+/gu,
+      ),
+    ).toEqual(["key.connection.authorizedById"]);
+
+    // The audit is where the email lands, and no AI read reaches it.
+    for (const file of await adminSources())
+      if (/^src\/admin-mcp\/(?:ops|tools)\//u.test(file))
+        expect([file, (await read(file)).includes("mcp-audit-events")]).toEqual(
+          [file, false],
+        );
+    expect(await read("src/admin-mcp/audit.ts")).toMatch(
+      /read: \(\{ req \}\) => isHumanOwner\(req\)/u,
+    );
+  });
+
+  it("counts an empty install the same way everywhere: only the seeded row is ignored", async () => {
+    const scripts = async (directory: string): Promise<string[]> => {
+      const entries = await readdir(path.join(repositoryRoot, directory), {
+        withFileTypes: true,
+      });
+      const files = await Promise.all(
+        entries.map(async (entry) => {
+          const relative = path.join(directory, entry.name);
+          if (entry.isDirectory())
+            return ignored.has(entry.name) ? [] : scripts(relative);
+          return /\.[cm]?[jt]sx?$/u.test(entry.name) ? [relative] : [];
+        }),
+      );
+      return files.flat();
+    };
+    const count =
+      /\.count\(\{\s*collection: "users",\s*overrideAccess: true,?(?:\s*req,)?(?:\s*\/\/[^\n]*)*\s*(where: \{[\s\S]*?\n\s*\},\n)?/gu;
+    const readers: string[] = [];
+    for (const file of [
+      ...(await scripts("scripts")),
+      ...(await adminSources()).map((name) => path.join("apps/admin", name)),
+    ]) {
+      const source = await readFile(path.join(repositoryRoot, file), "utf8");
+      for (const [, where] of source.matchAll(count)) {
+        readers.push(file);
+        expect([file, where?.replace(/\s+/gu, " ").trim()]).toEqual([
+          file,
+          'where: { or: [ { email: { not_equals: ADMIN_MCP_OPERATOR_ROW_EMAIL } }, { role: { not_equals: "ai_operator" } }, ], },',
+        ]);
+      }
+    }
+    expect(readers.sort()).toEqual([
+      "apps/admin/src/editorial/provision-owner.ts",
+      "scripts/curation/bootstrap-development.mjs",
+      "scripts/seed-phase4-acceptance.mjs",
+    ]);
+  });
+
   it("adds the role value alone in its own migration", async () => {
     const migration = await read(
       "src/migrations/20261103_143652_ai_operator_role.ts",
@@ -342,9 +424,15 @@ describe("Admin MCP identity (admin-mcp-completion-v1, section 2)", () => {
     );
     // No password, and a row that already holds the address stays as it is.
     expect(up).toContain(
-      `INSERT INTO "users" ("role", "email") VALUES ('ai_operator', '${ADMIN_MCP_OPERATOR_ROW_EMAIL}') ON CONFLICT DO NOTHING;`,
+      `INSERT INTO "users" ("role", "email") VALUES ('ai_operator', '${ADMIN_MCP_OPERATOR_ROW_EMAIL}') ON CONFLICT ("email") DO NOTHING;`,
     );
     expect(up).not.toMatch(/"(?:salt|hash)"/u);
+    // The rollback the seeded row asks for, named where someone would look for it.
+    expect(
+      migration.slice(0, migration.indexOf("export async function down")),
+    ).toContain(
+      `DELETE FROM "users" WHERE "email" = '${ADMIN_MCP_OPERATOR_ROW_EMAIL}' AND "role" = 'ai_operator';`,
+    );
     const snapshot = await read(`src/migrations/${name}.json`);
     expect(snapshot).not.toContain(ADMIN_MCP_OPERATOR_ROW_EMAIL);
     const columns = (

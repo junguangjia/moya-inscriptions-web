@@ -154,9 +154,10 @@ export const ADMIN_MCP_TOOLS: readonly AdminMcpTool[] = [
     klass: "read",
     profiles: ADMIN_MCP_TOOL_PROFILES,
     input: adminFindInputSchema,
-    run: async (input, { tools, req }) =>
+    run: async (input, { key, tools, req }) =>
       findEnvelope(req, input as AdminFindInput, {
         tools,
+        userId: key.user.id,
         switches: await controlFor(req),
       }),
     continuation: findContinuation,
@@ -168,9 +169,10 @@ export const ADMIN_MCP_TOOLS: readonly AdminMcpTool[] = [
     klass: "read",
     profiles: ADMIN_MCP_TOOL_PROFILES,
     input: adminGetInputSchema,
-    run: async (input, { tools, req }) =>
+    run: async (input, { key, tools, req }) =>
       getEnvelope(req, input as AdminGetInput, {
         tools,
+        userId: key.user.id,
         switches: await controlFor(req),
       }),
     continuation: getContinuation,

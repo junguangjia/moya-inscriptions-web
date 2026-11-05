@@ -30,6 +30,8 @@ export interface RecordFacts {
 
 export interface ActionScope {
   readonly tools: readonly string[];
+  /** The caller's own account, the only holder a lock can be given back by. */
+  readonly userId: number;
   readonly switches: Readonly<
     Partial<Record<AdminMcpSensitiveCategory, boolean>>
   >;
@@ -47,8 +49,11 @@ const expectedOf = ({ revision, fingerprint }: RecordFacts) => ({
   ...(fingerprint ? { fingerprint } : {}),
 });
 
-/** Only an AI holder's lock is offered back: another account's refuses by name. */
-const whenLocked = ({ type, id, lock }: RecordFacts): readonly Skeleton[] =>
+/** Only this caller's own lock is offered back: another account's refuses by name. */
+const whenLocked = (
+  { type, id, lock }: RecordFacts,
+  userId: number,
+): readonly Skeleton[] =>
   lock?.held
     ? [
         {
@@ -63,7 +68,7 @@ const whenLocked = ({ type, id, lock }: RecordFacts): readonly Skeleton[] =>
             },
           },
         },
-        ...(lock.by === "ai"
+        ...(lock.holderUserId === userId
           ? [{ op: "document.lock_release" as const, input: { type, id } }]
           : []),
       ]
@@ -92,9 +97,12 @@ const publication = (
 ];
 
 const SKELETONS: Readonly<
-  Record<AdminCmsRecordType, (facts: RecordFacts) => readonly Skeleton[]>
+  Record<
+    AdminCmsRecordType,
+    (facts: RecordFacts, userId: number) => readonly Skeleton[]
+  >
 > = {
-  catalog: (facts) => [
+  catalog: (facts, userId) => [
     {
       tool: "admin_get",
       args: { type: "catalog", id: facts.id, view: "preview" },
@@ -124,9 +132,9 @@ const SKELETONS: Readonly<
       input: { id: facts.id, expectedRevision: facts.revision, content: {} },
     },
     ...publication("catalog", facts),
-    ...whenLocked(facts),
+    ...whenLocked(facts, userId),
   ],
-  article: (facts) => [
+  article: (facts, userId) => [
     {
       tool: "admin_get",
       args: { type: "article", id: facts.id, view: "preview" },
@@ -136,9 +144,9 @@ const SKELETONS: Readonly<
       input: { id: facts.id, expectedRevision: facts.revision, content: {} },
     },
     ...publication("article", facts),
-    ...whenLocked(facts),
+    ...whenLocked(facts, userId),
   ],
-  collection: (facts) => [
+  collection: (facts, userId) => [
     {
       tool: "admin_get",
       args: { type: "collection", id: facts.id, view: "preview" },
@@ -148,7 +156,7 @@ const SKELETONS: Readonly<
       input: { id: facts.id, expected: expectedOf(facts) },
     },
     ...publication("collection", facts),
-    ...whenLocked(facts),
+    ...whenLocked(facts, userId),
   ],
   media: (facts) => [
     ...(facts.mediaId === undefined
@@ -173,9 +181,9 @@ const SKELETONS: Readonly<
 /** Exact only. Filed under what can be called right now. */
 export const actionsFor = (
   facts: RecordFacts,
-  { tools, switches }: ActionScope,
+  { tools, switches, userId }: ActionScope,
 ): readonly AdminActionSkeleton[] =>
-  SKELETONS[facts.type](facts).flatMap((skeleton) => {
+  SKELETONS[facts.type](facts, userId).flatMap((skeleton) => {
     if ("tool" in skeleton)
       return tools.includes(skeleton.tool) ? [skeleton] : [];
     const entry = adminOpMeta[skeleton.op];

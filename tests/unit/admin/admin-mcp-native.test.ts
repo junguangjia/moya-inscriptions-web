@@ -31,6 +31,7 @@ import {
   listingTable,
   markRequestStart,
   okEnvelope,
+  requestKeyFor,
   toolFor,
   toolListingFor,
   toolResult,
@@ -1296,10 +1297,39 @@ describe("a connection's identity", () => {
         .playbook,
       byteChannel: {
         available: false,
-        unavailable: ["upload", "original_download", "rendered_preview"],
+        unavailable: [
+          "upload",
+          "download",
+          "canonical_export",
+          "report_csv",
+          "rendered_preview",
+          "deep_zoom_master",
+          "local_import",
+          "account_provision",
+        ],
       },
     });
     expect(JSON.stringify(answer)).not.toContain("@");
+  });
+
+  it("derives a key's request key as it always has, and a connection's apart from it", () => {
+    // main's value, to the byte: a receipt written before this change still replays.
+    expect(requestKeyFor("synthetic-request", 0)).toBe(
+      "6a8685bb-5c3c-430e-8380-565375908e0e",
+    );
+    expect(requestKeyFor("synthetic-request", 3)).toBe(
+      "05d8ccb7-7d4b-418a-8593-a22bc2855612",
+    );
+    const mine = `conn-${"a".repeat(32)}`;
+    const theirs = `conn-${"b".repeat(32)}`;
+    const key = requestKeyFor("synthetic-request", 0, mine);
+    expect(key).toBe(requestKeyFor("synthetic-request", 0, mine));
+    expect(key).not.toBe(requestKeyFor("synthetic-request", 0, theirs));
+    expect(key).not.toBe(requestKeyFor("synthetic-request", 0));
+    expect(key).not.toBe(requestKeyFor("synthetic-request", 1, mine));
+    expect(key).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/u,
+    );
   });
 
   it("refuses to state a key.id that is not a key's or a connection's", () => {

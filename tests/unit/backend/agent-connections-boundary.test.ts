@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import {
   existsSync,
   mkdtempSync,
@@ -7,6 +8,8 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:net";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,7 +33,15 @@ import {
 } from "admin/agent-connections-resource";
 import { extractModuleReferences } from "../architecture/workspace-scanner.js";
 import { agentAdminTools } from "admin/agent-admin-mcp";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 // The real parser and pool, recorded: this suite opens no connection, and what the
 // pool was given is the only place the TLS settings can be read back from.
@@ -285,11 +296,10 @@ describe("F1: the NEW connection surface fails closed", () => {
 describe("the login door's gate", () => {
   const managed =
     "postgresql://x@db.example.invalid:5432/synthetic?sslmode=verify-full";
-  const productionDoor = {
+  const productionDoor: Record<string, string | undefined> = {
     NODE_ENV: "production",
     ADMIN_MCP_OAUTH_ENABLED: "true",
     CMS_ENVIRONMENT: "production",
-    AGENT_AUTHORIZATION_ENVIRONMENT: "production",
     AGENT_AUTHORIZATION_ISSUER: "https://auth.artvenn.invalid",
     AGENT_AUTHORIZATION_RESOURCE: "https://admin.artvenn.invalid/api/mcp",
     AGENT_AUTHORIZATION_CLIENTS: JSON.stringify([
@@ -311,7 +321,6 @@ describe("the login door's gate", () => {
     ADMIN_MCP_OAUTH_ENABLED: undefined,
     AGENT_CONNECTIONS_ENABLED: "true",
     CMS_ENVIRONMENT: undefined,
-    AGENT_AUTHORIZATION_ENVIRONMENT: undefined,
     AGENT_AUTHORIZATION_CLIENTS: undefined,
     AGENT_RESOURCE_DATABASE_URL: "postgresql://x@127.0.0.1:5432/synthetic",
   };
@@ -330,6 +339,39 @@ describe("the login door's gate", () => {
     }
     return "COMPOSED";
   };
+
+  // A CA file Production's door can read, so a refusal below is the one it names.
+  let certificates: string;
+  let authority: string;
+
+  beforeAll(() => {
+    certificates = mkdtempSync(path.join(tmpdir(), "resource-ca-"));
+    authority = path.join(certificates, "authority.pem");
+    execFileSync(
+      "openssl",
+      [
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        path.join(certificates, "authority-key.pem"),
+        "-out",
+        authority,
+        "-days",
+        "1",
+        "-subj",
+        "/CN=synthetic-resource-ca",
+      ],
+      { stdio: "pipe" },
+    );
+    productionDoor.AGENT_DATABASE_SSL_CA_FILE = authority;
+  });
+
+  afterAll(() => {
+    rmSync(certificates, { recursive: true, force: true });
+  });
 
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -477,7 +519,7 @@ describe("the login door's gate", () => {
     await resourceRuntime()?.close();
   });
 
-  it("reports a bad setting when the Admin starts, and leaves the rest of it running", () => {
+  it("reports a bad setting when the Payload config loads, and leaves the rest of it running", () => {
     stubAll({ ...productionDoor, AGENT_RESOURCE_DATABASE_URL: undefined });
     const report = vi.fn();
     expect(connectionAuthDependencies(report)).toBeNull();
@@ -576,7 +618,7 @@ describe("the login door's gate", () => {
     const runtime = compose(productionDoor);
     expect(pools.configs.at(-1)).toMatchObject({
       max: 4,
-      ssl: { rejectUnauthorized: true },
+      ssl: { rejectUnauthorized: true, ca: readFileSync(authority, "utf8") },
     });
     expect(
       (pools.configs.at(-1) as { connectionString: string }).connectionString,
@@ -589,76 +631,107 @@ describe("the login door's gate", () => {
     ).toBe("RESOURCE_DATABASE_NOT_LOOPBACK");
   });
 
-  it("passes the CA file in Production and refuses one it cannot use", async () => {
-    const directory = mkdtempSync(path.join(tmpdir(), "resource-ca-"));
-    try {
-      const authority = path.join(directory, "authority.pem");
-      execFileSync(
-        "openssl",
-        [
-          "req",
-          "-x509",
-          "-newkey",
-          "rsa:2048",
-          "-nodes",
-          "-keyout",
-          path.join(directory, "authority-key.pem"),
-          "-out",
-          authority,
-          "-days",
-          "1",
-          "-subj",
-          "/CN=synthetic-resource-ca",
-        ],
-        { stdio: "pipe" },
-      );
-      const runtime = compose(productionDoor, {
-        AGENT_DATABASE_SSL_CA_FILE: authority,
-      });
-      expect(pools.configs.at(-1)).toMatchObject({
-        max: 4,
-        ssl: {
-          rejectUnauthorized: true,
-          ca: readFileSync(authority, "utf8"),
-        },
-      });
-      await runtime?.close();
+  it("refuses a Production door with no CA file, or one it cannot use, by name", async () => {
+    for (const unset of [undefined, ""])
+      expect(
+        refusalOf(productionDoor, { AGENT_DATABASE_SSL_CA_FILE: unset }),
+      ).toBe("RESOURCE_DATABASE_CA_REQUIRED");
+    const junk = path.join(certificates, "junk.pem");
+    writeFileSync(junk, "not a certificate");
+    for (const file of [junk, path.join(certificates, "absent.pem")])
+      expect(
+        refusalOf(productionDoor, { AGENT_DATABASE_SSL_CA_FILE: file }),
+      ).toBe("RESOURCE_DATABASE_REFUSED");
 
-      const junk = path.join(directory, "junk.pem");
-      writeFileSync(junk, "not a certificate");
-      for (const file of [junk, path.join(directory, "absent.pem")])
-        expect(
-          refusalOf(productionDoor, { AGENT_DATABASE_SSL_CA_FILE: file }),
-        ).toBe("RESOURCE_DATABASE_REFUSED");
-
-      // Development's loopback database has no TLS, so nothing there reads it.
+    // Development's loopback database has no TLS, so nothing there reads it.
+    for (const file of [junk, undefined]) {
       const local = compose(developmentDoor, {
-        AGENT_DATABASE_SSL_CA_FILE: junk,
+        AGENT_DATABASE_SSL_CA_FILE: file,
       });
       expect(pools.configs.at(-1)).toMatchObject({ max: 4, ssl: false });
       await local?.close();
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
     }
   });
 
-  it("refuses an environment that disagrees with the issuer's, by name", async () => {
+  it("names a wrapper key it cannot use, and says nothing of its value", () => {
+    const short = randomBytes(16).toString("base64");
+    for (const [name, value] of [
+      ["AGENT_CONNECTION_WRAPPER_INDEX_KEY", undefined],
+      ["AGENT_CONNECTION_WRAPPER_SEAL_KEY", undefined],
+      ["AGENT_CONNECTION_WRAPPER_SEAL_KEY", ""],
+      ["AGENT_CONNECTION_WRAPPER_INDEX_KEY", short],
+    ] as const) {
+      expect(refusalOf(productionDoor, { [name]: value })).toBe(
+        "WRAPPER_KEY_REFUSED",
+      );
+      let thrown: unknown;
+      try {
+        compose(productionDoor, { [name]: value });
+      } catch (error) {
+        thrown = error;
+      }
+      expect((thrown as Error).message).toBe(
+        "agent resource runtime refused: WRAPPER_KEY_REFUSED",
+      );
+    }
+    stubAll({
+      ...productionDoor,
+      AGENT_CONNECTION_WRAPPER_INDEX_KEY: short,
+    });
+    const report = vi.fn();
+    expect(connectionAuthDependencies(report)).toBeNull();
+    expect(report.mock.calls).toEqual([["WRAPPER_KEY_REFUSED"]]);
+  });
+
+  it("gives its pool a query timeout, and gives up on a database that goes silent", async () => {
+    // Just enough of the protocol for a connect to finish, then nothing, ever.
+    const silent = createServer((socket) => {
+      socket.on("error", () => undefined);
+      socket.once("data", () => {
+        const authenticationOk = [0x52, 0, 0, 0, 8, 0, 0, 0, 0];
+        const readyForQuery = [0x5a, 0, 0, 0, 5, 0x49];
+        socket.write(Buffer.from([...authenticationOk, ...readyForQuery]));
+      });
+    });
+    await new Promise<void>((resolve) =>
+      silent.listen(0, "127.0.0.1", resolve),
+    );
+    try {
+      const { port } = silent.address() as AddressInfo;
+      const runtime = compose(developmentDoor, {
+        AGENT_RESOURCE_DATABASE_URL: `postgresql://x@127.0.0.1:${port}/synthetic`,
+      });
+      expect(
+        (pools.configs.at(-1) as { connectionString: string }).connectionString,
+      ).toContain("query_timeout=5000");
+      await expect(
+        runtime?.verifyAccessToken(`${CONNECTION_TOKEN_PREFIX}silent`),
+      ).rejects.toThrow("Query read timeout");
+      await runtime?.close();
+    } finally {
+      await new Promise((resolve) => silent.close(resolve));
+    }
+  }, 15_000);
+
+  it("compares the environment with the issuer's only where the two can differ", async () => {
     for (const [override, code] of [
       [{ CMS_ENVIRONMENT: undefined }, "ENVIRONMENT_DISAGREES_WITH_NODE_ENV"],
       [{ CMS_ENVIRONMENT: "synthetic" }, "ENVIRONMENT_DISAGREES_WITH_NODE_ENV"],
-      [
-        { AGENT_AUTHORIZATION_ENVIRONMENT: undefined },
-        "ENVIRONMENT_DISAGREES_WITH_ISSUER",
-      ],
-      [
-        { AGENT_AUTHORIZATION_ENVIRONMENT: "development" },
-        "ENVIRONMENT_DISAGREES_WITH_ISSUER",
-      ],
     ] as const)
       expect([override, refusalOf(productionDoor, override)]).toEqual([
         override,
         code,
       ]);
+
+    // In Production both sides are forced to `production`, so `admin.env` needs no
+    // copy of the issuer's setting and a stray one decides nothing.
+    for (const copy of [undefined, "production", "development"]) {
+      const production = compose(productionDoor, {
+        AGENT_AUTHORIZATION_ENVIRONMENT: copy,
+      });
+      expect(production?.environment).toBe("production");
+      await production?.close();
+    }
 
     const operator = { AGENT_AUTHORIZATION_PROFILE: "operator" };
     expect(
@@ -666,6 +739,12 @@ describe("the login door's gate", () => {
         ...operator,
         CMS_ENVIRONMENT: "synthetic",
         AGENT_AUTHORIZATION_ENVIRONMENT: "development",
+      }),
+    ).toBe("ENVIRONMENT_DISAGREES_WITH_ISSUER");
+    expect(
+      refusalOf(developmentDoor, {
+        ...operator,
+        CMS_ENVIRONMENT: "synthetic",
       }),
     ).toBe("ENVIRONMENT_DISAGREES_WITH_ISSUER");
     const agreeing = compose(developmentDoor, {
