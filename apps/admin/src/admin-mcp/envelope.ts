@@ -57,7 +57,7 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     retryable: true,
   },
   MEDIA_JOB_FAILED: {
-    hint: "The state committed but a media job failed. Read the job before retrying it.",
+    hint: "The state committed but a media job stopped; jobs names it. Read it with list.jobs before retrying it with community.retry-publishing-job.",
     retryable: false,
   },
   MCP_PAUSED: {
@@ -85,7 +85,7 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     retryable: false,
   },
   PREVIEW_REQUIRED: {
-    hint: "This save binds a new identity, which is irreversible. Call admin_preview first.",
+    hint: "This input makes the op irreversible: a save binding a new identity, or a legal hold's release. Call admin_preview first.",
     retryable: false,
   },
   INPUT_INVALID: {

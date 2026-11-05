@@ -66,6 +66,8 @@ export const adminExecuteRowSchema = z.strictObject({
   fields: z.array(z.string()).optional(),
   replayed: z.literal(true).optional(),
   lock: adminLockSchema.optional(),
+  /** On MEDIA_JOB_FAILED: the newest jobs that stopped, for reading and retrying. */
+  jobs: z.array(z.string()).optional(),
 });
 
 /** Grouped by state, not one object per target. An empty group is omitted. */
@@ -78,12 +80,19 @@ export const adminExecuteDataSchema = z.strictObject({
         index: z.number().int().nonnegative(),
         id: adminExecuteTargetRefSchema.optional(),
         state: z.string().min(1),
+        /** This call changed nothing here: the wait is on work already open. */
+        alreadyApplied: z.literal(true).optional(),
       }),
     )
     .optional(),
   conflict: z.array(adminExecuteRowSchema).optional(),
   failed: z.array(adminExecuteRowSchema).optional(),
   unknown: z.array(adminExecuteRowSchema).optional(),
+  /**
+   * Moderation only: each subject this call moderated got its own case, user message
+   * and appeal path, and this many did. A replay opens none.
+   */
+  moderationCases: z.number().int().positive().optional(),
   /** What each completed target's op answered. It is what a cut drops first. */
   results: z
     .array(z.looseObject({ index: z.number().int().nonnegative() }))
@@ -114,6 +123,17 @@ export const adminSaveEchoSchema = z.strictObject({
   /** Exactly one of these: read the record again only when warnings are present. */
   noRereadNeeded: z.literal(true).optional(),
   warnings: z.array(z.string()).optional(),
+});
+
+/**
+ * One community write's row in `results`: small, because a report or a work can run
+ * past the text cap, and read through admin_get when the whole of it is wanted.
+ */
+export const adminCommunityWriteEchoSchema = z.looseObject({
+  id: z.string().optional(),
+  state: z.string().optional(),
+  version: z.number().int().nonnegative().optional(),
+  caseOpened: z.literal(true).optional(),
 });
 
 export type AdminExecuteInput = z.infer<typeof adminExecuteInputSchema>;

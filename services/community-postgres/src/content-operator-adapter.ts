@@ -20,13 +20,18 @@ import {
 } from "./self-only.js";
 import { assertExecutionFence } from "./execution-fence.js";
 import { createHash, randomUUID } from "node:crypto";
-import { CommunityConflictError, CommunityNotFoundError } from "@moya/api";
+import {
+  CommunityConflictError,
+  CommunityIdempotencyConflictError,
+  CommunityNotFoundError,
+} from "@moya/api";
 import type {
   CommunityContentOperatorPort,
   ExecutionFence,
   PublicUserStatus,
 } from "@moya/api";
 import {
+  markForAiOperator,
   operatorWorkSchema,
   operatorWorkPageSchema,
   featuredOrderResultSchema,
@@ -181,10 +186,12 @@ export class PostgresCommunityContentOperatorAdapter implements CommunityContent
       // confusion this work exists to remove.
       if (old.rows[0]) {
         if (old.rows[0].fingerprint !== fingerprint)
-          throw new CommunityConflictError("Request identity already used");
+          throw new CommunityIdempotencyConflictError(
+            "Request identity already used",
+          );
         if (old.rows[0].result?.permanentlyDeleted === true)
           throw new CommunityNotFoundError();
-        return old.rows[0].result as T;
+        return markForAiOperator(operator, old.rows[0].result as T, "replayed");
       }
       // Only a NEW effect needs the right to execute, and it is checked after
       // the lock wait, never before it: whoever waited here may have lost that
@@ -219,7 +226,9 @@ export class PostgresCommunityContentOperatorAdapter implements CommunityContent
         "INSERT INTO community.content_operator_receipts(operator_label,request_id,fingerprint,result) VALUES($1,$2,$3,$4)",
         [operator, requestId, fingerprint, JSON.stringify(result)],
       );
-      return result;
+      return audit
+        ? result
+        : markForAiOperator(operator, result, "alreadyInPlace");
     });
   }
   async readWorkTitle(id: string): Promise<string | null> {

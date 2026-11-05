@@ -6,6 +6,7 @@ import {
   moderationEventQuerySchema,
   moderationSummaryQuerySchema,
   moderationSummarySchema,
+  markForAiOperator,
   operatorCommentDetailSchema,
   operatorCommentPageSchema,
   operatorCommentQuerySchema,
@@ -288,7 +289,7 @@ export class CommunityModerationService {
      * conflict. Ordinary Owner moderation passes none.
      */
     receipt?: CommandReceipt,
-  ): Promise<ModerationResult> {
+  ): Promise<ModerationResult & { readonly replayed?: true }> {
     const { action, reason } = this.parse(moderateCommentCommandSchema, body);
     const at = this.clock();
     const transition = moderationTransitions[action];
@@ -311,7 +312,11 @@ export class CommunityModerationService {
         `Comment is ${current.moderation}; ${action} requires ${transition.from.join(" or ")}`,
       );
     }
-    return { id: moderated.id, moderation: moderated.moderation };
+    return {
+      id: moderated.id,
+      moderation: moderated.moderation,
+      ...(moderated.replayed === true ? { replayed: true as const } : {}),
+    };
   }
 
   /**
@@ -373,7 +378,7 @@ export class CommunityModerationService {
   async moderateUser(
     id: PublicUserId,
     body: unknown,
-  ): Promise<UserModerationResult> {
+  ): Promise<UserModerationResult & { readonly alreadyInPlace?: true }> {
     const { action, reason } = this.parse(moderateUserCommandSchema, body);
     const at = this.clock();
     const result = await this.identityPort.setUserStatus(
@@ -387,11 +392,14 @@ export class CommunityModerationService {
       throw new CommunityConflictError(
         "A deleted account cannot be suspended or reinstated",
       );
-    return {
+    const answer = {
       id: result.user.id,
       status: result.user.status,
       revokedSessions: result.revokedSessions,
     };
+    return result.unchanged === true
+      ? markForAiOperator(this.operatorLabel, answer, "alreadyInPlace")
+      : answer;
   }
 
   /** The operation history, newest first, from the authoritative audit table. */

@@ -27,6 +27,7 @@ const MISSES: ReadonlySet<string> = new Set([
 
 // The target moved or someone holds it: the command was fine when it was written.
 const CONFLICTS: ReadonlySet<string> = new Set([
+  "STATE_CONFLICT",
   "IDEMPOTENCY_CONFLICT",
   "REVISION_CONFLICT",
   "APPROVED_REVISION_CHANGED",

@@ -47,5 +47,7 @@ export interface CommunityIdentityPort {
   ): Promise<{
     readonly user: PublicUserRecord;
     readonly revokedSessions: number;
+    /** The account was already in this status, so nothing was recorded. */
+    readonly unchanged?: true;
   } | null>;
 }

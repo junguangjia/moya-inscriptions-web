@@ -114,6 +114,8 @@ export const adminMcpMetaSchema = z.strictObject({
   sources: z
     .record(z.string(), z.enum(["ok", "timed_out", "failed", "not_available"]))
     .optional(),
+  /** The op asked to publish with a publish gate shut, so no job exists to wait for. */
+  mediaGate: z.literal("off").optional(),
 });
 
 export const adminMcpEnvelopeSchema = z

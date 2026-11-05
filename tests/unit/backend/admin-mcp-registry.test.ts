@@ -13,6 +13,7 @@ import {
   ADMIN_OP_NAMES,
   ADMIN_OP_TOOLS,
   adminActionDetailSchema,
+  adminCommunityWriteEchoSchema,
   adminMcpEnvelopeSchema,
   type AdminOpName,
 } from "@moya/contracts/internal/admin-mcp";
@@ -177,6 +178,20 @@ describe("op names", () => {
           route as keyof typeof communityOperationDefinitions
         ];
       const entry = entryOf(`community.${route}` as AdminOpName);
+      // A built write answers its own small echo, and takes its key from requestId.
+      if (entry.tool === "admin_execute" && entry.run !== undefined) {
+        const shapeOf = (schema: unknown) =>
+          (schema as { shape: Record<string, unknown> }).shape;
+        expect(Object.keys(shapeOf(entry.input)).sort(), route).toEqual(
+          Object.keys(shapeOf(definition.input))
+            .filter((field) => field !== "requestId")
+            .sort(),
+        );
+        expect(entry.output, route).toEqual({
+          ai: adminCommunityWriteEchoSchema,
+        });
+        continue;
+      }
       expect(entry.input, route).toBe(definition.input);
       expect(entry.output, route).toBe(definition.output);
     }
@@ -666,6 +681,55 @@ describe("class decides the tool", () => {
     expect(entryOf("catalog.publish").completion.kind).toBe("sync");
   });
 
+  it("pins which async ops read a real settlement, so accepted never reads as done", () => {
+    const settles = (op: AdminOpName) => {
+      const { completion } = entryOf(op);
+      return completion.kind === "async" && completion.settle !== undefined;
+    };
+    const built = ADMIN_OP_NAMES.filter(
+      (op) => entryOf(op).completion.kind === "async" && entryOf(op).run,
+    );
+    expect(names(built.filter(settles))).toEqual(
+      names([
+        "community.moderate-work",
+        "community.moderate-user",
+        "community.moderate-work-submission",
+        "community.moderate-article-submission",
+        "community.decide-report",
+        "community.review-report",
+        "community.retry-publishing-job",
+        "editorial.prepare-catalog-delivery",
+        "editorial.request-catalog-release",
+        "catalog.withdraw",
+      ]),
+    );
+    // Nothing built answers from `accepted`: a new async op has to say how it settles.
+    expect(built.filter((op) => !settles(op))).toEqual([]);
+  });
+
+  it("never reads a command it cannot place as having moved nothing", async () => {
+    const settleOf = (op: AdminOpName) => {
+      const { completion } = entryOf(op);
+      if (completion.kind !== "async" || completion.settle === undefined)
+        throw new Error(`${op} has no settlement`);
+      return completion.settle;
+    };
+    const context = {} as Parameters<ReturnType<typeof settleOf>>[2];
+    for (const [op, input, answer] of [
+      ["community.moderate-work-submission", { action: "approve" }, undefined],
+      ["community.moderate-work-submission", { action: "approve" }, {}],
+      ["community.decide-report", { action: "hide" }, undefined],
+      ["community.decide-report", { action: "hide" }, { target: null }],
+      ["community.decide-report", { action: "suspend" }, {}],
+      ["community.review-report", { outcome: "uphold" }, undefined],
+      ["community.review-report", { outcome: "uphold" }, { decision: null }],
+    ] as const)
+      await expect(
+        settleOf(op)(input, answer, context),
+        JSON.stringify([op, input, answer]),
+      ).rejects.toThrow("SETTLEMENT_SUBJECT_UNKNOWN");
+  });
+
   it("pins the credential map of section 2", () => {
     const credential = (op: AdminOpName) => entryOf(op).credential;
     for (const op of ADMIN_OP_NAMES) {
@@ -1036,8 +1100,11 @@ describe("admin_actions", () => {
     );
     expect(text).not.toContain("9007199254740991");
     expect(text).not.toContain('"$schema"');
-    expect(text).toContain('"format":"uuid"');
-    expect(text).not.toContain("0000-0000-0000-000000000000");
+    const keyed = JSON.stringify(
+      actionDetail("community.delete-body", allTools, open),
+    );
+    expect(keyed).toContain('"format":"uuid"');
+    expect(keyed).not.toContain("0000-0000-0000-000000000000");
   });
 
   it("says when an op is not on this key", () => {

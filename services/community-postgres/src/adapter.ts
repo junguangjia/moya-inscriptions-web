@@ -100,6 +100,7 @@ export class PostgresCommunityIdentityAdapter implements CommunityIdentityPort {
   ): Promise<{
     readonly user: PublicUserRecord;
     readonly revokedSessions: number;
+    readonly unchanged?: true;
   } | null> {
     const client = await this.connect();
     try {
@@ -153,7 +154,11 @@ export class PostgresCommunityIdentityAdapter implements CommunityIdentityPort {
           at,
         );
       await client.query("COMMIT");
-      return { user, revokedSessions: revoked?.rowCount ?? 0 };
+      return {
+        user,
+        revokedSessions: revoked?.rowCount ?? 0,
+        ...(row.changed === true ? {} : { unchanged: true as const }),
+      };
     } catch (error) {
       try {
         await client.query("ROLLBACK");

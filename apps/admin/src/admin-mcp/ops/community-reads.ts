@@ -5,6 +5,7 @@ import {
   adminReadRowsDataSchema,
   aiCountResultSchema,
   aiFindResultSchema,
+  aiSettlementResultSchema,
   resolveAnalyticsRange,
 } from "@moya/contracts/internal/admin-mcp";
 import type {
@@ -13,6 +14,8 @@ import type {
   AdminMcpNext,
   AiCountSource,
   AiFindResult,
+  AiSettlementQuery,
+  AiSettlementResult,
   AnalyticsInsightQuery,
 } from "@moya/contracts/internal/admin-mcp";
 import type { PayloadRequest } from "payload";
@@ -68,6 +71,8 @@ export interface CommunityReadLimits {
   readonly slots: PoolSlots;
   readonly waitMs: number;
   readonly holdMs: number;
+  /** What a call says when no slot came in time. A read answers READ_TIMED_OUT. */
+  readonly busyCode?: string;
 }
 
 /** A slot within the wait, or false. A turn that comes later goes straight back. */
@@ -96,7 +101,10 @@ export const inPoolShare =
   (backend: OperatorCall, limits: CommunityReadLimits): OperatorCall =>
   async <Result>(...call: Parameters<OperatorCall>): Promise<Result> => {
     if (!(await slotWithin(limits)))
-      throw new CommunityOperatorError("READ_TIMED_OUT", 503);
+      throw new CommunityOperatorError(
+        limits.busyCode ?? "READ_TIMED_OUT",
+        503,
+      );
     let overran = false;
     try {
       return await backend<Result>(...call);
@@ -109,11 +117,29 @@ export const inPoolShare =
     }
   };
 
-const community = inPoolShare(callAiOperator("community"), {
+const COMMUNITY_LIMITS: CommunityReadLimits = {
   slots: createPoolSlots(COMMUNITY_READ_POOL_SHARE),
   waitMs: COMMUNITY_WAIT_MS,
   holdMs: COMMUNITY_OVERRUN_HOLD_MS,
-});
+};
+
+const community = inPoolShare(callAiOperator("community"), COMMUNITY_LIMITS);
+// A job's own subject needs no community state, so Catalog work never needs that token.
+const baseShare = inPoolShare(callAiOperator("base"), COMMUNITY_LIMITS);
+
+/**
+ * A write takes the same slots: the App pool holds 5 connections by default
+ * (DATABASE_POOL_MAX), and these 2 and analytics' 2 are what leave one free for the
+ * public site and sign-in. A write's transaction holds a connection as a read does, so
+ * a share of its own would make 6. Refused in turn, it has not started.
+ */
+export const communityWriteCall = (
+  headers: Readonly<Record<string, string>> = {},
+): OperatorCall =>
+  inPoolShare(callAiOperator("community", headers), {
+    ...COMMUNITY_LIMITS,
+    busyCode: "EXECUTE_BUSY",
+  });
 
 export const SELF_ONLY_CATEGORY = "self_only";
 
@@ -206,13 +232,29 @@ const naming = (
         },
       };
 
+/** The Backend's settlement route: what is left of the media work behind a subject. */
+export const askSettlement = async (
+  query: AiSettlementQuery,
+): Promise<AiSettlementResult> => {
+  const call = query.type === "item" ? baseShare : community;
+  const checked = aiSettlementResultSchema.safeParse(
+    await call(
+      "GET",
+      `ai/settlement?${new URLSearchParams({ ...query }).toString()}`,
+    ),
+  );
+  if (!checked.success)
+    throw new CommunityOperatorError("OPERATOR_RESPONSE_INVALID", 502);
+  return checked.data;
+};
+
 /** State, length and hash: what a row says of long text. */
 export const textFacts = (value: unknown) =>
   typeof value === "string" && value !== ""
     ? { state: "VALUE", length: codePointLength(value), hash: textHash(value) }
     : { state: "ABSENT" };
 
-const shortOrFacts = (value: unknown) =>
+export const shortOrFacts = (value: unknown) =>
   typeof value === "string" && codePointLength(value) > INLINE_TEXT_CHARS
     ? textFacts(value)
     : value;

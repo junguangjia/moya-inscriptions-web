@@ -77,6 +77,7 @@ export {
   AI_OPERATOR_CREDENTIALS,
   AI_OPERATOR_LABEL,
   AI_OPERATOR_ROUTES,
+  AI_OPERATOR_REQUEST_ID_HEADER,
   AI_OPERATOR_RUN_HEADER,
   aiOperatorRouteFor,
   aiOperatorRouteId,
@@ -88,12 +89,15 @@ export {
   AI_COUNT_GROUPS,
   AI_FIND_WORDS_MAX,
   AI_LOOKUP_TYPES,
+  AI_SETTLEMENT_TYPES,
   aiCountQuerySchema,
   aiCountResultSchema,
   aiFindItemSchema,
   aiFindQuerySchema,
   aiFindResultSchema,
   aiFindStatusSchema,
+  aiSettlementQuerySchema,
+  aiSettlementResultSchema,
 } from "./ai-reads.js";
 export type {
   AiCountQuery,
@@ -107,7 +111,18 @@ export type {
   AiLookupType,
   AiOperatorReader,
   AiOperatorSubject,
+  AiSettlementQuery,
+  AiSettlementResult,
+  AiSettlementType,
 } from "./ai-reads.js";
+export {
+  ADMIN_JOB_MAX_REFS,
+  adminJobDataSchema,
+  adminJobInputSchema,
+  adminJobRefSchema,
+  adminJobRowSchema,
+} from "./job.js";
+export type { AdminJobInput, AdminJobRef, AdminJobRow } from "./job.js";
 export type {
   AiOperatorCredential,
   AiOperatorRoute,
@@ -217,6 +232,7 @@ export {
   adminExecuteInputSchema,
   adminExecuteListedShape,
   adminExecuteRowSchema,
+  adminCommunityWriteEchoSchema,
   adminSaveEchoSchema,
 } from "./execute.js";
 export type {
@@ -263,6 +279,7 @@ export type {
   AdminOpMeta,
   AdminOpOutput,
   AdminOpRecovery,
+  AdminOpSettlement,
   AdminOpTool,
 } from "./op-meta.js";
 export {

@@ -772,7 +772,12 @@ const communityItemOf = (
   match,
   actions: [
     ...(exact
-      ? communityActionsFor(type, id, scope)
+      ? communityActionsFor(
+          type,
+          id,
+          scope,
+          (disambiguators as { ownerOnly?: unknown }).ownerOnly === true,
+        )
       : candidateActions(type, id)),
   ],
 });

@@ -664,6 +664,12 @@ const readSweep = (): Readonly<Record<string, readonly string[]>> => {
       `publishing/accounts/${ids.author}/capacity`,
     ],
     "publishing/jobs": ["publishing/jobs?pageSize=50"],
+    "ai/settlement": [
+      `ai/settlement?${query({ type: "work", id: ids.selfWork, intent: "withdraw" })}`,
+      `ai/settlement?${query({ type: "item", id: ids.item, intent: "withdraw" })}`,
+      `ai/settlement?${query({ type: "user", id: ids.author, intent: "withdraw" })}`,
+      `ai/settlement?${query({ type: "article", id: `article-${"0".repeat(32)}`, intent: "publish" })}`,
+    ],
     "articles/submissions": ["articles/submissions"],
     "articles/:id/submission": [
       `articles/article-${"0".repeat(32)}/submission`,
@@ -681,7 +687,8 @@ describe("the canary sweep", () => {
       ({ klass, credentials }) =>
         klass === "read" && credentials.includes("community"),
     ).map(({ path }) => path.replace("/internal/community/", ""));
-    expect(Object.keys(sweep).sort()).toEqual([...rows].sort());
+    // A route with a row per query value is one route here.
+    expect(Object.keys(sweep).sort()).toEqual([...new Set(rows)].sort());
     for (const routes of Object.values(sweep))
       for (const route of routes) {
         const read = await ai(route);

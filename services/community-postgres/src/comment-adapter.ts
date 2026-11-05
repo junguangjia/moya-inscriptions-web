@@ -5,7 +5,10 @@ import {
 } from "./staff-moderation-reporting.js";
 import { PostgresDiscussionStore } from "./discussion-store.js";
 import { assertExecutionFence } from "./execution-fence.js";
-import { CommunityConflictError, CommunityReadTimedOutError } from "@moya/api";
+import {
+  CommunityIdempotencyConflictError,
+  CommunityReadTimedOutError,
+} from "@moya/api";
 
 import { asCommunityOperationError } from "./availability.js";
 import {
@@ -78,6 +81,7 @@ import type {
   ModerationEventAction,
   PublicationPolicy,
 } from "@moya/contracts/internal/community-operator";
+import { markForAiOperator } from "@moya/contracts/internal/community-operator";
 import type { OperatorReadScope } from "@moya/contracts/internal/community-operator";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
@@ -262,6 +266,7 @@ export class PostgresCommunityCommentAdapter
       id: unknown;
       moderation: unknown;
       kind: unknown;
+      replayed?: unknown;
     } & QueryResultRow;
     type Receipt = { fingerprint: unknown; result: unknown } & QueryResultRow;
     const rows = await this.transaction(async (run) => {
@@ -278,10 +283,12 @@ export class PostgresCommunityCommentAdapter
         const row = prior[0];
         if (row === undefined) return null;
         if (row.fingerprint !== receipt.fingerprint)
-          throw new CommunityConflictError(
+          throw new CommunityIdempotencyConflictError(
             "Reused command identity with other content",
           );
-        return [row.result as Changed];
+        return [
+          markForAiOperator(operatorLabel, row.result as Changed, "replayed"),
+        ];
       };
       // The replay comes first: returning a receipt creates no effect, so
       // an executor that lost its lease must still be able to read back
@@ -368,6 +375,7 @@ export class PostgresCommunityCommentAdapter
       id: row.id as CatalogCommentId,
       kind: row.kind,
       moderation: row.moderation as CommentModerationState,
+      ...(row.replayed === true ? { replayed: true as const } : {}),
     };
   }
 

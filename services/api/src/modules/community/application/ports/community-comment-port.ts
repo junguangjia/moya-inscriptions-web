@@ -128,6 +128,8 @@ export interface ModeratedSubject {
   readonly id: CatalogCommentId;
   readonly kind: "comment" | "reply";
   readonly moderation: CommentModerationState;
+  /** `ai-admin` only: its receipt answered, and nothing ran. */
+  readonly replayed?: true;
 }
 
 /**

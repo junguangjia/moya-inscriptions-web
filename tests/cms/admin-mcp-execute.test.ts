@@ -381,7 +381,7 @@ describe("the tool on the wire", () => {
     expect(
       await call({
         requestId: requestId(),
-        op: "community.moderate-comment",
+        op: "ops.master.requeue",
         input: {},
       }),
     ).toMatchObject({ ok: false, code: "NOT_AVAILABLE" });

@@ -206,7 +206,7 @@ const queue = (op: AdminOpName, input: Record<string, unknown>) => ({
   args: { op, input },
 });
 
-/** What reads around a community record. Its writes join with the slice that builds them. */
+/** What reads around a community record. */
 const COMMUNITY_READS: Readonly<
   Partial<
     Record<AdminRecordType, (id: string) => readonly AdminActionSkeleton[]>
@@ -230,13 +230,43 @@ const COMMUNITY_READS: Readonly<
   media_item: (id) => [queue("list.jobs", { subjectId: id })],
 };
 
-/** Exact only, and on the tools this key has: read-only, so every key has them. */
+const write = (op: AdminOpName, input: Record<string, unknown>) => ({
+  tool: "admin_execute",
+  args: { op, input },
+});
+
+/** What can be done to it. `requestId`, a reason and a version stay the caller's. */
+const COMMUNITY_WRITES: Readonly<
+  Partial<
+    Record<AdminRecordType, (id: string) => readonly AdminActionSkeleton[]>
+  >
+> = {
+  user: (id) => [write("community.moderate-user", { id })],
+  work: (id) => [write("community.moderate-work", { id })],
+  comment: (id) => [write("community.moderate-comment", { id })],
+  report: (id) => [
+    write("community.decide-report", { id }),
+    write("community.review-report", { id }),
+    write("community.set-report-metadata", { id }),
+  ],
+  thread: (id) => [write("community.update-thread", { id })],
+  publishing_job: (id) => [write("community.retry-publishing-job", { id })],
+  work_revision: (id) => [write("community.moderate-work-submission", { id })],
+  article: (id) => [write("community.moderate-article-submission", { id })],
+};
+
+/**
+ * Exact only, and on the tools this key has, so a read key is offered only reads. A
+ * case only the Owner handles is offered no write, since each would answer that.
+ */
 export const communityActionsFor = (
   type: AdminRecordType,
   id: string,
   { tools }: Pick<ActionScope, "tools">,
+  ownerOnly = false,
 ): readonly AdminActionSkeleton[] =>
   [
     ...candidateActions(type, id),
     ...(COMMUNITY_READS[type]?.(id) ?? []),
+    ...(ownerOnly ? [] : (COMMUNITY_WRITES[type]?.(id) ?? [])),
   ].filter(({ tool }) => tools.includes(tool));

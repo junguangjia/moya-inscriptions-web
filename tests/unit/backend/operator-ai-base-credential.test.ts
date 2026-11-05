@@ -253,7 +253,8 @@ describe("OPERATOR_AI_BASE_TOKEN route table", () => {
         method,
         `/internal/${route}`,
         klass,
-        ["base"],
+        // Settlement of a job's own subject is the one row the two credentials share.
+        route === "community/ai/settlement" ? ["base", "community"] : ["base"],
         query,
       ]),
     );
@@ -368,9 +369,16 @@ describe("the base token on the Backend", () => {
   it("passes the table's rows, and an irreversible row only with the run header", async () => {
     const backend = await startBackend();
     const master = "ai/catalog-master";
+    // Past the table with no reader to ask: refused for that, and not by the table.
+    expect(
+      await backend.send(
+        "GET",
+        "ai/settlement?type=item&id=x&intent=withdraw",
+        bearer(baseToken),
+      ),
+    ).toEqual({ status: 503, code: "OPERATOR_UNAVAILABLE" });
     // No handler yet behind these: past the table they are ordinary unknown routes.
     for (const [method, route] of [
-      ["GET", "ai/settlement?type=item"],
       ["GET", `${master}/status`],
       ["POST", `${master}/attach`],
       ["POST", `${master}/detach`],

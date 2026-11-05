@@ -1,8 +1,13 @@
 import { staffAuditCommand } from "../staff-moderation-reporting.js";
 import { createHash, randomUUID } from "node:crypto";
 
-import { CommunityConflictError, CommunityNotFoundError } from "@moya/api";
 import {
+  CommunityConflictError,
+  CommunityIdempotencyConflictError,
+  CommunityNotFoundError,
+} from "@moya/api";
+import {
+  markForAiOperator,
   operatorAccountCapacitySchema,
   workPublishingSettingsSchema,
 } from "@moya/contracts/internal/community-operator";
@@ -365,8 +370,10 @@ export const operatorCommand = <T>(
     ).rows[0];
     if (old !== undefined) {
       if (old.fingerprint !== fingerprint)
-        throw new CommunityConflictError("Request identity already used");
-      return old.result;
+        throw new CommunityIdempotencyConflictError(
+          "Request identity already used",
+        );
+      return markForAiOperator(spec.operator, old.result, "replayed");
     }
     const result = await change(db);
     await db.query(

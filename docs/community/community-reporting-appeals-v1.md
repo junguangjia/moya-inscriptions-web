@@ -15,31 +15,47 @@ case association, including after the content became hidden. This creates a
 separate case whenever the original already has a decision, preserving its
 history and appeal. It does not make hidden targets generally reportable.
 
-Current human moderation in the existing pending queues and content/account
-controls must carry a reason and record a staff-origin decision, affected-user
-notification and appeal. Staff records have no fabricated reporter. Automated
-prepared operations retain their separate authorization and receipt boundary.
-Overturning a rejected submission returns only the exact unchanged candidate to
-its native pending queue; it never publishes it. A later edit, new candidate,
-withdrawal, deletion or visibility change refuses restoration. Publication still
-requires the existing native approval and media checks. Existing operator body
-deletion is irreversible: a correction changes the decision record and notice,
-never reconstructs deleted text. Whole-thread removal is a separate access flag;
-any restoration preserves author deletion and other active measures. Each
-affected author receives a private decision and appeal record.
+Moderation in the existing pending queues and content/account controls, by a
+person or by the operator AI (`ai_operator`, amendment 2026-11-03), must carry a
+reason and record a staff-origin decision, affected-user notification and
+appeal. Its record names `owner` or `ai-admin`, and nothing else differs. Staff
+records have no fabricated reporter. Automated prepared operations retain their
+separate authorization and receipt boundary. Overturning a rejected submission
+returns only the exact unchanged candidate to its native pending queue; it never
+publishes it. A later edit, new candidate, withdrawal, deletion or visibility
+change refuses restoration. Publication still requires the existing native
+approval and media checks. Existing operator body deletion is irreversible: a
+correction changes the decision record and notice, never reconstructs deleted
+text. Whole-thread removal is a separate access flag; any restoration preserves
+author deletion and other active measures. Each affected author receives a
+private decision and appeal record.
 
 ## Responsibility and escalation
 
-The Owner receives and reviews complaints and appeals, owns urgent on-call
-handling, and reviews the necessity of every disclosure. Urgent unlawful-content
-cases have a separate priority queue and durable SES notification, including a
-visible delivery failure. The Owner preserves necessary evidence, applies
-appropriate protective measures, and makes legally required reports to the
-competent authority through its official channel. Staff must not publish
-complaint evidence or forward identity documents indiscriminately. Ordinary
-service targets are not statutory deadlines. Rights-holder disputes require
-human judgment, forwarding notices and counter-statements, delivery tracking,
-follow-up and a reasoned restoration decision.
+The Owner and the operator AI receive and review complaints and appeals,
+including rights-holder disputes and appeals against the AI's own decisions, and
+either may judge the necessity of a forward. The Owner owns urgent on-call
+handling. Urgent unlawful-content cases have a separate priority queue and
+durable SES notification, including a visible delivery failure. The Owner
+preserves necessary evidence, applies appropriate protective measures, and makes
+legally required reports to the competent authority through its official
+channel; no tool exists for these. Staff must not publish complaint evidence or
+forward identity documents indiscriminately. Ordinary service targets are not
+statutory deadlines. Rights-holder disputes require judgment, forwarding notices
+and counter-statements, delivery tracking, follow-up and a reasoned restoration
+decision.
+
+A case on a self-only work or on a comment under one stays with the Owner: the
+AI sees that it exists and every write on it answers `SELF_ONLY_OWNER_REVIEW`.
+
+A request to read, correct or delete personal information reaches this queue as
+an ordinary report: the public policy sends it through the same complaint entry.
+Nothing marks it. It has no kind or reason of its own, `privacy` also means that
+a post exposes someone, and only its description says what is asked. So the
+system does not recognise such a request, and neither reads nor writes refuse it
+for the AI. Leaving it to the Owner, as the policy says, rests on whoever reads
+the description: this is an accepted limit, recorded in
+`docs/development/admin-mcp-completion-v1.md` section 17.
 
 ## Retention
 
@@ -64,9 +80,11 @@ workflow. The reporting Backend must never write CMS tables. The Owner uses the
 native editorial interface to withdraw or restore such content first. A report
 may then record that the same published read verified it unavailable, or verify
 publication before correcting that observation. These are time-stamped
-observations, not a new permanent publication authority. Platform responses to
-rights claimants are labelled as Owner-authored handling results, never as a
-fabricated statement from an unrelated public account.
+observations, not a new permanent publication authority. A platform response to
+a rights claimant is a platform handling result, never a fabricated statement
+from an unrelated public account. A person reads no author on it: the record
+keeps who sent it, and one sent through the operator AI shows `ai-admin` in the
+case's history, never the Owner. Responses the Owner sends keep today's label.
 
 ## Production activation checklist
 

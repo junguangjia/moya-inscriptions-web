@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import {
   CommunityConflictError,
+  CommunityIdempotencyConflictError,
   CommunityInputError,
   CommunityNotFoundError,
 } from "@moya/api";
@@ -10,7 +11,9 @@ import {
   threadSummarySchema,
   threadReadResultSchema,
 } from "@moya/contracts/schemas";
+import { AI_OPERATOR_LABEL } from "@moya/contracts/internal/admin-mcp";
 import {
+  markForAiOperator,
   operatorThreadPageSchema,
   operatorThreadSchema,
 } from "@moya/contracts/internal/community-operator";
@@ -404,21 +407,25 @@ export class PostgresThreadAdapter implements ThreadPort {
     subject: string,
     input: unknown,
     change: (db: PoolClient) => Promise<T>,
+    /** What names the command, when `subject` is made per call and a retry's differs. */
+    named: string = subject,
   ): Promise<T> {
     return this.run(true, async (db) => {
       await db.query(
         "SELECT pg_advisory_xact_lock(hashtextextended('phase4-content-operator',0))",
       );
       const requestId = (input as { requestId: string }).requestId;
-      const fingerprint = commandFingerprint(action, subject, input);
+      const fingerprint = commandFingerprint(action, named, input);
       const old = await db.query<{ fingerprint: string; result: T }>(
         "SELECT fingerprint,result FROM community.content_operator_receipts WHERE operator_label=$1 AND request_id=$2",
         [operator, requestId],
       );
       if (old.rows[0]) {
         if (old.rows[0].fingerprint !== fingerprint)
-          throw new CommunityConflictError("Request identity already used");
-        return old.rows[0].result;
+          throw new CommunityIdempotencyConflictError(
+            "Request identity already used",
+          );
+        return markForAiOperator(operator, old.rows[0].result, "replayed");
       }
       const result = await change(db);
       await db.query(
@@ -445,28 +452,37 @@ export class PostgresThreadAdapter implements ThreadPort {
     input: CreateThreadCommand,
   ): Promise<OperatorThread> {
     const id = `thread-${randomUUID().replaceAll("-", "")}`;
-    return this.command(operator, "thread.create", id, input, async (db) => {
-      await db.query(
-        `INSERT INTO community.threads(id,title,description,tags,status,position,created_by)
+    return this.command(
+      operator,
+      "thread.create",
+      id,
+      input,
+      async (db) => {
+        await db.query(
+          `INSERT INTO community.threads(id,title,description,tags,status,position,created_by)
          VALUES($1,$2,$3,$4::text[],'open',$5,$6)`,
-        [
-          id,
-          input.title,
-          input.description,
-          input.tags,
-          input.position,
-          operator,
-        ],
-      );
-      return this.operatorThread(
-        (
-          await db.query<ThreadRow>(
-            `SELECT ${threadColumns} ${threadFrom("$1::timestamptz")} WHERE t.id = $3`,
-            [new Date().toISOString(), null, id],
-          )
-        ).rows[0]!,
-      );
-    });
+          [
+            id,
+            input.title,
+            input.description,
+            input.tags,
+            input.position,
+            operator,
+          ],
+        );
+        return this.operatorThread(
+          (
+            await db.query<ThreadRow>(
+              `SELECT ${threadColumns} ${threadFrom("$1::timestamptz")} WHERE t.id = $3`,
+              [new Date().toISOString(), null, id],
+            )
+          ).rows[0]!,
+        );
+      },
+      // The new id differs on every call, so a retry could never meet its own receipt.
+      // The Owner's route keeps answering as it always has.
+      operator === AI_OPERATOR_LABEL ? "new" : id,
+    );
   }
 
   async operatorUpdateThread(

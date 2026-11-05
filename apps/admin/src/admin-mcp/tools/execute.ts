@@ -9,6 +9,7 @@ import type {
   AdminExecuteData,
   AdminExecuteInput,
   AdminExecuteRow,
+  AdminJobRef,
   AdminMcpEnvelope,
   AdminCmsRecordType,
   AdminMcpNext,
@@ -34,6 +35,7 @@ import { envelopeCodeOf, targetFailureOf } from "../refusal";
 import type { TargetFailure } from "../refusal";
 import { adminOpMeta, isAdminOpName } from "../registry";
 import type { AdminOpContext, AdminOpEntry } from "../registry";
+import { JOB_TOOL_NAME, settlementNext } from "../settlement";
 import { opRefusalOf, unknownOpEnvelope } from "./read";
 
 export const EXECUTE_TOOL_NAME = "admin_execute";
@@ -53,6 +55,9 @@ const requestKeyFor = (requestId: string, index: number) => {
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+/** A community record's id: a fixed word and hex, so no caller's text fits in it. */
+const PLATFORM_ID =
+  /^(?:comment|user|work|work-revision|report|thread|article|publishing-job|media-item)-[0-9a-f]{32}$/u;
 const SIMPLE_KEY = /^[\w-]{1,64}$/u;
 const INPUT_MAX_DEPTH = 32;
 
@@ -62,7 +67,7 @@ const safeRef = (value: unknown): number | string | undefined => {
     return Number.isSafeInteger(value) && value > 0 ? value : undefined;
   if (typeof value !== "string") return undefined;
   if (/^[1-9]\d{0,14}$/u.test(value)) return Number(value);
-  return UUID.test(value) ? value : undefined;
+  return UUID.test(value) || PLATFORM_ID.test(value) ? value : undefined;
 };
 
 /**
@@ -139,10 +144,16 @@ interface TargetOutcome {
   readonly lock?: AdminExecuteRow["lock"];
   readonly replayed?: boolean;
   readonly result?: Readonly<Record<string, unknown>>;
+  /** A queued target whose effect was there before this call. */
+  readonly alreadyApplied?: true;
   /** Settlement's own word on a queued target. */
   readonly settledState?: string;
   readonly settledNext?: AdminMcpNext;
   readonly settledHint?: string;
+  /** On MEDIA_JOB_FAILED: what stopped. */
+  readonly jobs?: readonly string[];
+  /** Asked to publish with a gate shut, so no job exists. */
+  readonly mediaGate?: "off";
 }
 
 const COMPLETE: ReadonlySet<TargetOutcome["state"]> = new Set([
@@ -212,22 +223,34 @@ const settledOutcome = async (
   complete: CompleteState,
 ): Promise<TargetOutcome> => {
   const settlement = await settlementOf(entry, raw, result, context);
-  if (settlement === undefined || settlement.ok)
-    return { ...row, state: complete, code: "OK" };
+  if (settlement === undefined) return { ...row, state: complete, code: "OK" };
+  const gate =
+    settlement.mediaGate === undefined
+      ? {}
+      : { mediaGate: settlement.mediaGate };
+  if (settlement.ok) return { ...row, ...gate, state: complete, code: "OK" };
   if (settlement.code === "QUEUED")
     return {
       ...row,
+      ...gate,
       state: "queued",
       code: "QUEUED",
+      ...(complete === "already_applied" ? { alreadyApplied: true } : {}),
       settledState: settlement.state ?? "accepted",
       ...(settlement.next === undefined
         ? {}
         : { settledNext: settlement.next }),
-      ...("hint" in settlement && settlement.hint !== undefined
-        ? { settledHint: settlement.hint }
-        : {}),
+      ...(settlement.hint === undefined
+        ? {}
+        : { settledHint: settlement.hint }),
     };
-  return { ...row, state: "failed", code: settlement.code };
+  return {
+    ...row,
+    ...gate,
+    state: "failed",
+    code: settlement.code,
+    ...(settlement.jobs === undefined ? {} : { jobs: settlement.jobs }),
+  };
 };
 
 /** The row a public identity names, for an answer and an audit row that did not read one. */
@@ -348,6 +371,7 @@ const rowOf = ({
   fields,
   replayed,
   lock,
+  jobs,
 }: TargetOutcome): AdminExecuteRow => ({
   index,
   ...(id === undefined ? {} : { id }),
@@ -355,6 +379,7 @@ const rowOf = ({
   ...(fields === undefined ? {} : { fields: [...fields] }),
   ...(replayed ? { replayed: true as const } : {}),
   ...(lock === undefined ? {} : { lock }),
+  ...(jobs === undefined ? {} : { jobs: [...jobs] }),
 });
 
 const dataOf = (outcomes: readonly TargetOutcome[]): AdminExecuteData => {
@@ -366,10 +391,11 @@ const dataOf = (outcomes: readonly TargetOutcome[]): AdminExecuteData => {
     outcomes.filter((outcome) => outcome.state === state).map(rowOf);
   const queued = outcomes
     .filter(({ state }) => state === "queued")
-    .map(({ index, id, settledState }) => ({
+    .map(({ index, id, settledState, alreadyApplied }) => ({
       index,
       ...(id === undefined ? {} : { id }),
       state: settledState ?? "accepted",
+      ...(alreadyApplied ? { alreadyApplied } : {}),
     }));
   const groups: AdminExecuteData = {
     applied: ids("applied"),
@@ -379,9 +405,17 @@ const dataOf = (outcomes: readonly TargetOutcome[]): AdminExecuteData => {
     failed: rows("failed"),
     unknown: rows("unknown"),
   };
-  return Object.fromEntries(
-    Object.entries(groups).filter(([, group]) => group?.length),
-  ) as AdminExecuteData;
+  const moderationCases = outcomes.filter(
+    ({ result }) => result?.caseOpened === true,
+  ).length;
+  return {
+    ...(Object.fromEntries(
+      Object.entries(groups).filter(
+        ([, group]) => Array.isArray(group) && group.length > 0,
+      ),
+    ) as AdminExecuteData),
+    ...(moderationCases === 0 ? {} : { moderationCases }),
+  };
 };
 
 // Long enough to carry a list of ids and short counters, and no real text: a cut
@@ -457,6 +491,29 @@ const STOPPED_CODE = {
   ledger: "AUDIT_UNAVAILABLE",
 } as const;
 
+/**
+ * How the queued targets go on. Each op's own way, when every one has it: a read of
+ * their jobs needs nothing repeated, so their refs join into one, while they fit. Past
+ * that, or for a target whose settlement could not be read, the same call replays and
+ * asks again, which runs nothing twice.
+ */
+const queuedNext = (
+  call: AdminExecuteInput,
+  outcomes: readonly TargetOutcome[],
+): AdminMcpNext => {
+  const replay = nextCall(call, 0, false, RETRY_AFTER_MS);
+  const ways = outcomes
+    .filter(({ state }) => state === "queued")
+    .map(({ settledNext }) => settledNext);
+  const [first] = ways;
+  if (first === undefined || ways.includes(undefined)) return replay;
+  if (first.tool !== JOB_TOOL_NAME) return first;
+  const joined = settlementNext(
+    ways.flatMap((way) => way!.args.refs as AdminJobRef[]),
+  );
+  return bytesOf(joined) <= NEXT_ARGS_MAX_BYTES ? joined : replay;
+};
+
 /** The whole answer of a call, from what each target it reached did. */
 const answerOf = (
   call: AdminExecuteInput,
@@ -502,9 +559,12 @@ const answerOf = (
       single === undefined ? "PARTIAL" : envelopeCodeOf(single.code),
       {
         ...fields,
-        ...(retry === undefined
-          ? {}
-          : { next: nextCall(call, 0, false, afterMsOf(retry)) }),
+        // A target still waiting on its jobs has a way on, whatever stopped the others.
+        ...(retry !== undefined
+          ? { next: nextCall(call, 0, false, afterMsOf(retry)) }
+          : data.queued === undefined
+            ? {}
+            : { next: queuedNext(call, outcomes) }),
       },
     );
     return call.priorIncomplete === true
@@ -519,10 +579,7 @@ const answerOf = (
       ...(single?.settledState === undefined
         ? {}
         : { state: single.settledState }),
-      // The op's own way on when it has one: a replay of it would say the same.
-      next:
-        outcomes.find(({ settledNext }) => settledNext !== undefined)
-          ?.settledNext ?? nextCall(call, 0, false, RETRY_AFTER_MS),
+      next: queuedNext(call, outcomes),
     });
     const hint = outcomes.find(
       ({ settledHint }) => settledHint !== undefined,
@@ -707,6 +764,9 @@ const runCall = async (
         ? { replayed: true as const }
         : {}),
       ...(answer.code === "PARTIAL" ? { partial: true as const } : {}),
+      ...(outcomes.some(({ mediaGate }) => mediaGate !== undefined)
+        ? { mediaGate: "off" as const }
+        : {}),
     },
   };
 };

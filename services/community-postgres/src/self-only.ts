@@ -40,6 +40,11 @@ export const reportIsSelfOnlySql = (report: string): string =>
     OR (${report}.target_type='comment' AND (${commentIsSelfOnlySql(`${report}.target_id`)}
       OR (${report}.snapshot->'post'->>'type'='work' AND ${workIsSelfOnlySql(`${report}.snapshot->'post'->>'id'`)}))))`;
 
+/** The same question for a case named by its id. Its alias is apart from the ones above. */
+export const caseIsSelfOnlySql = (reportId: string): string =>
+  `EXISTS(SELECT 1 FROM community.report_cases so_case
+    WHERE so_case.id=${reportId} AND ${reportIsSelfOnlySql("so_case")})`;
+
 export const revisionIsSelfOnlySql = (revisionId: string): string =>
   `EXISTS(SELECT 1 FROM community.work_revisions so_rev
     JOIN community.works so_w ON so_w.id=so_rev.work_id

@@ -9,6 +9,7 @@ import {
   CommunityNotFoundError,
   CommunityContentOperatorService,
   isCommunityConflictError,
+  isCommunityIdempotencyConflictError,
   isCommunityInputError,
   isCommunityNotFoundError,
   isCommunityReadTimedOutError,
@@ -44,7 +45,12 @@ import {
   type AiOperatorReader,
 } from "@moya/contracts/internal/admin-mcp";
 
-import { aiInputRefusal, handleAiOperatorRead } from "./ai-operator.js";
+import {
+  aiCommentReceipt,
+  aiInputRefusal,
+  featuringSelfOnly,
+  handleAiOperatorRead,
+} from "./ai-operator.js";
 import { deliverPublishingMedia } from "./publishing-media-read.js";
 import { JsonBodyError, readJsonBody } from "../http/json-body.js";
 import { sendJson } from "../http/json-response.js";
@@ -212,6 +218,10 @@ const sendFailure = (response: ServerResponse, error: unknown): void => {
   }
   if (isCommunityNotFoundError(error)) {
     sendOperatorError(response, 404, "NOT_FOUND");
+    return;
+  }
+  if (isCommunityIdempotencyConflictError(error)) {
+    sendOperatorError(response, 409, "IDEMPOTENCY_CONFLICT");
     return;
   }
   if (isCommunityConflictError(error)) {
@@ -455,6 +465,7 @@ export const handleOperatorRequest = async (
         response,
         pathname,
         reportingService,
+        actor.label === AI_OPERATOR_LABEL,
       );
       return;
     }
@@ -636,11 +647,18 @@ export const handleOperatorRequest = async (
         return;
       }
       if (pathname === "/internal/community/featured" && method === "PUT") {
-        sendJson(
-          response,
-          200,
-          await operatorService.setFeatured(await commandBody()),
-        );
+        const command = await commandBody();
+        if (actor.label === AI_OPERATOR_LABEL) {
+          if (aiOperatorReader === undefined) {
+            sendOperatorError(response, 503, "OPERATOR_UNAVAILABLE");
+            return;
+          }
+          if (await featuringSelfOnly(command, aiOperatorReader)) {
+            sendOperatorError(response, 403, SELF_ONLY_OWNER_REVIEW);
+            return;
+          }
+        }
+        sendJson(response, 200, await operatorService.setFeatured(command));
         return;
       }
       if (
@@ -888,12 +906,16 @@ export const handleOperatorRequest = async (
         methodNotAllowed();
         return;
       }
+      const command = requireHumanModerationReason(await readJsonBody(request));
       sendJson(
         response,
         200,
         await moderationService.moderateComment(
           id.data,
-          requireHumanModerationReason(await readJsonBody(request)),
+          command,
+          actor.label === AI_OPERATOR_LABEL
+            ? aiCommentReceipt(request, id.data, command)
+            : undefined,
         ),
       );
       return;
