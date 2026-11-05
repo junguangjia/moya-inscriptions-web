@@ -157,9 +157,15 @@ describe("the control view gate", () => {
 });
 
 describe("the control page", () => {
-  const page = (overrides: Partial<AdminMcpControlPage> = {}) =>
+  const page = (
+    overrides: Partial<AdminMcpControlPage> = {},
+    connections = true,
+  ) =>
     renderToStaticMarkup(
-      createElement(McpControlClient, { page: { ...PAGE, ...overrides } }),
+      createElement(McpControlClient, {
+        connections,
+        page: { ...PAGE, ...overrides },
+      }),
     );
 
   it("shows pause, threshold and policy-text status for each switch", () => {
@@ -178,6 +184,37 @@ describe("the control page", () => {
     expect(html).toContain('href="/admin/agent-connections"');
     expect(html).toContain("即将到期的自动化密钥");
     expect(html).toContain("暂停后所有 AI 连接和密钥只能调用 admin_whoami");
+  });
+
+  it("reads as it did before the login door while the door is off", () => {
+    for (const pause of [false, true]) {
+      const html = page({ pause }, false);
+      expect(html).not.toContain('href="/admin/agent-connections"');
+      expect(html).not.toContain("AI 连接");
+      expect(html).toContain(
+        pause
+          ? "已暂停。所有密钥只能调用 admin_whoami，下一次请求起生效。"
+          : "运行中。暂停后所有密钥只能调用 admin_whoami，后台页面不受影响。",
+      );
+      expect(html).toContain("即将到期的密钥");
+      // The links that were there before stay.
+      expect(html).toContain('href="/admin/collections/mcp-audit-events"');
+    }
+  });
+
+  it("takes the door's state from the server view", async () => {
+    try {
+      vi.stubEnv("NODE_ENV", "production");
+      expect(await render(props(owner, { cookie: COOKIE }))).not.toContain(
+        'href="/admin/agent-connections"',
+      );
+      vi.stubEnv("ADMIN_MCP_OAUTH_ENABLED", "true");
+      expect(await render(props(owner, { cookie: COOKIE }))).toContain(
+        'href="/admin/agent-connections"',
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("offers a resume while paused", () => {
@@ -224,7 +261,7 @@ describe("the control page's writes", () => {
     fetchMock.mockResolvedValue(Response.json({ result: {} }));
     runtime.refresh.mockReset();
     vi.stubGlobal("fetch", fetchMock);
-    mount(createElement(McpControlClient, { page: PAGE }));
+    mount(createElement(McpControlClient, { connections: true, page: PAGE }));
   });
 
   afterEach(() => {

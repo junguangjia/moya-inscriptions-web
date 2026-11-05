@@ -25,6 +25,7 @@ import {
   bearer,
   clickConsent,
   closedList,
+  consentClicks,
   hex,
   issueAiKey,
   signIn,
@@ -331,8 +332,10 @@ try {
  * (Issue #355). The official SDK does all of a tool's half by itself from one URL:
  * it takes the 401, discovers, finds no registration endpoint, offers its client id
  * as a vendor's URL because the issuer says it may, and hands over the link a browser
- * opens. A person signs in and clicks 允许. That URL is on the closed list and nothing
- * fetches it: every address this client reaches is written down and checked.
+ * opens. A person signs in and clicks 允许. That URL is on the closed list, and every
+ * address this client's own requests reach, the refresh's included, is written down
+ * and checked. That the issuer never fetches it is pinned in
+ * `agent-operator-flow-cases.ts`, since no recorder here can see the issuer's own.
  */
 async function operatorAcceptance() {
   const vendorClientId = closedList().get("codex").clientId;
@@ -400,7 +403,7 @@ async function operatorAcceptance() {
     side = await toolSide(redirectUri);
 
     stage = "the-challenge-names-the-metadata-and-the-scope";
-    const challenge = await globalThis.fetch(resourceUrl, {
+    const challenge = await recordingFetch(resourceUrl, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -416,13 +419,16 @@ async function operatorAcceptance() {
     const resourceMetadata = await discoverOAuthProtectedResourceMetadata(
       resourceUrl,
       { resourceMetadataUrl },
+      recordingFetch,
     );
     assert.equal(resourceMetadata.resource, resourceUrl);
     assert.deepEqual(resourceMetadata.scopes_supported, ["artvenn:admin"]);
     const [authorizationServer] = resourceMetadata.authorization_servers;
     assert.equal(authorizationServer, new URL(issuerHint).origin);
-    const metadata =
-      await discoverAuthorizationServerMetadata(authorizationServer);
+    const metadata = await discoverAuthorizationServerMetadata(
+      authorizationServer,
+      { fetchFn: recordingFetch },
+    );
     assert.equal(metadata.issuer, authorizationServer);
     assert.equal(metadata.registration_endpoint, undefined);
     assert.equal(metadata.client_id_metadata_document_supported, true);
@@ -456,7 +462,7 @@ async function operatorAcceptance() {
         await review.getAttribute("data-agent-consent-client"),
         vendorClientId,
       );
-      await clickConsent(page, "approve");
+      await clickConsent(page, "approve", stage);
       const arrival = await side.take();
       assert.equal(arrival.error, null);
       return arrival.code;
@@ -466,7 +472,7 @@ async function operatorAcceptance() {
     await signIn(page, access.ownerEmail, access.ownerPassword);
     const review = page.locator("[data-agent-consent]");
     await review.waitFor({ state: "visible" });
-    await clickConsent(page, "approve");
+    await clickConsent(page, "approve", stage);
     const arrival = await side.take();
     assert.equal(arrival.error, null);
     completed.push(stage);
@@ -548,8 +554,9 @@ async function operatorAcceptance() {
 
     stage = "the-sdk-refreshes-with-no-person-and-the-token-rotates";
     const before = kept.tokens;
+    // Through the recorder too, so the loopback check below covers the refresh.
     assert.equal(
-      await auth(provider, { serverUrl: resourceUrl }),
+      await auth(provider, { serverUrl: resourceUrl, fetchFn: recordingFetch }),
       "AUTHORIZED",
     );
     assert.notEqual(kept.tokens.refresh_token, before.refresh_token);
@@ -605,13 +612,14 @@ async function operatorAcceptance() {
     completed.push(stage);
 
     await connected.close().catch(() => undefined);
-    console.log(JSON.stringify({ ok: true, stage, completed }));
+    console.log(JSON.stringify({ ok: true, stage, completed, consentClicks }));
   } catch (error) {
     console.log(
       JSON.stringify({
         ok: false,
         stage,
         completed,
+        consentClicks,
         category:
           error instanceof Error ? error.constructor.name : "UnknownError",
       }),

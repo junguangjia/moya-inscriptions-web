@@ -23,7 +23,14 @@ import { consentRuntime } from "./runtime";
 
 // Payload removes the password before the document hook can see it, so what this
 // save will do is noticed before that and acted on only once the save has been made.
-const stoppingConnections = new WeakSet<PayloadRequest>();
+// Keyed by account too: a local-API bulk update runs every account's hooks side by
+// side on one request, and a save that fails after the notice leaves its mark there.
+const stoppingConnections = new WeakMap<PayloadRequest, Set<string>>();
+
+const accountKey = (doc: unknown): string | null => {
+  const id = (doc as { id?: unknown } | null | undefined)?.id;
+  return typeof id === "string" || typeof id === "number" ? String(id) : null;
+};
 
 export const noticeConnectionStop: CollectionBeforeChangeHook = ({
   data,
@@ -32,12 +39,18 @@ export const noticeConnectionStop: CollectionBeforeChangeHook = ({
   req,
 }) => {
   if (operation !== "update") return data;
+  const account = accountKey(originalDoc);
+  if (account === null) return data;
   const leavesOwner =
     originalDoc?.role === "owner" && (data.role ?? "owner") !== "owner";
   // An empty one is no change: Payload saves a password only when there is one.
   const changesPassword =
     typeof data.password === "string" && data.password !== "";
-  if (leavesOwner || changesPassword) stoppingConnections.add(req);
+  if (leavesOwner || changesPassword) {
+    const accounts = stoppingConnections.get(req) ?? new Set<string>();
+    accounts.add(account);
+    stoppingConnections.set(req, accounts);
+  }
   return data;
 };
 
@@ -46,14 +59,16 @@ export const stopConnections: CollectionAfterChangeHook = async ({
   doc,
   req,
 }) => {
-  if (!stoppingConnections.delete(req)) return doc;
+  const account = accountKey(doc);
+  if (
+    account === null ||
+    stoppingConnections.get(req)?.delete(account) !== true
+  )
+    return doc;
   try {
     const runtime = consentRuntime();
     if (runtime?.preset === "operator")
-      await revokeConnectionsOf(
-        runtime,
-        `payload-user-${String((doc as { id: number | string }).id)}`,
-      );
+      await revokeConnectionsOf(runtime, `payload-user-${String(account)}`);
   } catch {
     req.payload.logger.error({ category: "AGENT_CONNECTION_REVOKE_FAILED" });
   }

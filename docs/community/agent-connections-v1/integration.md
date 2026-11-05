@@ -213,7 +213,11 @@ What a client should expect:
   in the Admin. The next request answers one generic `401` with the metadata
   pointer, and refresh answers `invalid_grant` once the connection has been
   revoked. Treat that as a request to send the person through the browser again.
-  A role restored later brings nothing back. Pause leaves only `admin_whoami`.
+  When that revoke succeeded, a role restored later brings nothing back. A
+  revoke that failed, or a change made while the door was off, lets the old
+  tokens come back with the role, as
+  [section 22 of the record](../../development/admin-mcp-completion-v1.md#22-login-door)
+  states under its limits. Pause leaves only `admin_whoami`.
 - **`resource` must equal the address.** The Admin's page offers
   `CMS_PUBLIC_URL` plus `/api/mcp`, and discovery names
   `AGENT_AUTHORIZATION_RESOURCE`, so a release keeps the two equal.

@@ -226,39 +226,84 @@ export const signIn = async (page, email, password) => {
   await page.locator('button[type="submit"]').click();
 };
 
+/** A request that carries a consent decision. */
+export const isConsentPost = (request) =>
+  request.method() === "POST" &&
+  new URL(request.url()).pathname === "/api/agent-connections/consent";
+
+/**
+ * How many clicks each decision took, by stage, for the harness summary. A retry is
+ * allowed and is shown here; a second POST is not allowed at all.
+ */
+export const consentClicks = {};
+
 /**
  * Clicks 允许 or 拒绝 on the review page until the click reaches the page's own
  * handler, which sends the decision at once. The page shows before React has taken
  * it over, and WebKit has been seen to drop a click on a button that already looked
- * hydrated, so a click that sent nothing in a moment is made again. One that did send
- * is never repeated, so a decision is never sent twice.
+ * hydrated, so a click that sent nothing in a moment is made again. Every consent
+ * POST the page sends is counted from before the first click, and the moment a click
+ * has to send its POST in starts only once that click was delivered, so a slow click
+ * is never taken for a lost one. A decision that sent two POSTs fails the stage.
+ *
+ * With `keyboard`, the button is focused and Enter pressed instead, as a person
+ * without a pointer does.
  */
-export const clickConsent = async (page, decision) => {
+export const clickConsent = async (
+  page,
+  decision,
+  stage,
+  { keyboard = false } = {},
+) => {
   const button = `[data-agent-consent-${decision}]`;
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    await page.waitForFunction((target) => {
-      const element = globalThis.document.querySelector(target);
-      return (
-        element !== null &&
-        Object.keys(element).some((key) => key.startsWith("__reactFiber"))
-      );
-    }, button);
-    const sent = page
-      .waitForRequest(
-        (request) =>
-          request.method() === "POST" &&
-          new URL(request.url()).pathname === "/api/agent-connections/consent",
-        { timeout: 2000 },
-      )
-      .then(
-        () => true,
-        () => false,
-      );
-    // Not waiting for the navigation it starts: a test may be holding that one.
-    await page.locator(button).click({ noWaitAfter: true });
-    if (await sent) return;
+  let posts = 0;
+  let finished = false;
+  const count = (request) => {
+    if (isConsentPost(request)) posts += 1;
+  };
+  page.on("request", count);
+  // Resolves on the first POST, so a late one is never waited past.
+  const firstPost = (async () => {
+    while (!finished && posts === 0) await delay(50);
+  })();
+  try {
+    let attempts = 0;
+    while (posts === 0) {
+      assert.ok(attempts < 5, "the click never reached the review page");
+      // Hydrated, and for 允许 past its wait after the page was shown.
+      await Promise.race([
+        firstPost,
+        page.waitForFunction((target) => {
+          const element = globalThis.document.querySelector(target);
+          return (
+            element !== null &&
+            Object.keys(element).some((key) =>
+              key.startsWith("__reactFiber"),
+            ) &&
+            !element.disabled &&
+            element.getAttribute("aria-disabled") !== "true"
+          );
+        }, button),
+      ]);
+      if (posts > 0) break;
+      attempts += 1;
+      if (keyboard) {
+        await page.locator(button).focus();
+        await page.keyboard.press("Enter");
+      } else {
+        // Not waiting for the navigation it starts: a test may hold that one.
+        await page.locator(button).click({ noWaitAfter: true });
+      }
+      await Promise.race([firstPost, delay(5000)]);
+    }
+    // A late POST from an earlier click would arrive now, beside this one.
+    if (attempts > 1) await delay(2000);
+    assert.equal(posts, 1, "a decision was sent more than once");
+    (consentClicks[stage] ??= []).push(attempts);
+  } finally {
+    finished = true;
+    page.off("request", count);
   }
-  assert.fail("the click never reached the review page");
 };
 
 /** An `ai_operator` account and its key at profile full, as an Owner issues them. */

@@ -708,6 +708,37 @@ describe("an account's connections, through the real users hook", () => {
     expect(await doorStatus(bystander.presented)).toBe(200);
   });
 
+  it("stops each owner one bulk update demotes, on one request, and nobody else", async () => {
+    // A local-API update by `where` is one request for every account it changes,
+    // and Payload runs their hooks side by side. REST refuses it by disableBulkEdit.
+    const first = await newPerson();
+    const second = await newPerson();
+    const { id: unchangedId } = await account(
+      `automation-${randomBytes(6).toString("hex")}`,
+      "automation",
+    );
+    const firstConnection = connect(first.subject);
+    const secondConnection = connect(second.subject);
+    const unchanged = connect(subjectOf(unchangedId));
+    const bystander = connect(subjectOf(otherOwnerId));
+
+    const changed = await payload.update({
+      collection: "users",
+      where: { id: { in: [first.id, second.id, unchangedId] } },
+      data: { role: "automation" },
+    });
+    expect(changed.errors).toEqual([]);
+    expect(changed.docs).toHaveLength(3);
+    for (const { id, presented } of [firstConnection, secondConnection]) {
+      expect(statusOf(id)).toBe("revoked");
+      expect(await doorStatus(presented)).toBe(401);
+    }
+    // In the same request but never an owner, and outside it altogether.
+    expect(statusOf(unchanged.id)).toBe("authorized");
+    expect(statusOf(bystander.id)).toBe("authorized");
+    expect(await doorStatus(bystander.presented)).toBe(200);
+  });
+
   it("stops nothing on any other change", async () => {
     const person = await newPerson();
     const { id, presented } = connect(person.subject);

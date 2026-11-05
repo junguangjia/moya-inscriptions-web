@@ -3,6 +3,7 @@ import { createElement } from "react";
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -985,6 +986,58 @@ describe("the consent page under the login door", () => {
     );
   });
 
+  it("keeps 允许 waiting a moment each time the page is shown and focused", () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(
+        async () =>
+          ({
+            ok: false,
+            json: async () => ({ ok: false, error: "CONSENT_NOT_DECIDABLE" }),
+          }) as unknown as Response,
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      consentPage(hostedTool);
+      const allow = screen.getByRole("button", { name: "允许" });
+      // Not before the page has focus: jsdom's document has it once an element does.
+      expect(allow.getAttribute("aria-disabled")).toBe("true");
+      act(() => {
+        allow.focus();
+        window.dispatchEvent(new Event("focus"));
+      });
+      fireEvent.click(allow);
+      act(() => void vi.advanceTimersByTime(999));
+      expect(allow.getAttribute("aria-disabled")).toBe("true");
+      expect(fetchMock).not.toHaveBeenCalled();
+      act(() => void vi.advanceTimersByTime(1));
+      expect(allow.getAttribute("aria-disabled")).toBeNull();
+
+      // Each switch starts it again, and a click or key that comes with it does
+      // nothing. Focus stays on the button, so a keyboard user loses no place.
+      for (const switched of [
+        () => window.dispatchEvent(new Event("focus")),
+        () => document.dispatchEvent(new Event("visibilitychange")),
+      ]) {
+        act(switched);
+        fireEvent.click(allow);
+        expect(allow.getAttribute("aria-disabled")).toBe("true");
+        expect(document.activeElement).toBe(allow);
+        act(() => void vi.advanceTimersByTime(1000));
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+      fireEvent.click(allow);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      // 拒绝 never waits.
+      expect(
+        screen
+          .getByRole("button", { name: "拒绝" })
+          .hasAttribute("aria-disabled"),
+      ).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("leaves the Development read-only page as its harness reads it", () => {
     render(
       createElement(AgentConsentClient, {
@@ -1194,6 +1247,43 @@ describe("the review view's gate", () => {
     expect(runtime.consents.arm).not.toHaveBeenCalled();
   });
 
+  it.each(["approved", "denied"])(
+    "tells the person who decided (%s) that it was handled, after Back or a refresh",
+    async (decision) => {
+      const runtime = stubRuntime({
+        decision,
+        humanAccountId: "payload-user-7",
+      });
+      const html = await renderConsent(viewProps(humanOwner));
+      expect(html).toContain("这次请求已经处理过了");
+      expect(html).toContain("是否已连上，请到");
+      expect(html).toContain('href="/admin/agent-connections"');
+      expect(html).not.toContain("这次连接没有完成");
+      expect(html).not.toContain("data-agent-consent-refused");
+      expect(runtime.consents.arm).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["another owner's decision", "payload-user-8", "operator"],
+    ["a decision under the read-only profile", "payload-user-7", "read-only"],
+  ])(
+    "keeps the refusal for %s, so it tells a prober nothing",
+    async (_, decidedBy, preset) => {
+      const runtime = stubRuntime({
+        decision: "approved",
+        humanAccountId: decidedBy,
+      });
+      runtime.preset = preset;
+      const html = await renderConsent(viewProps(humanOwner));
+      expect(html).toContain(
+        'data-agent-consent-refused="INTERACTION_NOT_AVAILABLE"',
+      );
+      expect(html).not.toContain("这次请求已经处理过了");
+      expect(runtime.consents.arm).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps its sentence when the runtime refused to build", async () => {
     payload.consentRuntime.mockImplementation(() => {
       throw new Error("consent runtime refused: CONSENT_DATABASE_REQUIRED");
@@ -1388,7 +1478,7 @@ describe("the AI connections page under the login door", () => {
 
   it("asks first, then disconnects anyone's connection", async () => {
     await mount(operatorList());
-    fireEvent.click(screen.getByRole("button", { name: "断开" }));
+    fireEvent.click(screen.getByRole("button", { name: /^断开「Claude」/u }));
     await screen.findByText("断开「Claude」？");
     expect(posted).toEqual([]);
     fireEvent.click(screen.getByText("确认断开"));
@@ -1399,11 +1489,45 @@ describe("the AI connections page under the login door", () => {
     });
     expect(await screen.findByRole("status")).toBeTruthy();
     expect(screen.getByRole("status").textContent).toBe("已断开「Claude」。");
+    // The button that opened the dialog may be gone with its row: focus goes on
+    // to the list rather than falling back to the page.
+    await waitFor(() =>
+      expect(document.activeElement?.textContent).toBe("已连接的工具"),
+    );
+  });
+
+  it("names whose tool each disconnect button stops", async () => {
+    await mount(
+      operatorList({
+        connections: [
+          listed(),
+          listed({
+            id: "conn-ffffffffffffffffffffffffffffffff",
+            authorizedBy: PERSON,
+            mine: true,
+          }),
+          listed({
+            id: "conn-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            tool: null,
+            authorizedBy: null,
+          }),
+        ],
+      }),
+    );
+    expect(
+      screen
+        .getAllByRole("button", { name: /^断开/u })
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual([
+      "断开「Claude」，授权人：other@editorial.example.invalid",
+      `断开「Claude」，授权人：${PERSON}（你）`,
+      "断开「已不在清单中的工具」，授权人：账号已不存在",
+    ]);
   });
 
   it("does not disconnect on cancel", async () => {
     await mount(operatorList());
-    fireEvent.click(screen.getByRole("button", { name: "断开" }));
+    fireEvent.click(screen.getByRole("button", { name: /^断开「Claude」/u }));
     await screen.findByText("断开「Claude」？");
     fireEvent.click(screen.getByText("取消"));
     await waitFor(() => expect(screen.queryByText("确认断开")).toBeNull());
@@ -1418,7 +1542,9 @@ describe("the AI connections page under the login door", () => {
     );
     expect(document.body.textContent).toContain("已不在清单中的工具");
     expect(document.body.textContent).toContain("账号已不存在");
-    expect(screen.getByRole("button", { name: "断开" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /^断开「已不在清单中的工具」/u }),
+    ).toBeTruthy();
   });
 
   it("builds the Claude button from this deployment's address, never a fixed one", async () => {
@@ -1479,14 +1605,44 @@ describe("the AI connections page under the login door", () => {
     expect(
       document.querySelector("[data-agent-connections-claude]"),
     ).toBeNull();
+    // User scope, so the tool finds it from whichever folder it starts in.
     expect(
       document.querySelector('[data-agent-connections-steps="claude-code"]')
         ?.textContent,
-    ).toContain(`claude mcp add --transport http artvenn ${ADDRESS}`);
+    ).toContain(
+      `claude mcp add --transport http --scope user artvenn ${ADDRESS}`,
+    );
     for (const list of document.querySelectorAll(
       "[data-agent-connections-steps] ol",
     ))
       expect(list.children.length).toBe(3);
+  });
+
+  it("gives Codex the name step, and a terminal path with each command to copy", async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    await mount(operatorList());
+    const card = document.querySelector(
+      '[data-agent-connections-steps="codex"]',
+    );
+    expect(card?.querySelector("ol")?.children[0]?.textContent).toContain(
+      "填一个名字（例如 artvenn），选 Streamable HTTP",
+    );
+    const terminal = card?.querySelector(
+      '[data-agent-connections-terminal="codex"]',
+    );
+    expect(terminal?.children.length).toBe(3);
+    const commands = [
+      `codex mcp add artvenn --url ${ADDRESS}`,
+      "codex mcp login artvenn",
+    ];
+    for (const command of commands)
+      expect(terminal?.textContent).toContain(command);
+    for (const button of terminal?.querySelectorAll("button") ?? [])
+      fireEvent.click(button);
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
+    expect(writeText).toHaveBeenNthCalledWith(1, commands[0]);
+    expect(writeText).toHaveBeenNthCalledWith(2, commands[1]);
   });
 
   it("points to the pause switch, and offers a person no key", async () => {

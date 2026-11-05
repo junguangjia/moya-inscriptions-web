@@ -44,8 +44,16 @@ import styles from "./connections.module.css";
  *
  * Be exact about what that is: it IS a write during a GET page render. What makes
  * it safe is not the method but the gates above it. The Owner browser session is
- * checked first, and on a cross-site navigation the `SameSite=Strict` session is
- * absent, so nothing started elsewhere arms anything. Nothing prefetches this page
+ * checked first. Under the Development read-only profile the landing waits for a
+ * click, and a cross-site navigation carries no `SameSite=Strict` session, so
+ * nothing started elsewhere arms anything. Under `operator` that is not so: the
+ * landing's refresh is a same-origin step, so a link or popup started elsewhere CAN
+ * arm a ticket in a signed-in owner's session. What keeps that harmless is what the
+ * ticket is for: it is rendered only into this same-origin page, which no other site
+ * can read; spending it takes a click here, the ticket, a same-origin `Origin` and
+ * the Strict cookie on the POST; and the issuer resumes only with the one-time secret
+ * that POST returned, beside its own cookie in the browser that started the request.
+ * 允许 also waits a moment after the page is shown. Nothing prefetches this page
  * either: the landing's link is a plain `<a>`, and the workspace tabs prefetch
  * nothing.
  *
@@ -131,6 +139,24 @@ const Refused = ({ code }: { readonly code: string }) => (
   </section>
 );
 
+/**
+ * Back or a refresh after this same person decided. The refusal above would tell
+ * them a connection that worked had failed. Only the person who decided sees this,
+ * so to anyone else a spent interaction still reads as one nobody opened.
+ */
+const AlreadyDecided = () => (
+  <section className={styles.consent} data-agent-consent-decided>
+    <h1 className={styles.consentTitle}>这次请求已经处理过了</h1>
+    <p className={styles.consentText} role="status">
+      是否已连上，请到
+      <a className={styles.quietLink} href="/admin/agent-connections">
+        「AI 连接」
+      </a>
+      页查看。
+    </p>
+  </section>
+);
+
 const firstParam = (
   value: string | string[] | undefined,
 ): string | undefined => (Array.isArray(value) ? value[0] : value);
@@ -212,9 +238,16 @@ const consentBody = async (
     const consent = await runtime.consents.read(interaction);
     // A uid nobody opened, or one already decided, reveals nothing beyond
     // "not available": a prober must not be able to tell a live interaction
-    // from a spent one.
-    if (consent === null || consent.decision !== null)
-      return <Refused code="INTERACTION_NOT_AVAILABLE" />;
+    // from a spent one. Under `operator` the person who decided it is told it
+    // was handled; the Development read-only profile stays as #141 measured it.
+    if (consent !== null && consent.decision !== null)
+      return runtime.preset === "operator" &&
+        consent.humanAccountId === humanAccountId ? (
+        <AlreadyDecided />
+      ) : (
+        <Refused code="INTERACTION_NOT_AVAILABLE" />
+      );
+    if (consent === null) return <Refused code="INTERACTION_NOT_AVAILABLE" />;
 
     const display = describeConsent({
       interactionUid: consent.interactionUid,

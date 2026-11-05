@@ -580,7 +580,7 @@
   color: var(--yoyi-color-text-inverse);
 }
 
-.consentAllow:hover:not(:disabled) {
+.consentAllow:hover:not(:disabled):not([aria-disabled="true"]) {
   background: var(--yoyi-color-seal-red-hover);
 }
 
@@ -588,7 +588,9 @@
   background: var(--yoyi-color-background-muted);
 }
 
+/* 允许's moment after the page is shown reads as disabled, and keeps its focus. */
 .consentAllow:disabled,
+.consentAllow[aria-disabled="true"],
 .consentDeny:disabled {
   opacity: 0.6;
   cursor: default;
@@ -668,6 +670,12 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--yoyi-space-2) var(--yoyi-space-3);
+}
+
+/* Names a second way through one tool's steps, such as its terminal. */
+.stepLabel {
+  margin: var(--yoyi-space-4) 0 0;
+  font-weight: 600;
 }
 
 /* One card per connection on a phone, one row each from a tablet up. */

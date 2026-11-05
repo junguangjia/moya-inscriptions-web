@@ -29,11 +29,18 @@ import type { RegisteredClient } from "@moya/community-postgres";
  *   admin after a same-site step            probe_strict=S
  *
  * So the page the provider sends the browser to cannot authenticate anybody,
- * and no redirect chain fixes that. The human takes one same-origin step of
- * their own; the page after it has a session, and only that page mints the
- * ticket. A POST that cannot produce the ticket did not come from a page this
- * server rendered to this human — which is the CSRF property, obtained without
- * weakening a cookie and without a same-site bounce nobody tested.
+ * and no redirect chain fixes that. One same-origin step follows; the page after
+ * it has a session, and only that page mints the ticket. A POST that cannot
+ * produce the ticket did not come from a page this server rendered to this
+ * human — which is the CSRF property, obtained without weakening a cookie.
+ *
+ * Under the Development read-only profile that step is the human's own click.
+ * Under `operator` the landing takes it with a meta refresh, measured to carry
+ * the session (the record's section 22), so a navigation started elsewhere can
+ * reach the review and arm a ticket. That is harmless for the reasons above: the
+ * ticket is readable only on this origin, the POST that spends it also needs a
+ * click, a same-origin `Origin` and the Strict cookie, and the provider resumes
+ * only with the one-time secret that POST returned, beside its own cookie.
  */
 
 /** A refusal with a bare code. Never a message that could carry a value. */

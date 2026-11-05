@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { ConsentDisplay, ConsentTool } from "./consent";
 
@@ -153,6 +153,48 @@ const returnSentence = (tool: ConsentTool): string =>
     ? `授权完成后，浏览器只会回到这台电脑上的程序（${tool.callbackHosts.join("、")}）。`
     : `授权完成后，浏览器会回到：${tool.callbackHosts.join("、")}`;
 
+/** About as long as a person takes to read the warning above the buttons. */
+const ALLOW_WAIT_MS = 1000;
+
+/**
+ * 允许 waits a moment each time this page is shown and focused. Under `operator` the
+ * landing goes on by itself, so a page somebody else opened can appear under a
+ * person's pointer, in a popup or behind one that closes, and the second click of a
+ * double click would land on 允许. The wait starts again on every `visibilitychange`
+ * and every `focus` of the window, so a click that comes with the switch is ignored.
+ *
+ * `aria-disabled` rather than `disabled`, so a keyboard user's focus stays on the
+ * button through the wait instead of falling back to the page. The click is checked
+ * against a ref, which the switch clears at once, not against the next render.
+ */
+const useAllowAfterAMoment = () => {
+  const [ready, setReady] = useState(false);
+  const readyNow = useRef(false);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const restart = () => {
+      clearTimeout(timer);
+      readyNow.current = false;
+      setReady(false);
+      if (document.visibilityState !== "visible" || !document.hasFocus())
+        return;
+      timer = setTimeout(() => {
+        readyNow.current = true;
+        setReady(true);
+      }, ALLOW_WAIT_MS);
+    };
+    restart();
+    document.addEventListener("visibilitychange", restart);
+    window.addEventListener("focus", restart);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", restart);
+      window.removeEventListener("focus", restart);
+    };
+  }, []);
+  return { ready, readyNow };
+};
+
 const OperatorConsent = ({
   code,
   decide,
@@ -167,66 +209,72 @@ const OperatorConsent = ({
   readonly person: string;
   readonly state: "idle" | "sending" | "failed";
   readonly tool: ConsentTool;
-}) => (
-  <section
-    className={styles.consent}
-    data-agent-consent={display.interaction}
-    data-agent-consent-callback-hosts={tool.callbackHosts.join(" ")}
-    data-agent-consent-client={display.client}
-    data-agent-consent-environment={display.environment}
-    data-agent-consent-expires={display.expiresAt}
-    data-agent-consent-local={tool.local}
-    data-agent-consent-resource={display.resource}
-    data-agent-consent-scopes={display.capabilities.join(" ")}
-  >
-    <h1 className={styles.consentTitle}>「{tool.label}」想连接由于艺后台</h1>
-    {/* One string each, because JSX turns a line break into a space between Chinese sentences. */}
-    <p className={styles.consentText}>
-      {`允许后，它会以「AI 操作账号」的身份，不用你逐条确认，就能做后台里几乎所有的事：查看和修改内容、审核、发布、处理举报和申诉、封禁用户、查看数据。它读到的内容会发送给 ${tool.label} 的提供方 ${tool.vendor}。`}
-    </p>
-    <p className={styles.consentText}>
-      它不能：管理账号和密钥、动暂停开关、看或改操作记录、改敏感开关。
-    </p>
-    <p className={styles.consentText}>
-      {`所有操作都会留下记录，并写明是你（${person}）授权的。你和其他管理员随时可以在「AI 连接」页断开。`}
-    </p>
-    <p className={styles.consentText} data-agent-consent-return>
-      {returnSentence(tool)}
-    </p>
-    <p className={styles.consentWarning}>
-      {
-        "只有你刚刚自己在这个工具里点了「连接」，才点允许。如果是别人发来的链接，请点拒绝。"
-      }
-    </p>
-    <div className={styles.consentActions}>
-      <button
-        className={styles.consentAllow}
-        data-agent-consent-approve
-        disabled={state === "sending"}
-        onClick={() => void decide("approve")}
-        type="button"
-      >
-        允许
-      </button>
-      <button
-        className={styles.consentDeny}
-        data-agent-consent-deny
-        disabled={state === "sending"}
-        onClick={() => void decide("deny")}
-        type="button"
-      >
-        拒绝
-      </button>
-    </div>
-    {state === "failed" ? (
-      <p
-        className={styles.consentText}
-        data-agent-consent-error={code ?? "REFUSED"}
-        role="alert"
-      >
-        这次连接没有完成，请回到工具重新点连接。{" "}
-        <small className={styles.code}>{code ?? "REFUSED"}</small>
+}) => {
+  const allow = useAllowAfterAMoment();
+  return (
+    <section
+      className={styles.consent}
+      data-agent-consent={display.interaction}
+      data-agent-consent-callback-hosts={tool.callbackHosts.join(" ")}
+      data-agent-consent-client={display.client}
+      data-agent-consent-environment={display.environment}
+      data-agent-consent-expires={display.expiresAt}
+      data-agent-consent-local={tool.local}
+      data-agent-consent-resource={display.resource}
+      data-agent-consent-scopes={display.capabilities.join(" ")}
+    >
+      <h1 className={styles.consentTitle}>「{tool.label}」想连接由于艺后台</h1>
+      {/* One string each, because JSX turns a line break into a space between Chinese sentences. */}
+      <p className={styles.consentText}>
+        {`允许后，它会以「AI 操作账号」的身份，不用你逐条确认，就能做后台里几乎所有的事：查看和修改内容、审核、发布、处理举报和申诉、封禁用户、查看数据。它读到的内容会发送给 ${tool.label} 的提供方 ${tool.vendor}。`}
       </p>
-    ) : null}
-  </section>
-);
+      <p className={styles.consentText}>
+        它不能：管理账号和密钥、动暂停开关、看或改操作记录、改敏感开关。
+      </p>
+      <p className={styles.consentText}>
+        {`所有操作都会留下记录，并写明是你（${person}）授权的。你和其他管理员随时可以在「AI 连接」页断开。`}
+      </p>
+      <p className={styles.consentText} data-agent-consent-return>
+        {returnSentence(tool)}
+      </p>
+      <p className={styles.consentWarning}>
+        {
+          "只有你刚刚自己在这个工具里点了「连接」，才点允许。如果是别人发来的链接，请点拒绝。"
+        }
+      </p>
+      <div className={styles.consentActions}>
+        <button
+          aria-disabled={allow.ready ? undefined : true}
+          className={styles.consentAllow}
+          data-agent-consent-approve
+          disabled={state === "sending"}
+          onClick={() => {
+            if (allow.readyNow.current) void decide("approve");
+          }}
+          type="button"
+        >
+          允许
+        </button>
+        <button
+          className={styles.consentDeny}
+          data-agent-consent-deny
+          disabled={state === "sending"}
+          onClick={() => void decide("deny")}
+          type="button"
+        >
+          拒绝
+        </button>
+      </div>
+      {state === "failed" ? (
+        <p
+          className={styles.consentText}
+          data-agent-consent-error={code ?? "REFUSED"}
+          role="alert"
+        >
+          这次连接没有完成，请回到工具重新点连接。{" "}
+          <small className={styles.code}>{code ?? "REFUSED"}</small>
+        </p>
+      ) : null}
+    </section>
+  );
+};

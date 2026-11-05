@@ -4223,6 +4223,8 @@ Limits, stated:
   allow is then voided or abandoned. The page's list is honest about what is
   left: it shows a connection only when its current grant was built at its
   current generation, so that row is not listed. The tool has to connect again.
+  Nor does it list one past the 180-day limit from its grant's consent, which
+  the door counts from the same column.
 - A grant the issuer revoked itself, by a detected replay or by a tool revoking
   its own token, stays on the page's list until an owner disconnects it or the
   tool connects again, because the consent role cannot read the provider's rows
@@ -4277,16 +4279,24 @@ service on its own database role.
   hands over the link; a person signs in and allows; the SDK redeems the code,
   lists exactly what an `ai_operator` key at full lists, makes one call that the
   audit names with the connection and the person, refreshes, is sent back to a
-  person by a disconnect, and connects again. Every address it reached is
-  checked to be loopback.
+  person by a disconnect, and connects again. Every address its own requests
+  reached, discovery, transport and refresh, is checked to be loopback. That
+  covers the client's side only. That the issuer never fetches a client id URL
+  is pinned in `agent-operator-flow-cases.ts`, which spies on the issuer's
+  fetch.
 - `tests/cms/agent-connections-browser.mjs` runs on Chromium and WebKit at phone
   width: signed out and back to the same review, the landing going on by itself
   with nothing armed until the review's one request, deny, wording, both resume
   refusals with two browser contexts, no ticket for an automation session, a
   connection token or any key, with an Owner session as the control, any owner's
   disconnect with its audit rows, a second computer, and a demotion and a
-  password change on the real stores. A hosted tool's last redirect is the one
-  hop it does not take in a browser: Playwright cannot intercept a redirect, and
+  password change on the real stores. It also reads the frame refusal the Admin
+  itself sends on both page groups (`frame-ancestors 'none'` and
+  `X-Frame-Options: DENY`), and checks that 允许 ignores a click or a key that
+  comes with a window switch, waiting about a second each time the page is shown
+  and focused. Each decision is exactly one consent POST, and the summary says
+  how many clicks each one took. A hosted tool's last redirect is the one hop it
+  does not take in a browser: Playwright cannot intercept a redirect, and
   following it would reach the vendor. So from the resume route on, a hosted
   flow walks the issuer's answers with the browser's own cookies and stops at
   the vendor's address, and loopback tools take every hop.
@@ -4299,7 +4309,11 @@ O4 still owes: the Nginx block for the issuer host and its limits, with a log
 format that does not carry the query string; the issuer's systemd unit; the
 environment templates, in which the address on the AI connections page,
 `CMS_PUBLIC_URL` plus `/api/mcp`, and `AGENT_AUTHORIZATION_RESOURCE` must be
-equal, because a tool connects only then; the documents section 7 of the
+equal, because a tool connects only then; release checks that the origin of
+`AGENT_AUTHORIZATION_CONSENT_URL` equals the origin of `CMS_PUBLIC_URL`, because
+the Admin checks every allow, deny and disconnect against that origin and would
+refuse them all otherwise, and that the Admin's and the issuer's copies of
+`AGENT_AUTHORIZATION_CLIENTS` are identical; the documents section 7 of the
 amendment names; the private release toolkit; and the real-client record, per
 task and client, failures included, in which Claude's link and the step lists on
 the AI connections page meet a real client for the first time, and which says

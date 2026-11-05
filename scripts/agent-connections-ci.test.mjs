@@ -145,6 +145,12 @@ describe("the agent-connections acceptance runs in CI", () => {
     // Compared exactly, in both engines, so a skipped stage is a failure.
     assert.ok(harness.includes('["chromium", "webkit"].flatMap'));
     assert.ok(harness.includes("GENERIC_CLIENT_RESULT_INCOMPLETE"));
+    // The major the step names is held by the harness, not by the port alone.
+    assert.match(step, /TEST_DATABASE_EXPECTED_VERSION_NUM: "160015"\n/u);
+    assert.match(
+      harness,
+      /process\.env\.TEST_DATABASE_EXPECTED_VERSION_NUM;[\s\S]{0,400}throw new Error\("AGENT_CONNECTIONS_POSTGRES_VERSION_MISMATCH"\)/u,
+    );
   });
 
   it("keeps the Production Admin browser coverage it was added beside", () => {

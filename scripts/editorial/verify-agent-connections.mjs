@@ -83,7 +83,9 @@ const RESTART_STAGE = "restart-preserves-the-result";
 const operatorBrowserStages = ["chromium", "webkit"].flatMap((engine) =>
   [
     "signed-out-returns-to-the-same-review",
+    "no-page-can-frame-the-door",
     "review-says-it-plainly-at-phone-width",
+    "allow-ignores-a-click-that-comes-with-a-window-switch",
     "deny-tells-the-tool-access-denied",
     "signed-in-continues-by-itself-and-arms-once",
     "allow-reaches-the-door-at-profile-full",
@@ -112,6 +114,26 @@ const operatorClientStages = [
   "connecting-again-is-a-fresh-consent-that-works",
   "nothing-reached-a-vendor",
 ];
+
+/**
+ * How many clicks each consent decision took, by stage, as a child reported it.
+ * Fixed stage names and small counts only. More than one is a retry the child
+ * allowed, shown here so a first tap a browser keeps losing cannot hide in a pass;
+ * a second POST already failed the child's stage.
+ */
+const consentClicksOf = (reported) =>
+  Object.fromEntries(
+    Object.entries(
+      reported !== null && typeof reported === "object" ? reported : {},
+    ).filter(
+      ([name, counts]) =>
+        /^[a-z][a-z-]{0,95}$/u.test(name) &&
+        Array.isArray(counts) &&
+        counts.every(
+          (count) => Number.isInteger(count) && count >= 1 && count <= 5,
+        ),
+    ),
+  );
 
 const freePort = () =>
   new Promise((resolve, reject) => {
@@ -392,6 +414,16 @@ async function main() {
     control = createPostgresPool(
       parsePostgresConfig({ DATABASE_URL: admin.href }),
     );
+    // A CI step that names the server it runs on is held to it. Without this the
+    // major rested on a port mapping alone, and a service that moved would pass.
+    const expectedVersion = process.env.TEST_DATABASE_EXPECTED_VERSION_NUM;
+    if (expectedVersion !== undefined) {
+      const { rows } = await control.query(
+        "SELECT current_setting('server_version_num') AS num",
+      );
+      if (rows[0]?.num !== expectedVersion)
+        throw new Error("AGENT_CONNECTIONS_POSTGRES_VERSION_MISMATCH");
+    }
     await control.query(`CREATE DATABASE "${owned}"`);
     created = true;
 
@@ -799,6 +831,9 @@ async function main() {
           // the single fact this milestone is judged on.
           backendToolRead:
             summary?.backendToolRead === "VERIFIED" ? "VERIFIED" : "NOT_RUN",
+          ...(OPERATOR
+            ? { consentClicks: consentClicksOf(summary?.consentClicks) }
+            : {}),
         }),
       );
       throw new Error("AGENT_CONNECTIONS_CHECK_FAILED");
@@ -909,6 +944,9 @@ async function main() {
           stage: /^[a-z][a-z-]{0,95}$/.test(genericResult?.stage ?? "")
             ? genericResult.stage
             : "unrecognized-generic-result",
+          ...(OPERATOR
+            ? { consentClicks: consentClicksOf(genericResult?.consentClicks) }
+            : {}),
         }),
       );
       throw new Error("GENERIC_CLIENT_CHECK_FAILED");
@@ -920,6 +958,10 @@ async function main() {
     )
       throw new Error("GENERIC_CLIENT_RESULT_INCOMPLETE");
     summary.completed.push(...(genericResult.completed ?? []));
+    summary.consentClicks = {
+      ...consentClicksOf(summary.consentClicks),
+      ...consentClicksOf(genericResult.consentClicks),
+    };
     session.assertActive();
 
     // Restart both services against the SAME stores and the SAME keys. The
@@ -1137,6 +1179,7 @@ async function main() {
       // because a reader should not have to know that to trust it.
       backendToolRead: summary.backendToolRead ?? "NOT_RUN",
       agentProfile: OPERATOR ? "operator" : "read-only",
+      ...(OPERATOR ? { consentClicks: summary.consentClicks } : {}),
     }),
   );
 }

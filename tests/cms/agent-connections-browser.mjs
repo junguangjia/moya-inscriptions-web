@@ -19,7 +19,9 @@ import {
   bearer,
   clickConsent,
   closedList,
+  consentClicks,
   hex,
+  isConsentPost,
   issueAiKey,
   listTools,
   redeemCode,
@@ -717,7 +719,7 @@ async function operatorAcceptance() {
           await route.abort().catch(() => undefined);
         };
         await context.route(pattern, walk);
-        await clickConsent(page, decision);
+        await clickConsent(page, decision, stage);
         await until(
           () => arrival !== undefined || failure !== undefined,
           "no answer for the hosted tool",
@@ -733,8 +735,8 @@ async function operatorAcceptance() {
       const review = (page) => page.locator("[data-agent-consent]");
       const reviewUid = (page) =>
         review(page).getAttribute("data-agent-consent");
-      const allowAtLoopback = async (page, flow) => {
-        await clickConsent(page, "approve");
+      const allowAtLoopback = async (page, flow, how = {}) => {
+        await clickConsent(page, "approve", stage, how);
         // The page shows a bare refusal code when the decision fails, so a failure
         // here names a rule rather than only a missing arrival.
         const refused = page.locator("[data-agent-consent-error]");
@@ -781,6 +783,38 @@ async function operatorAcceptance() {
       );
       completed.push(stage);
 
+      stage = `${name}-no-page-can-frame-the-door`;
+      // Sent by the Admin itself on both page groups, beside what Payload sends,
+      // so no other page can put a hidden 允许 or 确认断开 under a click.
+      for (const path of [
+        "/admin/agent-connections",
+        `${REVIEW_PATH}?interaction=${hex(12)}`,
+        `/agent-connections/consent/${hex(12)}`,
+      ]) {
+        const answer = await owner.context.request.get(`${origin}${path}`, {
+          maxRedirects: 0,
+          timeout: 120_000,
+        });
+        const headers = answer.headers();
+        assert.deepEqual(
+          [
+            path,
+            answer.status(),
+            headers["content-security-policy"],
+            headers["x-frame-options"],
+            headers["accept-ch"],
+          ],
+          [
+            path,
+            200,
+            "frame-ancestors 'none'",
+            "DENY",
+            "Sec-CH-Prefers-Color-Scheme",
+          ],
+        );
+      }
+      completed.push(stage);
+
       stage = `${name}-review-says-it-plainly-at-phone-width`;
       const local = await review(owner.page).innerText();
       for (const phrase of [
@@ -813,9 +847,58 @@ async function operatorAcceptance() {
       }
       completed.push(stage);
 
+      stage = `${name}-allow-ignores-a-click-that-comes-with-a-window-switch`;
+      const approve = owner.page.locator("[data-agent-consent-approve]");
+      const allowState = () => approve.getAttribute("aria-disabled");
+      const sentEarly = [];
+      const onEarlyPost = (request) => {
+        if (isConsentPost(request)) sentEarly.push(stage);
+      };
+      owner.page.on("request", onEarlyPost);
+      await until(
+        async () => (await allowState()) === null,
+        "允许 never became available",
+      );
+      // Where a keyboard user would be.
+      await approve.focus();
+      for (const target of ["focus", "visibilitychange"]) {
+        const switched = Date.now();
+        // The switch and a click in one task, as the second click of a double click
+        // lands, then a key at once.
+        await owner.page.evaluate((type) => {
+          (type === "focus" ? globalThis : globalThis.document).dispatchEvent(
+            new globalThis.Event(type),
+          );
+          globalThis.document
+            .querySelector("[data-agent-consent-approve]")
+            .click();
+        }, target);
+        await owner.page.keyboard.press("Enter");
+        await until(
+          async () => (await allowState()) === "true",
+          `允许 did not wait after ${target}`,
+          900,
+        );
+        // Still focused, so the page stays usable from a keyboard.
+        assert.ok(
+          await approve.evaluate(
+            (element) => element === globalThis.document.activeElement,
+          ),
+          target,
+        );
+        await until(
+          async () => (await allowState()) === null,
+          `允许 did not come back after ${target}`,
+        );
+        assert.ok(Date.now() - switched >= 900, target);
+      }
+      owner.page.off("request", onEarlyPost);
+      assert.deepEqual(sentEarly, []);
+      completed.push(stage);
+
       stage = `${name}-deny-tells-the-tool-access-denied`;
       const deniedUid = await reviewUid(owner.page);
-      await clickConsent(owner.page, "deny");
+      await clickConsent(owner.page, "deny", stage, { keyboard: true });
       assert.deepEqual(await side.take(), {
         code: null,
         error: "access_denied",
@@ -900,7 +983,10 @@ async function operatorAcceptance() {
       completed.push(stage);
 
       stage = `${name}-allow-reaches-the-door-at-profile-full`;
-      const codexTokens = await allowAtLoopback(owner.page, secondFlow);
+      // From the keyboard, once 允许 has waited.
+      const codexTokens = await allowAtLoopback(owner.page, secondFlow, {
+        keyboard: true,
+      });
       const onDoor = await door(codexTokens.access_token);
       assert.equal(onDoor.status, 200);
       assert.ok(onDoor.names.includes("admin_whoami"));
@@ -1023,7 +1109,7 @@ async function operatorAcceptance() {
         await route.continue();
       };
       await owner.page.route(`**${resumePath}*`, holdResume);
-      await clickConsent(owner.page, "approve");
+      await clickConsent(owner.page, "approve", stage);
       await until(
         () => resumeRequest !== undefined,
         "the allow did not resume",
@@ -1369,7 +1455,7 @@ async function operatorAcceptance() {
       await browser.close();
       openBrowser = undefined;
     }
-    console.log(JSON.stringify({ ok: true, stage, completed }));
+    console.log(JSON.stringify({ ok: true, stage, completed, consentClicks }));
   } catch (error) {
     console.log(
       JSON.stringify({
@@ -1377,6 +1463,7 @@ async function operatorAcceptance() {
         stage,
         completed,
         refusalCode,
+        consentClicks,
         category:
           error instanceof Error ? error.constructor.name : "UnknownError",
       }),

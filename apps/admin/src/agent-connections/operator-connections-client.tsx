@@ -65,16 +65,19 @@ const OTHER_TOOLS: readonly {
   readonly family: string;
   readonly name: string;
   readonly steps: (address: string) => readonly React.ReactNode[];
+  /** The same tool from its terminal, where there is no settings window. */
+  readonly terminal?: (address: string) => readonly React.ReactNode[];
 }[] = [
   {
     family: "claude-code",
     name: "Claude Code",
     steps: (address) => [
+      // User scope, so artvenn is there whichever folder claude starts in.
       <span className={styles.stepCopy} key="command">
         在终端运行：
         <CopyValue
           label="命令"
-          value={`claude mcp add --transport http artvenn ${address}`}
+          value={`claude mcp add --transport http --scope user artvenn ${address}`}
         />
       </span>,
       "启动 claude，输入 /mcp，选择 artvenn，再选 Authenticate。",
@@ -85,9 +88,23 @@ const OTHER_TOOLS: readonly {
     family: "codex",
     name: "Codex",
     steps: () => [
-      "打开设置，进入 MCP servers，点 Add server，选 Streamable HTTP。",
+      "打开设置，进入 MCP servers，点 Add server，填一个名字（例如 artvenn），选 Streamable HTTP。",
       "粘贴上面的地址，保存，然后重启 Codex。",
       "点 Authenticate，在浏览器里登录后台并点「允许」。",
+    ],
+    terminal: (address) => [
+      <span className={styles.stepCopy} key="add">
+        运行：
+        <CopyValue
+          label="命令"
+          value={`codex mcp add artvenn --url ${address}`}
+        />
+      </span>,
+      <span className={styles.stepCopy} key="login">
+        再运行：
+        <CopyValue label="命令" value="codex mcp login artvenn" />
+      </span>,
+      "浏览器打开后，登录后台并点「允许」。",
     ],
   },
   {
@@ -121,6 +138,9 @@ const parsed = async (
 const toolName = (connection: ListedConnection): string =>
   connection.tool ?? "已不在清单中的工具";
 
+const authorizerName = (connection: ListedConnection): string =>
+  `${connection.authorizedBy ?? "账号已不存在"}${connection.mine ? "（你）" : ""}`;
+
 export const OperatorConnectionsClient = ({
   address,
 }: {
@@ -133,6 +153,7 @@ export const OperatorConnectionsClient = ({
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<ListedConnection | null>(null);
   const dialogRef = useRef<HTMLDialogElement | null>(null);
+  const listHeadingRef = useRef<HTMLHeadingElement | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -171,6 +192,12 @@ export const OperatorConnectionsClient = ({
     if (pending !== null && !dialog.open) dialog.showModal();
     if (pending === null && dialog.open) dialog.close();
   }, [pending]);
+
+  // The button that opened the dialog leaves with its row, and focus would fall to
+  // the page. The receipt is read out as a status; the list is where to go on from.
+  useEffect(() => {
+    if (receipt !== null) listHeadingRef.current?.focus();
+  }, [receipt]);
 
   const disconnect = async (connection: ListedConnection) => {
     setPending(null);
@@ -273,7 +300,7 @@ export const OperatorConnectionsClient = ({
           </div>
           {others.length === 0 ? null : (
             <div className={styles.stepGrid}>
-              {others.map(({ family, name, steps }) => (
+              {others.map(({ family, name, steps, terminal }) => (
                 <details
                   className={styles.stepCard}
                   data-agent-connections-steps={family}
@@ -285,6 +312,19 @@ export const OperatorConnectionsClient = ({
                       <li key={index}>{step}</li>
                     ))}
                   </ol>
+                  {terminal === undefined ? null : (
+                    <>
+                      <p className={styles.stepLabel}>在终端里用 {name}：</p>
+                      <ol
+                        className={styles.stepList}
+                        data-agent-connections-terminal={family}
+                      >
+                        {terminal(toolAddress).map((step, index) => (
+                          <li key={index}>{step}</li>
+                        ))}
+                      </ol>
+                    </>
+                  )}
                 </details>
               ))}
             </div>
@@ -293,7 +333,9 @@ export const OperatorConnectionsClient = ({
       )}
 
       <section className={community.card}>
-        <h2>已连接的工具</h2>
+        <h2 ref={listHeadingRef} tabIndex={-1}>
+          已连接的工具
+        </h2>
         {surface === null ? null : surface.connections.length === 0 ? (
           <p className={community.lead} data-agent-connections-empty>
             还没有连接任何工具。
@@ -322,8 +364,7 @@ export const OperatorConnectionsClient = ({
                     {toolName(connection)}
                   </td>
                   <td data-agent-connection-authorized-by data-label="授权人">
-                    {connection.authorizedBy ?? "账号已不存在"}
-                    {connection.mine ? "（你）" : ""}
+                    {authorizerName(connection)}
                   </td>
                   <td
                     data-label="授权时间"
@@ -343,7 +384,10 @@ export const OperatorConnectionsClient = ({
                       : whenText(connection.lastVerifiedAt)}
                   </td>
                   <td>
+                    {/* Each row's button says whose tool it stops: at phone width the
+                        rows are cards, and a screen reader may not read them as a table. */}
                     <button
+                      aria-label={`断开「${toolName(connection)}」，授权人：${authorizerName(connection)}`}
                       className={community.actionButton}
                       data-agent-connection-disconnect={connection.id}
                       data-danger="true"

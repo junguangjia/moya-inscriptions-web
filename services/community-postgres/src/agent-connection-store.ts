@@ -30,6 +30,8 @@
  * here by `readForAuthorization` returning the grant alongside the connection.
  */
 
+import { ADMIN_MCP_CONNECTION_LIFETIME_MS } from "@moya/contracts/internal/admin-mcp";
+
 // The family pattern, imported rather than respelled. A sibling module in this
 // same package, so there is no dependency to invert — unlike the client-id
 // FORMS, which live in `apps/admin` and are deliberately not duplicated here.
@@ -817,6 +819,10 @@ export const createAgentConnectionStore = (
      * leaves a row saying `authorized` with no token behind it, and the tokens
      * it replaced already refused. Listing that row as connected would be
      * false, and there is nothing behind it to disconnect.
+     *
+     * Live also means inside the hard limit from the grant's consent, which the
+     * door counts from the same column: past it every token is refused, so the
+     * row is not a connection either.
      */
     async listAuthorized(): Promise<readonly ListedConnection[]> {
       const { rows } = await pool.query(
@@ -829,8 +835,10 @@ export const createAgentConnectionStore = (
             AND g.generation_at_consent = c.generation
           WHERE c.status='authorized'
             AND c.revoked_at IS NULL
+            AND g.consented_at > CURRENT_TIMESTAMP - make_interval(secs => $1)
           ORDER BY c.consented_at DESC, c.id DESC
           LIMIT 200`,
+        [ADMIN_MCP_CONNECTION_LIFETIME_MS / 1000],
       );
       return rows.map((entry) => parseListedRow(entry));
     },
