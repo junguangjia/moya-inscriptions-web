@@ -288,8 +288,27 @@ describe("a case's self-only question", () => {
       "UPDATE community.works SET title='',text='',media_ids='{}',public_revision_id=NULL,author_revision_id=NULL,visibility='self',deleted_at=CURRENT_TIMESTAMP WHERE id=$1",
       [work],
     );
+    await setup.query("DELETE FROM community.work_revisions WHERE work_id=$1", [
+      work,
+    ]);
     expect(await reader.isSelfOnly("report", id)).toBe(false);
     expect(await reader.isSelfOnly("report", opaque("report"))).toBe(false);
+  });
+
+  it("is true of a case on a work deleted with its text kept, and on a comment under it", async () => {
+    const reporter = await newUser();
+    const work = await newWork(await newUser());
+    const comment = await newComment(work, reporter);
+    const cases = [
+      await workReport(work, reporter),
+      await commentReport(comment, reporter),
+    ];
+    await setup.query(
+      "UPDATE community.works SET deleted_at=CURRENT_TIMESTAMP WHERE id=$1",
+      [work],
+    );
+    for (const id of cases)
+      expect(await reader.isSelfOnly("report", id), id).toBe(true);
   });
 });
 

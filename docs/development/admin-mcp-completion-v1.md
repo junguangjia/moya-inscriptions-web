@@ -626,7 +626,8 @@ FROM (VALUES
   ('community.comment_likes','SELECT'), ('community.work_publishing_settings','SELECT'),
   ('community.account_publishing_capacity','SELECT'), ('public.catalog_discovery','SELECT'),
   ('community.media_public_assets','SELECT'), ('community.media_item_refs','SELECT'),
-  ('community.catalog_media_assets','SELECT'),
+  ('community.catalog_media_assets','SELECT'), ('community.work_drafts','SELECT'),
+  ('community.work_draft_snapshots','SELECT'), ('community.work_edit_drafts','SELECT'),
   ('community.discussion_command_receipts','INSERT')
 ) AS needed(rel, priv)
 UNION ALL
@@ -1174,15 +1175,22 @@ published row (plugin dist/mcp/tools/schemas.js:20).
 Self-only works are `visibility='self' AND deleted_at IS NULL`
 (apps/web/features/publishing/ui/editor/visibility-field.tsx:20). The second
 condition matters: erasing a work also sets visibility to self and empties the
-work (services/community-postgres/src/publishing/works.ts:395-400), so reports
-and appeals on erased works stay with AI. A trash purge only sets `deleted_at`
-(works.ts:532): it keeps the title, text and revisions, and `trashed_at`, which
-erasing clears. So for AI a deleted work with `trashed_at` set counts as
-self-only too, whatever its visibility, by the lead's decision of S7. That is
-`isSelfOnlyWorkSql`, the one definition every carrier below and analytics use.
-Self-only works are withheld from AI while their switch is off (section 12).
-Carriers, each with a test: read-works and find, `read-report` snapshot
-(reporting-adapter.ts:468), `latestSubmission.title`, submission title and body
+work and all that holds its text
+(services/community-postgres/src/publishing/works.ts:395-425), so reports and
+appeals on erased works stay with AI. A trash purge only sets `deleted_at`
+(works.ts:532): it keeps the title, text and revisions. So did #126's delete,
+with no `trashed_at`, until #138 removed it. So for AI a deleted work that still
+holds content counts as self-only too, whatever its visibility and whether or
+not `trashed_at` is set, by the lead's decisions of S7. Content is what an
+account purge erases, asked by the same `deletedWorkHoldsContentSql`: the row's
+title, text, media list and revision pointers, and any row of its in
+`work_revisions`, `work_drafts`, `work_draft_snapshots` or `work_edit_drafts`.
+An emptied row stays readable. That is `isSelfOnlyWorkSql`, the one definition
+every carrier below and analytics use, with `isSelfOnlyWorkInScanSql` for a
+statement that goes over the whole table. Self-only works are withheld from AI
+while their switch is off (section 12). Carriers, each with a test: read-works
+and find, `read-report` snapshot (reporting-adapter.ts:468),
+`latestSubmission.title`, submission title and body
 (work-publishing-schemas.ts:167-168), `read-featured` with `filter=all`
 (content-operator-adapter.ts:400-412), read-comments, read-comment and comment
 report snapshots, analytics title resolution (section 19), selector sources, and
@@ -1460,6 +1468,25 @@ tests/cms/admin-mcp-community.test.ts:
   `READ_TIMED_OUT`. That is 12 s inside the 15 s call, and with the pool's 5 s
   connection wait 17 s inside the call and its 15 s hold, so the hold is a real
   bound on these reads. The Owner's reads have no such limit, as before.
+- A deleted row's content test asks four more tables, so a statement that goes
+  over `works` asks through hashed sets (`isSelfOnlyWorkInScanSql`): the works
+  list, its count, `find` on works and the comment set. Each set is read once,
+  and only if a row gets that far. The per-row lookups stay where a statement
+  asks of one work or a few. At the bench's scale plus 200 erased works, 20,000
+  drafts, 20,000 snapshots and 5,000 edit drafts, on a laptop with PostgreSQL's
+  default `jit=on`, the sets keep the default works list at 91 to 105 ms and the
+  comment queue at 358 to 406 ms, from about 530 ms and 1,320 ms with lookups
+  everywhere, and 20,000 erased works add 30 ms and 70 ms to those two. Lookups
+  over many rows cost more in that seed, whatever the erased count: `read-users`
+  6 to 584 ms, `find` on reports 15 to 589 ms, `read-reports` 42 to 62 ms and
+  the submissions queue 22 to 115 ms. Nearly all of that is JIT compiling,
+  because the planner prices the two tables with no index on `work_id` into
+  every row: with `jit=off` those four read 8, 13, 37 and 13 ms, and with such
+  an index on `work_drafts` and `work_draft_snapshots` and JIT on they read 7,
+  54, 28 and 21 ms. No index is added here, and whether Production has JIT on
+  was not read. The Owner's reads plan the condition away. At L0's seed, with
+  few drafts, M3's single samples read 197 ms and 367 ms against 160 ms before,
+  inside its 2,350 ms, and U1 17 ms and 18 ms against 16 ms.
 - `listPending` compares its cursor in milliseconds. It held microseconds in the
   column and milliseconds in the cursor, so the row a page ended on came back at
   the head of the next page, on the Owner's screen too.
@@ -1618,6 +1645,14 @@ tests/cms/admin-mcp-community-writes.test.ts:
   intention and acts on the state it finds: `already_applied`, through
   ALREADY_SET, when nothing was left to change. Hiding a comment already hidden
   stays a conflict under a new requestId, as on the human route.
+- So a community write that replayed a target says what that answer is: one
+  fixed sentence in `hint`, that what `results` shows of it can be what its
+  command answered when it committed, not a fresh read, and to read the record
+  to see what holds now. A suspension the Owner undid can otherwise read
+  `ok:true` with state `suspended`. A case's replay does read its record, and
+  "can be" holds of that too, so no op is an exception. A batch that replays one
+  target and runs another says it as well, though `meta.replayed` needs them
+  all. A fresh answer has no such sentence, and tools/list does not change.
 - `data.moderationCases` counts the subjects this call moderated, each with its
   own case, user message and appeal path. A replay or a state already in place
   opens none. A row of `queued` carries `alreadyApplied` when this call changed
@@ -2864,7 +2899,10 @@ Accepted limits, recorded and not fixed:
   work's, a submission's and an Article's have one, but their settlement then
   reads the withheld work and could only answer QUEUED unread on every repeat, a
   work's stored answer holds its title, and their key is in a body the route has
-  not read at this check.
+  not read at this check. Featuring and a job's retry answer the same way, with
+  the featuring row reading `enabled` and the job `queued`: featuring asks in
+  its handler before its service reaches the receipt, and a retry's key is in a
+  body the route has not read. The lead accepts all of these.
 - `community.retry-publishing-job` answers SELF_ONLY_OWNER_REVIEW when the job's
   subject is a self-only work, as a trash purge's is, since running it would end
   that work's self-only status. A job on a media item still retries whatever the
@@ -2872,11 +2910,13 @@ Accepted limits, recorded and not fixed:
   name such an item, as this list says above. A retry also undoes an Owner's
   abandon of a job, which the Owner's own page allows too.
 
-- A work the trash purge deleted counts as self-only for AI, so a case on it
-  goes to the Owner, and SELF_ONLY_OWNER_REVIEW's hint says so. Nothing at this
-  head sets `trashed_at`: the only rows of this shape come from `trashWork`,
-  removed by #155. Whether Production holds any was not read, and this holds
-  either way.
+- A deleted work that still holds content counts as self-only for AI, so a case
+  on it goes to the Owner, and SELF_ONLY_OWNER_REVIEW's hint says so. Two ways
+  left such rows, and nothing at this head writes either: the trash purge of a
+  work from `trashWork`, removed by #155, and #126's delete, which set
+  `deleted_at` alone and left no `trashed_at`, from 2026-09-13 until #138
+  removed it on 2026-09-15. Whether Production holds any was not read, and this
+  holds either way.
 
 - A decision on an official record reads whether it is still published inside
   the case's transaction, holding an App connection and the case's row lock
@@ -3851,7 +3891,8 @@ Recorded when built in S7, the community writes, in tests/cms/admin-mcp-bench/.
 - Neither path scans a large table on its writes, which go by id, and U3's
   locates scan none, its miss included. `list.comments` leaves out what a
   self-only work withholds through one hashed set of them, read once per
-  statement, so `works` is on M3's row, reported and asserted alone.
+  statement, so `works` is on M3's row, reported and asserted alone, with
+  `work_revisions`, which that set asks about an emptied row.
 - Statements per target on these rows are about 22 for a comment, with its
   receipt and time limit, and about 25 for a suspension, five of them its
   settlement. `list.comments` costs a title read per row, so M3's list is about

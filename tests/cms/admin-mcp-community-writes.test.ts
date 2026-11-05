@@ -297,11 +297,16 @@ const makePublic = (workId: string) =>
   setup.query("UPDATE community.works SET visibility='public' WHERE id=$1", [
     workId,
   ]);
-const deleteWork = (workId: string) =>
-  setup.query(
+/** As an erasure leaves a work: nothing holds its text. */
+const deleteWork = async (workId: string) => {
+  await setup.query(
     "UPDATE community.works SET title='',text='',media_ids='{}',public_revision_id=NULL,author_revision_id=NULL,visibility='self',deleted_at=CURRENT_TIMESTAMP WHERE id=$1",
     [workId],
   );
+  await setup.query("DELETE FROM community.work_revisions WHERE work_id=$1", [
+    workId,
+  ]);
+};
 const newComment = async (
   workId: string,
   authorId: string,
@@ -1633,6 +1638,13 @@ describe("a lost answer, retried with the same requestId", () => {
     const requestId = randomUUID();
     const input = { id: user, action: "suspend", reason: REASON };
     await execute("community.moderate-user", input, requestId);
+    expect(
+      await execute(
+        "community.moderate-user",
+        { ...input, reason: "Another reason" },
+        requestId,
+      ),
+    ).toMatchObject({ ok: false, code: "IDEMPOTENCY_CONFLICT" });
     expect(
       await execute(
         "community.moderate-user",

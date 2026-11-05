@@ -1093,9 +1093,10 @@ describe("the community reference paths", () => {
       seqScans,
     });
     // list.comments leaves out what a self-only work withholds through one hashed set
-    // of them, read once per statement. Reported above; nothing else may join it, and
-    // the writes themselves go by id.
-    expect(seqScans.filter((table) => table !== "works")).toEqual([]);
+    // of them, read once per statement, and that set asks what holds an emptied row's
+    // text. Reported above; nothing else may join them, and the writes go by id.
+    const inTheSet = ["works", "work_revisions"];
+    expect(seqScans.filter((table) => !inTheSet.includes(table))).toEqual([]);
     expect(await largeSeqScans(hide.statements)).toEqual([]);
   });
 

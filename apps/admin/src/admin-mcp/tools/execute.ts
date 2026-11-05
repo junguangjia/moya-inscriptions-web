@@ -434,6 +434,22 @@ const CONTINUED =
 const LEDGER_STOPPED =
   "The audit ledger could not record a target, so the batch stopped there. The targets named in data did run and the rest did not. Retry shortly with next.";
 
+const REPLAYED =
+  "A replayed target did not run again: what results shows of it can be what its command answered when it committed, not a fresh read. Read the record to see what holds now.";
+
+/**
+ * A community write's receipt answers what it stored, and the Owner may have undone that
+ * since (section 7). Said before the rows go in, so the cut in withResults counts it.
+ */
+const withReplayHint = (
+  envelope: AdminMcpEnvelope,
+  entry: AdminOpEntry,
+  outcomes: readonly TargetOutcome[],
+): AdminMcpEnvelope =>
+  entry.credential === "community" && outcomes.some(({ replayed }) => replayed)
+    ? { ...envelope, hint: `${envelope.hint ?? ""} ${REPLAYED}`.trim() }
+    : envelope;
+
 const bytesOf = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 
 const nextCall = (
@@ -740,7 +756,7 @@ const runCall = async (
   }
 
   const answer = withResults(
-    answerOf(call, outcomes, reached, stopped),
+    withReplayHint(answerOf(call, outcomes, reached, stopped), entry, outcomes),
     call,
     outcomes,
   );

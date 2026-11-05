@@ -630,6 +630,8 @@ describe("one save", () => {
       input,
     });
     expect(replay).toMatchObject({ ok: true, meta: { replayed: true } });
+    // Only a community write's replay carries the sentence on stored answers.
+    expect(replay.hint).toBeUndefined();
     expect(replay.data.already_applied).toEqual([draft.id]);
     expect(replay.data.results?.[0]).toMatchObject({
       revision: first.data.results?.[0]?.revision,

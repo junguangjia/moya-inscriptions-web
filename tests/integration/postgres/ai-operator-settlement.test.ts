@@ -509,7 +509,16 @@ describe("what the Owner holds", () => {
       "UPDATE community.works SET title='',text='',media_ids='{}',public_revision_id=NULL,author_revision_id=NULL,visibility='self',deleted_at=CURRENT_TIMESTAMP WHERE id=$1",
       [work],
     );
-    expect(await settle("work", work)).toMatchObject({ open: 1 });
+    // Its revision still holds text, so it is not yet what an erasure leaves.
+    expect(await settle("work", work)).toBe("self_only");
+    await setup.query(
+      "DELETE FROM community.work_revision_items WHERE item_id=$1",
+      [item],
+    );
+    await setup.query("DELETE FROM community.work_revisions WHERE work_id=$1", [
+      work,
+    ]);
+    expect(await settle("work", work)).toMatchObject({ open: 0 });
   });
 });
 

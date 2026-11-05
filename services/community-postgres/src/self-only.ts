@@ -1,16 +1,52 @@
+const WORK_TEXT_HOLDERS = [
+  "work_revisions",
+  "work_drafts",
+  "work_draft_snapshots",
+  "work_edit_drafts",
+] as const;
+
+const workRowHoldsContentSql = (work: string): string =>
+  `${work}.title<>'' OR ${work}.text<>'' OR cardinality(${work}.media_ids)>0
+    OR ${work}.public_revision_id IS NOT NULL OR ${work}.author_revision_id IS NOT NULL`;
+
+/**
+ * A deleted work still holds content an erasure removes. A trash purge marks a work
+ * deleted but keeps its title, text, media list and revisions, an older delete did the
+ * same with no `trashed_at`, and an erased work keeps none of them. The row's own
+ * columns come first, so a row that holds its text reads no other table.
+ */
+export const deletedWorkHoldsContentSql = (work: string): string =>
+  `(${workRowHoldsContentSql(work)}
+    ${WORK_TEXT_HOLDERS.map((table) => `OR EXISTS(SELECT 1 FROM community.${table} hc WHERE hc.work_id=${work}.id)`).join(" ")})`;
+
+const selfOnlyWorkSql = (work: string, deletedHoldsContent: string): string =>
+  `((${work}.visibility='self' AND ${work}.deleted_at IS NULL) OR (${work}.deleted_at IS NOT NULL AND ${deletedHoldsContent}))`;
+
 /**
  * What AI does not read (admin-mcp-completion-v1 section 6): a live work with
- * `visibility='self'`, and a deleted work that still holds content. Erasing a work
- * also sets visibility to self, but it empties the row and clears `trashed_at`, so
- * reports and appeals on it stay with AI. A trash purge only sets `deleted_at`, so
- * that row keeps its title, text and revisions, and `trashed_at` says so whatever its
- * visibility was. Comments and replies under such a work are withheld with it, because
- * the flip to self leaves them untouched. Each reads current state, so a flip is seen
- * by the next statement. Arguments are SQL expressions from this package, never caller
- * text.
+ * `visibility='self'`, and a deleted work that still holds content. Erasing a work also
+ * sets visibility to self, but it empties the row and takes what held its text, so
+ * reports and appeals on it stay with AI. Whatever else deleted a work leaves its text
+ * there, whatever its visibility was. Comments and replies under such a work are
+ * withheld with it, because the flip to self leaves them untouched. Each reads current
+ * state, so a flip is seen by the next statement. Arguments are SQL expressions from
+ * this package, never caller text.
  */
 export const isSelfOnlyWorkSql = (work: string): string =>
-  `((${work}.visibility='self' AND ${work}.deleted_at IS NULL) OR (${work}.deleted_at IS NOT NULL AND ${work}.trashed_at IS NOT NULL))`;
+  selfOnlyWorkSql(work, deletedWorkHoldsContentSql(work));
+
+/**
+ * The same condition for a statement that goes over the whole table. The lookups above
+ * are priced into every row, deleted or not, so a large table would pay for them in
+ * planning and compiling alone. These sets cost one read each, of a statement that
+ * reaches an emptied row. Two of the tables have no index on `work_id` to look up by.
+ */
+export const isSelfOnlyWorkInScanSql = (work: string): string =>
+  selfOnlyWorkSql(
+    work,
+    `(${workRowHoldsContentSql(work)}
+    ${WORK_TEXT_HOLDERS.map((table) => `OR ${work}.id IN (SELECT hc.work_id FROM community.${table} hc WHERE hc.work_id IS NOT NULL)`).join(" ")})`,
+  );
 
 export const workIsSelfOnlySql = (workId: string): string =>
   `EXISTS(SELECT 1 FROM community.works so_w
@@ -21,7 +57,7 @@ export const workIsSelfOnlySql = (workId: string): string =>
  * lookup above runs once per row. For a value that is never NULL.
  */
 export const workInSelfOnlySetSql = (workId: string): string =>
-  `${workId} IN (SELECT so_w.id FROM community.works so_w WHERE ${isSelfOnlyWorkSql("so_w")})`;
+  `${workId} IN (SELECT so_w.id FROM community.works so_w WHERE ${isSelfOnlyWorkInScanSql("so_w")})`;
 
 /** For a comment or a reply: ids are unique across both tables. */
 export const commentIsSelfOnlySql = (commentId: string): string =>

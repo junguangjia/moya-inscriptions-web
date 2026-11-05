@@ -591,6 +591,9 @@ const seed = async () => {
     "UPDATE community.works SET title='',text='',media_ids='{}',public_revision_id=NULL,author_revision_id=NULL,visibility='self',deleted_at=CURRENT_TIMESTAMP WHERE id=$1",
     [ids.deletedWork],
   );
+  await db.query("DELETE FROM community.work_revisions WHERE work_id=$1", [
+    ids.deletedWork,
+  ]);
   await seedPendingArticle(
     ids.pendingArticle,
     hostile("articletitle"),

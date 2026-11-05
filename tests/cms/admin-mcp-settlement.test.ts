@@ -1424,6 +1424,8 @@ describe("a lost answer, on an op with media work", () => {
   });
 });
 
+const REPLAY_HINT = /not a fresh read\. Read the record to see what holds now/u;
+
 describe("a lost answer, on a suspension and on a case", () => {
   /** Delivers the one write and loses its answer, as the first call's way of ending. */
   const losing = async <T>(attempt: () => Promise<T>): Promise<T> => {
@@ -1539,6 +1541,53 @@ describe("a lost answer, on a suspension and on a case", () => {
     });
     expect(retried.data.moderationCases).toBeUndefined();
     await reversalStands(user, before);
+  });
+
+  it("says a replay's row can be what its command answered then, and a fresh answer does not", async () => {
+    const user = await newUser();
+    const requestId = randomUUID();
+    const input = { id: user, action: "suspend", reason: REASON };
+    const fresh = await execute("community.moderate-user", input, requestId);
+    expect(fresh).toMatchObject({ ok: true, data: { applied: [user] } });
+    expect(fresh.meta.replayed).toBeUndefined();
+    expect(fresh.hint).toBeUndefined();
+    const before = await overturnedSuspension(user);
+    const replay = await execute("community.moderate-user", input, requestId);
+    expect(replay).toMatchObject({
+      ok: true,
+      data: { results: [{ state: "suspended" }] },
+      meta: { replayed: true },
+    });
+    expect(replay.hint).toMatch(REPLAY_HINT);
+    await reversalStands(user, before);
+    // A batch that replays one target and runs another has no meta.replayed to read.
+    const other = await newUser();
+    const both = await executeAll(
+      "community.moderate-user",
+      { action: "suspend", reason: REASON },
+      [{ id: user }, { id: other }],
+      requestId,
+    );
+    expect(both).toMatchObject({
+      ok: true,
+      data: { already_applied: [user], applied: [other] },
+    });
+    expect(both.meta.replayed).toBeUndefined();
+    expect(both.hint).toMatch(REPLAY_HINT);
+  });
+
+  it("adds the same words to a code's own hint, and only on a replay", async () => {
+    const { author: user, item } = await publicWork();
+    const requestId = randomUUID();
+    const input = { id: user, action: "suspend", reason: REASON };
+    const fresh = await execute("community.moderate-user", input, requestId);
+    expect(fresh).toMatchObject({ code: "QUEUED" });
+    expect(fresh.hint).not.toMatch(REPLAY_HINT);
+    const replay = await execute("community.moderate-user", input, requestId);
+    expect(replay).toMatchObject({ code: "QUEUED", meta: { replayed: true } });
+    expect(replay.hint).toContain(fresh.hint);
+    expect(replay.hint).toMatch(REPLAY_HINT);
+    await succeedAll(item);
   });
 
   it("keeps it when next is the same write because a settlement could not be read", async () => {

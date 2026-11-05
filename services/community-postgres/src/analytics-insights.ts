@@ -115,7 +115,7 @@ const scanSql = (
     FROM community.analytics_events e WHERE ${where}`;
 };
 
-/** Section 6's definition: an erased work is not self-only, a trash-purged one is. */
+/** Section 6's definition: an erased work is not self-only, one still holding its text is. */
 const selfOnly = (type: string, id: string): string =>
   `(${type} = 'work' AND EXISTS (SELECT 1 FROM community.works w WHERE w.id = ${id} AND ${isSelfOnlyWorkSql("w")}))`;
 

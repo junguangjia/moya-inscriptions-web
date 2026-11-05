@@ -15,6 +15,7 @@ import {
 import { limitAiWrite } from "./ai-write-limit.js";
 import { asCommunityOperationError } from "./availability.js";
 import {
+  isSelfOnlyWorkInScanSql,
   isSelfOnlyWorkSql,
   reportIsSelfOnlySql,
   workIsSelfOnlySql,
@@ -123,7 +124,7 @@ export const operatorWorksWhere = ` LEFT JOIN community.work_revisions ar ON ar.
   AND ($3::text IS NULL OR w.id=$3)
   AND ($4::timestamptz IS NULL OR COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at)>=$4::timestamptz)
   AND ($5::timestamptz IS NULL OR COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at)<=$5::timestamptz)
-  AND NOT ($6::boolean AND ${isSelfOnlyWorkSql("w")})`;
+  AND NOT ($6::boolean AND ${isSelfOnlyWorkInScanSql("w")})`;
 
 export const operatorUsersWhere = `WHERE ($1='' OR position(lower($1) in lower(u.id||' '||u.handle||' '||u.display_name))>0)
   AND ($2::text IS NULL OR u.id=$2)`;

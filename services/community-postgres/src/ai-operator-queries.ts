@@ -43,6 +43,7 @@ import {
   articleUsesSelfOnlyMediaSql,
   caseIsSelfOnlySql,
   commentIsSelfOnlySql,
+  isSelfOnlyWorkInScanSql,
   isSelfOnlyWorkSql,
   jobSubjectIsSelfOnlySql,
   reportAsksOfOwnProfileSql,
@@ -316,7 +317,7 @@ const SEARCH_BRANCHES: Readonly<Record<AiFindSource, SearchBranch>> = {
          FROM community.works w JOIN community.public_users u ON u.id=w.author_id
          LEFT JOIN community.work_revisions ar ON ar.id=w.author_revision_id AND ar.requested_visibility='public'
          CROSS JOIN LATERAL (SELECT concat_ws(' ',w.id,w.title,w.text,ar.title,ar.body,u.display_name,u.handle) AS doc) m
-         WHERE NOT ${isSelfOnlyWorkSql("w")} AND ${holdsEveryWord("m.doc")}
+         WHERE NOT ${isSelfOnlyWorkInScanSql("w")} AND ${holdsEveryWord("m.doc")}
          ORDER BY COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at) DESC,w.id LIMIT $3`,
         [...args],
       )
