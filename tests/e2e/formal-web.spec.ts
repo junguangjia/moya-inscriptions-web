@@ -339,6 +339,20 @@ test("Formal root composes truthful runtime list states", async ({ page }) => {
   await expect(calligraphy).not.toContainText("视觉 QA 合成");
 });
 
+test("Formal timeline keeps the policy notice readable and closable", async ({
+  page,
+}) => {
+  const { shell } = await openFormalRoot(page);
+  await selectHomeFeed(page, "时间轴", "timeline");
+  const timeline = shell.locator('[data-home-feed-panel="timeline"]');
+  const notice = timeline.locator("[data-policy-update-notice]");
+  await expect(notice).toBeVisible();
+  // A PC's fixed chrome must not cover it; the click checks the real hit target.
+  await notice.getByRole("button", { name: "关闭提示" }).click();
+  await expect(notice).toHaveCount(0);
+  await expect(timeline.locator("[data-timeline-feed]")).toBeVisible();
+});
+
 test("Formal timeline says it is unavailable when its rows cannot load", async ({
   page,
 }) => {
