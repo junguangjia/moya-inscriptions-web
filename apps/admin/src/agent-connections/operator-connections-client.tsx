@@ -60,13 +60,41 @@ const claudeConnectorLink = (
   return link.href;
 };
 
+/**
+ * ChatGPT's page for adding a server. Neither ChatGPT nor Codex has a link that fills
+ * in the address, so their links copy it in the same click and the page says what to
+ * click next. The words are from OpenAI's documents; the real-client record corrects
+ * them when a real screen differs.
+ */
+const CHATGPT_PLUGINS = "https://chatgpt.com/plugins";
+/** Codex's settings window, on a computer. It has no link to its MCP page. */
+const CODEX_SETTINGS = "codex://settings";
+
+const CHATGPT_STEPS: readonly string[] = [
+  "在 ChatGPT 里点 +，选 Add custom MCP server。",
+  `名称填「${CONNECTOR_NAME}」，Server URL 处粘贴（地址已复制）。`,
+  "认证方式选 OAuth，Client ID 和 Secret 留空，勾选提示，点 Create，再安装。",
+  `在打开的页面里登录后台，点「允许」。之后在新对话里输入 @${CONNECTOR_NAME} 使用。`,
+];
+
+/** The same tool from its terminal, where there is no settings window. */
+const codexTerminalSteps = (address: string): readonly React.ReactNode[] => [
+  <span className={styles.stepCopy} key="add">
+    运行：
+    <CopyValue label="命令" value={`codex mcp add artvenn --url ${address}`} />
+  </span>,
+  "Codex 发现需要登录时会自己打开浏览器，在那里登录后台并点「允许」。",
+  <span className={styles.stepCopy} key="login">
+    浏览器没有打开，或以后要重新登录时，运行：
+    <CopyValue label="命令" value="codex mcp login artvenn" />
+  </span>,
+];
+
 /** Offered only for a tool on this deployment's closed list. */
 const OTHER_TOOLS: readonly {
   readonly family: string;
   readonly name: string;
   readonly steps: (address: string) => readonly React.ReactNode[];
-  /** The same tool from its terminal, where there is no settings window. */
-  readonly terminal?: (address: string) => readonly React.ReactNode[];
 }[] = [
   {
     family: "claude-code",
@@ -84,39 +112,58 @@ const OTHER_TOOLS: readonly {
       "浏览器打开后，登录后台并点「允许」。",
     ],
   },
-  {
-    family: "codex",
-    name: "Codex",
-    steps: () => [
-      "打开设置，进入 MCP servers，点 Add server，填一个名字（例如 artvenn），选 Streamable HTTP。",
-      "粘贴上面的地址，保存，然后重启 Codex。",
-      "点 Authenticate，在浏览器里登录后台并点「允许」。",
-    ],
-    terminal: (address) => [
-      <span className={styles.stepCopy} key="add">
-        运行：
-        <CopyValue
-          label="命令"
-          value={`codex mcp add artvenn --url ${address}`}
-        />
-      </span>,
-      "Codex 发现需要登录时会自己打开浏览器，在那里登录后台并点「允许」。",
-      <span className={styles.stepCopy} key="login">
-        浏览器没有打开，或以后要重新登录时，运行：
-        <CopyValue label="命令" value="codex mcp login artvenn" />
-      </span>,
-    ],
-  },
-  {
-    family: "chatgpt",
-    name: "ChatGPT",
-    steps: () => [
-      "打开 chatgpt.com/plugins，点 +，选 Add custom MCP server。",
-      "填名称和上面的地址，认证方式选 OAuth，接受提示后创建并安装。",
-      "在打开的页面里登录后台并点「允许」。",
-    ],
-  },
 ];
+
+/**
+ * A link that also copies the address, in the same click. The browser follows the link
+ * as usual. 地址已复制 shows only once the write resolved; a browser that refuses it,
+ * or has no clipboard here, says so and shows the address to copy by hand.
+ */
+const CopyingLink = ({
+  address,
+  children,
+  ...link
+}: React.AnchorHTMLAttributes<HTMLAnchorElement> & {
+  readonly address: string;
+}) => {
+  const [copy, setCopy] = useState<"copied" | "refused" | null>(null);
+  const write = () => {
+    try {
+      const written = navigator.clipboard?.writeText(address);
+      if (written === undefined) setCopy("refused");
+      else
+        void written.then(
+          () => setCopy("copied"),
+          () => setCopy("refused"),
+        );
+    } catch {
+      setCopy("refused");
+    }
+  };
+  return (
+    <>
+      <a {...link} onClick={write}>
+        {children}
+      </a>
+      {copy === "copied" ? (
+        <p className={community.notice} data-tone="success" role="status">
+          地址已复制。
+        </p>
+      ) : null}
+      {copy === "refused" ? (
+        <p
+          className={community.notice}
+          data-agent-connections-copy-refused
+          data-tone="error"
+          role="alert"
+        >
+          没能自动复制地址，请手动复制：
+          <span className={styles.mono}>{address}</span>
+        </p>
+      ) : null}
+    </>
+  );
+};
 
 const FAILURE_TEXT: Readonly<Record<string, string>> = {
   CONNECTION_NOT_FOUND: "这条连接已经不存在了。",
@@ -143,9 +190,15 @@ const authorizerName = (connection: ListedConnection): string =>
 
 export const OperatorConnectionsClient = ({
   address,
+  cursorLink,
 }: {
   /** From this deployment's public address. Null falls back to the list's. */
   readonly address: string | null;
+  /**
+   * Cursor's install link, built on the server because it carries Cursor's client
+   * id, which the list route never sends. Null shows no Cursor button.
+   */
+  readonly cursorLink: string | null;
 }) => {
   const [surface, setSurface] = useState<ListedSurface | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -228,6 +281,9 @@ export const OperatorConnectionsClient = ({
   const toolAddress = address ?? surface?.resource ?? "";
   const families = surface?.families;
   const others = OTHER_TOOLS.filter(({ family }) => families?.has(family));
+  // One card for both: one OpenAI account, two entries on the list.
+  const chatgpt = families?.has("chatgpt") === true;
+  const codex = families?.has("codex") === true;
 
   return (
     <div
@@ -267,40 +323,130 @@ export const OperatorConnectionsClient = ({
       {surface === null || toolAddress === "" ? null : (
         <section className={community.card} data-agent-connections-connect>
           <h2>连接一个工具</h2>
-          {families?.has("claude") ? (
-            <div className={styles.connectClaude}>
-              <a
-                className={styles.connectButton}
-                data-agent-connections-claude
-                href={claudeConnectorLink("customize", toolAddress)}
-                rel="noopener noreferrer"
-                target="_blank"
-              >
-                连接到 Claude
-              </a>
-              <p className={community.lead}>
-                {
-                  "在 Claude 打开的窗口里点 Add，再登录后台并点「允许」。之后在对话的 + 菜单里打开这个连接。"
-                }
-              </p>
-              <a
-                className={styles.quietLink}
-                data-agent-connections-claude-team
-                href={claudeConnectorLink("admin-settings", toolAddress)}
-                rel="noopener noreferrer"
-                target="_blank"
-              >
-                团队版管理员：为整个团队添加
-              </a>
-            </div>
-          ) : null}
+          <div className={styles.connectGrid}>
+            {families?.has("claude") ? (
+              <div className={styles.connectTool}>
+                <a
+                  className={styles.connectButton}
+                  data-agent-connections-claude
+                  href={claudeConnectorLink("customize", toolAddress)}
+                  rel="noopener noreferrer"
+                  target="_blank"
+                >
+                  连接到 Claude
+                </a>
+                <p className={community.lead}>
+                  {
+                    "在 Claude 打开的窗口里点 Add，再登录后台并点「允许」。之后在对话的 + 菜单里打开这个连接。"
+                  }
+                </p>
+                <a
+                  className={styles.quietLink}
+                  data-agent-connections-claude-team
+                  href={claudeConnectorLink("admin-settings", toolAddress)}
+                  rel="noopener noreferrer"
+                  target="_blank"
+                >
+                  团队版管理员：为整个团队添加
+                </a>
+              </div>
+            ) : null}
+            {chatgpt || codex ? (
+              <div className={styles.connectTool}>
+                {chatgpt ? (
+                  <>
+                    <CopyingLink
+                      address={toolAddress}
+                      className={styles.connectButton}
+                      data-agent-connections-chatgpt
+                      href={CHATGPT_PLUGINS}
+                      rel="noopener noreferrer"
+                      target="_blank"
+                    >
+                      连接到 ChatGPT
+                    </CopyingLink>
+                    <ol
+                      className={styles.connectSteps}
+                      data-agent-connections-steps="chatgpt"
+                    >
+                      {CHATGPT_STEPS.map((step) => (
+                        <li key={step}>{step}</li>
+                      ))}
+                    </ol>
+                    <p className={community.lead}>
+                      {
+                        "如果看不到 Add custom MCP server，说明你的 ChatGPT 账号暂时不能添加（部分套餐没有）。建议在电脑上操作。"
+                      }
+                    </p>
+                  </>
+                ) : null}
+                {codex ? (
+                  // The same OpenAI account, but another client id and another
+                  // connection, which the list shows as its own row.
+                  <div
+                    className={styles.connectCodex}
+                    data-agent-connections-steps="codex"
+                  >
+                    {chatgpt ? (
+                      <p className={community.lead} data-agent-connections-two>
+                        ChatGPT 和 Codex 是两条连接，断开一个不影响另一个。
+                      </p>
+                    ) : null}
+                    {/* A custom scheme, so no new tab: the browser hands it to the app. */}
+                    <CopyingLink
+                      address={toolAddress}
+                      className={styles.quietLink}
+                      data-agent-connections-codex
+                      href={CODEX_SETTINGS}
+                    >
+                      在电脑上的 Codex 里连接
+                    </CopyingLink>
+                    <p className={community.lead}>
+                      {
+                        "然后进入 MCP servers，点 Add server，名字填 artvenn，选 Streamable HTTP，粘贴地址，保存，重启，点 Authenticate，登录后台并点「允许」。"
+                      }
+                    </p>
+                    <details className={styles.stepCard}>
+                      <summary>在终端里用 Codex</summary>
+                      <ol
+                        className={styles.stepList}
+                        data-agent-connections-terminal="codex"
+                      >
+                        {codexTerminalSteps(toolAddress).map((step, index) => (
+                          <li key={index}>{step}</li>
+                        ))}
+                      </ol>
+                    </details>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {families?.has("cursor") && cursorLink !== null ? (
+              <div className={styles.connectTool}>
+                <a
+                  className={styles.connectButton}
+                  data-agent-connections-cursor
+                  href={cursorLink}
+                  rel="noopener noreferrer"
+                  target="_blank"
+                >
+                  连接到 Cursor
+                </a>
+                <p className={community.lead}>
+                  {
+                    "浏览器问是否打开 Cursor 时点打开。在 Cursor 里点 Install，再点 Connect，浏览器打开后登录后台并点「允许」。需要电脑上装好 Cursor。建议在 Cursor 设置里打开 Privacy Mode。"
+                  }
+                </p>
+              </div>
+            ) : null}
+          </div>
           <div className={styles.address} data-agent-connections-address>
             <span className={community.lead}>其他工具填这个地址：</span>
             <CopyValue label="地址" value={toolAddress} />
           </div>
           {others.length === 0 ? null : (
             <div className={styles.stepGrid}>
-              {others.map(({ family, name, steps, terminal }) => (
+              {others.map(({ family, name, steps }) => (
                 <details
                   className={styles.stepCard}
                   data-agent-connections-steps={family}
@@ -312,19 +458,6 @@ export const OperatorConnectionsClient = ({
                       <li key={index}>{step}</li>
                     ))}
                   </ol>
-                  {terminal === undefined ? null : (
-                    <>
-                      <p className={styles.stepLabel}>在终端里用 {name}：</p>
-                      <ol
-                        className={styles.stepList}
-                        data-agent-connections-terminal={family}
-                      >
-                        {terminal(toolAddress).map((step, index) => (
-                          <li key={index}>{step}</li>
-                        ))}
-                      </ol>
-                    </>
-                  )}
                 </details>
               ))}
             </div>

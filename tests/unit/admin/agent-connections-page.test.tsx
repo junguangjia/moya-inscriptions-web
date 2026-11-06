@@ -1233,6 +1233,31 @@ describe("the review view's gate", () => {
     expect(html).toContain(PERSON);
   });
 
+  it("names Cursor and its vendor Anysphere for Cursor's client id, from the closed list", async () => {
+    const runtime = stubRuntime({ oauthClientId: CURSOR_CLIENT });
+    const cursor = (
+      JSON.parse(productionClients()) as {
+        clientId: string;
+        family: string;
+        label: string;
+        callbackPolicy: string;
+        redirectUris: string[];
+      }[]
+    ).find(({ clientId }) => clientId === CURSOR_CLIENT);
+    runtime.clients.set(CURSOR_CLIENT, cursor!);
+    const html = await renderConsent(viewProps(humanOwner));
+    expect(runtime.consents.arm).toHaveBeenCalledOnce();
+    expect(html).toContain("「Cursor」想连接由于艺后台");
+    expect(html).toContain(
+      "发送给 Cursor 的提供方 Anysphere，以及你在 Cursor 里选用的模型的提供方。",
+    );
+    // A program on this computer, by both of the loopback names it may use.
+    expect(html).toContain("这台电脑上的程序");
+    expect(html).toContain(
+      'data-agent-consent-callback-hosts="localhost 127.0.0.1"',
+    );
+  });
+
   it.each([
     ["a spent interaction", { decision: "approved" }],
     ["a tool off the list", { oauthClientId: "https://other.example/client" }],
@@ -1318,6 +1343,67 @@ describe("the AI connections view's gate", () => {
     const html = renderPage(viewProps(humanOwner));
     expect(html).toContain("AI 连接未启用。");
     expect(html).not.toContain("已连接的工具");
+  });
+
+  /** The Cursor button as the real view renders it, after the list arrives. */
+  const cursorButton = async (
+    publicUrl: string | undefined,
+    clients: string,
+  ): Promise<Element | null> => {
+    cleanup();
+    operatorSurface();
+    vi.stubEnv("CMS_PUBLIC_URL", publicUrl);
+    vi.stubEnv("AGENT_AUTHORIZATION_CLIENTS", clients);
+    vi.stubGlobal("fetch", mockFetch(operatorList()));
+    render(AgentConnectionsView(viewProps(humanOwner)));
+    await waitFor(() =>
+      expect(
+        document.querySelector("[data-agent-connections-claude]"),
+      ).toBeTruthy(),
+    );
+    return document.querySelector("[data-agent-connections-cursor]");
+  };
+
+  it("builds Cursor's install link on the server, from this deployment's address and Cursor's listed id, with no secret", async () => {
+    for (const origin of [
+      "https://public.example.test",
+      "https://elsewhere.example.test",
+    ]) {
+      const link = new URL(
+        (await cursorButton(origin, productionClients()))?.getAttribute(
+          "href",
+        ) ?? "",
+      );
+      expect(`${link.origin}${link.pathname}`).toBe(
+        "https://cursor.com/install-mcp",
+      );
+      expect([...link.searchParams.keys()]).toEqual(["name", "config"]);
+      expect(link.searchParams.get("name")).toBe("artvenn");
+      // Exactly the documented server entry: no secret, no scopes, nothing else.
+      expect(
+        JSON.parse(
+          Buffer.from(link.searchParams.get("config") ?? "", "base64").toString(
+            "utf8",
+          ),
+        ),
+      ).toStrictEqual({
+        type: "http",
+        url: `${origin}/api/mcp`,
+        auth: { CLIENT_ID: CURSOR_CLIENT },
+      });
+    }
+  });
+
+  it("offers no Cursor button when the server's list has no Cursor, or there is no address", async () => {
+    const withoutCursor = JSON.stringify(
+      (JSON.parse(productionClients()) as { family: string }[]).filter(
+        ({ family }) => family !== "cursor",
+      ),
+    );
+    expect(
+      await cursorButton("https://public.example.test", withoutCursor),
+    ).toBeNull();
+    expect(await cursorButton(undefined, productionClients())).toBeNull();
   });
 
   it("sends a browser with no session to the login page", () => {
@@ -1426,17 +1512,40 @@ const operatorList = (overrides: Record<string, unknown> = {}) => ({
       { family: "claude-code", label: "Claude Code" },
       { family: "codex", label: "Codex" },
       { family: "chatgpt", label: "ChatGPT" },
+      { family: "cursor", label: "Cursor" },
     ],
     connections: [listed()],
     ...overrides,
   },
 });
 
+/** The closed list as Production's settings template writes it. */
+const productionClients = () => {
+  const line = readFileSync(
+    new URL(
+      "../../../infra/production/env/admin.env.example",
+      `file://${import.meta.dirname}/`,
+    ),
+    "utf8",
+  )
+    .split("\n")
+    .find((entry) => entry.startsWith("AGENT_AUTHORIZATION_CLIENTS="));
+  return line?.slice("AGENT_AUTHORIZATION_CLIENTS=".length) ?? "";
+};
+const CURSOR_CLIENT = "https://cursor.com/oauth/mcp-client.json";
+
 describe("the AI connections page under the login door", () => {
   const ADDRESS = "https://public.example.test/api/mcp";
-  const mount = async (body: unknown, address: string | null = ADDRESS) => {
+  /** What the server hands the page; how it is built is pinned on the view below. */
+  const CURSOR_LINK =
+    "https://cursor.com/install-mcp?name=artvenn&config=e30%3D";
+  const mount = async (
+    body: unknown,
+    address: string | null = ADDRESS,
+    cursorLink: string | null = CURSOR_LINK,
+  ) => {
     vi.stubGlobal("fetch", mockFetch(body));
-    render(createElement(OperatorConnectionsClient, { address }));
+    render(createElement(OperatorConnectionsClient, { address, cursorLink }));
     await waitFor(() =>
       expect(
         document
@@ -1589,45 +1698,98 @@ describe("the AI connections page under the login door", () => {
     ).toContain(RESOURCE);
   });
 
-  it("gives short steps for other tools, only those on the closed list", async () => {
-    await mount(
-      operatorList({
-        clients: [
-          { family: "claude-code", label: "Claude Code" },
-          { family: "chatgpt", label: "ChatGPT" },
-        ],
-      }),
+  /** Keeps jsdom from trying to navigate, and says whether the page left the link alone. */
+  const clickThrough = (link: Element): boolean => {
+    let followed = false;
+    const record = (event: Event) => {
+      followed = !event.defaultPrevented;
+      event.preventDefault();
+    };
+    document.addEventListener("click", record);
+    try {
+      fireEvent.click(link);
+    } finally {
+      document.removeEventListener("click", record);
+    }
+    return followed;
+  };
+  const chatgptButton = () =>
+    document.querySelector("[data-agent-connections-chatgpt]") as Element;
+
+  it("offers Claude, ChatGPT and Cursor one button each, in one style", async () => {
+    await mount(operatorList());
+    const buttons = ["claude", "chatgpt", "cursor"].map((tool) =>
+      document.querySelector(`[data-agent-connections-${tool}]`),
     );
-    const families = [
-      ...document.querySelectorAll("[data-agent-connections-steps]"),
-    ].map((node) => node.getAttribute("data-agent-connections-steps"));
-    expect(families).toEqual(["claude-code", "chatgpt"]);
-    expect(
-      document.querySelector("[data-agent-connections-claude]"),
-    ).toBeNull();
-    // User scope, so the tool finds it from whichever folder it starts in.
-    expect(
-      document.querySelector('[data-agent-connections-steps="claude-code"]')
-        ?.textContent,
-    ).toContain(
-      `claude mcp add --transport http --scope user artvenn ${ADDRESS}`,
-    );
-    for (const list of document.querySelectorAll(
-      "[data-agent-connections-steps] ol",
-    ))
-      expect(list.children.length).toBe(3);
+    expect(buttons.map((button) => button?.textContent)).toEqual([
+      "连接到 Claude",
+      "连接到 ChatGPT",
+      "连接到 Cursor",
+    ]);
+    expect(buttons[0]?.className).toBeTruthy();
+    for (const button of buttons) {
+      expect(button?.className).toBe(buttons[0]?.className);
+      // Plain links to a new tab, which the server never fetches and which tell the
+      // next page nothing about this one.
+      expect(button?.tagName).toBe("A");
+      expect(button?.getAttribute("target")).toBe("_blank");
+      expect(button?.getAttribute("rel")).toBe("noopener noreferrer");
+    }
+    expect(buttons[2]?.getAttribute("href")).toBe(CURSOR_LINK);
   });
 
-  it("gives Codex the name step, and a terminal path with each command to copy", async () => {
+  it("copies the address in the ChatGPT click, and lets the browser open ChatGPT's page", async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    await mount(operatorList());
+    expect(chatgptButton().getAttribute("href")).toBe(
+      "https://chatgpt.com/plugins",
+    );
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(clickThrough(chatgptButton())).toBe(true);
+    expect(writeText).toHaveBeenCalledOnce();
+    expect(writeText).toHaveBeenCalledWith(ADDRESS);
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "地址已复制。",
+    );
+  });
+
+  it("shows ChatGPT's four steps unfolded, and says ChatGPT and Codex are two connections", async () => {
+    await mount(operatorList());
+    const steps = document.querySelector(
+      '[data-agent-connections-steps="chatgpt"]',
+    );
+    expect(steps?.tagName).toBe("OL");
+    expect(steps?.closest("details")).toBeNull();
+    const items = [...(steps?.children ?? [])].map((item) => item.textContent);
+    expect(items).toHaveLength(4);
+    expect(items[0]).toContain("Add custom MCP server");
+    expect(items[1]).toContain("「由于艺后台」");
+    expect(items[2]).toContain("OAuth");
+    expect(items[3]).toContain("「允许」");
+    expect(
+      document.querySelector("[data-agent-connections-two]")?.textContent,
+    ).toBe("ChatGPT 和 Codex 是两条连接，断开一个不影响另一个。");
+  });
+
+  it("copies the address from the Codex link in the ChatGPT card, and keeps the terminal commands", async () => {
     const writeText = vi.fn(async () => undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     await mount(operatorList());
     const card = document.querySelector(
       '[data-agent-connections-steps="codex"]',
     );
-    expect(card?.querySelector("ol")?.children[0]?.textContent).toContain(
-      "填一个名字（例如 artvenn），选 Streamable HTTP",
-    );
+    expect(
+      card?.parentElement?.querySelector("[data-agent-connections-chatgpt]"),
+    ).toBeTruthy();
+    const link = card?.querySelector("[data-agent-connections-codex]");
+    expect(link?.textContent).toBe("在电脑上的 Codex 里连接");
+    expect(link?.getAttribute("href")).toBe("codex://settings");
+    expect(link?.getAttribute("target")).toBeNull();
+    expect(card?.textContent).toContain("名字填 artvenn，选 Streamable HTTP");
+    expect(clickThrough(link as Element)).toBe(true);
+    expect(writeText).toHaveBeenCalledWith(ADDRESS);
+
     const terminal = card?.querySelector(
       '[data-agent-connections-terminal="codex"]',
     );
@@ -1640,9 +1802,89 @@ describe("the AI connections page under the login door", () => {
       expect(terminal?.textContent).toContain(command);
     for (const button of terminal?.querySelectorAll("button") ?? [])
       fireEvent.click(button);
-    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
-    expect(writeText).toHaveBeenNthCalledWith(1, commands[0]);
-    expect(writeText).toHaveBeenNthCalledWith(2, commands[1]);
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(3));
+    expect(writeText).toHaveBeenNthCalledWith(2, commands[0]);
+    expect(writeText).toHaveBeenNthCalledWith(3, commands[1]);
+  });
+
+  it.each([
+    [
+      "refuses the write",
+      {
+        clipboard: {
+          writeText: vi.fn(async () => {
+            throw new DOMException("synthetic refusal", "NotAllowedError");
+          }),
+        },
+      },
+    ],
+    ["has no clipboard here", {}],
+  ])(
+    "says so where the browser %s, and shows the address to copy by hand",
+    async (_, synthetic) => {
+      vi.stubGlobal("navigator", synthetic);
+      await mount(operatorList());
+      expect(clickThrough(chatgptButton())).toBe(true);
+      const refused = await waitFor(() => {
+        const notice = document.querySelector(
+          "[data-agent-connections-copy-refused]",
+        );
+        expect(notice).toBeTruthy();
+        return notice as Element;
+      });
+      expect(refused.getAttribute("role")).toBe("alert");
+      expect(refused.textContent).toContain("没能自动复制地址");
+      expect(refused.textContent).toContain(ADDRESS);
+      expect(screen.queryByText("地址已复制。")).toBeNull();
+    },
+  );
+
+  it("keeps the Claude Code card, and offers each tool only when it is on the closed list", async () => {
+    await mount(
+      operatorList({
+        clients: [{ family: "claude-code", label: "Claude Code" }],
+      }),
+    );
+    expect(
+      [...document.querySelectorAll("[data-agent-connections-steps]")].map(
+        (node) => node.getAttribute("data-agent-connections-steps"),
+      ),
+    ).toEqual(["claude-code"]);
+    for (const tool of ["claude", "chatgpt", "codex", "cursor"])
+      expect(
+        document.querySelector(`[data-agent-connections-${tool}]`),
+      ).toBeNull();
+    const card = document.querySelector(
+      '[data-agent-connections-steps="claude-code"]',
+    );
+    // User scope, so the tool finds it from whichever folder it starts in.
+    expect(card?.textContent).toContain(
+      `claude mcp add --transport http --scope user artvenn ${ADDRESS}`,
+    );
+    expect(card?.querySelector("ol")?.children.length).toBe(3);
+
+    // Codex alone keeps its way in, with no ChatGPT button and no sentence about two.
+    cleanup();
+    await mount(
+      operatorList({ clients: [{ family: "codex", label: "Codex" }] }),
+    );
+    expect(
+      document.querySelector("[data-agent-connections-codex]"),
+    ).toBeTruthy();
+    expect(
+      document.querySelector("[data-agent-connections-chatgpt]"),
+    ).toBeNull();
+    expect(document.querySelector("[data-agent-connections-two]")).toBeNull();
+
+    // No link from the server, no Cursor button, whatever the list says.
+    cleanup();
+    await mount(operatorList(), ADDRESS, null);
+    expect(
+      document.querySelector("[data-agent-connections-cursor]"),
+    ).toBeNull();
+    expect(
+      document.querySelector("[data-agent-connections-chatgpt]"),
+    ).toBeTruthy();
   });
 
   it("points to the pause switch, and offers a person no key", async () => {
@@ -1669,7 +1911,12 @@ describe("the AI connections page under the login door", () => {
           }) as unknown as Response,
       ),
     );
-    render(createElement(OperatorConnectionsClient, { address: ADDRESS }));
+    render(
+      createElement(OperatorConnectionsClient, {
+        address: ADDRESS,
+        cursorLink: CURSOR_LINK,
+      }),
+    );
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("需要管理员登录");
     expect(alert.querySelector("small")?.textContent).toBe("OWNER_ONLY");

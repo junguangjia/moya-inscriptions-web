@@ -161,15 +161,18 @@ export interface ConsentTool {
 
 /**
  * The model provider behind each family on the closed list. The public policy names
- * these two, so another vendor needs the policy text changed first, and then a line
- * here. A family with no line stops at the consent page, which could not otherwise
- * say where the content goes.
+ * these three, so another vendor needs the policy text changed first, and then a line
+ * here; a release ships the policy before the Admin that carries the line. A family
+ * with no line stops at the consent page, which could not otherwise say where the
+ * content goes. Cursor passes what it reads on to the model the person picks in it,
+ * as the policy says, so its line names both.
  */
 const TOOL_VENDORS: ReadonlyMap<string, string> = new Map([
   ["claude", "Anthropic"],
   ["claude-code", "Anthropic"],
   ["codex", "OpenAI"],
   ["chatgpt", "OpenAI"],
+  ["cursor", "Anysphere，以及你在 Cursor 里选用的模型的提供方"],
 ]);
 
 const consentToolOf = (

@@ -3973,8 +3973,9 @@ Behavior Matrix states the behaviour; this section says how it fits together.
 Sections 1 to 21 describe the key door, which stays for automation and the
 companion. Nothing here is built until its slice merges: O1 issuer, stores and
 migration; O2 door and audit; O3 consent, page and hooks; O4 Production
-templates and the real-client record. The end of this section says what has been
-proved, what O4 delivered and what stays for the release.
+templates and the real-client record; O5 Cursor on the list and one button per
+tool. The end of this section says what has been proved, what O4 delivered, what
+stays for the release and what O5 changed.
 
 An administrator adds one address or clicks one button in their tool, signs in
 with their usual Admin account and clicks allow. No key is issued to a person.
@@ -4058,10 +4059,11 @@ Tool     issuer /token, code and PKCE -> artvenn_ct_ token and refresh token
   `features.clientIdMetadataDocument` stays off so its fetch path cannot run:
   `Client.find` reads static clients first (oidc-provider lib/models/client.js).
   Discovery still says `client_id_metadata_document_supported`, added by a
-  post-route middleware. The public policy names Anthropic and OpenAI, which
-  covers this list; another vendor needs the policy text changed first.
-  `parseRegisteredClients` refuses `hosted-https` unless its caller allows it,
-  so Article stays loopback only.
+  post-route middleware. The public policy names Anthropic and OpenAI, and from
+  O5 Anysphere for Cursor, a sentence that waits on the Owner's approval;
+  another vendor needs the policy text changed first. `parseRegisteredClients`
+  refuses `hosted-https` unless its caller allows it, so Article stays loopback
+  only.
 - Native on every entry, hosted ones too. `native_client_prompt`
   (lib/helpers/interaction_policy/prompts/consent.js) is what forces a screen on
   every connect. A `web` client with a live provider session and grant gets
@@ -4133,13 +4135,14 @@ Tool     issuer /token, code and PKCE -> artvenn_ct_ token and refresh token
   a signed-in person reached the review without seeing the login page. The
   read-only profile keeps the click #141 measured. The link is an `<a>`, so
   nothing prefetches the page that arms a ticket.
-- AI connections page. Its address and Claude button come from `CMS_PUBLIC_URL`
+- AI connections page. Its address and its buttons come from `CMS_PUBLIC_URL`
   plus `/api/mcp`, and a tool connects only if that equals
   `AGENT_AUTHORIZATION_RESOURCE`, since discovery names the resource, so a
   release has to keep the two equal. The page carries the list's resource in
-  `data-agent-connections-resource` for that check. The Claude link and the step
-  lists for other tools come from the vendors' documents as read at design time,
-  and the real-client record corrects them if a vendor differs.
+  `data-agent-connections-resource` for that check. The links and the step lists
+  come from the vendors' documents as read at design time, Cursor's and
+  ChatGPT's from O5, and the real-client record corrects them if a vendor
+  differs.
 - Reserved audit rows. An allow, a deny and a disconnect each write two rows of
   class `reserved`, `op` `agent-connections.approve`, `.deny` or `.disconnect`,
   with `userId` the person acting. The `start` row comes first, and if it cannot
@@ -4182,16 +4185,17 @@ Tool     issuer /token, code and PKCE -> artvenn_ct_ token and refresh token
   this issuer only; Article has none. Expired artifacts and undecided consent
   rows go hourly, in the issuer's own process.
 
-| Tool        | `family`      | `clientId`                                          | Callback                                              | `callbackPolicy` |
-| ----------- | ------------- | --------------------------------------------------- | ----------------------------------------------------- | ---------------- |
-| Claude      | `claude`      | https://claude.ai/oauth/mcp-oauth-client-metadata   | https://claude.ai/api/mcp/auth_callback               | `hosted-https`   |
-| Claude Code | `claude-code` | https://claude.ai/oauth/claude-code-client-metadata | localhost and 127.0.0.1, any port, /callback          | `loopback-host`  |
-| Codex       | `codex`       | https://chatgpt.com/oauth/codex/client.json         | 127.0.0.1 and localhost, any port, /callback          | `loopback-host`  |
-| ChatGPT     | `chatgpt`     | https://chatgpt.com/oauth/client.json               | https://chatgpt.com/connector_platform_oauth_redirect | `hosted-https`   |
+| Tool        | `family`      | `clientId`                                          | Callback                                                    | `callbackPolicy` |
+| ----------- | ------------- | --------------------------------------------------- | ----------------------------------------------------------- | ---------------- |
+| Claude      | `claude`      | https://claude.ai/oauth/mcp-oauth-client-metadata   | https://claude.ai/api/mcp/auth_callback                     | `hosted-https`   |
+| Claude Code | `claude-code` | https://claude.ai/oauth/claude-code-client-metadata | localhost and 127.0.0.1, any port, /callback                | `loopback-host`  |
+| Codex       | `codex`       | https://chatgpt.com/oauth/codex/client.json         | 127.0.0.1 and localhost, any port, /callback                | `loopback-host`  |
+| ChatGPT     | `chatgpt`     | https://chatgpt.com/oauth/client.json               | https://chatgpt.com/connector_platform_oauth_redirect       | `hosted-https`   |
+| Cursor      | `cursor`      | https://cursor.com/oauth/mcp-client.json            | localhost and 127.0.0.1, any port (it uses 8787), /callback | `loopback-host`  |
 
-As read from the vendors' own documents when this was designed. The parser
-requires a port on a loopback entry; the provider ignores it for a native
-client.
+As read from the vendors' own documents when this was designed, Cursor's when O5
+added it. The parser requires a port on a loopback entry; the provider ignores
+it for a native client.
 
 Limits, stated:
 
@@ -4272,7 +4276,7 @@ Limits, stated:
 Proof, as of O3. `scripts/editorial/verify-agent-connections.mjs` runs under
 `AGENT_AUTHORIZATION_PROFILE=operator` beside its read-only run, on PostgreSQL
 16 in CI, with `CMS_ENVIRONMENT` equal to `AGENT_AUTHORIZATION_ENVIRONMENT`, a
-real issuer, a real Admin under `next dev`, the four real client ids and each
+real issuer, a real Admin under `next dev`, the listed real client ids and each
 service on its own database role.
 
 - `tests/cms/agent-connections-generic-client.mjs` is the first token an issuer
@@ -4318,7 +4322,7 @@ the release.
   it unsets `ARTICLE_AUTHORING_ENABLED`, so it runs only this listener.
 - The settings: `infra/production/env/admin-authorization.env.example` and a
   block in `admin.env.example`, naming every setting the issuer and the Admin
-  read for the door, with the closed list of the four tools above. The Admin
+  read for the door, with the closed list of tools (five since O5). The Admin
   carries `AGENT_DATABASE_SSL_CA_FILE` and no `AGENT_AUTHORIZATION_ENVIRONMENT`.
   The Article file keeps `AGENT_AUTHORIZATION_ENABLED=false`.
 - Nginx, in `infra/production/nginx/yoyi.conf.template`: the issuer's own server
@@ -4457,3 +4461,59 @@ depends on it; only then its DNS record. Migrations and roles stay. Afterwards
 the stored role passwords and file copies are removed: as accepted only when no
 rollback ran after the last passing verify, otherwise as abandoned after a full
 rollback. The database backups stay until the Owner decides.
+
+O5, Cursor and one button per tool, after the Owner's words of
+2026-11-06:「保留chatgpt就可以了，他和codex通用的。添加cursor。都要做的像Claude一样，有按钮可以一键进入连接」.
+Delivered in the repository; Production changes only at its own release.
+
+- The closed list gains Cursor by its own published client id, under
+  `loopback-host` with both 8787 spellings, in both settings files, the harness
+  and the tests. The four earlier entries stay, Codex's included: ChatGPT and
+  Codex share an OpenAI account but not a client id, so the page joins them and
+  the list does not. No parser, provider or issuer change, and no migration.
+  Cursor's web and cloud agents return to a callback on Cursor's site under the
+  same id, which would need one entry with two policies, so they stay out; its
+  old `cursor://` callback stays refused by the parser.
+- The AI connections page offers one button per tool in one style, stacked at
+  full width on a phone and side by side from a tablet up. Claude's is
+  unchanged. Neither ChatGPT nor Codex has a link that fills in the address, so
+  ChatGPT's button opens its plugins page and copies the address in the same
+  click, with four short steps under it, unfolded. The same card holds Codex: a
+  quiet link to its settings window that copies the address too, one line of
+  steps, and the terminal commands as before, with a sentence that ChatGPT and
+  Codex are two connections. Cursor's desktop app registers a client of its own
+  unless told a client id, so its button opens Cursor's install page with the
+  server entry its documents give, `type`, `url` and `auth.CLIENT_ID`, and no
+  secret. The Admin builds that link on the server from `CMS_PUBLIC_URL` and the
+  closed list, because the list route sends no client id. 地址已复制 shows only
+  once the clipboard write resolved; a browser that refuses it says so and shows
+  the address to copy by hand. All three are plain links that the server never
+  fetches.
+- The consent page names Cursor, its vendor Anysphere, and the provider of the
+  model the person picks in Cursor, which is where Cursor passes content on. The
+  privacy policy's AI vendor sentence names Anysphere, Inc. in the same change,
+  in the plan's recommended wording. It needs the Owner's approval before any
+  release: the Behavior Matrix pins the policy text confirmed on 2026-11-03, and
+  this changes it. The release order is the policy first, then the Admin, then
+  the client list in both settings files and their staged copies, then the
+  issuer and the Admin restart.
+- Proof. The page's unit tests: three buttons in one style, both copies, the
+  visible refusal, Cursor's link decoded from two addresses, and no Cursor
+  button without a listed entry or an address; the consent page for Cursor's
+  client id; the parser on Cursor's entry and on its refused callbacks.
+  `agent-operator-flow-cases.ts` takes Cursor through consent to a token on both
+  spellings and on another port, which the loopback policy says the provider
+  does not pin, and runs the official SDK told Cursor's id as its install link
+  tells it; a test now pins that a denial carries `iss` too, as it already did,
+  which ChatGPT and Codex need to keep their listed ids. The operator harness
+  lists Cursor and checks the three buttons, the decoded link and the ChatGPT
+  click at phone width; Chromium reads the copied address back, and WebKit,
+  which grants a test no clipboard, shows either answer.
+- Unverified until a real Cursor and a real ChatGPT connect, for the real-client
+  record: that Cursor honours `auth.CLIENT_ID` from the link and sends exactly
+  that id; which callback spelling it sends, and that no build still sends
+  `cursor://`; its Install and Connect labels; that ChatGPT offers Add custom
+  MCP server on the Owner's plan, with write tools; that it uses its listed
+  client id and callback; whether a ChatGPT plugin also works in Codex inside
+  the desktop app; that `codex://settings` opens; and both copying links on
+  phone browsers.

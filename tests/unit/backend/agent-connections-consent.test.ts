@@ -171,7 +171,7 @@ describe("consent rules", () => {
         });
       });
 
-      it.each(["claude", "claude-code", "codex", "chatgpt"])(
+      it.each(["claude", "claude-code", "codex", "chatgpt", "cursor"])(
         "knows who is behind the %s family",
         (family) => {
           expect(
@@ -179,9 +179,20 @@ describe("consent rules", () => {
               ...operator,
               registered: listed(family, "Tool"),
             }).tool?.vendor,
-          ).toMatch(/^(?:Anthropic|OpenAI)$/u);
+          ).toMatch(/^(?:Anthropic|OpenAI|Anysphere，.+)$/u);
         },
       );
+
+      it("names Cursor's vendor and the model the person picks in it", () => {
+        // The policy names Anysphere, Inc., and says Cursor hands content on to that
+        // model's provider, so the consent page says both.
+        expect(
+          describeConsent({
+            ...operator,
+            registered: listed("cursor", "Cursor"),
+          }).tool?.vendor,
+        ).toBe("Anysphere，以及你在 Cursor 里选用的模型的提供方");
+      });
 
       it("stops a tool whose vendor it could not name, or one off the list", () => {
         expect(() =>
@@ -611,12 +622,66 @@ describe("consent rules", () => {
               "https://chatgpt.com/connector_platform_oauth_redirect",
             ],
           },
+          {
+            clientId: "https://cursor.com/oauth/mcp-client.json",
+            family: "cursor",
+            label: "Cursor",
+            callbackPolicy: "loopback-host",
+            redirectUris: [
+              "http://localhost:8787/callback",
+              "http://127.0.0.1:8787/callback",
+            ],
+          },
         ];
         expect([
           ...parseRegisteredClients(JSON.stringify(list), {
             allowHosted: true,
           }).values(),
         ]).toEqual(list);
+      });
+
+      it("takes Cursor's own client id on both 8787 callbacks, and never its custom scheme or its hosted callback", () => {
+        // Desktop only. Cursor's web and cloud agents return to its own site under the
+        // same client id, which one loopback entry cannot also hold.
+        const cursor = {
+          clientId: "https://cursor.com/oauth/mcp-client.json",
+          family: "cursor",
+          label: "Cursor",
+          callbackPolicy: "loopback-host",
+          redirectUris: [
+            "http://localhost:8787/callback",
+            "http://127.0.0.1:8787/callback",
+          ],
+        };
+        const parse = (entry: Record<string, unknown>) =>
+          parseRegisteredClients(JSON.stringify([entry]), {
+            allowHosted: true,
+          });
+        expect(parse(cursor).get(cursor.clientId)).toEqual(cursor);
+
+        const OLD_FLOW = "cursor://anysphere.cursor-mcp/oauth/callback";
+        const HOSTED = "https://www.cursor.com/agents/mcp/oauth/callback";
+        for (const redirectUris of [
+          [OLD_FLOW],
+          [HOSTED],
+          [...cursor.redirectUris, OLD_FLOW],
+          [...cursor.redirectUris, HOSTED],
+        ])
+          expect([
+            redirectUris,
+            codeOf(() => parse({ ...cursor, redirectUris })),
+          ]).toEqual([redirectUris, "CLIENTS_REDIRECT_NOT_LOOPBACK"]);
+        // Nor its hosted callback beside the loopback ones under the hosted policy:
+        // an entry holds one hosted callback at most.
+        expect(
+          codeOf(() =>
+            parse({
+              ...cursor,
+              callbackPolicy: "hosted-https",
+              redirectUris: [HOSTED, ...cursor.redirectUris],
+            }),
+          ),
+        ).toBe("CLIENTS_REDIRECT_NOT_HOSTED");
       });
 
       it("takes one exact https URL on a named host, and refuses every other spelling", () => {

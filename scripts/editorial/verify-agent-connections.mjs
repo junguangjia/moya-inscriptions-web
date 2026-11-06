@@ -609,6 +609,16 @@ async function main() {
         callbackPolicy: "hosted-https",
         redirectUris: ["https://chatgpt.com/connector_platform_oauth_redirect"],
       },
+      {
+        clientId: "https://cursor.com/oauth/mcp-client.json",
+        family: "cursor",
+        label: "Cursor",
+        callbackPolicy: "loopback-host",
+        redirectUris: [
+          "http://localhost:8787/callback",
+          "http://127.0.0.1:8787/callback",
+        ],
+      },
     ]);
     const clients = JSON.stringify([
       {

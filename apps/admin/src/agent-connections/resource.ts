@@ -140,6 +140,25 @@ const operatorClients = (
 };
 
 /**
+ * The client id the closed list holds for one family, for a link the AI connections
+ * page builds on the server. The list route sends no client id, so this is the page's
+ * one way to it. Null when the family is not listed, or when the list does not parse,
+ * which the door refuses on its own.
+ */
+export const listedClientId = (
+  family: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): string | null => {
+  try {
+    for (const client of operatorClients(environment).values())
+      if (client.family === family) return client.clientId;
+  } catch {
+    // The door names the code on stderr; the page just offers no link.
+  }
+  return null;
+};
+
+/**
  * Builds the resource-server boundary, or refuses. `null` only when the login
  * door is OFF — which is the composition gate, not a failure.
  */

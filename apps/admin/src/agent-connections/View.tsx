@@ -18,6 +18,7 @@ import {
 import { oauthSurfaceEnabled, servedPreset } from "./composition";
 import { OperatorConnectionsClient } from "./operator-connections-client";
 import { resolveConnection } from "./resolve";
+import { listedClientId } from "./resource";
 import { consentRuntime } from "./runtime";
 
 import styles from "./connections.module.css";
@@ -171,9 +172,32 @@ const toolAddress = (): string | null => {
   return base && URL.canParse(base) ? new URL("/api/mcp", base).href : null;
 };
 
+/**
+ * Cursor's install link, carrying the server's settings as Cursor's documents give
+ * them. Its desktop app registers a client of its own unless told a client id, and
+ * the issuer has no registration, so the settings name Cursor's own published id from
+ * the closed list. Nothing secret goes in: the issuer's clients are public, and the
+ * address is in our metadata anyway. cursor.com's page hands the settings to the app,
+ * and shows them to copy when it cannot. Null without an address or a Cursor entry.
+ */
+const cursorInstallLink = (address: string | null): string | null => {
+  const clientId = listedClientId("cursor");
+  if (address === null || clientId === null) return null;
+  const config = { type: "http", url: address, auth: { CLIENT_ID: clientId } };
+  const link = new URL("https://cursor.com/install-mcp");
+  // The key in the person's Cursor settings and its tools' prefix, so plain ASCII.
+  link.searchParams.set("name", "artvenn");
+  link.searchParams.set(
+    "config",
+    Buffer.from(JSON.stringify(config)).toString("base64"),
+  );
+  return link.href;
+};
+
 export const AgentConnectionsView = (props: AdminViewServerProps) => {
   if (oauthSurfaceEnabled() && signedOut(props.initPageResult.req))
     redirect(loginWithReturn("/admin/agent-connections"));
+  const address = toolAddress();
   return (
     // The breadcrumb is client state the last view to mount owns, so a branch
     // that mounts no connections UI would otherwise show whichever page the
@@ -184,7 +208,10 @@ export const AgentConnectionsView = (props: AdminViewServerProps) => {
       {!oauthSurfaceEnabled() ? (
         <p role="alert">AI 连接未启用。</p>
       ) : servedPreset() === "operator" ? (
-        <OperatorConnectionsClient address={toolAddress()} />
+        <OperatorConnectionsClient
+          address={address}
+          cursorLink={cursorInstallLink(address)}
+        />
       ) : (
         <AgentConnectionsClient />
       )}

@@ -836,6 +836,7 @@ describe("the Production templates", () => {
       "claude-code",
       "codex",
       "chatgpt",
+      "cursor",
     ]);
     // Five distinct roles on one database; the CA file exists only on the host.
     const { AGENT_AUTHORIZATION_DATABASE_SSL_CA_FILE: ca, ...hostless } = env;
