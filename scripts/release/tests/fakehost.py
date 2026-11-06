@@ -2,7 +2,7 @@
 values, and one stub script installed as systemctl, systemd-run, curl, nginx, psql and cp. Every value here is
 synthetic. Six host behaviours the tool must handle are reproduced:
 
-  appRoleKey         backend env holds APP_DATABASE_URL (the App role) and a DATABASE_URL naming another role
+  appRoleKey         backend env holds the profile's appRole key (the App role) and a DATABASE_URL naming another role
   cmsCaFallback      operator.json has no CMS CA key; psql refuses a connection without an existing CA file
   systemdHostZone    `systemctl show` prints timer times in the host zone unless the caller sets TZ=UTC
   implicitParents    manifests list a parent directory only when it is an entry itself
@@ -543,7 +543,7 @@ class FakeHost:
         for name, spec in h['envFiles'].items():
             values = {}
             for key in spec['keys']:
-                role = APP_ROLE if key == 'APP_DATABASE_URL' else DECOY_ROLE if key == 'DATABASE_URL' else None
+                role = APP_ROLE if key == h['database']['appRole']['key'] else DECOY_ROLE if key == 'DATABASE_URL' else None
                 values[key] = synthetic(key, role)
             self.values[name] = values
         for rule in h.get('envEqualities', []):

@@ -196,7 +196,7 @@
         "keys": [
           "NODE_ENV",
           "SMS_ACCESS_KEY_ID",
-          "APP_DATABASE_URL",
+          "APP_ROLE_DATABASE_URL",
           "DATABASE_URL",
           "OPERATOR_AI_BASE_TOKEN",
           "COMMUNITY_OPERATOR_AI_TOKEN"
@@ -258,7 +258,7 @@
         "ca": "CMS_DATABASE_SSL_CA_FILE"
       },
       "caFallback": "APP_MIGRATION_DATABASE_SSL_CA_FILE",
-      "appRole": { "envFile": "backend", "key": "APP_DATABASE_URL" }
+      "appRole": { "envFile": "backend", "key": "APP_ROLE_DATABASE_URL" }
     },
     "checks": {
       "apex": "catalog.example.invalid",
