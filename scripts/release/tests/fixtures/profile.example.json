@@ -1,0 +1,275 @@
+{
+  "kind": "artvenn-release-profile",
+  "schema": 1,
+  "name": "example",
+  "note": "Fictional profile for the tool's own tests. The real profile is private and never committed.",
+  "local": {
+    "hostAlias": {
+      "file": "/nonexistent/example-client.py",
+      "pattern": "^HOST = '([^']+)'$"
+    },
+    "ssh": {
+      "binary": "/usr/bin/ssh",
+      "identity": "~/.ssh/example-release.pem",
+      "knownHosts": "~/.ssh/known_hosts_example",
+      "connectTimeout": 12
+    },
+    "remote": "/opt/example/bin/release-python -I -",
+    "repo": "/nonexistent/repository",
+    "work": "/nonexistent/work",
+    "compile": {
+      "argv": [
+        "/usr/bin/false",
+        "--commit",
+        "{commit}",
+        "--out",
+        "{out}",
+        "--roles",
+        "{roles}"
+      ],
+      "timeoutSeconds": 600
+    },
+    "requiredAncestor": null,
+    "codePaths": {
+      "web": [
+        "apps/web",
+        "packages/ui",
+        "packages/design-tokens",
+        "packages/contracts",
+        "pnpm-lock.yaml"
+      ],
+      "admin": [
+        "apps/admin",
+        "packages",
+        "services/agent-authorization",
+        "pnpm-lock.yaml"
+      ],
+      "backend": ["services", "packages", "database", "pnpm-lock.yaml"],
+      "issuer": [
+        "services/agent-authorization",
+        "packages/contracts",
+        "pnpm-lock.yaml"
+      ]
+    },
+    "migrationSources": {
+      "app": "database/community-migrations",
+      "cms": "apps/admin/src/migrations/index.ts"
+    },
+    "envTemplates": {
+      "web": "infra/production/env/web.env.example",
+      "admin": "infra/production/env/admin.env.example",
+      "backend": "infra/production/env/backend.env.example",
+      "issuer": "infra/production/env/admin-authorization.env.example"
+    },
+    "unitTemplates": {
+      "web": "infra/production/systemd/yoyi-web.service",
+      "admin": "infra/production/systemd/yoyi-admin.service",
+      "backend": "infra/production/systemd/yoyi-backend.service",
+      "issuer": "infra/production/systemd/yoyi-admin-authorization.service"
+    },
+    "nginxTemplate": "infra/production/nginx/yoyi.conf.template",
+    "pointers": {
+      "loginDoorToolkit": "the reviewed login-door toolkit (private, named in the real profile)"
+    },
+    "partBytes": 65536
+  },
+  "host": {
+    "name": "example",
+    "paths": {
+      "state": "/var/lib/example-deploy/release",
+      "lock": "/run/example-release.lock",
+      "runtime": "/srv/example/runtime",
+      "cache": "/var/cache/example-runtime",
+      "operator": "/etc/example/operator.json",
+      "nginxSite": "/etc/nginx/sites-available/example.conf",
+      "freeSpace": "/srv/example"
+    },
+    "tools": {
+      "systemctl": "/usr/bin/systemctl",
+      "systemd-run": "/usr/bin/systemd-run",
+      "journalctl": "/usr/bin/journalctl",
+      "curl": "/usr/bin/curl",
+      "nginx": "/usr/sbin/nginx",
+      "psql": "/usr/bin/psql",
+      "cp": "/bin/cp",
+      "python": "/usr/bin/python3"
+    },
+    "unitPrefix": "example-release-",
+    "timeZone": {
+      "hostZone": "ZZT",
+      "utcOffsetSeconds": 3600
+    },
+    "reservedUtc": [600, 660],
+    "timerGuards": [
+      {
+        "timer": "example-backup.timer",
+        "service": "example-backup.service",
+        "minutes": 20
+      }
+    ],
+    "settleSeconds": 3,
+    "readySeconds": { "web": 180, "admin": 120, "backend": 60, "issuer": 60 },
+    "restartOrder": ["backend", "issuer", "admin", "web"],
+    "services": {
+      "web": {
+        "unit": "example-web.service",
+        "artifact": "web",
+        "cwd": "apps/web",
+        "union": "apps/web/.next/static",
+        "cache": true,
+        "envFiles": ["web"],
+        "probes": [
+          { "url": "http://127.0.0.1:3000/", "expect": "200" },
+          { "url": "http://127.0.0.1:3000/policies", "expect": "200" }
+        ]
+      },
+      "admin": {
+        "unit": "example-admin.service",
+        "artifact": "admin",
+        "cwd": "apps/admin",
+        "union": "apps/admin/.next/static",
+        "cache": true,
+        "envFiles": ["admin"],
+        "probes": [
+          { "url": "http://127.0.0.1:3002/admin/login", "expect": "200" }
+        ]
+      },
+      "backend": {
+        "unit": "example-backend.service",
+        "artifact": "backend",
+        "cwd": "",
+        "envFiles": ["backend"],
+        "probes": [{ "url": "http://127.0.0.1:3001/health", "expect": "200" }]
+      },
+      "issuer": {
+        "unit": "example-issuer.service",
+        "artifact": "backend",
+        "rootName": "admin-authorization",
+        "cloneOf": "backend",
+        "cwd": "",
+        "envFiles": ["issuer"],
+        "probes": [
+          {
+            "url": "http://127.0.0.1:3004/healthz",
+            "expect": "200",
+            "headers": {
+              "Host": "admin-auth.example.invalid",
+              "X-Forwarded-Proto": "https"
+            }
+          }
+        ]
+      }
+    },
+    "untouched": {
+      "worker": {
+        "unit": "example-worker.service",
+        "cwd": "/srv/example/runtime/old0000a/worker"
+      }
+    },
+    "envFiles": {
+      "web": {
+        "path": "/etc/example/web.env",
+        "staged": "/etc/example/staged/web.env",
+        "keys": [
+          "NODE_ENV",
+          "INGRESS_TOKEN",
+          "PUBLIC_API_BASE_URL",
+          "ANALYTICS_RELAY_TOKEN"
+        ]
+      },
+      "admin": {
+        "path": "/etc/example/admin.env",
+        "staged": "/etc/example/staged/admin.env",
+        "keys": [
+          "NODE_ENV",
+          "CMS_DATABASE_URL",
+          "CMS_SECRET",
+          "AGENT_AUTHORIZATION_ISSUER",
+          "AGENT_AUTHORIZATION_CLIENTS",
+          "COMMUNITY_OPERATOR_AI_TOKEN"
+        ]
+      },
+      "backend": {
+        "path": "/etc/example/backend.env",
+        "staged": "/etc/example/staged/backend.env",
+        "stagedDiffers": "the staged copy lacks one key the live file has",
+        "keys": [
+          "NODE_ENV",
+          "SMS_ACCESS_KEY_ID",
+          "APP_ROLE_DATABASE_URL",
+          "DATABASE_URL",
+          "OPERATOR_AI_BASE_TOKEN",
+          "COMMUNITY_OPERATOR_AI_TOKEN"
+        ]
+      },
+      "issuer": {
+        "path": "/etc/example/admin-authorization.env",
+        "staged": "/etc/example/staged/admin-authorization.env",
+        "keys": [
+          "NODE_ENV",
+          "AGENT_AUTHORIZATION_ISSUER",
+          "AGENT_AUTHORIZATION_CLIENTS",
+          "AGENT_AUTHORIZATION_DATABASE_URL",
+          "AGENT_AUTHORIZATION_COOKIE_KEY"
+        ]
+      }
+    },
+    "envEqualities": [
+      { "key": "AGENT_AUTHORIZATION_CLIENTS", "files": ["admin", "issuer"] },
+      { "key": "AGENT_AUTHORIZATION_ISSUER", "files": ["admin", "issuer"] }
+    ],
+    "live": {
+      "web": {
+        "label": "aaaa1111",
+        "commit": "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111",
+        "root": "/srv/example/runtime/aaaa1111/web",
+        "pinFile": "/etc/systemd/system/example-web.service.d/zzzzzzzz-release-pin.conf",
+        "pinCount": 7
+      },
+      "admin": {
+        "label": "bbbb2222",
+        "commit": "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222",
+        "root": "/srv/example/runtime/bbbb2222/admin",
+        "pinFile": "/etc/systemd/system/example-admin.service.d/zzzzzzzz-release-pin.conf",
+        "pinCount": 6
+      },
+      "backend": {
+        "label": "bbbb2222",
+        "commit": "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222",
+        "root": "/srv/example/runtime/bbbb2222/backend",
+        "pinFile": "/etc/systemd/system/example-backend.service.d/zzzzzzzz-release-pin.conf",
+        "pinCount": 3
+      },
+      "issuer": {
+        "label": "bbbb2222",
+        "commit": "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222",
+        "root": "/srv/example/runtime/bbbb2222/admin-authorization",
+        "pinFile": "/etc/systemd/system/example-issuer.service.d/zzzzzzzz-issuer-root.conf",
+        "pinCount": 1
+      }
+    },
+    "database": {
+      "operatorApp": {
+        "url": "APP_MIGRATION_DATABASE_URL",
+        "ca": "APP_MIGRATION_DATABASE_SSL_CA_FILE"
+      },
+      "operatorCms": {
+        "url": "CMS_DATABASE_URL",
+        "ca": "CMS_DATABASE_SSL_CA_FILE"
+      },
+      "caFallback": "APP_MIGRATION_DATABASE_SSL_CA_FILE",
+      "appRole": { "envFile": "backend", "key": "APP_ROLE_DATABASE_URL" }
+    },
+    "checks": {
+      "apex": "catalog.example.invalid",
+      "pages": ["/", "/policies", "/admin/login"],
+      "mcpDoor": "/api/mcp",
+      "issuerHost": "admin-auth.example.invalid",
+      "reportQueue": {
+        "url": "http://127.0.0.1:3001/internal/community/reports",
+        "token": { "envFile": "backend", "key": "COMMUNITY_OPERATOR_AI_TOKEN" },
+        "base": { "envFile": "backend", "key": "OPERATOR_AI_BASE_TOKEN" }
+      }
+    }
+  }
+}
