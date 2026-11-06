@@ -13,7 +13,12 @@ job 先在 18.4 上运行完整 test milestone，再用
 `node scripts/verify.mjs postgres --profile complete`
 在 16.15 上运行同一套 migrations 与 PostgreSQL integration suite；`cms`
 job 在两个 major 上都运行 Payload migrations/integration 与 native Owner browser
-flow。本地 Compose 与 Development 仍固定 `postgres:18.4-alpine`。
+flow。2026-11-05 起 Owner 暂停 CI 的 PostgreSQL 18：`.github/workflows/ci.yml`
+顶层的 `CI_POSTGRES_18: "off"` 跳过全部 18.4 steps，test
+milestone 与 agent-connections acceptance 改在 16.15 上运行，其余 16.15
+steps 不变；改回 `"on"`
+即恢复上述双 major 布局。本地 Compose 与 Development 仍固定
+`postgres:18.4-alpine`。
 
 Migrations、named runtime grants 与 runtime
 queries 必须在 16 与 18 上都有效。只在较新 major 存在的 privilege 或语法（例如 PostgreSQL

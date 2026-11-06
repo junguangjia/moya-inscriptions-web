@@ -4,7 +4,9 @@ export {
   adminActionDetailsSchema,
   adminActionsIndexSchema,
   adminActionsInputSchema,
+  adminRetiredOpDataSchema,
   adminUnknownOpDataSchema,
+  adminWrongToolDataSchema,
 } from "./actions.js";
 export type {
   AdminActionDetail,
@@ -77,10 +79,13 @@ export {
   AI_OPERATOR_CREDENTIALS,
   AI_OPERATOR_LABEL,
   AI_OPERATOR_ROUTES,
+  AI_OPERATOR_REQUEST_ID_HEADER,
   AI_OPERATOR_RUN_HEADER,
   aiOperatorRouteFor,
   aiOperatorRouteId,
+  PERSONAL_INFO_OWNER_REVIEW,
   SELF_ONLY_OWNER_REVIEW,
+  URGENT_OWNER_ONLY,
 } from "./ai-routes.js";
 export {
   AI_FIND_LIMIT_MAX,
@@ -88,12 +93,15 @@ export {
   AI_COUNT_GROUPS,
   AI_FIND_WORDS_MAX,
   AI_LOOKUP_TYPES,
+  AI_SETTLEMENT_TYPES,
   aiCountQuerySchema,
   aiCountResultSchema,
   aiFindItemSchema,
   aiFindQuerySchema,
   aiFindResultSchema,
   aiFindStatusSchema,
+  aiSettlementQuerySchema,
+  aiSettlementResultSchema,
 } from "./ai-reads.js";
 export type {
   AiCountQuery,
@@ -107,7 +115,18 @@ export type {
   AiLookupType,
   AiOperatorReader,
   AiOperatorSubject,
+  AiSettlementQuery,
+  AiSettlementResult,
+  AiSettlementType,
 } from "./ai-reads.js";
+export {
+  ADMIN_JOB_MAX_REFS,
+  adminJobDataSchema,
+  adminJobInputSchema,
+  adminJobRefSchema,
+  adminJobRowSchema,
+} from "./job.js";
+export type { AdminJobInput, AdminJobRef, AdminJobRow } from "./job.js";
 export type {
   AiOperatorCredential,
   AiOperatorRoute,
@@ -115,6 +134,7 @@ export type {
 } from "./ai-routes.js";
 export {
   ADMIN_MCP_CODES,
+  ADMIN_MCP_CONTRACT_VERSION,
   ADMIN_MCP_RESULT_SCHEMA,
   ADMIN_MCP_TEXT_CAP_BYTES,
   ADMIN_MCP_TOKEN_BUDGET,
@@ -217,6 +237,7 @@ export {
   adminExecuteInputSchema,
   adminExecuteListedShape,
   adminExecuteRowSchema,
+  adminCommunityWriteEchoSchema,
   adminSaveEchoSchema,
 } from "./execute.js";
 export type {
@@ -263,22 +284,33 @@ export type {
   AdminOpMeta,
   AdminOpOutput,
   AdminOpRecovery,
+  AdminOpSettlement,
   AdminOpTool,
 } from "./op-meta.js";
 export {
   ADMIN_MCP_COMPANION_TOOLS,
   ADMIN_MCP_NATIVE_TOOLS,
+  ADMIN_OP_ALIASES,
   ADMIN_OP_NAMES,
 } from "./op-names.js";
 export type {
   AdminMcpCompanionTool,
   AdminMcpNativeTool,
+  AdminOpAlias,
   AdminOpName,
 } from "./op-names.js";
 export {
+  ADMIN_MCP_AUTHORIZE_CEILING,
+  ADMIN_MCP_CONNECTION_LIFETIME_MS,
+  ADMIN_MCP_OPERATOR_ROW_EMAIL,
   ADMIN_MCP_TOOL_PROFILES,
+  ADMIN_USER_ROLES,
   adminMcpToolProfileSchema,
 } from "./profiles.js";
-export type { AdminMcpToolProfile } from "./profiles.js";
-export { ADMIN_MCP_DOOR_REFUSALS, adminWhoamiDataSchema } from "./whoami.js";
+export type { AdminMcpToolProfile, AdminUserRole } from "./profiles.js";
+export {
+  ADMIN_MCP_BYTE_WORK,
+  ADMIN_MCP_DOOR_REFUSALS,
+  adminWhoamiDataSchema,
+} from "./whoami.js";
 export type { AdminMcpDoorRefusal, AdminWhoamiData } from "./whoami.js";

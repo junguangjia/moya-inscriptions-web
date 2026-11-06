@@ -9,16 +9,22 @@ import type {
   AdminExecuteData,
   AdminExecuteInput,
   AdminExecuteRow,
+  AdminJobRef,
   AdminMcpEnvelope,
   AdminCmsRecordType,
   AdminMcpNext,
+  AdminOpName,
+  AdminOpSettlement,
 } from "@moya/contracts/internal/admin-mcp";
 import type { PayloadRequest } from "payload";
 import { z } from "zod";
 
+import { CommunityOperatorError } from "../../community/backend";
 import { writeAuditEvent } from "../audit";
+import { BACKEND_CONTRACT_MISMATCH } from "../backend-answer";
 import { EXECUTE_BUDGET_MS } from "../budget";
 import { readMcpControl } from "../control/state";
+import { auditIdentity } from "../door";
 import type { AdminMcpKey } from "../door";
 import {
   CODE_GUIDE,
@@ -32,9 +38,16 @@ import {
 import { CMS_FAMILIES, heldLocksOf, rowIdOf } from "../records";
 import { envelopeCodeOf, targetFailureOf } from "../refusal";
 import type { TargetFailure } from "../refusal";
-import { adminOpMeta, isAdminOpName } from "../registry";
+import { adminOpMeta, currentOpName, lookupOp } from "../registry";
 import type { AdminOpContext, AdminOpEntry } from "../registry";
-import { opRefusalOf, unknownOpEnvelope } from "./read";
+import { JOB_TOOL_NAME, settlementNext } from "../settlement";
+import {
+  opRefusalOf,
+  retiredOpEnvelope,
+  unknownOpEnvelope,
+  withDeprecation,
+  wrongToolEnvelope,
+} from "./read";
 
 export const EXECUTE_TOOL_NAME = "admin_execute";
 
@@ -44,15 +57,34 @@ export const EXECUTE_DESCRIPTION = `Run one reversible write, or the same one on
 // its token budget (section 5). A wrong name answers UNKNOWN_OP with near ones.
 export const executeListedInput = z.strictObject(adminExecuteListedShape);
 
-/** A key per target, stable across retries: a uuid, so a Backend route takes it too. */
-const requestKeyFor = (requestId: string, index: number) => {
+/**
+ * A key per target, stable across retries: a uuid, so a Backend route takes it too.
+ * Every connection acts as one `users` row, so its id goes in the hash, or two people's
+ * tools that chose one requestId would meet at the CMS receipt and at the Backend. That
+ * id outlives a token, so the same connection still replays. A key has its own row, and
+ * its value does not change.
+ */
+export const requestKeyFor = (
+  requestId: string,
+  index: number,
+  connectionId?: string,
+) => {
   const hash = createHash("sha256")
-    .update(JSON.stringify([requestId, index]))
+    .update(
+      JSON.stringify(
+        connectionId === undefined
+          ? [requestId, index]
+          : [requestId, index, connectionId],
+      ),
+    )
     .digest("hex");
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+/** A community record's id: a fixed word and hex, so no caller's text fits in it. */
+const PLATFORM_ID =
+  /^(?:comment|user|work|work-revision|report|thread|article|publishing-job|media-item)-[0-9a-f]{32}$/u;
 const SIMPLE_KEY = /^[\w-]{1,64}$/u;
 const INPUT_MAX_DEPTH = 32;
 
@@ -62,7 +94,7 @@ const safeRef = (value: unknown): number | string | undefined => {
     return Number.isSafeInteger(value) && value > 0 ? value : undefined;
   if (typeof value !== "string") return undefined;
   if (/^[1-9]\d{0,14}$/u.test(value)) return Number(value);
-  return UUID.test(value) ? value : undefined;
+  return UUID.test(value) || PLATFORM_ID.test(value) ? value : undefined;
 };
 
 /**
@@ -98,8 +130,10 @@ export const executeReferences = (args: unknown) => {
   const { op, requestId, targets, input } = (args ?? {}) as Partial<
     Record<keyof AdminExecuteInput, unknown>
   >;
-  const entry =
-    typeof op === "string" && isAdminOpName(op) ? adminOpMeta[op] : undefined;
+  // The registry's name, so an earlier one is recorded as the op that ran.
+  const found = typeof op === "string" ? lookupOp(op) : undefined;
+  const name = found !== undefined && "op" in found ? found.op : undefined;
+  const entry = name === undefined ? undefined : adminOpMeta[name];
   const count = Array.isArray(targets) ? targets.length : 1;
   const target =
     entry?.target !== undefined && count === 1
@@ -116,7 +150,7 @@ export const executeReferences = (args: unknown) => {
       : undefined;
   const targetId = safeRef(target?.id);
   return {
-    ...(entry === undefined ? {} : { op: op as string }),
+    ...(name === undefined ? {} : { op: name }),
     ...(typeof requestId === "string" &&
     /^[A-Za-z0-9._:-]{1,128}$/u.test(requestId)
       ? { requestId }
@@ -139,10 +173,16 @@ interface TargetOutcome {
   readonly lock?: AdminExecuteRow["lock"];
   readonly replayed?: boolean;
   readonly result?: Readonly<Record<string, unknown>>;
+  /** A queued target whose effect was there before this call. */
+  readonly alreadyApplied?: true;
   /** Settlement's own word on a queued target. */
   readonly settledState?: string;
   readonly settledNext?: AdminMcpNext;
   readonly settledHint?: string;
+  /** On MEDIA_JOB_FAILED: what stopped. */
+  readonly jobs?: readonly string[];
+  /** Asked to publish with a gate shut, so no job exists. */
+  readonly mediaGate?: "off";
 }
 
 const COMPLETE: ReadonlySet<TargetOutcome["state"]> = new Set([
@@ -187,14 +227,21 @@ const settlementOf = async (
   raw: unknown,
   result: unknown,
   context: AdminOpContext,
-) => {
+): Promise<AdminOpSettlement | undefined> => {
   if (entry.completion.kind !== "async") return undefined;
   if (entry.completion.settle === undefined)
     return { ok: false, code: "QUEUED" as const, state: "accepted" };
   try {
     return await entry.completion.settle(raw, result, context);
-  } catch {
-    // The state committed, and a read that failed shows nothing about the work left.
+  } catch (error) {
+    // The state committed. An answer it cannot read reads the same on a repeat, so it
+    // is refused by name, as admin_job files it; any other failed read shows nothing
+    // about the work left.
+    if (
+      error instanceof CommunityOperatorError &&
+      error.code === BACKEND_CONTRACT_MISMATCH
+    )
+      return { ok: false, code: BACKEND_CONTRACT_MISMATCH };
     return { ok: false, code: "QUEUED" as const, state: "settlement_unread" };
   }
 };
@@ -212,22 +259,34 @@ const settledOutcome = async (
   complete: CompleteState,
 ): Promise<TargetOutcome> => {
   const settlement = await settlementOf(entry, raw, result, context);
-  if (settlement === undefined || settlement.ok)
-    return { ...row, state: complete, code: "OK" };
+  if (settlement === undefined) return { ...row, state: complete, code: "OK" };
+  const gate =
+    settlement.mediaGate === undefined
+      ? {}
+      : { mediaGate: settlement.mediaGate };
+  if (settlement.ok) return { ...row, ...gate, state: complete, code: "OK" };
   if (settlement.code === "QUEUED")
     return {
       ...row,
+      ...gate,
       state: "queued",
       code: "QUEUED",
+      ...(complete === "already_applied" ? { alreadyApplied: true } : {}),
       settledState: settlement.state ?? "accepted",
       ...(settlement.next === undefined
         ? {}
         : { settledNext: settlement.next }),
-      ...("hint" in settlement && settlement.hint !== undefined
-        ? { settledHint: settlement.hint }
-        : {}),
+      ...(settlement.hint === undefined
+        ? {}
+        : { settledHint: settlement.hint }),
     };
-  return { ...row, state: "failed", code: settlement.code };
+  return {
+    ...row,
+    ...gate,
+    state: "failed",
+    code: settlement.code,
+    ...(settlement.jobs === undefined ? {} : { jobs: settlement.jobs }),
+  };
 };
 
 /** The row a public identity names, for an answer and an audit row that did not read one. */
@@ -328,8 +387,7 @@ const auditTarget = async (
       requestId: call.requestId,
       ok: COMPLETE.has(state),
       code,
-      keyId: key.id,
-      ...(key.label ? { keyLabel: key.label } : {}),
+      ...auditIdentity(key),
       userId: String(key.user.id),
       ...(target?.type ? { targetType: target.type } : {}),
       ...(id === undefined ? {} : { targetId: String(id) }),
@@ -348,6 +406,7 @@ const rowOf = ({
   fields,
   replayed,
   lock,
+  jobs,
 }: TargetOutcome): AdminExecuteRow => ({
   index,
   ...(id === undefined ? {} : { id }),
@@ -355,6 +414,7 @@ const rowOf = ({
   ...(fields === undefined ? {} : { fields: [...fields] }),
   ...(replayed ? { replayed: true as const } : {}),
   ...(lock === undefined ? {} : { lock }),
+  ...(jobs === undefined ? {} : { jobs: [...jobs] }),
 });
 
 const dataOf = (outcomes: readonly TargetOutcome[]): AdminExecuteData => {
@@ -366,10 +426,11 @@ const dataOf = (outcomes: readonly TargetOutcome[]): AdminExecuteData => {
     outcomes.filter((outcome) => outcome.state === state).map(rowOf);
   const queued = outcomes
     .filter(({ state }) => state === "queued")
-    .map(({ index, id, settledState }) => ({
+    .map(({ index, id, settledState, alreadyApplied }) => ({
       index,
       ...(id === undefined ? {} : { id }),
       state: settledState ?? "accepted",
+      ...(alreadyApplied ? { alreadyApplied } : {}),
     }));
   const groups: AdminExecuteData = {
     applied: ids("applied"),
@@ -379,9 +440,17 @@ const dataOf = (outcomes: readonly TargetOutcome[]): AdminExecuteData => {
     failed: rows("failed"),
     unknown: rows("unknown"),
   };
-  return Object.fromEntries(
-    Object.entries(groups).filter(([, group]) => group?.length),
-  ) as AdminExecuteData;
+  const moderationCases = outcomes.filter(
+    ({ result }) => result?.caseOpened === true,
+  ).length;
+  return {
+    ...(Object.fromEntries(
+      Object.entries(groups).filter(
+        ([, group]) => Array.isArray(group) && group.length > 0,
+      ),
+    ) as AdminExecuteData),
+    ...(moderationCases === 0 ? {} : { moderationCases }),
+  };
 };
 
 // Long enough to carry a list of ids and short counters, and no real text: a cut
@@ -399,6 +468,22 @@ const CONTINUED =
 
 const LEDGER_STOPPED =
   "The audit ledger could not record a target, so the batch stopped there. The targets named in data did run and the rest did not. Retry shortly with next.";
+
+const REPLAYED =
+  "A replayed target did not run again: what results shows of it can be what its command answered when it committed, not a fresh read. Read the record to see what holds now.";
+
+/**
+ * A community write's receipt answers what it stored, and the Owner may have undone that
+ * since (section 7). Said before the rows go in, so the cut in withResults counts it.
+ */
+const withReplayHint = (
+  envelope: AdminMcpEnvelope,
+  entry: AdminOpEntry,
+  outcomes: readonly TargetOutcome[],
+): AdminMcpEnvelope =>
+  entry.credential === "community" && outcomes.some(({ replayed }) => replayed)
+    ? { ...envelope, hint: `${envelope.hint ?? ""} ${REPLAYED}`.trim() }
+    : envelope;
 
 const bytesOf = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 
@@ -444,8 +529,9 @@ export const executeContinuation = (
   kept: readonly unknown[],
 ): AdminMcpNext | undefined => {
   const { index } = (kept.at(-1) ?? {}) as { index?: unknown };
+  const call = rawInput as AdminExecuteInput;
   return typeof index === "number"
-    ? nextCall(rawInput as AdminExecuteInput, index + 1, true)
+    ? nextCall({ ...call, op: currentOpName(call.op) }, index + 1, true)
     : undefined;
 };
 
@@ -456,6 +542,29 @@ const STOPPED_CODE = {
   paused: "MCP_PAUSED",
   ledger: "AUDIT_UNAVAILABLE",
 } as const;
+
+/**
+ * How the queued targets go on. Each op's own way, when every one has it: a read of
+ * their jobs needs nothing repeated, so their refs join into one, while they fit. Past
+ * that, or for a target whose settlement could not be read, the same call replays and
+ * asks again, which runs nothing twice.
+ */
+const queuedNext = (
+  call: AdminExecuteInput,
+  outcomes: readonly TargetOutcome[],
+): AdminMcpNext => {
+  const replay = nextCall(call, 0, false, RETRY_AFTER_MS);
+  const ways = outcomes
+    .filter(({ state }) => state === "queued")
+    .map(({ settledNext }) => settledNext);
+  const [first] = ways;
+  if (first === undefined || ways.includes(undefined)) return replay;
+  if (first.tool !== JOB_TOOL_NAME) return first;
+  const joined = settlementNext(
+    ways.flatMap((way) => way!.args.refs as AdminJobRef[]),
+  );
+  return bytesOf(joined) <= NEXT_ARGS_MAX_BYTES ? joined : replay;
+};
 
 /** The whole answer of a call, from what each target it reached did. */
 const answerOf = (
@@ -485,6 +594,9 @@ const answerOf = (
     });
     return stopped === "ledger" ? { ...answer, hint: LEDGER_STOPPED } : answer;
   }
+  // A replay reads an unreadable answer the same way, so only a lost one is offered again.
+  if (data.unknown?.every(({ code }) => code === BACKEND_CONTRACT_MISMATCH))
+    return failedEnvelope(BACKEND_CONTRACT_MISMATCH, fields);
   if (data.unknown !== undefined)
     return failedEnvelope("OUTCOME_UNKNOWN", {
       ...fields,
@@ -502,9 +614,12 @@ const answerOf = (
       single === undefined ? "PARTIAL" : envelopeCodeOf(single.code),
       {
         ...fields,
-        ...(retry === undefined
-          ? {}
-          : { next: nextCall(call, 0, false, afterMsOf(retry)) }),
+        // A target still waiting on its jobs has a way on, whatever stopped the others.
+        ...(retry !== undefined
+          ? { next: nextCall(call, 0, false, afterMsOf(retry)) }
+          : data.queued === undefined
+            ? {}
+            : { next: queuedNext(call, outcomes) }),
       },
     );
     return call.priorIncomplete === true
@@ -519,10 +634,7 @@ const answerOf = (
       ...(single?.settledState === undefined
         ? {}
         : { state: single.settledState }),
-      // The op's own way on when it has one: a replay of it would say the same.
-      next:
-        outcomes.find(({ settledNext }) => settledNext !== undefined)
-          ?.settledNext ?? nextCall(call, 0, false, RETRY_AFTER_MS),
+      next: queuedNext(call, outcomes),
     });
     const hint = outcomes.find(
       ({ settledHint }) => settledHint !== undefined,
@@ -592,16 +704,30 @@ let inFlight = 0;
 
 const runCall = async (
   rawInput: unknown,
+  context: { readonly key: AdminMcpKey; readonly req: PayloadRequest },
+): Promise<AdminMcpEnvelope> => {
+  const asCalled = rawInput as AdminExecuteInput;
+  const found = lookupOp(asCalled.op);
+  if ("unknown" in found) return unknownOpEnvelope(asCalled.op);
+  if ("retired" in found) return retiredOpEnvelope(found.retired);
+  // Under the registry's name, so every way on an answer gives calls it.
+  return withDeprecation(
+    await runOp(found.op, { ...asCalled, op: found.op }, context),
+    found.deprecated === undefined ? [] : [found.deprecated],
+  );
+};
+
+const runOp = async (
+  name: AdminOpName,
+  call: AdminExecuteInput,
   { key, req }: { readonly key: AdminMcpKey; readonly req: PayloadRequest },
 ): Promise<AdminMcpEnvelope> => {
   const started = performance.now();
-  const call = rawInput as AdminExecuteInput;
-  if (!isAdminOpName(call.op)) return unknownOpEnvelope(call.op);
-  const entry: AdminOpEntry = adminOpMeta[call.op];
+  const entry: AdminOpEntry = adminOpMeta[name];
   if (entry.tool === "admin_execute_irreversible")
     return failedEnvelope("USE_EXECUTE_IRREVERSIBLE");
   // Class decides the tool: a read named here is not a write of any kind.
-  if (entry.tool !== EXECUTE_TOOL_NAME) return unknownOpEnvelope(call.op);
+  if (entry.tool !== EXECUTE_TOOL_NAME) return wrongToolEnvelope(entry.tool);
   const refusal = await opRefusalOf(entry, req);
   if (refusal !== undefined) return refusal;
   const total = call.targets?.length ?? 1;
@@ -620,7 +746,9 @@ const runCall = async (
   }));
   // Before any effect, so a slip in one target cannot leave the batch half done. The
   // operation gets what was sent and not this parse: a save reads which keys were
-  // sent, and the schema's defaults would read as clearing the rest.
+  // sent, and the schema's defaults would read as clearing the rest. A slip in the
+  // shared input names its choices once, not once a target.
+  const named = new Set<string>();
   const issues = merged.flatMap((command, index) => {
     const parsed = entry.input?.safeParse(command);
     return parsed === undefined || parsed.success
@@ -629,6 +757,7 @@ const runCall = async (
           parsed.error,
           entry.input,
           call.targets === undefined ? ["input"] : ["targets", String(index)],
+          named,
         );
   });
   if (issues.length > 0) return inputInvalidEnvelope(issues);
@@ -637,7 +766,7 @@ const runCall = async (
   let reached = startAt;
   let stopped: Stopped | undefined;
   // Past a start row that named no target, this call's own target row names it.
-  const startNamedIt = executeReferences(rawInput).targetId !== undefined;
+  const startNamedIt = executeReferences(call).targetId !== undefined;
   while (reached < total) {
     if (reached > startAt) {
       if (performance.now() - started >= EXECUTE_BUDGET_MS) {
@@ -660,7 +789,7 @@ const runCall = async (
     const context: AdminOpContext = {
       req,
       key,
-      requestKey: requestKeyFor(call.requestId, reached),
+      requestKey: requestKeyFor(call.requestId, reached, key.connection?.id),
     };
     const outcome = await runTarget(entry, command, reached, context);
     outcomes.push(outcome);
@@ -683,7 +812,7 @@ const runCall = async (
   }
 
   const answer = withResults(
-    answerOf(call, outcomes, reached, stopped),
+    withReplayHint(answerOf(call, outcomes, reached, stopped), entry, outcomes),
     call,
     outcomes,
   );
@@ -707,6 +836,9 @@ const runCall = async (
         ? { replayed: true as const }
         : {}),
       ...(answer.code === "PARTIAL" ? { partial: true as const } : {}),
+      ...(outcomes.some(({ mediaGate }) => mediaGate !== undefined)
+        ? { mediaGate: "off" as const }
+        : {}),
     },
   };
 };

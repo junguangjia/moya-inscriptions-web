@@ -25,6 +25,7 @@ export const GATE_A_P95_MS = {
   media_view: 800,
   single_write: 800,
   batch_write_per_target: 150,
+  job_read: 150,
   analytics_cached: 100,
   analytics_canonical_cold: 800,
   analytics_umami_cold: 2000,
@@ -314,6 +315,177 @@ export const gradeM1 = (data: unknown, oracle: CommunityOracle["m1"]) => {
     ordered(answer.groups ?? []),
     ordered(oracle.groups),
   );
+  return failures;
+};
+
+/** One subject's case, its decision and its message, as plain SQL reads them. */
+export type ToldRow = {
+  readonly target_id: string;
+  readonly kind: string;
+  readonly status: string;
+  readonly reason: string;
+  readonly operator_label: string;
+  readonly recipient_id: string | null;
+  readonly message_kind: string | null;
+  readonly text: string | null;
+};
+
+/**
+ * Each subject holds one case of its own with the request's reason and `ai-admin` on
+ * it, and the person it affects is told that reason and where to appeal. An answer can
+ * count cases that are not there, so this reads the rows.
+ */
+export const gradeTold = (
+  told: readonly ToldRow[],
+  subjects: readonly string[],
+  reason: string,
+  recipientOf: (subject: string) => string,
+) => {
+  const failures: string[] = [];
+  differs(
+    failures,
+    "subjects told",
+    told.map(({ target_id }) => target_id).sort(),
+    [...subjects].sort(),
+  );
+  for (const row of told) {
+    differs(
+      failures,
+      row.target_id,
+      [
+        row.kind,
+        row.status,
+        row.reason,
+        row.operator_label,
+        row.recipient_id,
+        row.message_kind,
+      ],
+      [
+        "moderation",
+        "resolved",
+        reason,
+        "ai-admin",
+        recipientOf(row.target_id),
+        "result",
+      ],
+    );
+    if (
+      !row.text?.includes(reason) ||
+      !row.text.includes("可在举报与申诉中申请复核")
+    )
+      failures.push(`${row.target_id}: the message`);
+  }
+  return failures;
+};
+
+export const M3_REASON = "未经许可的广告";
+
+/**
+ * M3: 「@lishu_test 最近 7 天的评论里，内容含“加微信”的全部移除，其他不要动。」 Three calls:
+ * locate the account, list its comments with the phrase in the range, hide those. A
+ * named range holds finished days in Asia/Shanghai.
+ */
+export const m3ListCall = (authorId: unknown, phrase: string): ToolCall => ({
+  name: "admin_read",
+  arguments: {
+    op: "list.comments",
+    input: { authorId, search: phrase, range: "last_7_days", pageSize: 50 },
+  },
+});
+
+export const m3HideCall = (
+  requestId: string,
+  ids: readonly unknown[],
+): ToolCall => ({
+  name: "admin_execute",
+  arguments: {
+    requestId,
+    op: "community.moderate-comment",
+    input: { action: "hide", reason: M3_REASON },
+    targets: ids.map((id) => ({ id })),
+  },
+});
+
+export const gradeM3 = (
+  listed: readonly unknown[],
+  answer: AdminExecuteData,
+  oracle: CommunityOracle["m3"],
+) => {
+  const failures: string[] = [];
+  const sorted = (ids: readonly unknown[]) => [...ids].map(String).sort();
+  differs(failures, "listed", sorted(listed), sorted(oracle.matching));
+  differs(
+    failures,
+    "hidden",
+    sorted(answer.applied ?? []),
+    sorted(oracle.matching),
+  );
+  differs(failures, "cases", answer.moderationCases, oracle.matching.length);
+  for (const group of ["conflict", "failed", "unknown", "queued"] as const)
+    differs(failures, group, answer[group], undefined);
+  return failures;
+};
+
+export const U3_REASON = "批量广告";
+
+/**
+ * U3: 「暂停下面 15 个账号，理由“批量广告”，已经暂停的跳过。结束后列出实际改动的账号。」 One locate
+ * per handle, then one call on those found. It waits on media work like any suspension,
+ * so a target can stand in `queued`, which says whether this call changed it.
+ */
+export const u3FindCall = (handle: string): ToolCall => ({
+  name: "admin_find",
+  arguments: { query: `@${handle}` },
+});
+
+export const u3SuspendCall = (
+  requestId: string,
+  ids: readonly unknown[],
+): ToolCall => ({
+  name: "admin_execute",
+  arguments: {
+    requestId,
+    op: "community.moderate-user",
+    input: { action: "suspend", reason: U3_REASON },
+    targets: ids.map((id) => ({ id })),
+  },
+});
+
+/** What this call changed and what it found in place, wherever each stands. */
+export const u3Outcome = ({
+  applied = [],
+  already_applied: inPlace = [],
+  queued = [],
+}: AdminExecuteData) => ({
+  changed: [
+    ...applied,
+    ...queued
+      .filter(({ alreadyApplied }) => alreadyApplied !== true)
+      .map(({ id }) => id),
+  ]
+    .map(String)
+    .sort(),
+  skipped: [
+    ...inPlace,
+    ...queued
+      .filter(({ alreadyApplied }) => alreadyApplied === true)
+      .map(({ id }) => id),
+  ]
+    .map(String)
+    .sort(),
+});
+
+export const gradeU3 = (
+  answer: AdminExecuteData,
+  oracle: CommunityOracle["u3"],
+) => {
+  const failures: string[] = [];
+  const { changed, skipped } = u3Outcome(answer);
+  differs(failures, "changed", changed, [...oracle.changed].sort());
+  differs(failures, "skipped", skipped, [...oracle.skipped].sort());
+  differs(failures, "cases", answer.moderationCases, oracle.changed.length);
+  for (const group of ["conflict", "failed", "unknown"] as const)
+    differs(failures, group, answer[group], undefined);
   return failures;
 };
 

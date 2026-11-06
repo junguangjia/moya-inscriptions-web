@@ -20,130 +20,130 @@ every slice it names has merged; section 22 lists the slices. In a row without a
 marker, a clause about an operator connection or the AI connections page arrives
 with O2 and O3, and one about the issuer host with O4.
 
-| Scenario                                                                                               | Development                                                                                                                                                     | Production                                                                                                   | Must Preserve                                                                                                                                                      |
-| ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| ai_operator key lists tools                                                                            | Tools by key profile (read, operate, full), native JSON answers, four annotations each, a result schema on all but admin_view_media, deterministic order        | Same                                                                                                         | AI keys and operator connections never list editorial_* or artvenn_*; at most 15 top-level tools; an operator connection lists at profile full                     |
-| Automation key on /api/mcp                                                                             | Plugin path as today                                                                                                                                            | Plugin path as today                                                                                         | Unchanged behaviour; automation gains only expiry, pause, audit                                                                                                    |
-| Development read-only connection token on /api/mcp                                                     | Plugin path as today                                                                                                                                            | Refused as today                                                                                             | Never the native path; never Owner identity                                                                                                                        |
-| JSON-RPC array on the native path                                                                      | -32600                                                                                                                                                          | Same                                                                                                         | Plugin path keeps per-req serialization                                                                                                                            |
-| GET /api/mcp with an AI key                                                                            | 405 from the native handler, for an operator connection too                                                                                                     | Same                                                                                                         | Other credentials keep the plugin's answer                                                                                                                         |
-| Client sends an unsupported protocol version header                                                    | HTTP 400, client falls back to initialize                                                                                                                       | Same                                                                                                         | Highest version served is 2025-11-25                                                                                                                               |
-| Read-profile key calls a write tool                                                                    | Absent from tools/list; call refused                                                                                                                            | Same                                                                                                         | Profile chosen by the Owner when issuing the key                                                                                                                   |
-| admin_view_media result                                                                                | Text plus image, no structuredContent, no outputSchema                                                                                                          | Same                                                                                                         | The exception is pinned by a test; the official client accepts it                                                                                                  |
-| admin_find with an id, URL, @handle                                                                    | Exact resolution on synthetic data, including ?articleId=, with op skeletons                                                                                    | Same                                                                                                         | Use resolution.ref for a mutation, never the first candidate                                                                                                       |
-| admin_find with free text                                                                              | Per-branch budget and status; candidates carry only an admin_get action; rights notices searchable, contact and evidence names never                            | Same                                                                                                         | A timed-out branch is named, never read as zero; t2s or trigram never yields a unique identity                                                                     |
-| Catalog missing transcription                                                                          | admin_read returns matching drafts; view=count groups in SQL                                                                                                    | Same                                                                                                         | Draft text stays private to authorized callers; no extra read per row                                                                                              |
-| admin_get with no view                                                                                 | Outline: state, length, hash; states which version was read                                                                                                     | Same                                                                                                         | Long text only on request; windows split on code points                                                                                                            |
-| Fix one character in a long transcription                                                              | catalog.patch_text with raw match and revision CAS; any zero or multiple match fails the whole patch                                                            | Same                                                                                                         | No t2s matching; validation and hooks still run                                                                                                                    |
-| Text result over the size cap                                                                          | Valid JSON, whole records, meta.truncated and next                                                                                                              | Same                                                                                                         | Never silently cut; export-sized output leaves through the companion                                                                                               |
-| Same failure 3 times                                                                                   | meta.repeat set; hint and retryable from the code guide                                                                                                         | Same                                                                                                         | Hints never contain user content                                                                                                                                   |
-| Withheld data on find, read or analytics                                                               | meta.excluded names the category, no count                                                                                                                      | Same                                                                                                         | Withheld never reads as empty                                                                                                                                      |
-| Reversible op on up to 100 targets                                                                     | Runs directly with per-target outcomes                                                                                                                          | Same                                                                                                         | Same reason, case, user message, appeal and receipt as the human route                                                                                             |
-| Reversible op on more than 100 targets or by selector                                                  | Preview, then resumable run; no quantity cap; client continues with next                                                                                        | Same                                                                                                         | Never truncated; no human step                                                                                                                                     |
-| Bulk moderation in the human Admin                                                                     | Selected items on the current page, at most 50                                                                                                                  | Same                                                                                                         | Unchanged; the larger limits apply only to the MCP path                                                                                                            |
-| Planning chunk repeated after a lost answer                                                            | Same chunkSeq and payload returns the run's current answer, count unchanged; a changed payload answers IDEMPOTENCY_CONFLICT                                     | Same                                                                                                         | count, expectedCount and the threshold comparison stay true                                                                                                        |
-| Irreversible op at or under threshold (counted in targets)                                             | Preview, then AI executes with no human                                                                                                                         | Same                                                                                                         | Arguments frozen by previewId; expectedVersion and reason guards stay                                                                                              |
-| Irreversible op above threshold                                                                        | AWAITING_OWNER with control-page path; one confirmation on the control page                                                                                     | Same                                                                                                         | No key can change the threshold or confirm                                                                                                                         |
-| Remove one thread with many replies                                                                    | One target; preview shows affected replies                                                                                                                      | Same                                                                                                         | Decision 4 counts targets                                                                                                                                          |
-| Budget spent during a call                                                                             | ok:false, IN_PROGRESS, with next                                                                                                                                | Same                                                                                                         | Nothing runs without the client; no worker added                                                                                                                   |
-| Lost answer or timeout                                                                                 | OUTCOME_UNKNOWN; same requestId retry is safe                                                                                                                   | Same                                                                                                         | Never reported as rejected or as success                                                                                                                           |
-| Failed COMMIT                                                                                          | OUTCOME_UNKNOWN                                                                                                                                                 | Same                                                                                                         | ok:true only after confirmed commit                                                                                                                                |
-| Hide a work, approve a submission, suspend a user, decide a report                                     | State commits; ok:false, QUEUED while publish or withdraw media jobs are open; ok:true when none; MEDIA_JOB_FAILED on failure                                   | Same                                                                                                         | Owner route answers as today                                                                                                                                       |
-| Prepare, request-release, job retry, master requeue or limit                                           | ok:false, QUEUED; ok:true only on real success                                                                                                                  | Same                                                                                                         | Accepted never reads as done                                                                                                                                       |
-| Release delivery                                                                                       | Publishes before answering, or CATALOG_DELIVERY_PENDING                                                                                                         | Same; needs the prepare reader approved                                                                      | Owner button unchanged                                                                                                                                             |
-| Catalog withdraw                                                                                       | Record leaves public reads; ok:false, QUEUED until media withdrawal is proven                                                                                   | Same                                                                                                         | Native withdraw behaviour unchanged                                                                                                                                |
-| Publish record with no new images                                                                      | catalog.publish completes                                                                                                                                       | Same                                                                                                         | Existing validation and revision checks                                                                                                                            |
-| Publish record with new images, direct switch on or off                                                | catalog.publish refuses until ready; prepare and release complete it                                                                                            | Same; needs the prepare reader approved                                                                      | Owner button and CMS_CATALOG_DIRECT_PUBLISH behave as today                                                                                                        |
-| Create or approve an approval batch under an AI key                                                    | Works, approvedBy records the AI user                                                                                                                           | Same                                                                                                         | Automation still cannot approve itself                                                                                                                             |
-| Save that binds a new identity, including create, register media, duplicate, import                    | PREVIEW_REQUIRED on direct execute; preview lists new identities; above threshold one confirmation per batch                                                    | Same                                                                                                         | Identity claims stay permanent; a save with no new identity stays direct                                                                                           |
-| Upload or ingest manifest with a new mediaId                                                           | Preview lists new mediaIds; above threshold one confirmation per batch; complete without a matching runId answers PREVIEW_REQUIRED                              | Same                                                                                                         | A replay answering registered and existingOnly uploads pass; Owner upload and automation CLIs unchanged                                                            |
-| Catalog duplicate with a new identity                                                                  | Atomic, with receipt; preview lists carried, dropped and similar records; replay returns the same id                                                            | Same                                                                                                         | Caller supplies identity; firstPublishedAt does not carry; Owner menu unchanged                                                                                    |
-| Document open by the Owner                                                                             | DOCUMENT_LOCKED with lock block and when it expires                                                                                                             | Same                                                                                                         | Hooks keep overrideLock false                                                                                                                                      |
-| Take over a document lock                                                                              | document.lock_takeover rewrites the lock row with CAS and audit; Owner tab shows the modal; lock_release available                                              | Same                                                                                                         | Reversible; Owner can take it back; loss of unsaved form state is recorded by test, not denied                                                                     |
-| Draft preview, structured                                                                              | admin_get view=preview: same projection as the page, issues, diff, media ids, relative renderPath                                                               | Same                                                                                                         | No absolute URL; no MCP key opens the Web preview route                                                                                                            |
-| Rendered image of a Catalog draft                                                                      | files_render_preview: single-use ticket in the local process, real Web page in a local browser, bounded image plus 0600 PNG                                     | Same; needs the companion and local Chrome or Chromium                                                       | Web unchanged; ticket accepted only by GET /api/editorial/preview/:id and anonymous elsewhere; Owner preview by session cookie unchanged; no browser on the server |
-| Rendered image of an Article or Collection                                                             | NO_PREVIEW_PAGE; structured draft read available                                                                                                                | Same                                                                                                         | Parity: the Owner has no preview page for these either                                                                                                             |
-| Pause on                                                                                               | Only admin_whoami remains, for all keys and operator connections, next request; transfer door refuses; running work stops at the next target                    | Same                                                                                                         | Owner Admin unaffected; Owner and automation REST keys on /api/editorial/* are not covered; a Development read-only connection lists nothing                       |
-| Expired key                                                                                            | 401 KEY_EXPIRED                                                                                                                                                 | Same                                                                                                         | Renewal capped at 30 days                                                                                                                                          |
-| Forged or disabled key                                                                                 | Generic 401; with the surface on, every 401 on the path carries the metadata pointer                                                                            | Same                                                                                                         | No oracle                                                                                                                                                          |
-| Owner-bound MCP key                                                                                    | 401 KEY_OWNER_BOUND                                                                                                                                             | Same; existing Owner-bound keys stop at deploy                                                               | Keys bind only to ai_operator or automation                                                                                                                        |
-| Automation key                                                                                         | Same editorial_* tools and scope; artvenn_* as today                                                                                                            | Same editorial_* tools and scope                                                                             | No new right; gains expiry, pause, audit                                                                                                                           |
-| Reserved surface by any key or Authorization header                                                    | Refused, including connection tokens, Authorization JWT and Bearer with an Owner token; surfaces include AI connection consent, list and disconnect             | Refused                                                                                                      | Only an Owner cookie session passes; other Owner credentials still read their own /api/users/me                                                                    |
-| JWT or REST key on the ai_operator row                                                                 | No authority                                                                                                                                                    | No authority                                                                                                 | Authority requires an MCP door strategy                                                                                                                            |
-| Audit record update or delete                                                                          | Refused for everyone                                                                                                                                            | Refused for everyone                                                                                         | Append-only by grant and trigger                                                                                                                                   |
-| Sensitive tools, all of dm, evidence, rawIp off                                                        | Absent; Backend refuses, including binary evidence routes                                                                                                       | Absent; Backend refuses                                                                                      | Only the Owner flips                                                                                                                                               |
-| Owner opens a sensitive switch                                                                         | Typed compliance confirmation on the control page; effective at once with no release, env change or restart; audit row                                          | Same; off until the Owner does this after the policy change                                                  | The policy constant shows status and refuses nothing                                                                                                               |
-| Sensitive tools, switch on                                                                             | Available on synthetic data                                                                                                                                     | Off until the Owner opens it                                                                                 | Named conversation and purpose required; no search or listing                                                                                                      |
-| Report read by AI, any switch state                                                                    | claimant contact never included                                                                                                                                 | Same                                                                                                         | Owner Admin shows the full report as today                                                                                                                         |
-| Any report read, evidence off                                                                          | File names and download path dropped; count and type kept                                                                                                       | Same                                                                                                         | Owner Admin unchanged                                                                                                                                              |
-| Rights notice case, any switch state                                                                   | AI reads claimant name, rights basis, description, materials, messages, audit reasons and appeal text; may decide, review, set metadata and forward; searchable | Same                                                                                                         | Contact withheld; forward is irreversible and goes through preview; Owner Admin unchanged                                                                          |
-| Appeal against an AI decision                                                                          | AI may review it; history shows ai-admin                                                                                                                        | Same                                                                                                         | Appeal path for users unchanged                                                                                                                                    |
-| Platform response to a rights claimant sent through AI                                                 | Labelled a platform handling result; history shows ai-admin                                                                                                     | Same                                                                                                         | Never Owner-authored; never from an unrelated public account                                                                                                       |
-| Visitor session details                                                                                | Readable with rawIp off; no IP field; include:ip answers withheld with no query                                                                                 | Same; needs OPERATOR_AI_BASE_TOKEN, which is placed only after the policy text is live                       | Province and city labelled approximate                                                                                                                             |
-| Raw IP records                                                                                         | Behind the rawIp switch, through admin_sensitive_read, with filters and a distinct-IP count; never cached                                                       | Same; off                                                                                                    | Owner analytics page unchanged                                                                                                                                     |
-| Self-only work, switch off                                                                             | Withheld on read-works, find, report snapshot, latestSubmission, submission, featured, selectors; canary sweep finds nothing; byte routes refuse                | Same                                                                                                         | Owner Admin path unchanged; author UI promise stays true                                                                                                           |
-| Comment or reply under a self-only work, switch off                                                    | Withheld on read-comments, read-comment, find, selectors and comment report snapshots; moderate-comment answers SELF_ONLY_OWNER_REVIEW                          | Same                                                                                                         | Owner handles it as today                                                                                                                                          |
-| Analytics rows for a self-only work, switch off                                                        | Collapse into one withheld row with the combined count; timelines show withheld; no title; native paths carry an id only                                        | Same, from the first analytics slice                                                                         | Shares still add to 100 percent                                                                                                                                    |
-| Report on a self-only work or a comment under it, switch off                                           | AI list shows ownerOnly with no text; writes answer SELF_ONLY_OWNER_REVIEW; stays in the Owner's queue                                                          | Same                                                                                                         | Owner handles it as today                                                                                                                                          |
-| Report or appeal on a work the author permanently deleted                                              | Handled by AI like any other; the work carries no text or media                                                                                                 | Same                                                                                                         | Deleted works are not self-only works                                                                                                                              |
-| Self-only work, switch on                                                                              | AI sees what the Owner sees, never a private draft                                                                                                              | Off until policy change, then the Owner opens it                                                             | Private drafts are not on this path                                                                                                                                |
-| Community tools before the policy is live                                                              | Available on synthetic data                                                                                                                                     | COMMUNITY_OPERATOR_AI_TOKEN not placed; community ops answer AI_CREDENTIAL_NOT_CONFIGURED                    | Release check, no code lock                                                                                                                                        |
-| Catalog thumbnails and master ops with the community token absent                                      | Work on OPERATOR_AI_BASE_TOKEN                                                                                                                                  | Same                                                                                                         | Catalog work never needs the community token; a test asserts it                                                                                                    |
-| Analytics with the community token absent                                                              | Aggregates, sessions, export, prune and traffic work on OPERATOR_AI_BASE_TOKEN                                                                                  | Same                                                                                                         | Analytics never needs the community token; a test asserts it                                                                                                       |
-| Plaintext contact, hard delete                                                                         | No tool                                                                                                                                                         | No tool                                                                                                      | Refused for everyone as today                                                                                                                                      |
-| admin_analytics overview, trend, compare, breakdown                                                    | Direct structured result with resolved range and time zone, source, asOf, named metrics                                                                         | Same; needs OPERATOR_AI_BASE_TOKEN                                                                           | Canonical is truth; Umami is a projection; Owner page unchanged                                                                                                    |
-| Metric never collected (referrer, UTM, channel, replay, heatmap, revenue, performance, rankingVersion) | collected:false with a reason                                                                                                                                   | Same                                                                                                         | Never returned as 0 or empty                                                                                                                                       |
-| Umami slow or down                                                                                     | At most 2 concurrent; UMAMI_QUERY_TIMEOUT with retryAfterMs, or stale cached answer marked stale; canonical numbers still returned                              | Same                                                                                                         | One pool connection stays free for the screen and ingestion                                                                                                        |
-| Identical analytics calls in parallel                                                                  | One upstream call through single-flight; cache age shown; key and pause checked first; hits audited                                                             | Same                                                                                                         | IP data never cached                                                                                                                                               |
-| Year-on-year beyond retention                                                                          | outOfRetention                                                                                                                                                  | Same                                                                                                         | Never a false zero                                                                                                                                                 |
-| Visitors across buckets or partial today                                                               | Unique counts never summed; partial period aligned and marked                                                                                                   | Same                                                                                                         | lowBase flagged on tiny bases                                                                                                                                      |
-| Same-content funnel                                                                                    | Canonical with sameTarget available; saved native funnels labelled same-visit order only                                                                        | Same                                                                                                         | Counting basis always labelled                                                                                                                                     |
-| Umami's own MCP route                                                                                  | Off                                                                                                                                                             | Off, release check                                                                                           | MCP_ENABLED stays unset                                                                                                                                            |
-| Save or delete an analytics definition                                                                 | Team-member identity, definition routes only; delete previews, refused if a board references it                                                                 | Same; needs the identity placed                                                                              | Bootstrap's managed definitions answer managed:true and copy; reset and website delete unreachable                                                                 |
-| Manual Umami prune                                                                                     | Preview with per-table counts or timedOut; run as one target, async; advisory lock against the timer                                                            | Same; needs the maintenance config path                                                                      | Fixed 180 days, no days argument; skippedLocksPossible never reads as all clear                                                                                    |
-| Canonical export                                                                                       | files_download streams JSONL in one snapshot; 31-day and row caps; 0600 file with count and sha256                                                              | Same                                                                                                         | Never joins raw IP or UA; nothing stored on the server                                                                                                             |
-| Report CSV                                                                                             | files_download, built from normalized rows under the guard, 500 rows                                                                                            | Same                                                                                                         | Formula-injection prefix kept; native export not called                                                                                                            |
-| Traffic summary                                                                                        | Snapshot file from a fixture                                                                                                                                    | Reads the hourly snapshot; available:false until the timer is installed                                      | Aggregates only; no IP, path or UA                                                                                                                                 |
-| Binary upload or original download                                                                     | artvenn-files through the transfer door; no shell needed                                                                                                        | Same; over 40 MiB needs the ingest signer                                                                    | Signed URLs and bytes never reach tool results; save-draft not in the door                                                                                         |
-| Client with no local process                                                                           | All HTTP tools and image views; byte tools and rendered preview unavailable, reported by admin_whoami                                                           | Same                                                                                                         | Never fails silently                                                                                                                                               |
-| Companion path outside configured roots or a symlink escape                                            | Refused                                                                                                                                                         | Same                                                                                                         | Server-supplied names never become paths                                                                                                                           |
-| New deep zoom master                                                                                   | files_master_plan then files_master_attach; existing checks in order; QUEUED until blocks finish                                                                | Same; needs ingest signer and UGC store                                                                      | 128 MiB and 120 MP limits; sha256 binding                                                                                                                          |
-| Create an invitation                                                                                   | Plain code returned once; audit stores the id only                                                                                                              | Same; needs the community token                                                                              | The one stated exception to no credentials in results; App role has no direct table write                                                                          |
-| Provision a password account                                                                           | Preview shows handle and name; body sent by the companion; schema refuses a password field                                                                      | Same; refused unless AUTH_PROFILE is password-only                                                           | Password never in model context, result or audit; App role has no direct table write                                                                               |
-| Catalog workbook or CSV import                                                                         | Parse locally; admin_preview is the dry run; saves follow the identity rule                                                                                     | Same                                                                                                         | No database credential on the client for real records                                                                                                              |
-| p5:validate and p5:apply-validation on a disposable database                                           | files_import modes spawn the built CLIs with env from a local 0600 file, after the disposable marker probe                                                      | Never on Production                                                                                          | P5_VALIDATION_RUNTIME guard stays; no URL, credential or SQL in tool arguments                                                                                     |
-| Pilot prepare, apply, media                                                                            | files_import kind=pilot spawns the built CLI with env from a local 0600 file; approval and scope guards run first                                               | Never on Production                                                                                          | assertPilotApproval and the database identity check stay; no URL, credential or SQL in tool arguments                                                              |
-| cms:legacy                                                                                             | Dry run through the companion and legacy-plan; apply through the run engine with the MCP key                                                                    | Same                                                                                                         | Protected file check stays; CLI unchanged                                                                                                                          |
-| Catalog search rebuild                                                                                 | Per-record short transactions, removal of unpublished rows, resumable; status op                                                                                | Same                                                                                                         | No SHARE lock, no full delete, no database credential; CLI unchanged                                                                                               |
-| Over the path rate limit                                                                               | Not applied by Nginx in local runs; template test only                                                                                                          | 429; the issuer host is limited per address and as a whole, also 429                                         | Per-path total only on /api/mcp; transfer has its own zone                                                                                                         |
-| Admin control page and audit list                                                                      | Owner cookie session sees them and the AI connections page; anonymous, key and connection token requests refused                                                | Same                                                                                                         | Other Admin pages unchanged                                                                                                                                        |
-| Approval duplicate, bulk edit of accounts or keys                                                      | Refused over REST                                                                                                                                               | Same                                                                                                         | Single edits by the Owner still work                                                                                                                               |
-| `artvenn_*`, `agent/*`, AI operations, the plugin connection path                                      | Available as today                                                                                                                                              | NOT_FOUND as today                                                                                           | Development-only boundary unchanged; `/agent-connections/start` stays with it; the login door's surfaces are the rows below                                        |
-| Operator connection token on /api/mcp [O2]                                                             | Native path, profile full, same tools and answers as an ai_operator key                                                                                         | Same, when `ADMIN_MCP_OAUTH_ENABLED` is on                                                                   | Never the plugin path; never Owner identity; never lists editorial_* or artvenn_*                                                                                  |
-| OAuth surface off [O2, O3]                                                                             | Well-known paths 404; connection token generic 401                                                                                                              | Same, today's behaviour                                                                                      | Admin starts normally on bad connection config; connection tokens refused; a bare code on stderr                                                                   |
-| POST /api/mcp with no token, surface on [O2, O3]                                                       | 401 with `resource_metadata` and `scope`                                                                                                                        | Same                                                                                                         | Key callers keep their answers                                                                                                                                     |
-| Unlisted client_id, including an https URL [O1]                                                        | `invalid_client`; no fetch; no consent row                                                                                                                      | Same                                                                                                         | No registration endpoint in metadata                                                                                                                               |
-| Listed client, listed callback, signed-out person [O3]                                                 | Landing, login, back to review with the same interaction                                                                                                        | Same                                                                                                         | Nothing granted before a click; the landing reads no database                                                                                                      |
-| Consent reached without an Owner browser session [O3]                                                  | Refused, no ticket armed                                                                                                                                        | Same                                                                                                         | Key, header JWT and automation session all refused                                                                                                                 |
-| Allow [O3]                                                                                             | Reserved audit row, then decision, then grant from the frozen row; browser returns to the listed callback, whose hostname the page named, loopback included     | Same                                                                                                         | One decision per interaction; ticket single-use; Origin checked; other owners are told                                                                             |
-| Deny [O3]                                                                                              | Tool told `access_denied`; no connection power                                                                                                                  | Same                                                                                                         | Reserved audit row                                                                                                                                                 |
-| Resume with the provider cookie but no one-time secret [O1, O3]                                        | Under `operator`: refused with a plain page; no grant, no code. Read-only has no secret: the cookie and an approved row resume, as #141 measured                | Same                                                                                                         | Under `operator`, a cookie alone never finishes a consent; a test with two browser contexts pins it                                                                |
-| Resume with the one-time secret but no provider cookie [O1, O3]                                        | Under `operator`: consent void; plain page says it did not start in this browser and to tell the other owners; no code. Read-only: plain page, no void          | Same                                                                                                         | The stranger's browser cannot finish it afterwards; the audit row keeps who clicked allow                                                                          |
-| Resume with neither cookie nor secret [O1]                                                             | Plain page; nothing changes, under `operator` and read-only alike                                                                                               | Same                                                                                                         | Never a blank page                                                                                                                                                 |
-| Same person and tool connect again without disconnecting, including from a second computer [O1, O3]    | Fresh consent screen, generation raised; old tokens stop, so the first computer ends                                                                            | Same                                                                                                         | Consent is never skipped, for any listed client; one person and one client id is one connection                                                                    |
-| Disconnect by any owner [O1, O2, O3]                                                                   | Next request 401; refresh `invalid_grant`                                                                                                                       | Same                                                                                                         | Reserved audit row                                                                                                                                                 |
-| Reconnect after disconnect from the same browser [O1, O3]                                              | Fresh consent screen, then works                                                                                                                                | Same                                                                                                         | Never a silent token                                                                                                                                               |
-| Access token expires while connected [O1, O2]                                                          | 401, tool refreshes, no person involved                                                                                                                         | Same                                                                                                         | Refresh rotates                                                                                                                                                    |
-| Two refreshes with one token inside 30 s [O1]                                                          | Both succeed                                                                                                                                                    | Same                                                                                                         | After 30 s replay revokes the grant and live access tokens                                                                                                         |
-| Connection idle past 30 days, or past 180 days from consent [O1]                                       | `invalid_grant`; the tool asks the person to sign in again                                                                                                      | Same                                                                                                         | Fresh consent; no standing permission                                                                                                                              |
-| Authorizing account leaves role owner, or changes password in the Admin [O2, O3]                       | Connections stop at the next request or at once                                                                                                                 | Same                                                                                                         | Password change is never blocked: a failed revoke logs a category and the connection stays until disconnected                                                      |
-| Tool removed from the list [O1, O2]                                                                    | Next request 401; no new consent                                                                                                                                | Same                                                                                                         | Needs a restart of both services                                                                                                                                   |
-| Audit row for a connection call [O2]                                                                   | Tool name, connection id, authorizing person's email, `userId` the AI row, `keyId` empty                                                                        | Same                                                                                                         | Read only in an Owner browser session; AI cannot read it                                                                                                           |
-| admin_whoami on a connection [O2]                                                                      | `key.id` is `conn-...`, profile, expiry, authorizing account id, no email                                                                                       | Same                                                                                                         | No secret; playbook unchanged                                                                                                                                      |
-| Article issuer                                                                                         | Not changed by this work                                                                                                                                        | Not changed by this work                                                                                     | Separate host, keys, tables, clients; loopback only                                                                                                                |
-| Article MCP                                                                                            | Token refused on /api/mcp, key refused on Article path                                                                                                          | Same                                                                                                         | Issue #177 isolation                                                                                                                                               |
-| Public policy pages                                                                                    | Current text until P1                                                                                                                                           | Text confirmed by the Owner on 2026-11-03, live with the first batch and before any AI credential is placed  | Exact wording as merged in P1; no sentence offering review by an administrator                                                                                     |
-| Public site, registration, access mode                                                                 | Unchanged                                                                                                                                                       | Unchanged, except that the first batch raises the registration agreement version and notifies existing users | No release changes the access mode                                                                                                                                 |
+| Scenario                                                                                               | Development                                                                                                                                                     | Production                                                                                                                                                                                   | Must Preserve                                                                                                                                                      |
+| ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| ai_operator key lists tools                                                                            | Tools by key profile (read, operate, full), native JSON answers, four annotations each, a result schema on all but admin_view_media, deterministic order        | Same                                                                                                                                                                                         | AI keys and operator connections never list editorial_* or artvenn_*; at most 15 top-level tools; an operator connection lists at profile full                     |
+| Automation key on /api/mcp                                                                             | Plugin path as today                                                                                                                                            | Plugin path as today                                                                                                                                                                         | Unchanged behaviour; automation gains only expiry, pause, audit                                                                                                    |
+| Development read-only connection token on /api/mcp                                                     | Plugin path as today                                                                                                                                            | Refused as today                                                                                                                                                                             | Never the native path; never Owner identity                                                                                                                        |
+| JSON-RPC array on the native path                                                                      | -32600                                                                                                                                                          | Same                                                                                                                                                                                         | Plugin path keeps per-req serialization                                                                                                                            |
+| GET /api/mcp with an AI key                                                                            | 405 from the native handler, for an operator connection too                                                                                                     | Same                                                                                                                                                                                         | Other credentials keep the plugin's answer                                                                                                                         |
+| Client sends an unsupported protocol version header                                                    | HTTP 400, client falls back to initialize                                                                                                                       | Same                                                                                                                                                                                         | Highest version served is 2025-11-25                                                                                                                               |
+| Read-profile key calls a write tool                                                                    | Absent from tools/list; call refused                                                                                                                            | Same                                                                                                                                                                                         | Profile chosen by the Owner when issuing the key                                                                                                                   |
+| admin_view_media result                                                                                | Text plus image, no structuredContent, no outputSchema                                                                                                          | Same                                                                                                                                                                                         | The exception is pinned by a test; the official client accepts it                                                                                                  |
+| admin_find with an id, URL, @handle                                                                    | Exact resolution on synthetic data, including ?articleId=, with op skeletons                                                                                    | Same                                                                                                                                                                                         | Use resolution.ref for a mutation, never the first candidate                                                                                                       |
+| admin_find with free text                                                                              | Per-branch budget and status; candidates carry only an admin_get action; rights notices searchable, contact and evidence names never                            | Same                                                                                                                                                                                         | A timed-out branch is named, never read as zero; t2s or trigram never yields a unique identity                                                                     |
+| Catalog missing transcription                                                                          | admin_read returns matching drafts; view=count groups in SQL                                                                                                    | Same                                                                                                                                                                                         | Draft text stays private to authorized callers; no extra read per row                                                                                              |
+| admin_get with no view                                                                                 | Outline: state, length, hash; states which version was read                                                                                                     | Same                                                                                                                                                                                         | Long text only on request; windows split on code points                                                                                                            |
+| Fix one character in a long transcription                                                              | catalog.patch_text with raw match and revision CAS; any zero or multiple match fails the whole patch                                                            | Same                                                                                                                                                                                         | No t2s matching; validation and hooks still run                                                                                                                    |
+| Text result over the size cap                                                                          | Valid JSON, whole records, meta.truncated and next                                                                                                              | Same                                                                                                                                                                                         | Never silently cut; export-sized output leaves through the companion                                                                                               |
+| Same failure 3 times                                                                                   | meta.repeat set; hint and retryable from the code guide                                                                                                         | Same                                                                                                                                                                                         | Hints never contain user content                                                                                                                                   |
+| Withheld data on find, read or analytics                                                               | meta.excluded names the category, no count                                                                                                                      | Same                                                                                                                                                                                         | Withheld never reads as empty                                                                                                                                      |
+| Reversible op on up to 100 targets                                                                     | Runs directly with per-target outcomes                                                                                                                          | Same                                                                                                                                                                                         | Same reason, case, user message, appeal and receipt as the human route                                                                                             |
+| Reversible op on more than 100 targets or by selector                                                  | Preview, then resumable run; no quantity cap; client continues with next                                                                                        | Same                                                                                                                                                                                         | Never truncated; no human step                                                                                                                                     |
+| Bulk moderation in the human Admin                                                                     | Selected items on the current page, at most 50                                                                                                                  | Same                                                                                                                                                                                         | Unchanged; the larger limits apply only to the MCP path                                                                                                            |
+| Planning chunk repeated after a lost answer                                                            | Same chunkSeq and payload returns the run's current answer, count unchanged; a changed payload answers IDEMPOTENCY_CONFLICT                                     | Same                                                                                                                                                                                         | count, expectedCount and the threshold comparison stay true                                                                                                        |
+| Irreversible op at or under threshold (counted in targets)                                             | Preview, then AI executes with no human                                                                                                                         | Same                                                                                                                                                                                         | Arguments frozen by previewId; expectedVersion and reason guards stay                                                                                              |
+| Irreversible op above threshold                                                                        | AWAITING_OWNER with control-page path; one confirmation on the control page                                                                                     | Same                                                                                                                                                                                         | No key can change the threshold or confirm                                                                                                                         |
+| Remove one thread with many replies                                                                    | One target; preview shows affected replies                                                                                                                      | Same                                                                                                                                                                                         | Decision 4 counts targets                                                                                                                                          |
+| Budget spent during a call                                                                             | ok:false, IN_PROGRESS, with next                                                                                                                                | Same                                                                                                                                                                                         | Nothing runs without the client; no worker added                                                                                                                   |
+| Lost answer or timeout                                                                                 | OUTCOME_UNKNOWN; same requestId retry is safe                                                                                                                   | Same                                                                                                                                                                                         | Never reported as rejected or as success                                                                                                                           |
+| Failed COMMIT                                                                                          | OUTCOME_UNKNOWN                                                                                                                                                 | Same                                                                                                                                                                                         | ok:true only after confirmed commit                                                                                                                                |
+| Hide a work, approve a submission, suspend a user, decide a report                                     | State commits; ok:false, QUEUED while publish or withdraw media jobs are open; ok:true when none; MEDIA_JOB_FAILED on failure                                   | Same                                                                                                                                                                                         | Owner route answers as today                                                                                                                                       |
+| Prepare, request-release, job retry, master requeue or limit                                           | ok:false, QUEUED; ok:true only on real success                                                                                                                  | Same                                                                                                                                                                                         | Accepted never reads as done                                                                                                                                       |
+| Release delivery                                                                                       | Publishes before answering, or CATALOG_DELIVERY_PENDING                                                                                                         | Same; needs the prepare reader approved                                                                                                                                                      | Owner button unchanged                                                                                                                                             |
+| Catalog withdraw                                                                                       | Record leaves public reads; ok:false, QUEUED until media withdrawal is proven                                                                                   | Same                                                                                                                                                                                         | Native withdraw behaviour unchanged                                                                                                                                |
+| Publish record with no new images                                                                      | catalog.publish completes                                                                                                                                       | Same                                                                                                                                                                                         | Existing validation and revision checks                                                                                                                            |
+| Publish record with new images, direct switch on or off                                                | catalog.publish refuses until ready; prepare and release complete it                                                                                            | Same; needs the prepare reader approved                                                                                                                                                      | Owner button and CMS_CATALOG_DIRECT_PUBLISH behave as today                                                                                                        |
+| Create or approve an approval batch under an AI key                                                    | Works, approvedBy records the AI user                                                                                                                           | Same                                                                                                                                                                                         | Automation still cannot approve itself                                                                                                                             |
+| Save that binds a new identity, including create, register media, duplicate, import                    | PREVIEW_REQUIRED on direct execute; preview lists new identities; above threshold one confirmation per batch                                                    | Same                                                                                                                                                                                         | Identity claims stay permanent; a save with no new identity stays direct                                                                                           |
+| Upload or ingest manifest with a new mediaId                                                           | Preview lists new mediaIds; above threshold one confirmation per batch; complete without a matching runId answers PREVIEW_REQUIRED                              | Same                                                                                                                                                                                         | A replay answering registered and existingOnly uploads pass; Owner upload and automation CLIs unchanged                                                            |
+| Catalog duplicate with a new identity                                                                  | Atomic, with receipt; preview lists carried, dropped and similar records; replay returns the same id                                                            | Same                                                                                                                                                                                         | Caller supplies identity; firstPublishedAt does not carry; Owner menu unchanged                                                                                    |
+| Document open by the Owner                                                                             | DOCUMENT_LOCKED with lock block and when it expires                                                                                                             | Same                                                                                                                                                                                         | Hooks keep overrideLock false                                                                                                                                      |
+| Take over a document lock                                                                              | document.lock_takeover rewrites the lock row with CAS and audit; Owner tab shows the modal; lock_release available                                              | Same                                                                                                                                                                                         | Reversible; Owner can take it back; loss of unsaved form state is recorded by test, not denied                                                                     |
+| Draft preview, structured                                                                              | admin_get view=preview: same projection as the page, issues, diff, media ids, relative renderPath                                                               | Same                                                                                                                                                                                         | No absolute URL; no MCP key opens the Web preview route                                                                                                            |
+| Rendered image of a Catalog draft                                                                      | files_render_preview: single-use ticket in the local process, real Web page in a local browser, bounded image plus 0600 PNG                                     | Same; needs the companion and local Chrome or Chromium                                                                                                                                       | Web unchanged; ticket accepted only by GET /api/editorial/preview/:id and anonymous elsewhere; Owner preview by session cookie unchanged; no browser on the server |
+| Rendered image of an Article or Collection                                                             | NO_PREVIEW_PAGE; structured draft read available                                                                                                                | Same                                                                                                                                                                                         | Parity: the Owner has no preview page for these either                                                                                                             |
+| Pause on                                                                                               | Only admin_whoami remains, for all keys and operator connections, next request; transfer door refuses; running work stops at the next target                    | Same                                                                                                                                                                                         | Owner Admin unaffected; Owner and automation REST keys on /api/editorial/* are not covered; a Development read-only connection lists nothing                       |
+| Expired key                                                                                            | 401 KEY_EXPIRED                                                                                                                                                 | Same                                                                                                                                                                                         | Renewal capped at 30 days                                                                                                                                          |
+| Forged or disabled key                                                                                 | Generic 401; with the surface on, every 401 on the path carries the metadata pointer                                                                            | Same                                                                                                                                                                                         | No oracle                                                                                                                                                          |
+| Owner-bound MCP key                                                                                    | 401 KEY_OWNER_BOUND                                                                                                                                             | Same; existing Owner-bound keys stop at deploy                                                                                                                                               | Keys bind only to ai_operator or automation                                                                                                                        |
+| Automation key                                                                                         | Same editorial_* tools and scope; artvenn_* as today                                                                                                            | Same editorial_* tools and scope                                                                                                                                                             | No new right; gains expiry, pause, audit                                                                                                                           |
+| Reserved surface by any key or Authorization header                                                    | Refused, including connection tokens, Authorization JWT and Bearer with an Owner token; surfaces include AI connection consent, list and disconnect             | Refused                                                                                                                                                                                      | Only an Owner cookie session passes; other Owner credentials still read their own /api/users/me                                                                    |
+| JWT or REST key on the ai_operator row                                                                 | No authority                                                                                                                                                    | No authority                                                                                                                                                                                 | Authority requires an MCP door strategy                                                                                                                            |
+| Audit record update or delete                                                                          | Refused for everyone                                                                                                                                            | Refused for everyone                                                                                                                                                                         | Append-only by grant and trigger                                                                                                                                   |
+| Sensitive tools, all of dm, evidence, rawIp off                                                        | Absent; Backend refuses, including binary evidence routes                                                                                                       | Absent; Backend refuses                                                                                                                                                                      | Only the Owner flips                                                                                                                                               |
+| Owner opens a sensitive switch                                                                         | Typed compliance confirmation on the control page; effective at once with no release, env change or restart; audit row                                          | Same; off until the Owner does this after the policy change                                                                                                                                  | The policy constant shows status and refuses nothing                                                                                                               |
+| Sensitive tools, switch on                                                                             | Available on synthetic data                                                                                                                                     | Off until the Owner opens it                                                                                                                                                                 | Named conversation and purpose required; no search or listing                                                                                                      |
+| Report read by AI, any switch state                                                                    | claimant contact never included                                                                                                                                 | Same                                                                                                                                                                                         | Owner Admin shows the full report as today                                                                                                                         |
+| Any report read, evidence off                                                                          | File names and download path dropped; count and type kept                                                                                                       | Same                                                                                                                                                                                         | Owner Admin unchanged                                                                                                                                              |
+| Rights notice case, any switch state                                                                   | AI reads claimant name, rights basis, description, materials, messages, audit reasons and appeal text; may decide, review, set metadata and forward; searchable | Same                                                                                                                                                                                         | Contact withheld; forward is irreversible and goes through preview; Owner Admin unchanged                                                                          |
+| Appeal against an AI decision                                                                          | AI may review it; history shows ai-admin                                                                                                                        | Same                                                                                                                                                                                         | Appeal path for users unchanged                                                                                                                                    |
+| Platform response to a rights claimant sent through AI                                                 | Labelled a platform handling result; history shows ai-admin                                                                                                     | Same                                                                                                                                                                                         | Never Owner-authored; never from an unrelated public account                                                                                                       |
+| Visitor session details                                                                                | Readable with rawIp off; no IP field; include:ip answers withheld with no query                                                                                 | Same; needs OPERATOR_AI_BASE_TOKEN, which is placed only after the policy text is live                                                                                                       | Province and city labelled approximate                                                                                                                             |
+| Raw IP records                                                                                         | Behind the rawIp switch, through admin_sensitive_read, with filters and a distinct-IP count; never cached                                                       | Same; off                                                                                                                                                                                    | Owner analytics page unchanged                                                                                                                                     |
+| Self-only work, switch off                                                                             | Withheld on read-works, find, report snapshot, latestSubmission, submission, featured, selectors; canary sweep finds nothing; byte routes refuse                | Same                                                                                                                                                                                         | Owner Admin path unchanged; author UI promise stays true                                                                                                           |
+| Comment or reply under a self-only work, switch off                                                    | Withheld on read-comments, read-comment, find, selectors and comment report snapshots; moderate-comment answers SELF_ONLY_OWNER_REVIEW                          | Same                                                                                                                                                                                         | Owner handles it as today                                                                                                                                          |
+| Analytics rows for a self-only work, switch off                                                        | Collapse into one withheld row with the combined count; timelines show withheld; no title; native paths carry an id only                                        | Same, from the first analytics slice                                                                                                                                                         | Shares still add to 100 percent                                                                                                                                    |
+| Report on a self-only work or a comment under it, switch off                                           | AI list shows ownerOnly with no text; writes answer SELF_ONLY_OWNER_REVIEW; stays in the Owner's queue                                                          | Same                                                                                                                                                                                         | Owner handles it as today                                                                                                                                          |
+| Report or appeal on a work the author permanently deleted                                              | Handled by AI like any other; the work carries no text or media                                                                                                 | Same                                                                                                                                                                                         | Deleted works are not self-only works                                                                                                                              |
+| Self-only work, switch on                                                                              | AI sees what the Owner sees, never a private draft                                                                                                              | Off until policy change, then the Owner opens it                                                                                                                                             | Private drafts are not on this path                                                                                                                                |
+| Community tools before the policy is live                                                              | Available on synthetic data                                                                                                                                     | COMMUNITY_OPERATOR_AI_TOKEN not placed; community ops answer AI_CREDENTIAL_NOT_CONFIGURED                                                                                                    | Release check, no code lock                                                                                                                                        |
+| Catalog thumbnails and master ops with the community token absent                                      | Work on OPERATOR_AI_BASE_TOKEN                                                                                                                                  | Same                                                                                                                                                                                         | Catalog work never needs the community token; a test asserts it                                                                                                    |
+| Analytics with the community token absent                                                              | Aggregates, sessions, export, prune and traffic work on OPERATOR_AI_BASE_TOKEN                                                                                  | Same                                                                                                                                                                                         | Analytics never needs the community token; a test asserts it                                                                                                       |
+| Plaintext contact, hard delete                                                                         | No tool                                                                                                                                                         | No tool                                                                                                                                                                                      | Refused for everyone as today                                                                                                                                      |
+| admin_analytics overview, trend, compare, breakdown                                                    | Direct structured result with resolved range and time zone, source, asOf, named metrics                                                                         | Same; needs OPERATOR_AI_BASE_TOKEN                                                                                                                                                           | Canonical is truth; Umami is a projection; Owner page unchanged                                                                                                    |
+| Metric never collected (referrer, UTM, channel, replay, heatmap, revenue, performance, rankingVersion) | collected:false with a reason                                                                                                                                   | Same                                                                                                                                                                                         | Never returned as 0 or empty                                                                                                                                       |
+| Umami slow or down                                                                                     | At most 2 concurrent; UMAMI_QUERY_TIMEOUT with retryAfterMs, or stale cached answer marked stale; canonical numbers still returned                              | Same                                                                                                                                                                                         | One pool connection stays free for the screen and ingestion                                                                                                        |
+| Identical analytics calls in parallel                                                                  | One upstream call through single-flight; cache age shown; key and pause checked first; hits audited                                                             | Same                                                                                                                                                                                         | IP data never cached                                                                                                                                               |
+| Year-on-year beyond retention                                                                          | outOfRetention                                                                                                                                                  | Same                                                                                                                                                                                         | Never a false zero                                                                                                                                                 |
+| Visitors across buckets or partial today                                                               | Unique counts never summed; partial period aligned and marked                                                                                                   | Same                                                                                                                                                                                         | lowBase flagged on tiny bases                                                                                                                                      |
+| Same-content funnel                                                                                    | Canonical with sameTarget available; saved native funnels labelled same-visit order only                                                                        | Same                                                                                                                                                                                         | Counting basis always labelled                                                                                                                                     |
+| Umami's own MCP route                                                                                  | Off                                                                                                                                                             | Off, release check                                                                                                                                                                           | MCP_ENABLED stays unset                                                                                                                                            |
+| Save or delete an analytics definition                                                                 | Team-member identity, definition routes only; delete previews, refused if a board references it                                                                 | Same; needs the identity placed                                                                                                                                                              | Bootstrap's managed definitions answer managed:true and copy; reset and website delete unreachable                                                                 |
+| Manual Umami prune                                                                                     | Preview with per-table counts or timedOut; run as one target, async; advisory lock against the timer                                                            | Same; needs the maintenance config path                                                                                                                                                      | Fixed 180 days, no days argument; skippedLocksPossible never reads as all clear                                                                                    |
+| Canonical export                                                                                       | files_download streams JSONL in one snapshot; 31-day and row caps; 0600 file with count and sha256                                                              | Same                                                                                                                                                                                         | Never joins raw IP or UA; nothing stored on the server                                                                                                             |
+| Report CSV                                                                                             | files_download, built from normalized rows under the guard, 500 rows                                                                                            | Same                                                                                                                                                                                         | Formula-injection prefix kept; native export not called                                                                                                            |
+| Traffic summary                                                                                        | Snapshot file from a fixture                                                                                                                                    | Reads the hourly snapshot; available:false until the timer is installed                                                                                                                      | Aggregates only; no IP, path or UA                                                                                                                                 |
+| Binary upload or original download                                                                     | artvenn-files through the transfer door; no shell needed                                                                                                        | Same; over 40 MiB needs the ingest signer                                                                                                                                                    | Signed URLs and bytes never reach tool results; save-draft not in the door                                                                                         |
+| Client with no local process                                                                           | All HTTP tools and image views; byte tools and rendered preview unavailable, reported by admin_whoami                                                           | Same                                                                                                                                                                                         | Never fails silently                                                                                                                                               |
+| Companion path outside configured roots or a symlink escape                                            | Refused                                                                                                                                                         | Same                                                                                                                                                                                         | Server-supplied names never become paths                                                                                                                           |
+| New deep zoom master                                                                                   | files_master_plan then files_master_attach; existing checks in order; QUEUED until blocks finish                                                                | Same; needs ingest signer and UGC store                                                                                                                                                      | 128 MiB and 120 MP limits; sha256 binding                                                                                                                          |
+| Create an invitation                                                                                   | Plain code returned once; audit stores the id only                                                                                                              | Same; needs the community token                                                                                                                                                              | The one stated exception to no credentials in results; App role has no direct table write                                                                          |
+| Provision a password account                                                                           | Preview shows handle and name; body sent by the companion; schema refuses a password field                                                                      | Same; refused unless AUTH_PROFILE is password-only                                                                                                                                           | Password never in model context, result or audit; App role has no direct table write                                                                               |
+| Catalog workbook or CSV import                                                                         | Parse locally; admin_preview is the dry run; saves follow the identity rule                                                                                     | Same                                                                                                                                                                                         | No database credential on the client for real records                                                                                                              |
+| p5:validate and p5:apply-validation on a disposable database                                           | files_import modes spawn the built CLIs with env from a local 0600 file, after the disposable marker probe                                                      | Never on Production                                                                                                                                                                          | P5_VALIDATION_RUNTIME guard stays; no URL, credential or SQL in tool arguments                                                                                     |
+| Pilot prepare, apply, media                                                                            | files_import kind=pilot spawns the built CLI with env from a local 0600 file; approval and scope guards run first                                               | Never on Production                                                                                                                                                                          | assertPilotApproval and the database identity check stay; no URL, credential or SQL in tool arguments                                                              |
+| cms:legacy                                                                                             | Dry run through the companion and legacy-plan; apply through the run engine with the MCP key                                                                    | Same                                                                                                                                                                                         | Protected file check stays; CLI unchanged                                                                                                                          |
+| Catalog search rebuild                                                                                 | Per-record short transactions, removal of unpublished rows, resumable; status op                                                                                | Same                                                                                                                                                                                         | No SHARE lock, no full delete, no database credential; CLI unchanged                                                                                               |
+| Over the path rate limit                                                                               | Not applied by Nginx in local runs; template test only                                                                                                          | 429; the issuer host is limited per address and as a whole, also 429                                                                                                                         | Per-path total only on /api/mcp; transfer has its own zone                                                                                                         |
+| Admin control page and audit list                                                                      | Owner cookie session sees them and the AI connections page; anonymous, key and connection token requests refused                                                | Same                                                                                                                                                                                         | Other Admin pages unchanged                                                                                                                                        |
+| Approval duplicate, bulk edit of accounts or keys                                                      | Refused over REST                                                                                                                                               | Same                                                                                                                                                                                         | Single edits by the Owner still work                                                                                                                               |
+| `artvenn_*`, `agent/*`, AI operations, the plugin connection path                                      | Available as today                                                                                                                                              | NOT_FOUND as today                                                                                                                                                                           | Development-only boundary unchanged; `/agent-connections/start` stays with it; the login door's surfaces are the rows below                                        |
+| Operator connection token on /api/mcp [O2]                                                             | Native path, profile full, same tools and answers as an ai_operator key                                                                                         | Same, when `ADMIN_MCP_OAUTH_ENABLED` is on                                                                                                                                                   | Never the plugin path; never Owner identity; never lists editorial_* or artvenn_*                                                                                  |
+| OAuth surface off [O2, O3]                                                                             | Well-known paths 404; connection token generic 401                                                                                                              | Same, today's behaviour                                                                                                                                                                      | Admin starts normally on bad connection config; connection tokens refused; a bare code on stderr                                                                   |
+| POST /api/mcp with no token, surface on [O2, O3]                                                       | 401 with `resource_metadata` and `scope`                                                                                                                        | Same                                                                                                                                                                                         | Key callers keep their answers                                                                                                                                     |
+| Unlisted client_id, including an https URL [O1]                                                        | `invalid_client`; no fetch; no consent row                                                                                                                      | Same                                                                                                                                                                                         | No registration endpoint in metadata                                                                                                                               |
+| Listed client, listed callback, signed-out person [O3]                                                 | Landing, login, back to review with the same interaction                                                                                                        | Same                                                                                                                                                                                         | Nothing granted before a click; the landing reads no database                                                                                                      |
+| Consent reached without an Owner browser session [O3]                                                  | Refused, no ticket armed                                                                                                                                        | Same                                                                                                                                                                                         | Key, header JWT and automation session all refused                                                                                                                 |
+| Allow [O3]                                                                                             | Reserved audit row, then decision, then grant from the frozen row; browser returns to the listed callback, whose hostname the page named, loopback included     | Same                                                                                                                                                                                         | One decision per interaction; ticket single-use; Origin checked; other owners are told                                                                             |
+| Deny [O3]                                                                                              | Tool told `access_denied`; no connection power                                                                                                                  | Same                                                                                                                                                                                         | Reserved audit row                                                                                                                                                 |
+| Resume with the provider cookie but no one-time secret [O1, O3]                                        | Under `operator`: refused with a plain page; no grant, no code. Read-only has no secret: the cookie and an approved row resume, as #141 measured                | Same                                                                                                                                                                                         | Under `operator`, a cookie alone never finishes a consent; a test with two browser contexts pins it                                                                |
+| Resume with the one-time secret but no provider cookie [O1, O3]                                        | Under `operator`: consent void; plain page says it did not start in this browser and to tell the other owners; no code. Read-only: plain page, no void          | Same                                                                                                                                                                                         | The stranger's browser cannot finish it afterwards; the audit row keeps who clicked allow                                                                          |
+| Resume with neither cookie nor secret [O1]                                                             | Plain page; nothing changes, under `operator` and read-only alike                                                                                               | Same                                                                                                                                                                                         | Never a blank page                                                                                                                                                 |
+| Same person and tool connect again without disconnecting, including from a second computer [O1, O3]    | Fresh consent screen, generation raised; old tokens stop, so the first computer ends                                                                            | Same                                                                                                                                                                                         | Consent is never skipped, for any listed client; one person and one client id is one connection                                                                    |
+| Disconnect by any owner [O1, O2, O3]                                                                   | Next request 401; refresh `invalid_grant`                                                                                                                       | Same                                                                                                                                                                                         | Reserved audit row                                                                                                                                                 |
+| Reconnect after disconnect from the same browser [O1, O3]                                              | Fresh consent screen, then works                                                                                                                                | Same                                                                                                                                                                                         | Never a silent token                                                                                                                                               |
+| Access token expires while connected [O1, O2]                                                          | 401, tool refreshes, no person involved                                                                                                                         | Same                                                                                                                                                                                         | Refresh rotates                                                                                                                                                    |
+| Two refreshes with one token inside 30 s [O1]                                                          | Both succeed                                                                                                                                                    | Same                                                                                                                                                                                         | After 30 s replay revokes the grant and live access tokens                                                                                                         |
+| Connection idle past 30 days, or past 180 days from consent [O1]                                       | `invalid_grant`; the tool asks the person to sign in again                                                                                                      | Same                                                                                                                                                                                         | Fresh consent; no standing permission                                                                                                                              |
+| Authorizing account leaves role owner, or changes password in the Admin [O2, O3]                       | Connections stop at the next request or at once                                                                                                                 | Same                                                                                                                                                                                         | Password change is never blocked: a failed revoke logs a category and the connection stays until disconnected                                                      |
+| Tool removed from the list [O1, O2]                                                                    | Next request 401; no new consent                                                                                                                                | Same                                                                                                                                                                                         | Needs a restart of both services                                                                                                                                   |
+| Audit row for a connection call [O2]                                                                   | Tool name, connection id, authorizing person's email, `userId` the AI row, `keyId` empty                                                                        | Same                                                                                                                                                                                         | Read only in an Owner browser session; AI cannot read it                                                                                                           |
+| admin_whoami on a connection [O2]                                                                      | `key.id` is `conn-...`, profile, expiry, authorizing account id, no email                                                                                       | Same                                                                                                                                                                                         | No secret; playbook unchanged                                                                                                                                      |
+| Article issuer                                                                                         | Not changed by this work                                                                                                                                        | Not changed by this work                                                                                                                                                                     | Separate host, keys, tables, clients; loopback only                                                                                                                |
+| Article MCP                                                                                            | Token refused on /api/mcp, key refused on Article path                                                                                                          | Same                                                                                                                                                                                         | Issue #177 isolation                                                                                                                                               |
+| Public policy pages                                                                                    | Current text until P1                                                                                                                                           | Wording as merged in P1, confirmed by the Owner on 2026-11-03 and live with the first batch before any AI credential is placed, with the AI vendor sentence the Owner approved on 2026-11-06 | Exact wording as merged in P1, with the AI vendor sentence the Owner approved on 2026-11-06; no sentence offering review by an administrator                       |
+| Public site, registration, access mode                                                                 | Unchanged                                                                                                                                                       | Unchanged, except that the first batch raises the registration agreement version and notifies existing users                                                                                 | No release changes the access mode                                                                                                                                 |
 
 # Technical design
 
@@ -541,10 +541,11 @@ Recorded when built in S6, on withholding:
   Its media route answers `SELF_ONLY_OWNER_REVIEW` for all of that Article's
   media while it does, because the reference, not the route, names the item. The
   Article's text stays readable, with that item's id in its `references`.
-- A deleted work is not self-only, so a case on it keeps the snapshot its
+- An erased work is not self-only, so a case on it keeps the snapshot its
   reporter saw and a comment under it stays readable, even if the author made
   the work self-only before deleting it. Both were public when written. The work
-  itself holds no text.
+  itself holds no text. A work the trash purge deleted does hold it, so it is
+  withheld (section 6).
 - `operatorReadScopeFor` withholds for `ai-admin` always. The selfOnly switch
   reaches the Backend with the slice that builds `x-ai-sensitive`; until then
   the switch can open nothing here, which fails safe.
@@ -564,6 +565,72 @@ tests/integration/postgres/ai-operator-reads.test.ts:
 - The byte test holds real bytes, the legacy way, which needs no media store: AI
   opens a public work's item, the Owner opens the self-only work's, and AI gets
   403 with no byte until the work is public again.
+
+Recorded when built in S7, on the Backend, tests in
+tests/unit/backend/operator-ai-community-credential.test.ts and
+tests/integration/postgres/ai-operator-writes.test.ts:
+
+- `AI_OPERATOR_ROUTES` gains the community credential's reversible writes, with
+  PUT beside GET and POST, and `selfOnly: "report"`, which asks
+  `caseIsSelfOnlySql`. The irreversible ones stay out until the run engine,
+  which sets their header, so `forward`, `delete-body`, `remove-thread` and
+  `abandon` still answer `AI_ROUTE_FORBIDDEN`.
+- `PUT featured` names its record in the body, so its handler asks the self-only
+  question itself.
+- `publishing/jobs/:id/retry` carries `selfOnly: "publishing_job"`, which asks
+  whether the job's subject is a self-only work. A job on a media item matches
+  nothing there.
+- A case's write also asks whether the case is a person's own request about
+  their personal information, and answers `PERSONAL_INFO_OWNER_REVIEW` (section
+  12). A read of it does not ask.
+- A comment write whose key already has a receipt passes the self-only check,
+  and no other route does (section 17). It reads the same table and the same
+  header the write's transaction reads, so this lets no new write through.
+- `articles/:id/moderation` carries `selfOnly: "article"`: AI cannot open the
+  media of an Article using a self-only work's item, and it is not asked to
+  approve what it cannot read. This reads the row's own rule, not a line of the
+  Matrix.
+- `metadata` with `legalHold:false` is the one write a route row cannot class,
+  because the class is in the body. Its handler answers `AI_RUN_REQUIRED`
+  without `x-admin-mcp-run`, as an irreversible row does. `urgent:false` is
+  decided there too and answers `URGENT_OWNER_ONLY`, run header or not: urgent
+  is one-way for AI, by the lead's decision, and no preview or run changes that.
+- `reporting-adapter.ts` wrote `moderated_by='owner'` whoever decided. A
+  decision or a correction moving a comment or a reply now records its operator.
+- Only `ai-admin` is told `replayed: true` (a receipt answered) or
+  `alreadyInPlace: true` (nothing was left to change), from `markForAiOperator`.
+  The Owner's answers keep their shape, and a stored receipt holds neither word.
+- `thread.create` fingerprinted the id it makes per call, so a retry could never
+  meet its own receipt and always read as a conflict. On the AI path the
+  fingerprint no longer holds it, so a lost answer replays. The Owner's page
+  sends a new requestId per click and never meets this, and its route is
+  unchanged.
+- A key used before on other content answers `IDEMPOTENCY_CONFLICT` on the
+  comment, content, thread and publishing receipts. It is a subclass of the
+  conflict, so every other caller treats it as one. The Owner's route now
+  answers that code too, and the Owner's Admin client narrows every 409 to
+  `STATE_CONFLICT`, so its pages read what they always read. A unit test holds
+  that narrowing.
+
+Recorded when built in S7, on settlement, tests in
+tests/unit/backend/operator-ai-base-credential.test.ts,
+tests/unit/backend/operator-ai-community-credential.test.ts and
+tests/cms/admin-mcp-settlement.test.ts:
+
+- `ai/settlement` with `type=item` is the one row both credentials hold, and
+  `item` names a job's own subject, a media item or a Catalog asset, because the
+  read is the same. `type=work`, `article` and `user` are on the community
+  credential alone. Admin sends `item` on the base token, so Catalog work needs
+  no other, and with the community token absent it still answers.
+- The route is the AI's own: `handleAiOperatorRead` runs for `ai-admin` alone,
+  so the Owner's token gets 404 there.
+- A subject that is not there answers 404, one self-only answers 403
+  `SELF_ONLY_OWNER_REVIEW` with no count, and a read out of time 503
+  `READ_TIMED_OUT`. None reads as settled. An item held by a revision of a
+  self-only work is refused on the base credential too, as a lookup refuses it.
+- `PostgresAiOperatorReader` takes the two publish gates, so its one call in
+  services/backend-production/src/composition.ts now passes them. With none
+  given it reads them as shut, as publishing does.
 
 Release record, App-role preflight, read-only, for the Owner to run on
 Production before `COMMUNITY_OPERATOR_AI_TOKEN` is placed. Every row must be
@@ -589,6 +656,9 @@ FROM (VALUES
   ('community.report_urgent_outbox','SELECT'), ('community.thread_read_state','SELECT'),
   ('community.comment_likes','SELECT'), ('community.work_publishing_settings','SELECT'),
   ('community.account_publishing_capacity','SELECT'), ('public.catalog_discovery','SELECT'),
+  ('community.media_public_assets','SELECT'), ('community.media_item_refs','SELECT'),
+  ('community.catalog_media_assets','SELECT'), ('community.work_drafts','SELECT'),
+  ('community.work_draft_snapshots','SELECT'), ('community.work_edit_drafts','SELECT'),
   ('community.discussion_command_receipts','INSERT')
 ) AS needed(rel, priv)
 UNION ALL
@@ -987,6 +1057,109 @@ tests/cms/admin-mcp-native.test.ts:
   files it under `not_available`. Ops on a tool no key has yet leave the index
   and answer `tool_not_listed` in a detail.
 
+Recorded when built in S7, tests in
+tests/unit/backend/admin-mcp-registry.test.ts and
+tests/unit/admin/admin-mcp-native.test.ts:
+
+- `admin_job` lists a plain shape, `kind` and `refs` of open objects, and the
+  runtime check holds the rest, as on `admin_execute`. With it tools/list passed
+  the budget of 4,000 tokens by about 120, so tools/list now drops what changes
+  no call: Zod's safe-integer bounds and the empty keys of an open object. A
+  closed object stays closed. Three more tools are still to come on the full
+  profile, and that slice will have to find its own room.
+- `meta.mediaGate` joins the envelope. `data.failed[].jobs` names what stopped
+  on MEDIA_JOB_FAILED, at most three, newest first.
+
+Recorded when built in E1, the guards, tests in
+tests/unit/backend/admin-mcp-totality.test.ts,
+tests/unit/backend/admin-mcp-route-parity.test.ts,
+tests/unit/admin/admin-mcp-community-share.test.ts,
+tests/unit/backend/admin-mcp-registry.test.ts and
+tests/unit/architecture/admin-mcp-extending.test.ts:
+
+- The tables that said "not built" by leaving a key out are whole Records now:
+  the community read and write facts, `admin_get`'s community records and what
+  reads and writes around a record. A row without an entry says
+  `notBuilt('<slice>')` or `none('<reason>')`, so a new route or record type
+  fails typecheck until it says which. `NOT_BUILT`, in the tests, files every op
+  with no body under its slice, and a test holds the two to each other. Nothing
+  answers differently.
+- Every built op on an AI credential runs its example over a call that records
+  and answers as an unreachable Backend, so only its first call is checked,
+  never a later one such as a write's read-back. That route has a row of its
+  class, on its credential, naming the self-only subject of a write's target
+  where it has one, and for a read the subject a table in the test gives it, a
+  comment or a work revision, or none. The four irreversible community routes
+  wait in `AI_ROUTE_PENDING` for S8. The AI's JSON call now asks the route table
+  before any fetch and refuses an unlisted route with the Backend's own
+  `AI_ROUTE_FORBIDDEN`, 403.
+- The capability document carries a budget table, tools/list per profile and per
+  tool and the `admin_actions` index, and the registry test fails once the index
+  passes 80% of the text cap; tools/list has no such alarm. The index is
+  measured in its largest form, with no AI token placed, so the document does
+  not depend on the process. A tools/list figure there is the tools array alone;
+  the JSON-RPC frame adds 44 bytes on the wire, which the contract suite checks.
+  The registry test also refuses an enum on tools/list taken from a registry
+  list, and any past eight values.
+- docs/development/admin-mcp-extending.md lists the touch points of four kinds
+  of change, each marked forced, guarded or review, and its test fails when it
+  names a file that is gone or a table its file no longer declares.
+
+Recorded when built in E1, room and compatibility, tests in
+tests/cms/admin-mcp-contract.test.ts, the added blocks of
+tests/cms/admin-mcp-community.test.ts,
+tests/cms/admin-mcp-community-writes.test.ts and
+tests/cms/admin-mcp-analytics.test.ts,
+tests/unit/admin/admin-mcp-backend-answer.test.ts and
+tests/unit/backend/admin-mcp-registry.test.ts. The suites that pinned the old
+code for these cases now pin the new one, and nothing else changed in them: a
+stub answer holding a contact field, a garbled analytics or settlement reply,
+and an op named on the wrong tool.
+
+- tools/list shows `type` on `admin_find` and `admin_get` and `report` on
+  `admin_analytics` as plain strings, and `admin_get`'s `find` as an open
+  object, `from` and `to` as an integer or a string and `fields` as strings.
+  Each keeps its JSON type, because a client may read a missing one as a string.
+  Descriptions are unchanged. The runtime check is as strict as it was, and
+  `INPUT_INVALID` now names a closed value's choices in `allowedValues`, a
+  union's from its branches, so `from` and `to` name `draft` and `published`. An
+  answer names them once per path, so a slip in a batch's shared input names
+  them once and not once a target. As the official client receives it, with its
+  JSON-RPC frame, full and operate went from 11,939 to 11,090 bytes and read
+  from 10,471 to 9,622, 849 bytes each; the ceiling stays 12,000. The capability
+  document counts the tools array alone, 44 bytes fewer. The reservation test,
+  the listing plus 1,000 bytes for each tool still to come, is not in: three
+  tools need the listing at 9,000 bytes or less, and it is 2,090 over. That room
+  comes from the descriptions, which S8 plans to cut.
+- On the AI path a Backend answer loses any key its schema names nowhere, and
+  the same strict schema reads the rest, so either side may be released first
+  with a new answer field and no unknown field reaches a tool. In a union only a
+  key that no branch names is dropped, so a branch's own field, such as an
+  owner-only mark, is never dropped to read another branch; of the branches that
+  then match, the one read drops the fewest keys. Anything else wrong answers
+  `BACKEND_CONTRACT_MISMATCH`, which retrying cannot change. A write whose own
+  answer cannot be read is an unknown target and never a failed one, with no
+  `next`, because the write may have committed and a replay reads the same
+  answer; so is a guarded write's read-back after a conflict. A settlement read
+  it cannot read, once the write committed, files the target as failed under
+  that code, as `MEDIA_JOB_FAILED` does for a state that did commit, with no
+  `next`, and `admin_job` files it refused. A body that is not JSON, or never
+  arrives, is a failed read as before: analytics answers
+  `ANALYTICS_UNAVAILABLE`, `reply_invalid`. The Backend's `AI_RUN_REQUIRED`
+  answers `PREVIEW_REQUIRED`, as the Admin does for the same input.
+- `ADMIN_MCP_CONTRACT_VERSION` is serverInfo's version, and `admin_whoami` on
+  the native path gives `contract`: that version, a hash of the op catalog
+  (names, tools, classes, inputs) and a hash of this credential's tools/list.
+  The plugin path's answer is unchanged. The `initialize` instructions are
+  unchanged.
+- `ADMIN_OP_ALIASES` keeps an op's earlier name: through its last day the name
+  runs the op that replaced it, under that op's name in every `next`, and the
+  answer carries `meta.deprecated`; after it the name answers `OP_RETIRED` with
+  `use`. An op named on another tool answers `WRONG_TOOL` with the tool, where
+  it answered `UNKNOWN_OP`; an irreversible op on `admin_execute` still answers
+  `USE_EXECUTE_IRREVERSIBLE`. Near names answer only a name that was never an
+  op. The table is empty: no op has been renamed.
+
 ## 6. Locate
 
 Principle: one call resolves a human reference to a stable ref and says whether
@@ -1122,13 +1295,24 @@ published row (plugin dist/mcp/tools/schemas.js:20).
   (payload.config.ts:254).
 - `preview`: section 10.
 
-Self-only works are exactly `visibility='self' AND deleted_at IS NULL`
+Self-only works are `visibility='self' AND deleted_at IS NULL`
 (apps/web/features/publishing/ui/editor/visibility-field.tsx:20). The second
-condition matters: permanent deletion also sets visibility to self and empties
-the work (services/community-postgres/src/publishing/works.ts:395-400), so
-reports and appeals on deleted works stay with AI. Self-only works are withheld
-from AI while their switch is off (section 12). Carriers, each with a test:
-read-works and find, `read-report` snapshot (reporting-adapter.ts:468),
+condition matters: erasing a work also sets visibility to self and empties the
+work and all that holds its text
+(services/community-postgres/src/publishing/works.ts:395-425), so reports and
+appeals on erased works stay with AI. A trash purge only sets `deleted_at`
+(works.ts:532): it keeps the title, text and revisions. So did #126's delete,
+with no `trashed_at`, until #138 removed it. So for AI a deleted work that still
+holds content counts as self-only too, whatever its visibility and whether or
+not `trashed_at` is set, by the lead's decisions of S7. Content is what an
+account purge erases, asked by the same `deletedWorkHoldsContentSql`: the row's
+title, text, media list and revision pointers, and any row of its in
+`work_revisions`, `work_drafts`, `work_draft_snapshots` or `work_edit_drafts`.
+An emptied row stays readable. That is `isSelfOnlyWorkSql`, the one definition
+every carrier below and analytics use, with `isSelfOnlyWorkInScanSql` for a
+statement that goes over the whole table. Self-only works are withheld from AI
+while their switch is off (section 12). Carriers, each with a test: read-works
+and find, `read-report` snapshot (reporting-adapter.ts:468),
 `latestSubmission.title`, submission title and body
 (work-publishing-schemas.ts:167-168), `read-featured` with `filter=all`
 (content-operator-adapter.ts:400-412), read-comments, read-comment and comment
@@ -1407,6 +1591,25 @@ tests/cms/admin-mcp-community.test.ts:
   `READ_TIMED_OUT`. That is 12 s inside the 15 s call, and with the pool's 5 s
   connection wait 17 s inside the call and its 15 s hold, so the hold is a real
   bound on these reads. The Owner's reads have no such limit, as before.
+- A deleted row's content test asks four more tables, so a statement that goes
+  over `works` asks through hashed sets (`isSelfOnlyWorkInScanSql`): the works
+  list, its count, `find` on works and the comment set. Each set is read once,
+  and only if a row gets that far. The per-row lookups stay where a statement
+  asks of one work or a few. At the bench's scale plus 200 erased works, 20,000
+  drafts, 20,000 snapshots and 5,000 edit drafts, on a laptop with PostgreSQL's
+  default `jit=on`, the sets keep the default works list at 91 to 105 ms and the
+  comment queue at 358 to 406 ms, from about 530 ms and 1,320 ms with lookups
+  everywhere, and 20,000 erased works add 30 ms and 70 ms to those two. Lookups
+  over many rows cost more in that seed, whatever the erased count: `read-users`
+  6 to 584 ms, `find` on reports 15 to 589 ms, `read-reports` 42 to 62 ms and
+  the submissions queue 22 to 115 ms. Nearly all of that is JIT compiling,
+  because the planner prices the two tables with no index on `work_id` into
+  every row: with `jit=off` those four read 8, 13, 37 and 13 ms, and with such
+  an index on `work_drafts` and `work_draft_snapshots` and JIT on they read 7,
+  54, 28 and 21 ms. No index is added here, and whether Production has JIT on
+  was not read. The Owner's reads plan the condition away. At L0's seed, with
+  few drafts, M3's single samples read 197 ms and 367 ms against 160 ms before,
+  inside its 2,350 ms, and U1 17 ms and 18 ms against 16 ms.
 - `listPending` compares its cursor in milliseconds. It held microseconds in the
   column and milliseconds in the cursor, so the row a page ended on came back at
   the head of the next page, on the Owner's screen too.
@@ -1423,9 +1626,10 @@ request id derived from requestId and index.
   (community-moderation-service.ts:281-285; port
   community-comment-port.ts:75-85). For the AI actor, the route turns a new
   `x-operator-request-id` header into a `CommandReceipt`.
-- CAS or state-guarded ops (decide-report, review-report, metadata,
-  moderate-user, set-policy) use `verify`: on a lost answer, read the subject
-  and compare history or state.
+- CAS ops (decide-report, review-report, metadata) use `verify`: on a lost
+  answer, read the subject and compare its history. moderate-user and set-policy
+  were meant to, by state, and take the same header receipt instead (recorded
+  below).
 
 Outcomes per target: applied, already_applied, conflict, failed, unknown. Only
 all applied or already_applied, with settlement done, gives `ok:true`. Budget
@@ -1529,6 +1733,84 @@ Recorded when built in S5, tests in tests/cms/admin-mcp-execute.test.ts:
   ALREADY_REVOKED, ALREADY_SET. An async op is still asked for its settlement on
   that path, so a repeat of `catalog.withdraw` under a new requestId reads
   QUEUED as the first call did, never `ok:true`.
+
+Recorded when built in S7, the community writes, tests in
+tests/cms/admin-mcp-community-writes.test.ts:
+
+- A community op's `input` leaves out the route's `requestId`, as an editorial
+  op leaves out `idempotencyKey`. moderate-comment, moderate-user and set-policy
+  have no such field, so their key goes in `x-operator-request-id`. Each route
+  requires one on the AI path, a uuid, and answers 400 without it: a target with
+  no key has nothing to replay. The Owner's routes read no header.
+- `results` holds a small echo, never the record: a report or a work can pass
+  the text cap, and `admin_get` reads the whole. An echo's title goes by length
+  and hash past `INLINE_TEXT_CHARS`, and is the only person's word it holds.
+- A Backend 5xx or a lost answer is OUTCOME_UNKNOWN, since the write may have
+  committed. The exceptions are the codes that say nothing ran, by name:
+  AI_CREDENTIAL_NOT_CONFIGURED, OPERATOR_NOT_CONFIGURED and EXECUTE_BUSY. A
+  refused body keeps its bare code on the row, under OPERATION_REFUSED.
+- A case's three ops have no receipt. A repeat whose version has moved answers
+  409, and the op then reads the case and asks whether this command is what
+  moved it. A decision: the case's decision is that action, not reversed, and
+  its history holds that action by `ai-admin` ending in that reason, because an
+  official record's verification stands before it. A review: the same, by
+  outcome. Metadata: its audit row holds the command as sent, version included,
+  so it is the very one. A same-worded decision someone overturned, or the
+  Owner's, stays STATE_CONFLICT. A read that fails there says OUTCOME_UNKNOWN,
+  since it was the one thing that could tell.
+- `moderate-user` and `set-policy` keep a receipt on the AI path, in
+  `discussion_command_receipts`, as moderate-comment does, with no migration. It
+  commits in the write's own transaction on both paths, the state already in
+  place included, so a repeat of that key answers what it stored whatever has
+  happened since: a retry, or following `next`, cannot re-suspend a user the
+  Owner reinstated. A user's receipt holds id, status and revoked sessions and
+  no name, because it outlives an account's deletion. A new requestId is a new
+  intention and acts on the state it finds: `already_applied`, through
+  ALREADY_SET, when nothing was left to change. Hiding a comment already hidden
+  stays a conflict under a new requestId, as on the human route.
+- So a community write that replayed a target says what that answer is: one
+  fixed sentence in `hint`, that what `results` shows of it can be what its
+  command answered when it committed, not a fresh read, and to read the record
+  to see what holds now. A suspension the Owner undid can otherwise read
+  `ok:true` with state `suspended`. A case's replay does read its record, and
+  "can be" holds of that too, so no op is an exception. A batch that replays one
+  target and runs another says it as well, though `meta.replayed` needs them
+  all. A fresh answer has no such sentence, and tools/list does not change.
+- `data.moderationCases` counts the subjects this call moderated, each with its
+  own case, user message and appeal path. A replay or a state already in place
+  opens none. A row of `queued` carries `alreadyApplied` when this call changed
+  nothing there, so U3's changed and skipped stay apart while media work is
+  open.
+- An id leaves in `data` and the audit row when it is a community record's own
+  shape, a fixed word and 32 hex digits, beside the shapes above.
+- Community writes share reads' 2 slots of `COMMUNITY_READ_POOL_SHARE`. The App
+  pool defaults to 5 (`DATABASE_POOL_MAX`), these 2 and analytics' 2 leave one
+  for the public site and sign-in, and a write's transaction holds a connection
+  as a read does, so a share of its own would make 6 of 5. A write waits its
+  turn up to 5 s and then answers EXECUTE_BUSY, having run nothing, and a read's
+  long list can so delay a write. `admin_execute`'s own share stays 2 calls per
+  process.
+- The slots bound connections only if a write ends by itself, because the
+  Backend does not stop on Admin's abort. So every AI write transaction starts
+  by setting `lock_timeout` and `statement_timeout` to 8 s, on the `ai-admin`
+  label alone, before any lock: `mutate`, `operatorCommand`, the thread command,
+  `setUserStatus`, a comment's moderation and the policy write. A report's
+  transaction has had its 8 s all along. Past the limit the transaction rolls
+  back, the route answers 500 and the client reads OUTCOME_UNKNOWN, which is
+  true and safe to retry. The Owner's writes take no limit and wait as they
+  always have. tests/cms/admin-mcp-community-writes.test.ts counts this on the
+  real Backend behind a held lock, and
+  tests/integration/postgres/ai-operator-writes ends every one of these
+  transactions. The limit is per statement, because PostgreSQL 16 has no
+  `transaction_timeout`: a write with two long lock waits can run past the 15 s
+  abort, and the 15 s slot hold covers that up to 30 s.
+- A CAS op's requestId binds nothing it can compare, because there is no run
+  table and no receipt: the same requestId with other arguments runs if its
+  version still matches. A receipt op answers IDEMPOTENCY_CONFLICT. Comment
+  receipts, content receipts and CMS receipts are looked up apart, like the
+  families above.
+- `PREVIEW_REQUIRED`'s hint now names a legal hold's release beside a new
+  identity. Only `set-report-metadata` with `legalHold:false` meets it here.
 
 ## 8. Preview and run engine
 
@@ -1709,6 +1991,73 @@ Proving it needs a Backend read outside this slice. A record with no media in
 its live row or any kept version answers `ok:true`, since there is nothing to
 prove, unless the record has reached `maxPerDoc` versions, when an older one
 that held media may be gone and it stays QUEUED.
+
+Recorded when built in S7, on settlement, tests in
+tests/cms/admin-mcp-settlement.test.ts over JSON-RPC and
+tests/integration/postgres/ai-operator-settlement.test.ts under the App role:
+
+- Which ops read it is pinned in the registry test beside the async list. No
+  built op answers from `accepted` any more.
+- The items behind a subject are the union its operations touch: a work's across
+  all its revisions, which is `syncWorkHolds`' set, because an approval moves
+  the public one and the old item's withdrawal is no longer on the public
+  revision; an Article's across its revisions; a user's all, which is
+  `requestOwnerPublicationSync`'s set.
+- A job open on any of them answers QUEUED, `state: media_jobs_open`, and `next`
+  is `admin_job` with the target's ref. The refs of a batch join into one read
+  while they fit `next`'s 1,500 bytes. Past that, or when any target's
+  settlement could not be read, `next` is the same call, which replays and asks
+  again. A batch with something stopped and something waiting answers PARTIAL,
+  and `next` reads only what is waiting.
+- `verify_withdrawal` counts as well as the two jobs this section names, because
+  a `withdraw_media` that submitted a purge succeeds with its verification still
+  to come (services/backend-production/src/publication/worker.ts), and the media
+  has not provably left until then. The publication adapter's own `activeJobSql`
+  treats the three alike. `ok:true` would otherwise be early, which rule 4 of
+  section 1 forbids.
+- "Newer than the operation" needs no time from the client. The operation fences
+  the subject's public asset, setting `desired_at`, in the transaction that
+  queues its jobs, so a replay and `admin_job` read the same time, and a later
+  operation that fences again starts its own. The worker's clock is not the
+  database's, and a job running through the operation has no successor if it
+  then fails, so a stop within one minute before the fence counts. A stop older
+  than that does not: an old failure never reads as this operation's.
+- A stop counts until a later job of its side has succeeded, since the worker's
+  reconcile tries again up to three purge attempts. A withdrawal and its
+  verification run one handler, so either clears the other. A publish job's stop
+  is not cleared by a withdrawal. An open job wins over a stop, because the
+  worker may yet get past it.
+- No index serves a subject's finished jobs and this task takes no migration, so
+  the read past a stop is a second statement, run only when there is a stop,
+  bounded on `publishing_jobs_state_idx` by the stop's own time as a real value.
+  L0 holds both statements to no scan of a large table at seeded scale.
+- A settlement read that fails, times out or answers garbage leaves the target
+  QUEUED, `state: settlement_unread`, and never `ok:true`. So does a work its
+  author flips to self-only between the commit and the read: `admin_job` names
+  that one SELF_ONLY_OWNER_REVIEW.
+- `community.retry-publishing-job` settles on the job itself, of whatever kind,
+  through `read-publishing-jobs`, so ok:true is the job's own `succeeded`. The
+  one exception is a `withdraw_media` that has succeeded: that success leaves
+  its verification to come, so the answer is its item's read, with the
+  verification open reading QUEUED and stopped reading MEDIA_JOB_FAILED, as on
+  every other path. A verification's own success is real and reads as itself.
+  Its echo holds only what stays true of the job, because a replay's stored
+  answer still says `queued`.
+- A decision settles on what the adapter's `subject` acts on: `retain`, `warn`
+  and `restrict_comments` move no media and answer at once, `suspend` reads the
+  affected user, a work and a community Article read themselves, and an official
+  record's hide reads nothing, since it was verified before the decision. A
+  review reads what its decision acted on. A rule that cannot say what a
+  committed command moved throws, and reads as unread, never as nothing moved.
+  The report echo gains `target`, its source and `affectedUserId` for this.
+- `intent` decides one thing: `mediaGate: "off"` is said only of a `publish`
+  with a gate shut. Withdrawal runs whatever the gates say.
+- `admin_job` takes at most 50 refs, which fit the text cap with their whole
+  `next` by test. A cut goes on from the first ref it left out. Past the 10 s
+  budget the rest wait: IN_PROGRESS, `remaining`, and `next` holds what is still
+  waiting and what was not read. It is a read, so a read key lists it.
+- Settlement reads share the 2 slots of `COMMUNITY_READ_POOL_SHARE` on both
+  credentials, for the same reason writes do.
 
 ## 10. Editorial completion
 
@@ -2249,6 +2598,25 @@ comment answers `SELF_ONLY_OWNER_REVIEW`. The comment part is a reading the
 Owner signed in the amendment. The Owner's Admin queue is unchanged. The check
 reads current visibility at read and write time.
 
+Personal-information requests, decided by the lead in S7. content.ts:77 sends a
+request to read, correct or delete personal information through the complaint
+entry and says the Owner verifies identity and handles it, so it stays with the
+Owner. A report with reason `privacy` filed by a user on their own profile is
+treated as such a request, identified from existing columns with no migration:
+`reason='privacy' AND target_type='user' AND target_id=reporter_id`. AI may read
+it, as the policy says: list, get and find hold its text, its `allowedActions`
+is empty, and an exact `admin_find` offers no write. Every AI write on the case,
+decision, review or metadata, answers `PERSONAL_INFO_OWNER_REVIEW`, whose fixed
+hint says it stays in the Owner's queue. A route row asks this through
+`selfOnly: "report"`, so a case's write added with the run engine takes the same
+property to get it. The Owner's route is unchanged. A `privacy` report about
+someone else is an ordinary case. What this cannot catch is in section 17.
+
+Urgent is one-way for AI, decided by the lead in S7. `urgent:true` works, and
+`urgent:false` from the AI credential answers `URGENT_OWNER_ONLY`, so AI cannot
+move a case out of the urgent-first order the Owner's on-call handling reads.
+The Owner clears it as before.
+
 Policy constant.
 `AI_POLICY_DISCLOSURE = { dm:false, evidence:false, rawIp:false, selfOnly:false }`
 in contracts is tied by a test to apps/web/app/policies/content.ts and
@@ -2280,6 +2648,16 @@ through AI is a platform handling result, never Owner-authored (amendment;
 docs/community/community-reporting-appeals-v1.md:67-68). A grep of
 reporting-adapter.ts and the two reporting contracts finds no Owner label in
 code, so this changes the document; S7 checks user-facing strings.
+
+Checked in S7, on user-facing strings. A person reads no operator of a case: a
+message holds its kind and text, a decision's fixed sentences name no one, and a
+forward adds nothing to what was sent. No string in apps/web/features/reporting,
+`reporting-adapter.ts` or `staff-moderation-reporting.ts` holds an Owner label,
+and tests/integration/postgres/ai-operator-writes.test.ts holds both to it. The
+label was in the document alone, which now says what the amendment signed. The
+Admin's own `私有材料 · 仅限 Owner` is the Owner's screen, not a message. The
+forward itself runs with the run engine; this slice proves the service's answer
+and strings.
 
 ## 13. Control page and audit
 
@@ -2448,10 +2826,12 @@ AGENT_CONNECTIONS_ENABLED.
 ## 16. Test plan
 
 - PostgreSQL 16 is the acceptance target: task-owned containers on
-  `postgres:16.15-alpine` with `TEST_DATABASE_EXPECTED_VERSION_NUM=160015`
-  (.github/workflows/ci.yml:202,268). Shared compose stays at 18.4 because tests
-  pin it (tests/unit/architecture/current-truth-config.test.ts:159). The
-  existing CI PostgreSQL 18 jobs are not changed.
+  `postgres:16.15-alpine` with `TEST_DATABASE_EXPECTED_VERSION_NUM=160015` (the
+  `postgres16` services in .github/workflows/ci.yml). Shared compose stays at
+  18.4 because tests pin it
+  (tests/unit/architecture/current-truth-config.test.ts:159). CI's PostgreSQL 18
+  steps are paused behind `CI_POSTGRES_18` since the Owner's word of
+  2026-11-05, 「可以修改规则暂时不测18，因为现在主体在16」.
 - Protocol-level tests, real JSON-RPC over HTTP, not direct handler calls, using
   the official client from tests/package.json on the native route, including GET
   with an AI key.
@@ -2618,6 +2998,92 @@ Accepted limits, recorded and not fixed:
   in `snapshot.post.title`. AI can read such a title until retention clears the
   case, three years after it closes, and can search the Article report's.
   Whether Production holds such a row was not checked.
+
+- A personal-information request is recognised only as a `privacy` report on the
+  reporter's own profile (section 12). AI can read and decide one filed any
+  other way, because nothing in its columns says what it asks: another reason on
+  the same profile, a report on someone else's profile or on a work or comment,
+  feedback, or a description alone. So can it one made while the same user has
+  another open report on their own profile, which joins that case and keeps its
+  reason, or one a rights notice then turned into `copyright`. For those,
+  leaving it to the Owner rests on whoever reads the description. The other way
+  round, a `privacy` report on one's own profile that asks for something else
+  still waits for the Owner.
+- The self-only check on a write runs before the write, in its own statement, so
+  the window lasts as long as the write waits. An author's flip landing inside
+  it, for up to the 8 s limit behind a lock, can let one write through on what
+  was public a moment earlier, and the next call refuses. This applies to
+  comment and case writes. A work's moderation conflicts because the flip bumps
+  its version, a submission's conflicts because the flip withdraws it, and
+  featuring re-reads `work_is_public` in its transaction.
+- After a lost answer and a flip, a comment's retry answers from its receipt.
+  The other writes still answer SELF_ONLY_OWNER_REVIEW for a write that
+  committed, so a client can read a committed write as refused, short of the
+  Matrix row "Lost answer or timeout". It takes two independent events and
+  nothing applies twice. A case's three ops have no receipt to answer from. A
+  work's, a submission's and an Article's have one, but their settlement then
+  reads the withheld work and could only answer QUEUED unread on every repeat, a
+  work's stored answer holds its title, and their key is in a body the route has
+  not read at this check. Featuring and a job's retry answer the same way, with
+  the featuring row reading `enabled` and the job `queued`: featuring asks in
+  its handler before its service reaches the receipt, and a retry's key is in a
+  body the route has not read. The lead accepts all of these.
+- `community.retry-publishing-job` answers SELF_ONLY_OWNER_REVIEW when the job's
+  subject is a self-only work, as a trash purge's is, since running it would end
+  that work's self-only status. A job on a media item still retries whatever the
+  item's work: it holds no text and moves no visibility, and a job's row can
+  name such an item, as this list says above. A retry also undoes an Owner's
+  abandon of a job, which the Owner's own page allows too.
+
+- A deleted work that still holds content counts as self-only for AI, so a case
+  on it goes to the Owner, and SELF_ONLY_OWNER_REVIEW's hint says so. Two ways
+  left such rows, and nothing at this head writes either: the trash purge of a
+  work from `trashWork`, removed by #155, and #126's delete, which set
+  `deleted_at` alone and left no `trashed_at`, from 2026-09-13 until #138
+  removed it on 2026-09-15. Whether Production holds any was not read, and this
+  holds either way.
+
+- A decision on an official record reads whether it is still published inside
+  the case's transaction, holding an App connection and the case's row lock
+  while the Catalog or editorial read answers, as the human route always has. It
+  is not under the transaction's 8 s limit, which ends a statement only while it
+  runs, and an Article's read can take a second connection from the same pool,
+  waiting at most 5 s for it (`connectionTimeoutMillis`). No statement or idle
+  limit is set on those reads, so nothing on the Backend ends a slow one. What
+  bounds it is how many there can be: one of AI's 2 slots, freed about 30 s in,
+  by Admin's 15 s abort and the 15 s hold. Only an official record's hide or
+  overturn does this.
+
+- `ok:true` on media work means no publish, withdraw or verification job is open
+  and none has stopped, as of that read. It does not prove bytes moved. A
+  publish job on an item whose renditions are not ready completes with nothing
+  to copy, and the worker's reconcile publishes them later, so an approval can
+  answer `ok:true` before such an item is public.
+- A subject's settlement counts every job on its items, whoever queued it. An
+  author's own publish on the same work, or on any item of a suspended user,
+  reads as QUEUED until it ends. It never reads as done early.
+- A stop within a minute before an operation reads as this operation's failure,
+  in exchange for never reading a job that failed through the operation as
+  finished. `admin_job` then answers MEDIA_JOB_FAILED for a stop the operation
+  did not cause, until the job is retried or a later one succeeds.
+- A retried job read back after its row left, which only a `succeeded` job does
+  and only after 7 days, answers NOT_FOUND on `admin_job` and QUEUED unread on a
+  replay. A retried withdrawal whose item has gone reads the same, and one whose
+  item's work has since become self-only reads SELF_ONLY_OWNER_REVIEW on
+  `admin_job` and QUEUED unread on a replay. None reads as done.
+- A later operation that fences the same asset moves `desired_at`, so an earlier
+  stop stops counting. If that operation queued nothing, because no copy is
+  live, there is nothing left to withdraw.
+- `meta.mediaGate` reads the gates when asked. A gate that has since opened or
+  shut does not change what was queued at the time, and settlement reports the
+  jobs as they stand.
+- A named range holds finished days, as section 6 asks, so `list.comments` with
+  `last_7_days` does not hold what was posted today. Its answer says so: the
+  `filter` echo carries `excludes: "today"`, a fixed hint says how to reach now,
+  and the `range` field says the same in `admin_actions`. tools/list holds none
+  of it, so a client that ignores the hint can still hide a user's ads of "the
+  last 7 days" and leave today's visible, and its `ok:true` is true only of the
+  rows it sent.
 
 ## 18. Reuse
 
@@ -3526,6 +3992,68 @@ Recorded when built in S6, the community half, in tests/cms/admin-mcp-bench/.
   no underscore, by `public_users_handle_normalized`, so the seed's is
   `lishu-test`.
 
+Recorded when built in S7, the community writes, in tests/cms/admin-mcp-bench/.
+
+- M3 is three calls: `admin_find` on the handle, `list.comments` with
+  `authorId`, `search` and `range: "last_7_days"`, then
+  `community.moderate-comment` with the ids it listed. A named range holds
+  finished days in Asia/Shanghai, so nothing in the fixture sits in today, where
+  the request's words could read either way. Inside lies half a day or more from
+  each edge, so a run crossing a Shanghai midnight reads the same set. Its
+  account is `lishu-ads`, apart from U1's, so U1's counts stay true. A second
+  account holds the same display name and the same phrase.
+- U3 is one locate per handle, the one with no account said there, then
+  `community.moderate-user` on the fourteen found. Grading reads `applied`,
+  `already_applied` and `queued`, so it holds whether media work is open or not.
+  None is open here, because no account in the fixture has media, so L0 asks for
+  `ok:true` with nothing queued. The miss is `status: none` with every source
+  `ok`, because a source that did not answer is never a miss.
+- Both also grade the rows with plain SQL. Each subject has one case with the
+  request's reason and `ai-admin`, and the person it affects has one message
+  with that reason and where to appeal. What the request left out has no case.
+  M3 counts every comment in the seed that is not visible, before and after, so
+  an extra row fails wherever it is.
+- Neither path scans a large table on its writes, which go by id, and U3's
+  locates scan none, its miss included. `list.comments` leaves out what a
+  self-only work withholds through one hashed set of them, read once per
+  statement, so `works` is on M3's row, reported and asserted alone, with
+  `work_revisions`, which that set asks about an emptied row.
+- Statements per target on these rows are about 22 for a comment, with its
+  receipt and time limit, and about 25 for a suspension, five of them its
+  settlement. `list.comments` costs a title read per row, so M3's list is about
+  twice U1's. M3's and U3's rows report the whole path, locates included.
+- The sample request, find a user's recent ad comments and hide them, is M3 at
+  scale. tests/cms/admin-mcp-community-writes.test.ts takes it end to end on a
+  real Backend under the App role: the account by `@handle`, the comments
+  through `list.comments`, the hide, what an anonymous visitor then reads of the
+  work on the public route, the same list answering `hidden`, each comment's
+  case and message, a replay that moves nothing, and the author's appeal. That
+  suite also holds the limit on today's comments in section 17.
+- L1 still times no community class. The only numbers on these writes are L0's
+  single samples, which Gate A's 200 do not count, and they say nothing about
+  TencentDB until L4.
+- A suspension's cost grows with its account's live assets, and a read past a
+  stop with the finished jobs since that stop. L0 prices each once.
+  `suspend_live_assets` is one account with five, about 3 statements per asset,
+  under a statement ceiling of its own and with no scan of a large table.
+  `job_read_old_stop` is a stop dated before every seeded job, where the bound
+  on the state index holds the whole table and the plan falls to a scan of
+  `publishing_jobs`, one statement more and inside the branch's 2 s statement
+  limit. Past that limit the answer is unread, never settled. Both are single
+  samples at seeded scale: they fail on a new statement or scan, and they say
+  nothing about TencentDB.
+
+Recorded when built in S7, on settlement, in tests/cms/admin-mcp-bench/.
+
+- `admin_job` is a class of its own in `l0.scale.ts` with the design's budget,
+  on a user, a work and an item in turn, at 10 statements. The seed gains media
+  items and publishing jobs at the `BENCH_SCALE` it names, one in twenty of them
+  stopped and none on a public asset, so no reference path waits on them.
+- The plan check now reads a statement that starts with `WITH`, which it had
+  not. That is how the first version of this read was caught: its check for a
+  later success read every finished job in one statement, on every call. A read
+  past a stop has its own test, one statement more and no scan.
+
 ## 22. Login door
 
 Authority:
@@ -3535,7 +4063,9 @@ Behavior Matrix states the behaviour; this section says how it fits together.
 Sections 1 to 21 describe the key door, which stays for automation and the
 companion. Nothing here is built until its slice merges: O1 issuer, stores and
 migration; O2 door and audit; O3 consent, page and hooks; O4 Production
-templates and the real-client record.
+templates and the real-client record; O5 Cursor on the list and one button per
+tool. The end of this section says what has been proved, what O4 delivered, what
+stays for the release and what O5 changed.
 
 An administrator adds one address or clicks one button in their tool, signs in
 with their usual Admin account and clicks allow. No key is issued to a person.
@@ -3563,6 +4093,22 @@ Tool     issuer /token, code and PKCE -> artvenn_ct_ token and refresh token
   plugin connection path and stays as #141 measured it, so its resume takes the
   cookie and an approved row with no secret, and its refresh and lifetimes are
   unchanged.
+- Resource side. `oauthSurfaceEnabled` composes the Admin's resource runtime;
+  `connectionsEnabled` alone decides what the plugin path receives from it. In
+  Production `AGENT_RESOURCE_DATABASE_URL` must end in exactly
+  `?sslmode=verify-full`, `AGENT_DATABASE_SSL_CA_FILE` must be set and readable
+  for its pool, and the issuer and resource must be https. `CMS_ENVIRONMENT`
+  must be `production`, and `admin.env` carries no
+  `AGENT_AUTHORIZATION_ENVIRONMENT`: the issuer is held to `production` too, so
+  the two cannot disagree. Development under
+  `AGENT_AUTHORIZATION_PROFILE=operator` needs those two names equal, since
+  there they can differ. A bad setting, a wrapper key included, is a bare code
+  on stderr on the first request that loads the Payload config, not when the
+  Admin starts, and connection tokens are refused. So a release check makes one
+  request before it reads the journal for
+  `agent-connections composition refused`. The pool has a 5 s query timeout,
+  carried in its URL because the shared helper takes none, so a database gone
+  silent after a connect answers the generic 401.
 - Development database. Every decision now writes `resume_secret_digest`, a
   read-only approval and a denial too. After this migration, apply
   `infra/development/agent-connections/grant-authorization.sql` again, or a
@@ -3572,13 +4118,39 @@ Tool     issuer /token, code and PKCE -> artvenn_ct_ token and refresh token
   `ADMIN_SCHEMA_NOT_READY` until every required migration has run unchanged.
 - Article. It runs the same `main.ts`, so its refused start now names a category
   on stderr, and nothing else about it changes.
+- Door. `adminMcpDispatch` looks for an `artvenn_ct_` token first, under any
+  spelling of the scheme, so one never reaches the key lookup. `admitConnection`
+  reads everything again on each request: the token and its frozen grant, the
+  preset, the closed list, the limit from consent, the authorizing person's role
+  against `ADMIN_MCP_AUTHORIZE_CEILING`, the operator row's role, and the pause.
+  A token of another preset goes to the plugin path, which refuses it in
+  Production. Every refusal is the plugin's generic 401, with a bare code in the
+  diagnostics, including a resource runtime that refused to build and a failed
+  read of a store or of `users`. An unreadable pause answers 503, as it does for
+  a key. The person is read from `payload-user-<id>`, the form the consent views
+  stamp, and a number past the `users.id` range reads as nobody, not as a store
+  error. The door also stops a connection at 180 days from consent itself,
+  because a token refreshed just before that limit would otherwise outlive it by
+  up to an hour.
+- Audit and `admin_whoami`. `auditIdentity` builds what every row says about the
+  caller: a key's id, or the connection id and the person's email at that
+  moment. `admin_whoami` gives the `conn-` id, the expiry at that limit and the
+  authorizing account's id, never an email. It also gives `byteChannel`, which
+  names each kind of work that goes through section 20's companion, because
+  every connection is a client with no local process: a tool asked for a report
+  CSV reads why it cannot. A key can be held by either kind, so a key's answer
+  has no such field; section 20's `byteChannel` for keys arrives with the
+  companion.
 - Closed list. The name on the consent page and the callback host come from
-  `AGENT_AUTHORIZATION_CLIENTS`, never from the request. There is no
-  registration endpoint, and `features.clientIdMetadataDocument` stays off so
-  its fetch path cannot run: `Client.find` reads static clients first
-  (oidc-provider lib/models/client.js). Discovery still says
-  `client_id_metadata_document_supported`, added by a post-route middleware. The
-  public policy names Anthropic and OpenAI, which covers this list; another
+  `AGENT_AUTHORIZATION_CLIENTS`, never from the request. The Admin's door reads
+  the same setting under `operator`, and refuses by a bare code when it is
+  missing or malformed; under the read-only profile only its consent side reads
+  it, with no hosted entry allowed. There is no registration endpoint, and
+  `features.clientIdMetadataDocument` stays off so its fetch path cannot run:
+  `Client.find` reads static clients first (oidc-provider lib/models/client.js).
+  Discovery still says `client_id_metadata_document_supported`, added by a
+  post-route middleware. The public policy names Anthropic and OpenAI, and from
+  O5 Anysphere for Cursor, a sentence the Owner approved on 2026-11-06; another
   vendor needs the policy text changed first. `parseRegisteredClients` refuses
   `hosted-https` unless its caller allows it, so Article stays loopback only.
 - Native on every entry, hosted ones too. `native_client_prompt`
@@ -3590,14 +4162,94 @@ Tool     issuer /token, code and PKCE -> artvenn_ct_ token and refresh token
 - Identity. One shared `ai_operator` row, seeded with no password, so
   `approvedBy`, locks and receipts need no change, and the audit names the
   person beside it. Strategy `mcp-connection`, set only by the door. `isOwner`
-  and `isHumanOwner` are unchanged.
+  and `isHumanOwner` are unchanged. A new Production install still provisions
+  through `provision-initial-owner.ts`, because `provisionInitialOwner` does not
+  count that exact row; its address on another role, or another `ai_operator`
+  account, still refuses. `seed-phase4-acceptance.mjs` and the curation tool's
+  `bootstrap-development.mjs` read it the same way. A new Development database
+  gets its first Owner from `bootstrap-synthetic.ts`, as docs/development.md
+  says: Payload's first-user page and `first-register` look for any row and
+  cannot be filtered, so they stay closed. The Admin's account list shows it.
+- Rollback. `down` keeps the row, so a chain rollback past
+  `20261103_143652_ai_operator_role` fails that migration's cast on it. While
+  the row has written nothing, it needs
+  `DELETE FROM "users" WHERE "email" = 'ai-connection@operator.invalid' AND "role" = 'ai_operator';`
+  first, by hand. Once a connection has saved anything that DELETE stops:
+  `editorial_receipts.actor_id` is NOT NULL under ON DELETE SET NULL, and a
+  Catalog delivery intent or receipt restricts it. Then set the row's role to
+  `automation` for the rollback instead, which keeps the receipts, and back to
+  `ai_operator` after `up` runs again, because `up` leaves an existing row as it
+  is and the door refuses any other role. `up` tolerates only a conflict on
+  `email`, so any other collision stops the migration instead of leaving no row.
+- One requestId on two connections. `requestKeyFor` mixes the connection id into
+  a connection's hash, so two people's tools that choose the same requestId each
+  get their own effect, at the CMS receipt and at the Backend, and on those
+  receipt routes one never reads the other's command as a replay. Two kinds of
+  write have no receipt and read the record back, so there a tool can read
+  another's identical effect as `already_applied`: a report decision (section
+  7), whose history names every credential as one AI operator, and a lock
+  takeover (see Limits). The Behavior Matrix asks only that a retry with the
+  same requestId is safe, and it is: the id outlives a token, so the same
+  connection still replays, across a refresh too. A key's derived value does not
+  change by one byte.
+- The run engine of section 8 is not built. When S8 builds it: a run names its
+  connection beside `keyId`, because a connection's `keyId` is empty and that
+  column, numeric on the audit row, cannot hold a `conn-` id. requestId's scope
+  and the rolling 24-hour figure count per credential, not per `users` row or
+  per numeric key, because every connection shares one row and has no key.
+- Consent side. `oauthSurfaceEnabled` also composes the consent runtime, its
+  routes and the discovery documents; `/agent-connections/start` stays with
+  `connectionsEnabled`. Its pool of 2 is under the same rules as the resource
+  side's: in Production `AGENT_CONSENT_DATABASE_URL` must end in exactly
+  `?sslmode=verify-full` with `AGENT_DATABASE_SSL_CA_FILE` set, on https;
+  loopback in Development; the same environment rule; the same 5 s query limit.
+  The routes answer only an Owner browser session, and a change also checks
+  Origin against `CMS_PUBLIC_URL`. Under `operator` the list is every live
+  connection with who authorized it, and any owner may disconnect any of them.
+  The read-only profile keeps its own page data and disconnects only its own.
+- Pages. Payload skips the login redirect for custom views, so the review page
+  and the AI connections page do their own: a browser with no session and no
+  `Authorization` header goes to the login page and comes back to the same
+  interaction. Anything else that is not an Owner browser session, a key, a
+  connection token, a header JWT or an automation session, gets one sentence and
+  nothing is armed. That answer is HTTP 200, as the control page's is, because a
+  server component here has no way to set a 403; the routes behind them
+  answer 403. Under `operator` the page names no client id, URL or scope, which
+  stay in `data-*` attributes for tests. The Development read-only profile keeps
+  the page its harness reads.
+- Landing. Under `operator` it continues by itself with a meta refresh, beside a
+  plain link for a browser that declines one. Measured 2026-11-05 on headless
+  Chromium 151 and WebKit 26.5: the `SameSite=Strict` session comes back on that
+  step from a cross-site link, a popup and an address bar, and on the real Admin
+  a signed-in person reached the review without seeing the login page. The
+  read-only profile keeps the click #141 measured. The link is an `<a>`, so
+  nothing prefetches the page that arms a ticket.
+- AI connections page. Its address and its buttons come from `CMS_PUBLIC_URL`
+  plus `/api/mcp`, and a tool connects only if that equals
+  `AGENT_AUTHORIZATION_RESOURCE`, since discovery names the resource, so a
+  release has to keep the two equal. The page carries the list's resource in
+  `data-agent-connections-resource` for that check. ChatGPT's button and Codex's
+  settings link copy the address and open ChatGPT's plugins page or Codex's
+  settings. The links and the step lists come from the vendors' documents as
+  read at design time, Cursor's and ChatGPT's from O5, and Cursor's client and
+  labels from reading its 3.22.7 app, until a real one connects; the real-client
+  record corrects them if a vendor differs.
+- Reserved audit rows. An allow, a deny and a disconnect each write two rows of
+  class `reserved`, `op` `agent-connections.approve`, `.deny` or `.disconnect`,
+  with `userId` the person acting. The `start` row comes first, and if it cannot
+  be written the change does not happen. The `finish` row says how it ended, a
+  refused ticket included. If only that one is lost, a category is logged, the
+  change stands, and the ledger reads as for any call: a start with no finish is
+  an unknown outcome. Nothing is written for a malformed body or a uid nobody
+  opened.
 - Binding. Under `operator`, `decideConsent` mints a one-time secret, stores its
   digest and returns it in the resume URL. Resume needs the secret and the
   provider cookie, so an approval reaches only the browser that started the
   request. The clients are public and have no secret of their own, so the closed
   list alone does not stop a stranger from starting a request. The secret is the
   `secret` query parameter of the issuer's resume route, so the issuer's Nginx
-  log format must not carry the query string.
+  log format must not carry the query string. A refused resume is a plain page
+  in Chinese with its bare code in small text, to read out to someone.
 - What a client asks for changes nothing. Under `operator` the issuer opens the
   consent as `artvenn:admin`, and rewrites the scope the provider resumes with,
   because a request asking for nothing we grant otherwise ends in
@@ -3624,16 +4276,17 @@ Tool     issuer /token, code and PKCE -> artvenn_ct_ token and refresh token
   this issuer only; Article has none. Expired artifacts and undecided consent
   rows go hourly, in the issuer's own process.
 
-| Tool        | `family`      | `clientId`                                          | Callback                                              | `callbackPolicy` |
-| ----------- | ------------- | --------------------------------------------------- | ----------------------------------------------------- | ---------------- |
-| Claude      | `claude`      | https://claude.ai/oauth/mcp-oauth-client-metadata   | https://claude.ai/api/mcp/auth_callback               | `hosted-https`   |
-| Claude Code | `claude-code` | https://claude.ai/oauth/claude-code-client-metadata | localhost and 127.0.0.1, any port, /callback          | `loopback-host`  |
-| Codex       | `codex`       | https://chatgpt.com/oauth/codex/client.json         | 127.0.0.1 and localhost, any port, /callback          | `loopback-host`  |
-| ChatGPT     | `chatgpt`     | https://chatgpt.com/oauth/client.json               | https://chatgpt.com/connector_platform_oauth_redirect | `hosted-https`   |
+| Tool        | `family`      | `clientId`                                          | Callback                                                    | `callbackPolicy` |
+| ----------- | ------------- | --------------------------------------------------- | ----------------------------------------------------------- | ---------------- |
+| Claude      | `claude`      | https://claude.ai/oauth/mcp-oauth-client-metadata   | https://claude.ai/api/mcp/auth_callback                     | `hosted-https`   |
+| Claude Code | `claude-code` | https://claude.ai/oauth/claude-code-client-metadata | localhost and 127.0.0.1, any port, /callback                | `loopback-host`  |
+| Codex       | `codex`       | https://chatgpt.com/oauth/codex/client.json         | 127.0.0.1 and localhost, any port, /callback                | `loopback-host`  |
+| ChatGPT     | `chatgpt`     | https://chatgpt.com/oauth/client.json               | https://chatgpt.com/connector_platform_oauth_redirect       | `hosted-https`   |
+| Cursor      | `cursor`      | https://cursor.com/oauth/mcp-client.json            | localhost and 127.0.0.1, any port (it uses 8787), /callback | `loopback-host`  |
 
-As read from the vendors' own documents when this was designed. The parser
-requires a port on a loopback entry; the provider ignores it for a native
-client.
+As read from the vendors' own documents when this was designed, Cursor's when O5
+added it. The parser requires a port on a loopback entry; the provider ignores
+it for a native client.
 
 Limits, stated:
 
@@ -3657,14 +4310,305 @@ Limits, stated:
   reach that route today; adding one needs this closed first.
 - The other owners are told of a new connection by a notice in the Admin on
   their next visit, not when it happens, because the Admin has no mail adapter.
-  O3 builds it.
+  It sits in the workspace header slot, on every page, and reads the reserved
+  list. What a person has seen is in their own Payload preferences, under
+  `agent-connections-seen`, so it needs no migration and follows them between
+  devices. An owner who does not open the Admin hears nothing, and a failed read
+  shows nothing.
+- An allow raises the generation at the click, before the browser resumes, so
+  that person's earlier connection to the same tool has already ended if the
+  allow is then voided or abandoned. The page's list is honest about what is
+  left: it shows a connection only when its current grant was built at its
+  current generation, so that row is not listed. The tool has to connect again.
+  Nor does it list one past the 180-day limit from its grant's consent, which
+  the door counts from the same column.
+- A grant the issuer revoked itself, by a detected replay or by a tool revoking
+  its own token, stays on the page's list until an owner disconnects it or the
+  tool connects again, because the consent role cannot read the provider's rows
+  or a wrapper. Its tokens already answer 401. Showing that would mean a new
+  read for one rare row, so the page does not.
 - A connection is always at profile full, so section 14's advice to use profile
   `read` for sessions that bulk-read untrusted content has no form here.
-- A connection has no byte channel. Uploads, originals and rendered previews
-  stay with the companion and its key, as the row "Client with no local process"
-  says.
+- A connection has no byte channel. Uploads, every download, the canonical
+  export and report CSV among them, rendered previews, new deep zoom masters,
+  local imports and password account bodies stay with the companion and its key,
+  as the row "Client with no local process" says.
+- A document lock is per account, not per connection, so tools on the shared row
+  do not block each other, and revision checks are what protect the content.
+  Measured: after A took a lock over from the Owner, B's save went through and
+  removed the lock row, A's next save on the old revision answered
+  REVISION_CONFLICT, and on a second lock B's takeover answered
+  `already_applied` and B's release removed A's lock.
+- A role change or password change revokes that person's connections through the
+  `users` hook, in the save, after its audit row, so demoting someone and
+  restoring them leaves the old token refused and refresh answering
+  `invalid_grant`. Connecting again is a fresh consent. If that revoke fails, a
+  category (`AGENT_CONNECTION_REVOKE_FAILED`) is logged and the change stands,
+  as the Matrix requires. Then the connection stays authorized until someone
+  disconnects it. For a password change its tokens keep working. For a demotion
+  the door still refuses them while the person is not an owner, but restoring
+  the role brings them back with no new consent, and nothing tells the owner who
+  restores it. A change made while the door is off revokes nothing and leaves
+  the same window, and so does one under the read-only profile, which stays as
+  #141 measured it. The hook sees a save through Payload, so a direct database
+  change stops a demoted person only through the door's own read of the role.
+- A key's answers differ from main in wording only, "key" becoming "credential",
+  in five strings: the `initialize` instructions, the `admin_whoami`
+  description, the NOT_FOUND hint, and the summaries of `document.lock_release`
+  and `list.runs`. One offer differs too: `admin_get` and `admin_find` offer
+  `document.lock_release` only on the caller's own lock, so a key no longer sees
+  it on another AI account's lock, where it could only be refused.
 - Each person needs an account with that vendor, on a plan and in a place it
   serves. Nothing in this repository changes that.
 - No real client has been through this door. Everything said here about a
   client's behaviour comes from documents until the real-client record says
   otherwise.
+
+Proof, as of O3. `scripts/editorial/verify-agent-connections.mjs` runs under
+`AGENT_AUTHORIZATION_PROFILE=operator` beside its read-only run, on PostgreSQL
+16 in CI, with `CMS_ENVIRONMENT` equal to `AGENT_AUTHORIZATION_ENVIRONMENT`, a
+real issuer, a real Admin under `next dev`, the listed real client ids and each
+service on its own database role.
+
+- `tests/cms/agent-connections-generic-client.mjs` is the first token an issuer
+  issued through a real consent to reach this door. The official SDK starts from
+  the one address, takes the 401, offers a vendor's URL as its client id and
+  hands over the link; a person signs in and allows; the SDK redeems the code,
+  lists exactly what an `ai_operator` key at full lists, makes one call that the
+  audit names with the connection and the person, refreshes, is sent back to a
+  person by a disconnect, and connects again. Every address its own requests
+  reached, discovery, transport and refresh, is checked to be loopback. That
+  covers the client's side only. That the issuer never fetches a client id URL
+  is pinned in `agent-operator-flow-cases.ts`, which spies on the issuer's
+  fetch.
+- `tests/cms/agent-connections-browser.mjs` runs on Chromium and WebKit at phone
+  width: signed out and back to the same review, the landing going on by itself
+  with nothing armed until the review's one request, deny, wording, both resume
+  refusals with two browser contexts, no ticket for an automation session, a
+  connection token or any key, with an Owner session as the control, any owner's
+  disconnect with its audit rows, a second computer, and a demotion and a
+  password change on the real stores. It also reads the frame refusal the Admin
+  itself sends on both page groups (`frame-ancestors 'none'` and
+  `X-Frame-Options: DENY`), and checks that 允许 ignores a click or a key that
+  comes with a window switch, waiting about a second each time the page is shown
+  and focused. Each decision is exactly one consent POST, and the summary says
+  how many clicks each one took. A hosted tool's last redirect is the one hop it
+  does not take in a browser: Playwright cannot intercept a redirect, and
+  following it would reach the vendor. So from the resume route on, a hosted
+  flow walks the issuer's answers with the browser's own cookies and stops at
+  the vendor's address, and loopback tools take every hop.
+- `tests/cms/agent-connections-surfaces.test.ts` holds the routes' 403s with the
+  Owner control and the audit rows before the change, and the `users` hook
+  through Payload's own REST route, a failed revoke included. Its stores are
+  synthetic.
+
+O4, delivered in the repository. These are templates; Production changes only at
+the release.
+
+- The issuer's unit,
+  `infra/production/systemd/yoyi-admin-authorization.service`: a copy of the
+  Article issuer's with its own user, its own environment file, loopback 3004
+  and the same `main.js`. It runs from a runtime root of its own, never the
+  shared one, so no other release can start it on code that is not live yet, and
+  it unsets `ARTICLE_AUTHORING_ENABLED`, so it runs only this listener.
+- The settings: `infra/production/env/admin-authorization.env.example` and a
+  block in `admin.env.example`, naming every setting the issuer and the Admin
+  read for the door, with the closed list of tools (five since O5). The Admin
+  carries `AGENT_DATABASE_SSL_CA_FILE` and no `AGENT_AUTHORIZATION_ENVIRONMENT`.
+  The Article file keeps `AGENT_AUTHORIZATION_ENABLED=false`.
+- Nginx, in `infra/production/nginx/yoyi.conf.template`: the issuer's own server
+  block, naming a certificate of its own (renewed on its own, so no other host's
+  renewal depends on this name), the Article issuer's forwarding headers, a
+  per-address limit and a cap on the whole host, both answering 429, and an
+  access log format that names each step by a fixed class and never a URI or
+  query, with the error log off, because the resume route's query holds the
+  one-time secret. For the same reason the host stays off the edge, whose
+  request logs keep the whole URL. On the apex, exact locations for the three
+  discovery documents, the consent landing and the review page, and
+  `frame-ancestors 'none'` with `Referrer-Policy: no-referrer` on every `/admin`
+  location, because the Admin's own refusal holds only for a document load and a
+  tab change inside a framed Admin page is not one. `/api/mcp` keeps its own
+  limit, which now carries every person's tools together. The new paths take
+  route classes that already exist, because the archive and the traffic summary
+  refuse a log row with any other, and the issuer's status log rotates with the
+  other logs that carry addresses.
+- `infra/production/README.md`: the sentence that kept all Admin OAuth
+  Development-only now names the login door as the Admin's one Production OAuth
+  surface; an issuer section; and the checks a release makes before the Admin
+  restarts with the door on. `AGENT_AUTHORIZATION_RESOURCE` is the same in both
+  files and equals `CMS_PUBLIC_URL` plus `/api/mcp`, because a tool connects
+  only then. The origin of `AGENT_AUTHORIZATION_CONSENT_URL` equals the origin
+  of `CMS_PUBLIC_URL`, because the Admin checks every allow, deny and disconnect
+  against that origin and would refuse them all otherwise. The client list, the
+  issuer, the switch and the two wrapper keys are byte-identical in both files.
+  A later release that changes the issuer, the agent-connection stores or the
+  Admin's consent and wrapper formats moves the issuer's root with it. The two
+  root discovery documents on the apex now answer for the Admin, which an
+  Article client reaches only if it ignores its own 401. Closing the door stops
+  and disables the issuer, so a reboot does not start it again.
+- Pins. `tests/unit/architecture/current-truth-config.test.ts` holds the unit,
+  both files and the template to each other, and fails when any of those lines
+  goes. `tests/unit/backend/admin-operator-issuer.test.ts` hands the issuer's
+  file and unit, as systemd would, to the issuer's own startup checks, and the
+  Article pair to its gate.
+  `tests/unit/backend/agent-connections-operator-surface.test.ts` builds the
+  Admin's consent and resource sides from `admin.env.example`.
+
+These pins read files. The template and the release's own renders of the live
+site passed `nginx -t` in a local nginx 1.28 (the host runs 1.24);
+`systemd-analyze verify` and a Production build first run at the release.
+
+Stays for the release, R0 to R8, as the private release toolkit runs them. The
+steps that change running services or the certificate (R3's certificate, R4, R5)
+undo what they started when a check fails, except that a certificate R3 has
+already issued stays and a re-run uses it again; R2's migrations and roles are
+forward-only and resume on a re-run; a cloud write (R3's record and edge rule)
+keeps a receipt, and one whose answer is lost is reported as unknown, never as
+unchanged. Nothing is printed that holds a secret.
+
+- R0. O1 to O4 merged after independent review, and one exact commit of main
+  pinned; the toolkit is built from it. Its tests run on a fake host, and its
+  own role and grant statements were rehearsed on a local PostgreSQL 16 against
+  the repository's community migrations, with `has_table_privilege` read back
+  for each role. The CMS migration's SQL and the backup were not part of that
+  rehearsal. Everything above ran under `next dev`, so that build is the first
+  Production build with the door on.
+- R1. Read-only on the host: both migration ledgers, that the three new roles
+  and the issuer unit do not exist yet, how the shared certificate is issued and
+  renewed, the App-role preflight, and whether any role on the host may create
+  roles. If none may, the Owner is asked in one sentence to grant that for the
+  release. One anonymous POST to `/api/mcp` from outside mainland China shows
+  whether the edge challenges a tool.
+- R2. The new runtime roots, then a free-space check and a backup, the community
+  and CMS migrations, the three roles with new passwords (an existing one of
+  this release is reused only with its stored password and given a new one only
+  on request), the grants file, the privileges read back, and a login as each
+  role that reads back CONNECT and its own privileges. This comes before any DNS
+  or certificate change, so a release that cannot create its roles stops here
+  with nothing else changed. Which role's create-role privilege was used is
+  recorded, and from then on every check and the close reminds the Owner to take
+  it back for as long as that role still holds it, whoever granted it.
+- R3. A public DNS name for the issuer host, on direct DNS to the origin and
+  never behind the edge, whose request logs would keep the resume secret. The
+  host gets a certificate of its own, by the same certbot and challenge method
+  the shared certificate uses, once the name is shown to resolve to the origin
+  and its challenge path to reach it, and a renewal timer of its own, a copy of
+  the shared certificate's with the certificate's name changed and its schedule
+  an hour later, so the two renewals never run together. The shared certificate,
+  its renewal settings and its timer are checked byte for byte before and after
+  and never change. If the host cannot reach its own public address, the
+  challenge path is checked from outside instead: the probe stays in place, the
+  toolkit fetches it over the internet, and the host goes on only when handed
+  back that exact value; nothing is skipped. No certificate is issued or renewed
+  within 15 minutes of a renewal timer's run, and the issuer host's is not
+  deleted within 15 minutes of the shared timer's run. Then the edge's
+  whole-request skip for `/api/mcp` and the three discovery paths.
+- R4. Keys and the signing file generated on the host, the issuer's file at mode
+  0600 with its staged copy, its runtime root at the pinned commit, the unit and
+  the issuer block, `nginx -t`, a reload, and the start with `reset-failed` and
+  no restarts counted. Health and discovery are read here through the local
+  Nginx with the real certificate, and from outside at the verify that follows
+  R5. From here the issuer host answers publicly, before the Admin has its door;
+  if R5 then rolls back, the issuer stays up until it is taken back on its own,
+  which is safe because the door is closed.
+- R5. Before any restart: the checks above, a login as the consent and the
+  resource role with exactly the URLs and CA file `admin.env` will hold, a file
+  the Admin's own user must be able to read, and the App-role preflight, which
+  must pass in full before the community AI token is placed. Then the apex
+  locations and the `/admin` frame header, and the Backend and the Admin at the
+  pinned commit with `admin.env`, `backend.env` and their staged copies. This
+  ships the merged S6 and S7 code to both and places the community AI token. One
+  request, then the journal is read for `agent-connections composition refused`,
+  and a request with an unknown connection token shows that the Admin reads
+  through the resource role's own pool. The media worker stays on its runtime
+  root without a restart: its startup check accepts a newer ledger, since it
+  looks only for the migrations it knows.
+- R6. Live acceptance, read-only. The Owner connects Claude with their own
+  account: consent, `admin_whoami`, one read, the audit row naming them,
+  disconnect, reconnect and pause; then Claude Code or Codex. The real-client
+  record starts here, per task and client, failures included. It is where
+  Claude's link and the step lists on the AI connections page meet a real client
+  for the first time, and it says whether each hosted tool's own state check
+  refuses a link started in an administrator's own browser.
+- R7. The Owner tells the other administrators.
+- R8. An hour and a day later: a refresh with no person involved, the count of
+  outcomes left unknown, timing per tool, the issuer's recorded failure
+  categories and refresh errors, and the refused answers on the issuer host's
+  token route, which is where a storm of `invalid_grant` shows (the issuer's
+  journal does not record that answer). Counted from the audit table, the
+  issuer's own store, its journal and its host's status log into private notes
+  only.
+
+Rollback, fastest first: pause; disconnect one connection; close the door with
+`ADMIN_MCP_OAUTH_ENABLED=false` in `admin.env` and its staged copies, an Admin
+restart and the issuer stopped and disabled, after which the discovery paths
+answer 404 and connection tokens are refused; then the previous Backend and
+Admin, with their files back to their earlier bytes. A rollback that fails part
+way leaves a state the next rollback picks up. The issuer and the Nginx changes
+are taken back only once the door is closed. The issuer host's certificate goes
+after the Nginx block that names it: its timer, the certificate itself and the
+challenge site's edit, each on its own and in any order, since nothing else
+depends on it; only then its DNS record. Migrations and roles stay. Afterwards
+the stored role passwords and file copies are removed: as accepted only when no
+rollback ran after the last passing verify, otherwise as abandoned after a full
+rollback. The database backups stay until the Owner decides.
+
+O5, Cursor and one button per tool, after the Owner's words of
+2026-11-06:「保留chatgpt就可以了，他和codex通用的。添加cursor。都要做的像Claude一样，有按钮可以一键进入连接」.
+Delivered in the repository; Production changes only at its own release.
+
+- The closed list gains Cursor by its own published client id, under
+  `loopback-host` with both 8787 spellings, in both settings files, the harness
+  and the tests. The four earlier entries stay, Codex's included: ChatGPT and
+  Codex share an OpenAI account but not a client id, so the page joins them and
+  the list does not. No parser, provider or issuer change, and no migration.
+  Cursor's web and cloud agents return to a callback on Cursor's site under the
+  same id, which would need one entry with two policies, so they stay out; its
+  old `cursor://` callback stays refused by the parser.
+- The AI connections page offers one button per tool in one style, stacked at
+  full width on a phone and side by side from a tablet up. Claude's is
+  unchanged. Neither ChatGPT nor Codex has a link that fills in the address, so
+  ChatGPT's button opens its plugins page and copies the address in the same
+  click, with four short steps under it, unfolded. The same card holds Codex: a
+  quiet link to its settings window that copies the address too, one line of
+  steps, and the terminal commands as before, with a sentence that a Codex added
+  in its settings or terminal is another connection. Cursor's desktop app
+  registers a client of its own unless told a client id, so its button opens
+  Cursor's install page with the server entry its documents give, `type`, `url`
+  and `auth.CLIENT_ID`, and no secret. The Admin builds that link on the server
+  from `CMS_PUBLIC_URL` and the closed list, because the list route sends no
+  client id. The notice 地址已复制 beside a copying link shows only once the
+  clipboard write resolved; a browser that refuses it says so there and shows
+  the address to copy by hand. That notice is on this page, not on ChatGPT's
+  tab, so ChatGPT's second step does not say the address was copied. All three
+  are plain links that the server never fetches.
+- The consent page names Cursor, its vendor Anysphere, and the provider of the
+  model the person picks in Cursor, which is where Cursor passes content on. The
+  privacy policy's AI vendor sentence names Anysphere, Inc. in the same change,
+  in the plan's recommended wording. The Owner approved it on 2026-11-06,
+  answering a message that quoted the sentence:「可以，都按照你的建议」. That is
+  the Owner-approved change the Behavior Matrix row for public policy pages
+  needed, which pinned the text confirmed on 2026-11-03 and now names this
+  sentence too. The release order is the policy first, then the Admin, then the
+  client list in both settings files and their staged copies, then the issuer
+  and the Admin restart.
+- Proof. The page's unit tests: three buttons in one style, both copies, the
+  visible refusal, Cursor's link decoded from two addresses, and no Cursor
+  button without a listed entry or an address; the consent page for Cursor's
+  client id; the parser on Cursor's entry and on its refused callbacks.
+  `agent-operator-flow-cases.ts` takes Cursor through consent to a token on both
+  spellings and on another port, which the loopback policy says the provider
+  does not pin, and runs the official SDK told Cursor's id as its install link
+  tells it; a test now pins that a denial carries `iss` too, as it already did,
+  which ChatGPT and Codex need to keep their listed ids. The operator harness
+  lists Cursor and checks the three buttons, the decoded link and the ChatGPT
+  click at phone width; Chromium reads the copied address back, and WebKit,
+  which grants a test no clipboard, shows either answer.
+- Unverified until a real Cursor and a real ChatGPT connect, for the real-client
+  record: that Cursor honours `auth.CLIENT_ID` from the link and sends exactly
+  that id; which callback spelling it sends, and that no build still sends
+  `cursor://`; its Install and Connect labels; that ChatGPT offers Add custom
+  MCP server on the Owner's plan, with write tools; that it uses its listed
+  client id and callback; whether a ChatGPT plugin also works in Codex inside
+  the desktop app; that `codex://settings` opens; and both copying links on
+  phone browsers.

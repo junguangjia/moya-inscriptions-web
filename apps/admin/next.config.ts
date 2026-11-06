@@ -32,11 +32,29 @@ const harnessDistDir =
     ? process.env.MOYA_ADMIN_DIST_DIR
     : undefined;
 
+/**
+ * The login door's pages refuse to be framed, from the app itself, so Development,
+ * the harness and Production answer alike. A hidden 允许 or 确认断开 in a frame
+ * would otherwise rest on the session cookie's SameSite alone. `withPayload` adds
+ * its own headers after these and keeps them. A browser applies these only when a
+ * document loads, so a framed page elsewhere in /admin could still reach the AI
+ * connections page through a tab change; the Production Nginx closes that for all
+ * of /admin (record section 22, O4).
+ */
+const NO_FRAMES = [
+  { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+  { key: "X-Frame-Options", value: "DENY" },
+];
+
 const nextConfig: NextConfig = {
   agentRules: false,
   poweredByHeader: false,
   ...(harnessDistDir ? { distDir: harnessDistDir } : {}),
   ...(allowedDevOrigins.length > 0 ? { allowedDevOrigins } : {}),
+  headers: async () => [
+    { source: "/admin/agent-connections/:path*", headers: NO_FRAMES },
+    { source: "/agent-connections/:path*", headers: NO_FRAMES },
+  ],
   // One ingress hostname keeps host-only preview cookies; assets need a distinct prefix.
   assetPrefix: process.env.NODE_ENV === "production" ? "/admin-assets" : "",
   output: "standalone",

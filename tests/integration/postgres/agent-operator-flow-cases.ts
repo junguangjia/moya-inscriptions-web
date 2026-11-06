@@ -23,9 +23,15 @@ import {
   mintResumeSecret,
 } from "@moya/community-postgres";
 import {
+  ConnectionAuthority,
+  ConsentError,
   authorizeConnection,
-  reconnectConnection,
-  revokeConnection,
+  decideConsent,
+  describeConsent,
+  mintConsentTicket,
+  parseRegisteredClients,
+  resolveConnection,
+  revokeConnectionsOf,
 } from "admin/agent-connections";
 import {
   afterAll,
@@ -39,20 +45,22 @@ import {
 
 import type { AuthorizationServer } from "@moya/agent-authorization";
 import type { createPostgresPool } from "@moya/catalog-postgres";
+import type { ConsentRuntime } from "admin/agent-connections";
 
 /**
- * Issue #355, login door, slice O1: the Admin issuer's `operator` profile, the
- * REAL service on PostgreSQL over real HTTP.
+ * Issue #355, login door, slices O1 and O3: the Admin issuer's `operator` profile,
+ * the REAL service on PostgreSQL over real HTTP.
  *
  * What this drives: `startAuthorizationServer`, the real oidc-provider, the real
  * adapter, wrapper and resume route, as the REAL provider role under
- * `infra/production/sql/admin-mcp-oauth-grants.sql`. The official MCP SDK client
- * drives the case that says so.
+ * `infra/production/sql/admin-mcp-oauth-grants.sql`, and the Admin's real
+ * `resolveConnection`, `decideConsent` and connection authority as the REAL consent
+ * role under that file. The official MCP SDK client drives the case that says so.
  *
- * What it does NOT drive, plainly: the Admin. `decideConsent` learns the operator
- * preset and mints the resume secret in slice O3, so `approve` below writes what
- * it will write, directly and as the consent role, with a stored digest. The
- * door is slice O2, so nothing here presents a token to `/api/mcp`.
+ * What it does NOT drive, plainly: the Admin's HTTP routes, its session check and
+ * its audit rows, and `/api/mcp`. `tests/cms` presents these tokens to the door, and
+ * `agent-connections-generic-client.mjs` runs the whole trip. `writeApproval` below
+ * writes a row the Admin would refuse, for the cases about what the issuer does then.
  *
  * Every case makes its own person, and a person plus a client is one connection,
  * so this passes alone on an empty database and on a used one.
@@ -62,6 +70,7 @@ const CLAUDE = "https://claude.ai/oauth/mcp-oauth-client-metadata";
 const CLAUDE_CODE = "https://claude.ai/oauth/claude-code-client-metadata";
 const CODEX = "https://chatgpt.com/oauth/codex/client.json";
 const CHATGPT = "https://chatgpt.com/oauth/client.json";
+const CURSOR = "https://cursor.com/oauth/mcp-client.json";
 const CLAUDE_CALLBACK = "https://claude.ai/api/mcp/auth_callback";
 const CHATGPT_CALLBACK =
   "https://chatgpt.com/connector_platform_oauth_redirect";
@@ -101,6 +110,16 @@ const CLIENTS = [
     label: "ChatGPT",
     callbackPolicy: "hosted-https",
     redirectUris: [CHATGPT_CALLBACK],
+  },
+  {
+    clientId: CURSOR,
+    family: "cursor",
+    label: "Cursor",
+    callbackPolicy: "loopback-host",
+    redirectUris: [
+      "http://localhost:8787/callback",
+      "http://127.0.0.1:8787/callback",
+    ],
   },
 ] as const;
 
@@ -215,6 +234,13 @@ export const registerAgentOperatorFlowTests = (
     let server: AuthorizationServer;
     const failures: string[] = [];
     const resumes: string[] = [];
+    /** What the Admin holds. No operator consent provisions a machine principal. */
+    let admin: ConsentRuntime;
+    const noPrincipal = async (): Promise<never> => {
+      throw new Error(
+        "an operator consent must not touch the principal registry",
+      );
+    };
 
     const issuerKeys = {
       AGENT_AUTHORIZATION_COOKIE_KEY: randomBytes(32).toString("base64url"),
@@ -297,6 +323,20 @@ export const registerAgentOperatorFlowTests = (
       await applyGrantFile();
       server = await startIssuer();
       issuer = server.origin;
+      admin = {
+        consents: decisions,
+        clients: parseRegisteredClients(JSON.stringify(CLIENTS), {
+          allowHosted: true,
+        }),
+        connections: control,
+        preset: "operator",
+        principals: { findPrincipal: noPrincipal, writePrincipal: noPrincipal },
+        authority: new ConnectionAuthority({ store: control as never }),
+        issuer,
+        resource: RESOURCE,
+        environment: "development",
+        close: async () => undefined,
+      };
     }, 30_000);
 
     afterAll(async () => {
@@ -389,39 +429,88 @@ export const registerAgentOperatorFlowTests = (
       return { jar, uid, verifier, state, clientId, redirect };
     };
 
-    /**
-     * What `decideConsent` will do in slice O3, in its order: the decision and
-     * the digest in one statement, then the connection under compare-and-set.
-     */
+    /** The review page's half: the connection, then the ticket it renders. */
+    const arm = async (uid: string, human: string, runtime = admin) => {
+      const consent = await decisions.read(uid);
+      expect(consent).not.toBeNull();
+      const connection = await resolveConnection(
+        runtime,
+        human,
+        consent?.oauthClientId ?? "",
+      );
+      const { ticket, digest } = mintConsentTicket();
+      expect(
+        await decisions.arm({
+          interactionUid: uid,
+          ticketDigest: digest,
+          connectionId: connection.id,
+          humanAccountId: human,
+        }),
+      ).not.toBeNull();
+      return { ticket, connectionId: connection.id };
+    };
+
+    /** A click on 允许, through the Admin's real decision. */
     const approve = async (
       uid: string,
       human: string,
       options: { readonly environment?: string } = {},
     ) => {
+      const runtime = {
+        ...admin,
+        environment: options.environment ?? "development",
+      };
+      const { ticket, connectionId } = await arm(uid, human, runtime);
+      const outcome = await decideConsent(runtime, human, {
+        interaction: uid,
+        ticket,
+        decision: "approve",
+      });
+      expect(outcome.decision).toBe("approved");
+      const resume = new URL(outcome.resume);
+      return {
+        resume,
+        secret: resume.searchParams.get(RESUME_SECRET_PARAMETER) ?? "",
+        connectionId,
+      };
+    };
+
+    /** A click on 拒绝, through the same decision. */
+    const deny = async (uid: string, human: string) => {
+      const { ticket } = await arm(uid, human);
+      const outcome = await decideConsent(admin, human, {
+        interaction: uid,
+        ticket,
+        decision: "deny",
+      });
+      expect(outcome.decision).toBe("denied");
+      // A denial has no secret to carry: its cookie's holder is told access_denied.
+      expect(outcome.resume).toBe(resumeUrl(uid).href);
+    };
+
+    /**
+     * An approval the Admin would refuse, in the order it writes one: the decision
+     * and the digest in one statement, then the connection under compare-and-set.
+     */
+    const writeApproval = async (uid: string, human: string) => {
       const consent = await decisions.read(uid);
       expect(consent).not.toBeNull();
       const client = CLIENTS.find(
         (entry) => entry.clientId === consent?.oauthClientId,
       );
-      const found = await control.findForClient(
-        human,
-        consent?.oauthClientId ?? "",
-      );
-      const stored =
-        found ??
-        (await control.createForClient({
-          id: `conn-${hex(16)}`,
-          principalLabel: `agent-operator-${hex(6)}`,
-          humanAccountId: human,
-          client: client?.family ?? "",
-          oauthClientId: consent?.oauthClientId ?? "",
-          environment: options.environment ?? "development",
-          preset: "operator",
-          status: "awaiting-consent",
-          generation: 0,
-          revokedAt: null,
-          consentedAt: null,
-        }));
+      const stored = await control.createForClient({
+        id: `conn-${hex(16)}`,
+        principalLabel: `agent-operator-${hex(6)}`,
+        humanAccountId: human,
+        client: client?.family ?? "",
+        oauthClientId: consent?.oauthClientId ?? "",
+        environment: "development",
+        preset: "operator",
+        status: "awaiting-consent",
+        generation: 0,
+        revokedAt: null,
+        consentedAt: null,
+      });
       if (stored === null) throw new Error("TEST_CONNECTION_NOT_CREATED");
       const ticket = hex(32);
       const ticketDigest = createHash("sha256").update(ticket).digest("hex");
@@ -433,15 +522,11 @@ export const registerAgentOperatorFlowTests = (
           humanAccountId: human,
         }),
       ).not.toBeNull();
-      const record = {
+      const next = authorizeConnection(stored.connection as never, {
         humanAccountId: human,
-        preset: "operator" as const,
+        preset: "operator",
         at: new Date().toISOString(),
-      };
-      const next =
-        stored.connection.status === "revoked"
-          ? reconnectConnection(stored.connection as never, record)
-          : authorizeConnection(stored.connection as never, record);
+      });
       const { secret, digest } = mintResumeSecret();
       expect(
         await decisions.decide({
@@ -463,53 +548,9 @@ export const registerAgentOperatorFlowTests = (
       return { secret, connectionId: stored.connection.id };
     };
 
-    const deny = async (uid: string, human: string) => {
-      const consent = await decisions.read(uid);
-      const connection = await control.createForClient({
-        id: `conn-${hex(16)}`,
-        principalLabel: `agent-operator-${hex(6)}`,
-        humanAccountId: human,
-        client: "claude",
-        oauthClientId: consent?.oauthClientId ?? "",
-        environment: "development",
-        preset: "operator",
-        status: "awaiting-consent",
-        generation: 0,
-        revokedAt: null,
-        consentedAt: null,
-      });
-      const ticket = hex(32);
-      const ticketDigest = createHash("sha256").update(ticket).digest("hex");
-      await decisions.arm({
-        interactionUid: uid,
-        ticketDigest,
-        connectionId: connection?.connection.id ?? "",
-        humanAccountId: human,
-      });
-      expect(
-        await decisions.decide({
-          interactionUid: uid,
-          ticketDigest,
-          humanAccountId: human,
-          decision: "denied",
-          grantedGeneration: null,
-        }),
-      ).not.toBeNull();
-    };
-
+    /** What the disconnect endpoint runs, after its session check and audit row. */
     const disconnect = async (connectionId: string) => {
-      const stored = await control.read(connectionId);
-      if (stored === null) throw new Error("TEST_CONNECTION_MISSING");
-      expect(
-        await control.compareAndSet(
-          connectionId,
-          stored.version,
-          revokeConnection(
-            stored.connection as never,
-            new Date().toISOString(),
-          ) as never,
-        ),
-      ).not.toBeNull();
+      await admin.authority.revoke(connectionId, new Date().toISOString());
     };
 
     const resumeUrl = (uid: string, secret?: string) =>
@@ -599,8 +640,8 @@ export const registerAgentOperatorFlowTests = (
       } = {},
     ) => {
       const started = await begin(clientId, redirect, options);
-      const { secret, connectionId } = await approve(started.uid, human);
-      const back = await follow(started.jar, resumeUrl(started.uid, secret));
+      const { resume, connectionId } = await approve(started.uid, human);
+      const back = await follow(started.jar, resume);
       expect(back.page).toBe("");
       expect(back.arrived?.searchParams.get("error")).toBeNull();
       const code = back.arrived?.searchParams.get("code") ?? "";
@@ -668,6 +709,11 @@ export const registerAgentOperatorFlowTests = (
         ],
         ["Codex on an address", CODEX, "http://127.0.0.1:53113/callback"],
         ["Codex on localhost", CODEX, "http://localhost:53114/callback"],
+        ["Cursor on localhost", CURSOR, "http://localhost:8787/callback"],
+        ["Cursor on an address", CURSOR, "http://127.0.0.1:8787/callback"],
+        // As the loopback policy states: the provider does not pin a loopback port
+        // (RFC 8252 §7.3), so the 8787 in the list is a readability rule.
+        ["Cursor on another port", CURSOR, "http://127.0.0.1:53115/callback"],
       ])(
         "%s connects, and the code lands on its exact callback",
         async (_name, clientId, redirect) => {
@@ -746,6 +792,18 @@ export const registerAgentOperatorFlowTests = (
           CODEX,
           "http://attacker.invalid:53120/callback",
         ],
+        // Cursor's old flow, and its web and cloud callback, which stay off the list.
+        [
+          "Cursor's custom scheme",
+          CURSOR,
+          "cursor://anysphere.cursor-mcp/oauth/callback",
+        ],
+        [
+          "Cursor's hosted callback",
+          CURSOR,
+          "https://www.cursor.com/agents/mcp/oauth/callback",
+        ],
+        ["another path on Cursor", CURSOR, "http://localhost:8787/other"],
       ])(
         "refuses %s before anything is written",
         async (_name, clientId, redirect) => {
@@ -953,49 +1011,60 @@ export const registerAgentOperatorFlowTests = (
         expect(response.status).toBe(404);
       });
 
-      it("connects the official MCP SDK client from that metadata alone", async () => {
-        const human = person();
-        const metadata = await discoverAuthorizationServerMetadata(issuer);
-        expect(metadata?.client_id_metadata_document_supported).toBe(true);
-        const redirect = "http://127.0.0.1:53130/callback";
-        const clientInformation = { client_id: CODEX };
-        const { authorizationUrl, codeVerifier } = await startAuthorization(
-          issuer,
-          {
+      it.each([
+        ["Codex", CODEX, "http://127.0.0.1:53130/callback", "artvenn:admin"],
+        // As Cursor's install link sets it up: told its own id, and no scopes, so it
+        // asks for every scope the metadata lists.
+        ["Cursor", CURSOR, "http://localhost:8787/callback", null],
+      ])(
+        "connects the official MCP SDK client as %s from that metadata alone",
+        async (_name, clientId, redirect, scope) => {
+          const human = person();
+          const metadata = await discoverAuthorizationServerMetadata(issuer);
+          expect(metadata?.client_id_metadata_document_supported).toBe(true);
+          const clientInformation = { client_id: clientId };
+          const { authorizationUrl, codeVerifier } = await startAuthorization(
+            issuer,
+            {
+              ...(metadata === undefined ? {} : { metadata }),
+              clientInformation,
+              redirectUrl: redirect,
+              scope: scope ?? metadata?.scopes_supported?.join(" ") ?? "",
+              state: "sdk-state",
+              resource: new URL(RESOURCE),
+            },
+          );
+          const jar = newJar();
+          const opened = await fetch(authorizationUrl, { redirect: "manual" });
+          jar.remember(opened);
+          const uid = new URL(opened.headers.get("location") ?? "").pathname
+            .split("/")
+            .pop();
+          const { secret } = await approve(uid ?? "", human);
+          const back = await follow(jar, resumeUrl(uid ?? "", secret));
+          expect(`${back.arrived?.origin}${back.arrived?.pathname}`).toBe(
+            redirect,
+          );
+          expect(back.arrived?.searchParams.get("iss")).toBe(issuer);
+          const tokens = await exchangeAuthorization(issuer, {
             ...(metadata === undefined ? {} : { metadata }),
             clientInformation,
-            redirectUrl: redirect,
-            scope: "artvenn:admin",
-            state: "sdk-state",
+            authorizationCode: back.arrived?.searchParams.get("code") ?? "",
+            codeVerifier,
+            redirectUri: redirect,
             resource: new URL(RESOURCE),
-          },
-        );
-        const jar = newJar();
-        const opened = await fetch(authorizationUrl, { redirect: "manual" });
-        jar.remember(opened);
-        const uid = new URL(opened.headers.get("location") ?? "").pathname
-          .split("/")
-          .pop();
-        const { secret } = await approve(uid ?? "", human);
-        const back = await follow(jar, resumeUrl(uid ?? "", secret));
-        const tokens = await exchangeAuthorization(issuer, {
-          ...(metadata === undefined ? {} : { metadata }),
-          clientInformation,
-          authorizationCode: back.arrived?.searchParams.get("code") ?? "",
-          codeVerifier,
-          redirectUri: redirect,
-          resource: new URL(RESOURCE),
-        });
-        expect(tokens.access_token).toMatch(/^artvenn_ct_/u);
-        const renewed = await refreshAuthorization(issuer, {
-          ...(metadata === undefined ? {} : { metadata }),
-          clientInformation,
-          refreshToken: tokens.refresh_token ?? "",
-          resource: new URL(RESOURCE),
-        });
-        expect(renewed.access_token).toMatch(/^artvenn_ct_/u);
-        expect(renewed.refresh_token).not.toBe(tokens.refresh_token);
-      });
+          });
+          expect(tokens.access_token).toMatch(/^artvenn_ct_/u);
+          const renewed = await refreshAuthorization(issuer, {
+            ...(metadata === undefined ? {} : { metadata }),
+            clientInformation,
+            refreshToken: tokens.refresh_token ?? "",
+            resource: new URL(RESOURCE),
+          });
+          expect(renewed.access_token).toMatch(/^artvenn_ct_/u);
+          expect(renewed.refresh_token).not.toBe(tokens.refresh_token);
+        },
+      );
     });
 
     describe("what a client asks for", () => {
@@ -1749,6 +1818,8 @@ export const registerAgentOperatorFlowTests = (
         expect(clicked.arrived).toBeNull();
         expect(clicked.page).toContain(VOIDED_PAGE);
         expect(clicked.page).toContain("告诉其他管理员");
+        // The code in small text, to read out to someone.
+        expect(clicked.page).toContain("<small>CONSENT_VOIDED</small>");
         expect(resumes).toEqual(["CONSENT_VOIDED"]);
         // Who clicked stays on the row for the audit; nothing was granted.
         expect(await stateOf(stranger.uid)).toEqual({
@@ -1789,6 +1860,7 @@ export const registerAgentOperatorFlowTests = (
         expect(alone.status).toBe(400);
         expect(alone.arrived).toBeNull();
         expect(alone.page).toContain(REFUSED_PAGE);
+        expect(alone.page).toContain("<small>RESUME_SECRET_REQUIRED</small>");
         expect(resumes).toEqual(["RESUME_SECRET_REQUIRED"]);
         expect(await stateOf(started.uid)).toEqual({
           decision: "approved",
@@ -1858,6 +1930,9 @@ export const registerAgentOperatorFlowTests = (
         const answer = await follow(newJar(), resumeUrl(started.uid));
         expect(answer.status).toBe(400);
         expect(answer.page).toContain(REFUSED_PAGE);
+        expect(answer.page).toContain(
+          "<small>INTERACTION_NOT_RESUMABLE</small>",
+        );
         expect(await stateOf(started.uid)).toEqual(before);
         // For a name nobody ever issued, too.
         const unknown = await follow(newJar(), resumeUrl(`unknown-${hex(8)}`));
@@ -1966,6 +2041,9 @@ export const registerAgentOperatorFlowTests = (
         expect(answer.arrived?.origin).toBe("https://claude.ai");
         expect(answer.arrived?.searchParams.get("error")).toBe("access_denied");
         expect(answer.arrived?.searchParams.get("code")).toBeNull();
+        // On an error too: ChatGPT and Codex keep their listed client ids only while
+        // every answer names the issuer.
+        expect(answer.arrived?.searchParams.get("iss")).toBe(issuer);
       });
 
       it("refuses before any decision, whatever the browser holds", async () => {
@@ -2073,7 +2151,10 @@ export const registerAgentOperatorFlowTests = (
               "preset" in row ? row.preset : "operator",
             ],
           );
-          const { secret, connectionId } = await approve(started.uid, person());
+          const { secret, connectionId } = await writeApproval(
+            started.uid,
+            person(),
+          );
           const answer = await follow(
             started.jar,
             resumeUrl(started.uid, secret),
@@ -2085,6 +2166,316 @@ export const registerAgentOperatorFlowTests = (
           expect(await grantsOf(connectionId)).toEqual([]);
         },
       );
+    });
+
+    describe("the Admin's decision, against a real interaction", () => {
+      it("shows each listed tool from the list, whatever the request carried", async () => {
+        for (const [clientId, redirect, tool] of [
+          [
+            CLAUDE,
+            CLAUDE_CALLBACK,
+            {
+              label: "Claude",
+              vendor: "Anthropic",
+              callbackHosts: ["claude.ai"],
+              local: false,
+            },
+          ],
+          [
+            CHATGPT,
+            CHATGPT_CALLBACK,
+            {
+              label: "ChatGPT",
+              vendor: "OpenAI",
+              callbackHosts: ["chatgpt.com"],
+              local: false,
+            },
+          ],
+          [
+            CLAUDE_CODE,
+            "http://localhost:53121/callback",
+            {
+              label: "Claude Code",
+              vendor: "Anthropic",
+              callbackHosts: ["localhost", "127.0.0.1"],
+              local: true,
+            },
+          ],
+          [
+            CODEX,
+            "http://127.0.0.1:53122/callback",
+            {
+              label: "Codex",
+              vendor: "OpenAI",
+              callbackHosts: ["127.0.0.1", "localhost"],
+              local: true,
+            },
+          ],
+          [
+            CURSOR,
+            "http://localhost:8787/callback",
+            {
+              label: "Cursor",
+              vendor: "Anysphere，以及你在 Cursor 里选用的模型的提供方",
+              callbackHosts: ["localhost", "127.0.0.1"],
+              local: true,
+            },
+          ],
+        ] as const) {
+          const { uid } = await begin(clientId, redirect);
+          const consent = await decisions.read(uid);
+          expect(
+            describeConsent({
+              interactionUid: consent!.interactionUid,
+              oauthClientId: consent!.oauthClientId,
+              resource: consent!.resource,
+              capabilityScopes: consent!.capabilityScopes,
+              protocolScopes: consent!.protocolScopes,
+              preset: consent!.preset,
+              servedPreset: admin.preset,
+              registered: admin.clients.get(consent!.oauthClientId),
+              expiresAt: consent!.expiresAt,
+              environment: admin.environment,
+              now: new Date(),
+            }),
+          ).toMatchObject({
+            client: clientId,
+            capabilities: ["artvenn:admin"],
+            preset: "operator",
+            tool,
+          });
+        }
+      });
+
+      it("gives the consent window its 30 minutes", async () => {
+        const { uid } = await begin(CLAUDE, CLAUDE_CALLBACK);
+        const consent = await decisions.read(uid);
+        const window =
+          Date.parse(consent?.expiresAt ?? "") -
+          Date.parse(consent?.issuedAt ?? "");
+        expect(Math.abs(window - 30 * 60_000)).toBeLessThan(5_000);
+      });
+
+      it("opens a new connection as operator, powerless until someone allows", async () => {
+        const { uid } = await begin(CLAUDE, CLAUDE_CALLBACK);
+        const { connectionId } = await arm(uid, person());
+        expect((await control.read(connectionId))?.connection).toMatchObject({
+          preset: "operator",
+          status: "awaiting-consent",
+          generation: 0,
+          client: "claude",
+          consentedAt: null,
+        });
+      });
+
+      it("hands the secret only to the answer, and stores only its digest", async () => {
+        const started = await begin(CLAUDE, CLAUDE_CALLBACK);
+        const { resume, secret, connectionId } = await approve(
+          started.uid,
+          person(),
+        );
+        expect(resume.origin).toBe(issuer);
+        expect(resume.pathname).toBe(`${PREFIX}/${started.uid}/resume`);
+        expect(secret).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+        expect(await decisions.read(started.uid)).toMatchObject({
+          decision: "approved",
+          resumeSecretArmed: true,
+          grantedGeneration: 1,
+          connectionId,
+        });
+        const { rows } = await pool.query(
+          `SELECT resume_secret_digest FROM community.agent_connection_consents
+            WHERE interaction_uid=$1`,
+          [started.uid],
+        );
+        expect(
+          (rows[0] as { resume_secret_digest: string }).resume_secret_digest,
+        ).toBe(createHash("sha256").update(secret).digest("hex"));
+      });
+
+      it("mints a different secret for each approval", async () => {
+        const first = await begin(CLAUDE, CLAUDE_CALLBACK);
+        const second = await begin(CLAUDE, CLAUDE_CALLBACK);
+        const human = person();
+        const one = await approve(first.uid, human);
+        const two = await approve(second.uid, human);
+        expect(one.secret).not.toBe(two.secret);
+      });
+
+      it("writes nothing for a wrong ticket, and the connection does not move", async () => {
+        const human = person();
+        const { uid } = await begin(CLAUDE, CLAUDE_CALLBACK);
+        const { connectionId } = await arm(uid, human);
+        await expect(
+          decideConsent(admin, human, {
+            interaction: uid,
+            ticket: hex(32),
+            decision: "approve",
+          }),
+        ).rejects.toMatchObject({ code: "CONSENT_NOT_DECIDABLE" });
+        expect((await decisions.read(uid))?.decision).toBeNull();
+        expect((await control.read(connectionId))?.connection).toMatchObject({
+          status: "awaiting-consent",
+          generation: 0,
+        });
+      });
+
+      it("refuses someone else's armed page, and that person's click still works", async () => {
+        const human = person();
+        const started = await begin(CLAUDE, CLAUDE_CALLBACK);
+        const { ticket, connectionId } = await arm(started.uid, human);
+        for (const decision of ["approve", "deny"] as const)
+          await expect(
+            decideConsent(admin, person(), {
+              interaction: started.uid,
+              ticket,
+              decision,
+            }),
+          ).rejects.toBeInstanceOf(ConsentError);
+        expect((await control.read(connectionId))?.connection.generation).toBe(
+          0,
+        );
+        expect(
+          (
+            await decideConsent(admin, human, {
+              interaction: started.uid,
+              ticket,
+              decision: "approve",
+            })
+          ).decision,
+        ).toBe("approved");
+      });
+
+      it("will not decide a tool taken off the list since the page rendered", async () => {
+        const human = person();
+        const { uid } = await begin(CLAUDE, CLAUDE_CALLBACK);
+        const { ticket, connectionId } = await arm(uid, human);
+        const without = new Map(admin.clients);
+        without.delete(CLAUDE);
+        await expect(
+          decideConsent({ ...admin, clients: without }, human, {
+            interaction: uid,
+            ticket,
+            decision: "approve",
+          }),
+        ).rejects.toMatchObject({ code: "CLIENT_NOT_REGISTERED" });
+        expect((await decisions.read(uid))?.decision).toBeNull();
+        expect((await control.read(connectionId))?.connection.generation).toBe(
+          0,
+        );
+        await expect(
+          resolveConnection({ ...admin, clients: without }, person(), CLAUDE),
+        ).rejects.toMatchObject({ code: "CLIENT_NOT_REGISTERED" });
+      });
+
+      it("will not decide a row of another preset or resource", async () => {
+        const human = person();
+        const { uid } = await begin(CLAUDE, CLAUDE_CALLBACK);
+        const { ticket } = await arm(uid, human);
+        await expect(
+          decideConsent({ ...admin, preset: "read-only" }, human, {
+            interaction: uid,
+            ticket,
+            decision: "approve",
+          }),
+        ).rejects.toMatchObject({ code: "PRESET_NOT_AVAILABLE" });
+        await expect(
+          decideConsent(
+            { ...admin, resource: "https://other.invalid/api/mcp" },
+            human,
+            { interaction: uid, ticket, decision: "approve" },
+          ),
+        ).rejects.toMatchObject({ code: "RESOURCE_NOT_AVAILABLE" });
+        expect((await decisions.read(uid))?.decision).toBeNull();
+      });
+    });
+
+    describe("a person who loses the right to authorize", () => {
+      it("stops every connection they authorized, and nobody else's", async () => {
+        const human = person();
+        const bystander = person();
+        const claude = await connect(CLAUDE, CLAUDE_CALLBACK, human);
+        const chatgpt = await connect(CHATGPT, CHATGPT_CALLBACK, human);
+        const theirs = await connect(CLAUDE, CLAUDE_CALLBACK, bystander);
+        const armed = await begin(CODEX, "http://127.0.0.1:53123/callback");
+        const { connectionId: unfinished } = await arm(armed.uid, human);
+
+        await revokeConnectionsOf(admin, human);
+
+        for (const { connectionId, tokens, started } of [claude, chatgpt]) {
+          expect((await control.read(connectionId))?.connection).toMatchObject({
+            status: "revoked",
+            generation: 2,
+          });
+          expect(
+            await refresh(started.clientId, tokens.refresh_token ?? ""),
+          ).toMatchObject({ status: 400, error: "invalid_grant" });
+        }
+        expect((await control.read(unfinished))?.connection.status).toBe(
+          "revoked",
+        );
+        const listed = (await control.listAuthorized()).map(
+          ({ connection }) => connection.id,
+        );
+        expect(listed).not.toContain(claude.connectionId);
+        expect(listed).not.toContain(chatgpt.connectionId);
+        expect(listed).toContain(theirs.connectionId);
+        expect(
+          (await refresh(CLAUDE, theirs.tokens.refresh_token ?? "")).error,
+        ).toBeUndefined();
+      });
+
+      it("does not revive anything when they are restored: the old tokens stay refused", async () => {
+        const human = person();
+        const old = await connect(CLAUDE, CLAUDE_CALLBACK, human);
+        await revokeConnectionsOf(admin, human);
+        // Twice, as a role changing back and forth would call it.
+        await revokeConnectionsOf(admin, human);
+        expect(
+          (await control.read(old.connectionId))?.connection.generation,
+        ).toBe(2);
+
+        expect(
+          await refresh(CLAUDE, old.tokens.refresh_token ?? ""),
+        ).toMatchObject({ status: 400, error: "invalid_grant" });
+
+        // Restored, the only way back is a fresh screen and a fresh allow.
+        const again = await begin(CLAUDE, CLAUDE_CALLBACK, {
+          jar: old.started.jar,
+        });
+        expect((await decisions.read(again.uid))?.decision).toBeNull();
+        const { resume } = await approve(again.uid, human);
+        const back = await follow(again.jar, resume);
+        const fresh = await exchange(
+          again,
+          back.arrived?.searchParams.get("code") ?? "",
+        );
+        expect(fresh.error).toBeUndefined();
+        expect(
+          await refresh(CLAUDE, old.tokens.refresh_token ?? ""),
+        ).toMatchObject({ status: 400, error: "invalid_grant" });
+        expect(
+          (await refresh(CLAUDE, fresh.refresh_token ?? "")).error,
+        ).toBeUndefined();
+      });
+
+      it("tries them all when one fails, and says so", async () => {
+        const human = person();
+        const claude = await connect(CLAUDE, CLAUDE_CALLBACK, human);
+        const chatgpt = await connect(CHATGPT, CHATGPT_CALLBACK, human);
+        // The newest is listed first, so stopping at a failure would spare the other.
+        outage = (text, values) =>
+          text.includes("UPDATE community.agent_connections") &&
+          values.includes(chatgpt.connectionId);
+        await expect(revokeConnectionsOf(admin, human)).rejects.toThrow();
+        outage = null;
+        expect(
+          (await control.read(chatgpt.connectionId))?.connection.status,
+        ).toBe("authorized");
+        expect(
+          (await control.read(claude.connectionId))?.connection.status,
+        ).toBe("revoked");
+      });
     });
 
     describe("the reaper", () => {

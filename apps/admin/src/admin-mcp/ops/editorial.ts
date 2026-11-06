@@ -44,7 +44,7 @@ import {
 
 const bindsIdentity = "the save binds an identity not yet bound";
 
-/** A write takes its key from requestId and index, so a client never sends one. */
+/** A write takes its key from requestId, index and connection, so a client never sends one. */
 const inputWithoutKey = (route: EditorialOperationName) =>
   (editorialOperationDefinitions[route].input as z.ZodObject).omit({
     idempotencyKey: true,

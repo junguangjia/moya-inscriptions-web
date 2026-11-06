@@ -14,7 +14,7 @@ export interface AdminOpContext {
   readonly key: AdminMcpKey;
   /** The admin_read call this runs under: paging, view, projection, grouping. */
   readonly read?: Partial<AdminReadInput>;
-  /** On admin_execute: this target's idempotency key, from requestId and index. */
+  /** On admin_execute: this target's idempotency key, from requestId, index and connection. */
   readonly requestKey?: string;
 }
 

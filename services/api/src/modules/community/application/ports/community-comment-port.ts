@@ -85,6 +85,17 @@ export interface CommandReceipt {
   readonly fence?: ExecutionFence;
 }
 
+/** The mode a command under a receipt committed, found in force, or answered from it. */
+export interface PublicationPolicyWrite {
+  readonly policy: PublicationPolicy;
+  readonly updatedAt: Date;
+  readonly updatedBy: string;
+  /** Already in force, so nothing was recorded. */
+  readonly unchanged?: true;
+  /** This command's receipt answered, so nothing ran. */
+  readonly replayed?: true;
+}
+
 /**
  * The right to execute, checked where it has to be checked: inside the very
  * transaction that performs the mutation, after any lock wait, against current
@@ -128,6 +139,8 @@ export interface ModeratedSubject {
   readonly id: CatalogCommentId;
   readonly kind: "comment" | "reply";
   readonly moderation: CommentModerationState;
+  /** `ai-admin` only: its receipt answered, and nothing ran. */
+  readonly replayed?: true;
 }
 
 /**
@@ -272,14 +285,18 @@ export interface CommunityCommentPort {
   /**
    * Writes the mode; a write of the mode already in force changes nothing.
    * When `audit` is given, the switch and its moderation event commit in one
-   * transaction, and nothing is recorded when no row changed.
+   * transaction, and nothing is recorded when no row changed. `receipt` is the
+   * AI path's: it commits there too, the mode already in force included, so a
+   * repeat of the command answers what it stored even after someone else moved
+   * the mode. Null without one.
    */
   writePublicationPolicy(
     policy: PublicationPolicy,
     operatorLabel: string,
     at: Date,
     audit?: ModerationEventDraft,
-  ): Promise<void>;
+    receipt?: CommandReceipt,
+  ): Promise<PublicationPolicyWrite | null>;
 
   recordModerationEvent(event: ModerationEvent): Promise<void>;
 }

@@ -40,7 +40,7 @@ import type {
 } from "@moya/contracts/internal/community-operator";
 import type { Pool, PoolClient } from "pg";
 import { asCommunityOperationError } from "./availability.js";
-import { reportIsSelfOnlySql } from "./self-only.js";
+import { reportAsksOfOwnProfileSql, reportIsSelfOnlySql } from "./self-only.js";
 import {
   beginWorkPublicationSync,
   syncWorkHolds,
@@ -1126,17 +1126,22 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
   /** Reads no text for an owner-only case, so none of it can reach a model. */
   private async aiAnswer(
     db: PoolClient,
-    row: CaseRow & { readonly owner_only: boolean },
+    row: CaseRow & {
+      readonly owner_only: boolean;
+      readonly owner_decides: boolean;
+    },
   ): Promise<OperatorReportAiAnswer> {
-    return row.owner_only
-      ? {
-          id: row.id,
-          kind: row.kind,
-          status: row.status,
-          ownerOnly: true,
-          code: SELF_ONLY_OWNER_REVIEW,
-        }
-      : projectReportForAi(await this.operatorDto(db, row));
+    if (row.owner_only)
+      return {
+        id: row.id,
+        kind: row.kind,
+        status: row.status,
+        ownerOnly: true,
+        code: SELF_ONLY_OWNER_REVIEW,
+      };
+    const report = projectReportForAi(await this.operatorDto(db, row));
+    // A person's own request: AI reads it, and no action on it is AI's to take.
+    return row.owner_decides ? { ...report, allowedActions: [] } : report;
   }
   async operatorListForAi(
     q: OperatorReportQuery,
@@ -1148,8 +1153,10 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
     return this.tx(async (db) => {
       const args = operatorReportFilter.values(q);
       const rows = (
-        await db.query<CaseRow & { owner_only: boolean }>(
-          `SELECT c.*,${reportIsSelfOnlySql("c")} AS owner_only FROM community.report_cases c WHERE ${where} ORDER BY c.urgent DESC,c.created_at,c.id LIMIT $8 OFFSET $9`,
+        await db.query<
+          CaseRow & { owner_only: boolean; owner_decides: boolean }
+        >(
+          `SELECT c.*,${reportIsSelfOnlySql("c")} AS owner_only,${reportAsksOfOwnProfileSql("c")} AS owner_decides FROM community.report_cases c WHERE ${where} ORDER BY c.urgent DESC,c.created_at,c.id LIMIT $8 OFFSET $9`,
           [...args, q.pageSize, (q.page - 1) * q.pageSize],
         )
       ).rows;
@@ -1171,8 +1178,10 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
   async operatorReadForAi(id: string): Promise<OperatorReportAiAnswer> {
     return this.tx(async (db) => {
       const row = (
-        await db.query<CaseRow & { owner_only: boolean }>(
-          `SELECT c.*,${reportIsSelfOnlySql("c")} AS owner_only FROM community.report_cases c WHERE c.id=$1`,
+        await db.query<
+          CaseRow & { owner_only: boolean; owner_decides: boolean }
+        >(
+          `SELECT c.*,${reportIsSelfOnlySql("c")} AS owner_only,${reportAsksOfOwnProfileSql("c")} AS owner_decides FROM community.report_cases c WHERE c.id=$1`,
           [id],
         )
       ).rows[0];
@@ -1239,7 +1248,9 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
       if (!allowed.includes(c.action))
         throw new CommunityInputError("Action is unavailable for this target");
       const dId = opaque("report-decision");
-      const key = officialHide ? null : await this.restrict(db, row, c.action);
+      const key = officialHide
+        ? null
+        : await this.restrict(db, row, c.action, operator);
       await db.query(
         "INSERT INTO community.report_decisions(id,case_id,action,reason,operator_label,restriction_key) VALUES($1,$2,$3,$4,$5,$6)",
         [dId, id, c.action, reason, operator, key],
@@ -1312,7 +1323,8 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
           "UPDATE community.report_decisions SET reversed_at=CURRENT_TIMESTAMP,review_reason=$2,appeal_status=CASE WHEN appeal_text IS NULL THEN NULL ELSE 'overturned' END WHERE id=$1",
           [d.id, reason],
         );
-        if (d.restriction_key) await this.release(db, d.restriction_key);
+        if (d.restriction_key)
+          await this.release(db, d.restriction_key, operator);
       } else
         await db.query(
           "UPDATE community.report_decisions SET review_reason=$2,appeal_status=CASE WHEN appeal_text IS NULL THEN NULL ELSE 'upheld' END WHERE id=$1",
@@ -1707,7 +1719,12 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
         ? "reporting_thread_revision"
         : "reporting_revision";
   }
-  private async writeSubject(db: PoolClient, s: Subject, state: unknown) {
+  private async writeSubject(
+    db: PoolClient,
+    s: Subject,
+    state: unknown,
+    operator: string,
+  ) {
     const now = new Date();
     const sync =
       s.kind === "work"
@@ -1719,9 +1736,10 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
               this.options.publication,
             )
           : null;
+    const moderated = s.kind === "comment" || s.kind === "reply";
     await db.query(
-      `UPDATE ${s.table} SET ${s.column}=$2${s.kind === "work" || s.kind === "article" ? ",version=version+1,updated_at=CURRENT_TIMESTAMP" : ""}${s.kind === "comment" || s.kind === "reply" ? ",moderated_at=CURRENT_TIMESTAMP,moderated_by='owner'" : ""} WHERE id=$1`,
-      [s.id, state],
+      `UPDATE ${s.table} SET ${s.column}=$2${s.kind === "work" || s.kind === "article" ? ",version=version+1,updated_at=CURRENT_TIMESTAMP" : ""}${moderated ? ",moderated_at=CURRENT_TIMESTAMP,moderated_by=$3" : ""} WHERE id=$1`,
+      moderated ? [s.id, state, operator] : [s.id, state],
     );
     if (s.kind === "user_status") {
       if (state === "suspended")
@@ -1747,6 +1765,7 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
     db: PoolClient,
     row: CaseRow,
     action: CommunityReportAction,
+    operator: string,
   ): Promise<string | null> {
     const s = this.subject(row, action);
     if (!s) return null;
@@ -1775,7 +1794,7 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
     if (s.kind === "user_status" && state.state === "deleted")
       throw new CommunityConflictError("A deleted account cannot be suspended");
     if (s.kind === "thread" ? state.state === null : state.state !== s.hidden)
-      await this.writeSubject(db, s, s.hidden);
+      await this.writeSubject(db, s, s.hidden, operator);
     const after = (
       await db.query<{ revision: string }>(
         `SELECT ${this.revisionColumn(s)}::text AS revision FROM ${s.table} WHERE id=$1`,
@@ -1794,7 +1813,7 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
     );
     return key;
   }
-  private async release(db: PoolClient, key: string) {
+  private async release(db: PoolClient, key: string, operator: string) {
     await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1,328))", [
       key,
     ]);
@@ -1828,7 +1847,7 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
     ).rows[0];
     // A later independent moderation or author deletion invalidates restoration.
     if (current?.revision === String(h.applied_revision))
-      await this.writeSubject(db, s, h.prior_state.value);
+      await this.writeSubject(db, s, h.prior_state.value, operator);
     await db.query(
       "DELETE FROM community.report_restriction_heads WHERE restriction_key=$1",
       [key],

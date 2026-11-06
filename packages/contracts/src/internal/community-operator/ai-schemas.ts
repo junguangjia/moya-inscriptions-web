@@ -32,6 +32,20 @@ export const operatorReadScopeFor = (
   label === AI_OPERATOR_LABEL ? [{ withholdSelfOnly: true }] : [];
 
 /**
+ * What only `ai-admin` is told of a write: `replayed`, its receipt answered and nothing
+ * ran; `alreadyInPlace`, nothing was left to change. The Owner's answers stay as they
+ * always were, and a stored receipt holds neither word.
+ */
+export const markForAiOperator = <Answer>(
+  label: string,
+  answer: Answer,
+  mark: "replayed" | "alreadyInPlace",
+): Answer =>
+  label === AI_OPERATOR_LABEL
+    ? ({ ...(answer as object), [mark]: true } as Answer)
+    : answer;
+
+/**
  * A report as AI reads it. Evidence keeps its count and type: its id, name and
  * download path are behind the evidence switch. `redacted` names what was removed.
  * A rights claimant's contact is withheld in every state of every switch.

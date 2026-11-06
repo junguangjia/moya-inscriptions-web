@@ -37,7 +37,7 @@ export type {
 } from "./contracts";
 export { admitGrant } from "./admission";
 export type { AdmittedConnection } from "./admission";
-export { connectionAuth } from "./authorization";
+export { connectionAuth, verifyConnection } from "./authorization";
 export type {
   AccessTokenVerifier,
   ConnectionAuthDependencies,
@@ -47,8 +47,11 @@ export {
   CONNECTIONS_ENABLED_SETTING,
   connectionOverrideAuth,
   connectionsEnabled,
+  environmentRefusal,
+  oauthSurfaceEnabled,
+  servedPreset,
 } from "./composition";
-export type { OverrideAuth } from "./composition";
+export type { OverrideAuth, ServedPreset } from "./composition";
 export {
   admitWrite,
   authorizeConnection,
@@ -81,10 +84,17 @@ export {
 export type {
   ConsentDecisionRequest,
   ConsentDisplay,
+  ConsentTool,
   RegisteredClient,
 } from "./consent";
 export { agentConnectionEndpoints } from "./endpoints";
-export { decideConsent } from "./decide";
+export {
+  agentConnectionAuthenticateHeader,
+  authorizationServerMetadataUrl,
+  protectedResourceMetadata,
+  wwwAuthenticate,
+} from "./discovery";
+export { decideConsent, revokeConnectionsOf } from "./decide";
 export type { ConsentOutcome } from "./decide";
 export { resolveConnection } from "./resolve";
 export {

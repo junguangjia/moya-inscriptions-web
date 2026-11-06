@@ -24,6 +24,18 @@ export type AdminOpRecovery = "receipt" | "cas_read_back" | "state_idempotent";
 /** Which Backend credential an op needs; `none` runs in Admin on the Local API. */
 export type AdminOpCredential = "none" | "base" | "community";
 
+/**
+ * What a settlement rule says of one target. `jobs` names what stopped on
+ * MEDIA_JOB_FAILED, and `mediaGate` that no job exists because a publish gate is shut.
+ */
+export type AdminOpSettlement = Pick<
+  AdminMcpEnvelope,
+  "ok" | "code" | "state" | "next" | "hint"
+> & {
+  readonly jobs?: readonly string[];
+  readonly mediaGate?: "off";
+};
+
 /** An async op answers from its settlement rule, so accepted never reads as done. */
 export type AdminOpCompletion<Input, Context> =
   | { readonly kind: "sync" }
@@ -39,9 +51,7 @@ export type AdminOpCompletion<Input, Context> =
         input: Input,
         result: unknown,
         context: Context,
-      ) => Promise<
-        Pick<AdminMcpEnvelope, "ok" | "code" | "state" | "next" | "hint">
-      >;
+      ) => Promise<AdminOpSettlement>;
     };
 
 /** The four Owner-only switches. Each stays off until the Owner opens it. */

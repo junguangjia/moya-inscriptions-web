@@ -1,7 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { createServer } from "node:http";
 import type { Server } from "node:http";
+import type { AddressInfo } from "node:net";
 
 import {
+  AI_OPERATOR_REQUEST_ID_HEADER,
   AI_OPERATOR_ROUTES,
   aiOperatorRouteFor,
   aiOperatorRouteId,
@@ -16,6 +19,7 @@ import {
 import type { BackendApplicationOptions } from "@moya/backend-runtime";
 import {
   callAiOperator,
+  callCommunityOperator,
   openCommunityAiEvidence,
   openCommunityAiMedia,
 } from "admin/community-backend";
@@ -67,14 +71,21 @@ const startBackend = async (
   const origin = `http://127.0.0.1:${address.port}`;
   return {
     origin,
-    send: async (method: string, route: string, token: string) => {
+    send: async (
+      method: string,
+      route: string,
+      token: string,
+      body: unknown = {},
+      headers: Readonly<Record<string, string>> = {},
+    ) => {
       const response = await fetch(`${origin}/internal/community/${route}`, {
         method,
         headers: {
           authorization: `Bearer ${token}`,
           ...(method === "GET" ? {} : { "content-type": "application/json" }),
+          ...headers,
         },
-        ...(method === "GET" ? {} : { body: "{}" }),
+        ...(method === "GET" ? {} : { body: JSON.stringify(body) }),
       });
       const text = await response.text();
       let code: string | undefined;
@@ -88,14 +99,20 @@ const startBackend = async (
   };
 };
 
-const reader = (selfOnly: boolean): AiOperatorReader => ({
+const reader = (
+  selfOnly: boolean,
+  { personal = false, receipt = false } = {},
+): AiOperatorReader => ({
   find: vi.fn(async () => ({
     items: [],
     sources: {},
     excluded: ["self_only"],
   })),
   count: vi.fn(async () => ({ total: 0, oldestAt: null })),
+  settlement: vi.fn(async () => ({ open: 0, failed: 0, failedJobs: [] })),
   isSelfOnly: vi.fn(async () => selfOnly),
+  isPersonalInfoRequest: vi.fn(async () => personal),
+  hasCommentReceipt: vi.fn(async () => receipt),
 });
 
 describe("the route table's community rows", () => {
@@ -104,23 +121,59 @@ describe("the route table's community rows", () => {
       credentials.includes("community"),
     );
     expect(community.length).toBeGreaterThan(25);
-    for (const { path, credentials } of community) {
-      expect(credentials, path).toEqual(["community"]);
-      expect(path.startsWith("/internal/community/"), path).toBe(true);
+    const shared = ({ path, query }: (typeof community)[number]) =>
+      path.endsWith("/ai/settlement") && query?.type === "item";
+    for (const row of community) {
+      expect(row.credentials, row.path).toEqual(
+        shared(row) ? ["base", "community"] : ["community"],
+      );
+      expect(row.path.startsWith("/internal/community/"), row.path).toBe(true);
     }
     expect(
       AI_OPERATOR_ROUTES.filter(({ credentials }) =>
         credentials.includes("base"),
-      ).every(({ credentials }) => !credentials.includes("community")),
-    ).toBe(true);
+      ).filter(({ credentials }) => credentials.includes("community")),
+    ).toHaveLength(1);
   });
 
-  it("holds no write yet: writes join with the slice that builds them", () => {
+  it("holds each reversible write once, and no irreversible one until the run engine", () => {
     const writes = AI_OPERATOR_ROUTES.filter(
-      ({ credentials, klass }) =>
-        credentials.includes("community") && !klass.startsWith("sensitive:"),
-    ).filter(({ klass, method }) => klass !== "read" || method !== "GET");
-    expect(writes).toEqual([]);
+      ({ credentials, klass, method }) =>
+        credentials.includes("community") &&
+        !klass.startsWith("sensitive:") &&
+        (klass !== "read" || method !== "GET"),
+    );
+    expect(
+      writes.map(({ method, path, klass, selfOnly }) => [
+        method,
+        path.slice("/internal/community/".length),
+        klass,
+        selfOnly,
+      ]),
+    ).toEqual([
+      ["POST", "reports/:id/decisions", "write", "report"],
+      ["POST", "reports/:id/review", "write", "report"],
+      ["POST", "reports/:id/metadata", "write", "report"],
+      ["POST", "comments/:id/moderation", "write", "comment"],
+      ["POST", "users/:id/status", "write", undefined],
+      ["PUT", "users/recommendation", "write", undefined],
+      ["POST", "works/:id/moderation", "write", "work"],
+      ["PUT", "featured", "write", undefined],
+      ["PUT", "featured/settings", "write", undefined],
+      ["PUT", "publication-policy", "write", undefined],
+      ["POST", "threads", "write", undefined],
+      ["POST", "threads/:id", "write", undefined],
+      ["PUT", "publishing/settings", "write", undefined],
+      [
+        "POST",
+        "publishing/submissions/:id/moderation",
+        "write",
+        "work_revision",
+      ],
+      ["PUT", "publishing/accounts/:id/capacity", "write", undefined],
+      ["POST", "publishing/jobs/:id/retry", "write", "publishing_job"],
+      ["POST", "articles/:id/moderation", "write", "article"],
+    ]);
   });
 
   it("matches a :name on a whole non-empty segment only", () => {
@@ -212,13 +265,67 @@ describe("the two AI credentials", () => {
     const backend = await startBackend();
     for (const route of [
       "catalog-delivery/thumbnail",
-      "ai/settlement?type=item",
       "ai/catalog-master/status",
     ])
       expect(await backend.send("GET", route, communityToken), route).toEqual({
         status: 403,
         code: "AI_ROUTE_FORBIDDEN",
       });
+  });
+
+  it("settles a job's own subject on either token, and a record on the community's alone", async () => {
+    const known = reader(false);
+    const backend = await startBackend({ aiOperatorReader: known });
+    const route = (type: string) =>
+      `ai/settlement?type=${type}&id=${id}&intent=withdraw`;
+    for (const token of [baseToken, communityToken])
+      expect((await backend.send("GET", route("item"), token)).status).toBe(
+        200,
+      );
+    for (const type of ["work", "article", "user"]) {
+      expect(await backend.send("GET", route(type), baseToken), type).toEqual({
+        status: 403,
+        code: "AI_ROUTE_FORBIDDEN",
+      });
+      expect(
+        (await backend.send("GET", route(type), communityToken)).status,
+        type,
+      ).toBe(200);
+    }
+    expect(known.settlement).toHaveBeenCalledTimes(5);
+    // No credential of the Owner's reaches it: this is the AI's own read.
+    expect((await backend.send("GET", route("item"), ownerToken)).status).toBe(
+      404,
+    );
+    expect(known.settlement).toHaveBeenCalledTimes(5);
+  });
+
+  it("names what it cannot answer, and never reads it as settled", async () => {
+    const known = reader(false);
+    const backend = await startBackend({ aiOperatorReader: known });
+    const route = `ai/settlement?type=work&id=${id}&intent=withdraw`;
+    for (const [answer, status, code] of [
+      ["not_found", 404, "NOT_FOUND"],
+      ["self_only", 403, "SELF_ONLY_OWNER_REVIEW"],
+      ["timed_out", 503, "READ_TIMED_OUT"],
+    ] as const) {
+      vi.mocked(known.settlement).mockResolvedValueOnce(answer);
+      expect(await backend.send("GET", route, communityToken), answer).toEqual({
+        status,
+        code,
+      });
+    }
+    for (const bad of [
+      `ai/settlement?type=work&id=${id}`,
+      `ai/settlement?type=work&id=${id}&intent=erase`,
+      `ai/settlement?type=work&id=${id}&intent=withdraw&extra=1`,
+      "ai/settlement?type=work&intent=withdraw",
+    ])
+      expect(await backend.send("GET", bad, communityToken), bad).toEqual({
+        status: 400,
+        code: "INVALID_QUERY",
+      });
+    expect(known.settlement).toHaveBeenCalledTimes(3);
   });
 
   it.each([
@@ -229,8 +336,11 @@ describe("the two AI credentials", () => {
     ["GET", `comments/${comment}/analysis`],
     ["GET", "catalog-delivery/render-backlog"],
     ["POST", "comments/moderation"],
-    ["POST", `reports/${id}/decisions`],
-    ["PUT", "publication-policy"],
+    ["POST", `reports/${id}/forward`],
+    ["POST", `comments/${comment}/delete-body`],
+    ["POST", `comments/${comment}/remove-thread`],
+    ["POST", `publishing/jobs/publishing-job-${"a".repeat(32)}/abandon`],
+    ["PUT", "featured/order"],
     ["GET", "unlisted"],
   ])("refuses both on %s %s", async (method, route) => {
     const backend = await startBackend({ aiOperatorReader: reader(false) });
@@ -278,6 +388,178 @@ describe("the two AI credentials", () => {
     await backend.send("GET", `comments/${comment}`, ownerToken);
     expect(answers.find).not.toHaveBeenCalled();
     expect(answers.isSelfOnly).not.toHaveBeenCalled();
+  });
+
+  it("keeps the base token off every community write", async () => {
+    const backend = await startBackend({ aiOperatorReader: reader(false) });
+    for (const [method, route] of [
+      ["POST", `reports/${id}/decisions`],
+      ["POST", `comments/${comment}/moderation`],
+      ["PUT", "publication-policy"],
+      ["PUT", "featured"],
+    ] as const)
+      expect(await backend.send(method, route, baseToken), route).toEqual({
+        status: 403,
+        code: "AI_ROUTE_FORBIDDEN",
+      });
+  });
+
+  it("fails closed when a self-only check on a write has nothing to ask", async () => {
+    const backend = await startBackend();
+    for (const [method, route] of [
+      ["POST", `reports/${id}/decisions`],
+      ["POST", `comments/${comment}/moderation`],
+      ["POST", `works/work-${"a".repeat(32)}/moderation`],
+    ] as const)
+      expect(await backend.send(method, route, communityToken), route).toEqual({
+        status: 503,
+        code: "OPERATOR_UNAVAILABLE",
+      });
+  });
+
+  it("asks the self-only question of a write's own record before anything runs", async () => {
+    const answers = reader(true);
+    const backend = await startBackend({ aiOperatorReader: answers });
+    for (const [method, route, subject, record] of [
+      ["POST", `reports/${id}/decisions`, "report", id],
+      ["POST", `reports/${id}/review`, "report", id],
+      ["POST", `reports/${id}/metadata`, "report", id],
+      ["POST", `comments/${comment}/moderation`, "comment", comment],
+      [
+        "POST",
+        `works/work-${"a".repeat(32)}/moderation`,
+        "work",
+        `work-${"a".repeat(32)}`,
+      ],
+      [
+        "POST",
+        `publishing/jobs/publishing-job-${"a".repeat(32)}/retry`,
+        "publishing_job",
+        `publishing-job-${"a".repeat(32)}`,
+      ],
+    ] as const) {
+      expect(await backend.send(method, route, communityToken), route).toEqual({
+        status: 403,
+        code: "SELF_ONLY_OWNER_REVIEW",
+      });
+      expect(answers.isSelfOnly).toHaveBeenLastCalledWith(subject, record);
+    }
+  });
+
+  it("asks it of the Owner's token never, on a write either", async () => {
+    const answers = reader(true);
+    const backend = await startBackend({ aiOperatorReader: answers });
+    await backend.send("POST", `comments/${comment}/moderation`, ownerToken);
+    await backend.send("POST", `reports/${id}/decisions`, ownerToken);
+    expect(answers.isSelfOnly).not.toHaveBeenCalled();
+    expect(answers.isPersonalInfoRequest).not.toHaveBeenCalled();
+    expect(answers.hasCommentReceipt).not.toHaveBeenCalled();
+  });
+
+  it("lets the Owner's featuring of a work through, and asks AI's before it runs", async () => {
+    const answers = reader(true);
+    const setFeatured = vi.fn(async () => ({ version: 2 }));
+    const backend = await startBackend({
+      aiOperatorReader: answers,
+      contentOperatorPort: { setFeatured } as never,
+    });
+    const command = {
+      requestId: randomUUID(),
+      target: { type: "work", id: `work-${"a".repeat(32)}` },
+      enabled: false,
+      position: 1,
+      expectedVersion: 1,
+    };
+    expect(
+      await backend.send("PUT", "featured", ownerToken, command),
+    ).toMatchObject({ status: 200 });
+    expect(setFeatured).toHaveBeenCalledTimes(1);
+    expect(answers.isSelfOnly).not.toHaveBeenCalled();
+    expect(
+      await backend.send("PUT", "featured", communityToken, command),
+    ).toEqual({ status: 403, code: "SELF_ONLY_OWNER_REVIEW" });
+    expect(setFeatured).toHaveBeenCalledTimes(1);
+    expect(answers.isSelfOnly).toHaveBeenCalledWith("work", command.target.id);
+  });
+
+  it("refuses every write on a person's own request, and no read", async () => {
+    const answers = reader(false, { personal: true });
+    const backend = await startBackend({ aiOperatorReader: answers });
+    for (const leaf of ["decisions", "review", "metadata"])
+      expect(
+        await backend.send("POST", `reports/${id}/${leaf}`, communityToken),
+        leaf,
+      ).toEqual({ status: 403, code: "PERSONAL_INFO_OWNER_REVIEW" });
+    expect(answers.isPersonalInfoRequest).toHaveBeenLastCalledWith(id);
+    const reads = vi.mocked(answers.isPersonalInfoRequest).mock.calls.length;
+    await backend.send("GET", `reports/${id}`, communityToken);
+    expect(answers.isPersonalInfoRequest).toHaveBeenCalledTimes(reads);
+  });
+
+  it("refuses to clear urgent by name on the AI credential, before the body reaches a service", async () => {
+    const metadata = vi.fn();
+    const backend = await startBackend({
+      aiOperatorReader: reader(false),
+      reportingPort: { metadata } as never,
+    });
+    expect(
+      await backend.send("POST", `reports/${id}/metadata`, communityToken, {
+        expectedVersion: 1,
+        urgent: false,
+      }),
+    ).toEqual({ status: 403, code: "URGENT_OWNER_ONLY" });
+    expect(metadata).not.toHaveBeenCalled();
+  });
+
+  it("passes a self-only check only for a comment write whose own key has a receipt", async () => {
+    const key = randomUUID();
+    const header = { [AI_OPERATOR_REQUEST_ID_HEADER]: key };
+    const body = { action: "hide", reason: "Synthetic" };
+    const held = reader(true, { receipt: true });
+    const backend = await startBackend({ aiOperatorReader: held });
+    // Past the check it reaches the real route, which has no store here.
+    const past = await backend.send(
+      "POST",
+      `comments/${comment}/moderation`,
+      communityToken,
+      body,
+      header,
+    );
+    expect(past.code).not.toBe("SELF_ONLY_OWNER_REVIEW");
+    expect(held.hasCommentReceipt).toHaveBeenCalledWith(key);
+    // A read of that comment, any other write, and a key that is no uuid do not pass.
+    expect(
+      await backend.send("GET", `comments/${comment}`, communityToken),
+    ).toEqual({ status: 403, code: "SELF_ONLY_OWNER_REVIEW" });
+    expect(
+      await backend.send(
+        "POST",
+        `works/work-${"a".repeat(32)}/moderation`,
+        communityToken,
+        body,
+        header,
+      ),
+    ).toEqual({ status: 403, code: "SELF_ONLY_OWNER_REVIEW" });
+    expect(
+      await backend.send(
+        "POST",
+        `comments/${comment}/moderation`,
+        communityToken,
+        body,
+        { [AI_OPERATOR_REQUEST_ID_HEADER]: "not-a-uuid" },
+      ),
+    ).toEqual({ status: 403, code: "SELF_ONLY_OWNER_REVIEW" });
+    const none = reader(true);
+    const refused = await startBackend({ aiOperatorReader: none });
+    expect(
+      await refused.send(
+        "POST",
+        `comments/${comment}/moderation`,
+        communityToken,
+        body,
+        header,
+      ),
+    ).toEqual({ status: 403, code: "SELF_ONLY_OWNER_REVIEW" });
   });
 
   it("fails closed when a self-only check has nothing to ask", async () => {
@@ -329,6 +611,42 @@ describe("ai/find's time", () => {
     });
     expect(answer.items).toEqual([]);
     expect(answer.excluded).toEqual(["self_only"]);
+  });
+});
+
+describe("the Owner's Admin client", () => {
+  it("narrows any 409 to STATE_CONFLICT, so a changed Backend code never reaches a page", async () => {
+    const stub = createServer((_request, response) => {
+      response.writeHead(409, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          error: { status: 409, code: "IDEMPOTENCY_CONFLICT" },
+        }),
+      );
+    });
+    await new Promise<void>((resolve) =>
+      stub.listen(0, "127.0.0.1", () => resolve()),
+    );
+    vi.stubEnv(
+      "COMMUNITY_OPERATOR_BASE_URL",
+      `http://127.0.0.1:${(stub.address() as AddressInfo).port}/`,
+    );
+    vi.stubEnv("COMMUNITY_OPERATOR_TOKEN", ownerToken);
+    try {
+      const error = await callCommunityOperator("POST", "threads", {
+        requestId: randomUUID(),
+        title: "Synthetic",
+      }).then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      expect(error).toBeInstanceOf(CommunityOperatorError);
+      expect((error as CommunityOperatorError).code).toBe("STATE_CONFLICT");
+      expect((error as CommunityOperatorError).status).toBe(409);
+    } finally {
+      stub.closeAllConnections();
+      await new Promise((resolve) => stub.close(resolve));
+    }
   });
 });
 

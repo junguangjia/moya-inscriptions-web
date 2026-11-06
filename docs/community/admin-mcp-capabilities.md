@@ -1,13 +1,43 @@
 # Admin MCP capabilities
 
-Generated from `apps/admin/src/admin-mcp/registry.ts` and
-`apps/admin/src/admin-mcp/surfaces.ts`. Do not edit by hand. To regenerate, run
+Generated from `apps/admin/src/admin-mcp/registry.ts`,
+`apps/admin/src/admin-mcp/surfaces.ts` and the tool list in
+`apps/admin/src/admin-mcp/tools/index.ts`. Do not edit by hand. To regenerate,
+run
 `pnpm --filter @moya/tests exec vitest run unit/backend/admin-mcp-registry.test.ts -u`;
 the same test fails while this file is stale.
 
 Scope and rules: `docs/development/admin-mcp-completion-v1.md`. "Built" says
 whether a slice has given the op its implementation yet; an op that is not built
 reports `not_available`.
+
+## Budgets
+
+Bytes of JSON. A tools/list figure is the JSON of the `tools` array alone,
+without the JSON-RPC frame, which adds 44 bytes on the wire; it counts against
+`ADMIN_MCP_TOKEN_BUDGET` at 3 bytes a token. The `admin_actions` index is the
+text of its tool result, against the 9000-byte text cap, measured on every op
+tool with every switch open and no AI token placed, its largest form. Only the
+index has an alarm: the registry test fails past 7200 bytes, 80% of the cap.
+
+| Measure                       | Bytes | Ceiling | Used | Left |
+| ----------------------------- | ----- | ------- | ---- | ---- |
+| tools/list, profile `read`    | 9578  | 12000   | 80%  | 2422 |
+| tools/list, profile `operate` | 11046 | 12000   | 92%  | 954  |
+| tools/list, profile `full`    | 11046 | 12000   | 92%  | 954  |
+| `admin_actions` index         | 5307  | 9000    | 59%  | 3693 |
+
+| Tool               | Bytes listed |
+| ------------------ | ------------ |
+| `admin_whoami`     | 552          |
+| `admin_find`       | 1322         |
+| `admin_get`        | 1462         |
+| `admin_read`       | 1323         |
+| `admin_analytics`  | 2339         |
+| `admin_actions`    | 774          |
+| `admin_view_media` | 1061         |
+| `admin_job`        | 736          |
+| `admin_execute`    | 1467         |
 
 ## Ops (133)
 
@@ -17,47 +47,47 @@ reports `not_available`.
 | ----------------------------------------- | ------------------------------------------------------- | ---------------------------- | ---------- | ---------------- | ---------- | ------ | ----- |
 | `community.read-reports`                  | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.read-report`                   | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
-| `community.decide-report`                 | reversible                                              | `admin_execute`              | async      | cas_read_back    | community  |        | no    |
-| `community.review-report`                 | reversible                                              | `admin_execute`              | async      | cas_read_back    | community  |        | no    |
-| `community.set-report-metadata`           | reversible; irreversible when legalHold is set to false | `admin_execute`              | sync       | cas_read_back    | community  |        | no    |
+| `community.decide-report`                 | reversible                                              | `admin_execute`              | async      | cas_read_back    | community  |        | yes   |
+| `community.review-report`                 | reversible                                              | `admin_execute`              | async      | cas_read_back    | community  |        | yes   |
+| `community.set-report-metadata`           | reversible; irreversible when legalHold is set to false | `admin_execute`              | sync       | cas_read_back    | community  |        | yes   |
 | `community.forward-report`                | irreversible                                            | `admin_execute_irreversible` | sync       | cas_read_back    | community  |        | no    |
 | `community.read-feedback`                 | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.read-works`                    | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.read-users`                    | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
-| `community.recommend-user`                | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | no    |
-| `community.moderate-work`                 | reversible                                              | `admin_execute`              | async      | receipt          | community  |        | no    |
+| `community.recommend-user`                | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | yes   |
+| `community.moderate-work`                 | reversible                                              | `admin_execute`              | async      | receipt          | community  |        | yes   |
 | `community.read-featured`                 | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
-| `community.set-featured`                  | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | no    |
-| `community.set-featured-quantity`         | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | no    |
+| `community.set-featured`                  | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | yes   |
+| `community.set-featured-quantity`         | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | yes   |
 | `community.delete-body`                   | irreversible                                            | `admin_execute_irreversible` | sync       | receipt          | community  |        | no    |
 | `community.remove-thread`                 | irreversible                                            | `admin_execute_irreversible` | sync       | receipt          | community  |        | no    |
 | `community.read-dm-conversation`          | read                                                    | `admin_sensitive_read`       | sync       | state_idempotent | community  | dm     | no    |
 | `community.lookup-dm-conversation`        | read                                                    | `admin_sensitive_read`       | sync       | state_idempotent | community  | dm     | no    |
 | `community.remove-dm-message`             | irreversible                                            | `admin_execute_irreversible` | sync       | receipt          | community  | dm     | no    |
 | `community.read-threads`                  | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
-| `community.create-thread`                 | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | no    |
-| `community.update-thread`                 | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | no    |
+| `community.create-thread`                 | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | yes   |
+| `community.update-thread`                 | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | yes   |
 | `community.read-feature-catalogs`         | read                                                    | `admin_read`                 | sync       | state_idempotent | none       |        | yes   |
 | `community.read-policy`                   | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
-| `community.set-policy`                    | reversible                                              | `admin_execute`              | sync       | cas_read_back    | community  |        | no    |
+| `community.set-policy`                    | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | yes   |
 | `community.read-comments`                 | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.read-comment`                  | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
-| `community.moderate-comment`              | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | no    |
-| `community.moderate-user`                 | reversible                                              | `admin_execute`              | async      | cas_read_back    | community  |        | no    |
+| `community.moderate-comment`              | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | yes   |
+| `community.moderate-user`                 | reversible                                              | `admin_execute`              | async      | receipt          | community  |        | yes   |
 | `community.read-events`                   | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.read-summary`                  | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.read-work-publishing-settings` | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
-| `community.set-work-publishing-settings`  | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | no    |
+| `community.set-work-publishing-settings`  | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | yes   |
 | `community.read-article-submissions`      | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.read-article-submission`       | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
-| `community.moderate-article-submission`   | reversible                                              | `admin_execute`              | async      | receipt          | community  |        | no    |
+| `community.moderate-article-submission`   | reversible                                              | `admin_execute`              | async      | receipt          | community  |        | yes   |
 | `community.read-work-submissions`         | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.read-work-submission`          | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
-| `community.moderate-work-submission`      | reversible                                              | `admin_execute`              | async      | receipt          | community  |        | no    |
+| `community.moderate-work-submission`      | reversible                                              | `admin_execute`              | async      | receipt          | community  |        | yes   |
 | `community.read-account-capacity`         | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
-| `community.set-account-capacity`          | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | no    |
+| `community.set-account-capacity`          | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | yes   |
 | `community.read-publishing-jobs`          | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
-| `community.retry-publishing-job`          | reversible                                              | `admin_execute`              | async      | receipt          | community  |        | no    |
+| `community.retry-publishing-job`          | reversible                                              | `admin_execute`              | async      | receipt          | community  |        | yes   |
 | `community.abandon-publishing-job`        | irreversible                                            | `admin_execute_irreversible` | sync       | receipt          | community  |        | no    |
 
 ### editorial (17)
@@ -274,10 +304,10 @@ here maps to the op of its own name.
 | `endpoint POST /mcp`                                                                             | config                                                              | the transport these tools arrive on               |
 | `endpoint GET /mcp`                                                                              | config                                                              | the transport these tools arrive on               |
 | `endpoint POST /mcp-control/keys/:id/renew`                                                      | reserved                                                            | key renewal                                       |
-| `endpoint POST /agent-connections/consent`                                                       | dev-only                                                            | AI connections                                    |
-| `endpoint GET /agent-connections`                                                                | dev-only                                                            | AI connections                                    |
-| `endpoint POST /agent-connections/start`                                                         | dev-only                                                            | AI connections                                    |
-| `endpoint POST /agent-connections/disconnect`                                                    | dev-only                                                            | AI connections                                    |
+| `endpoint POST /agent-connections/consent`                                                       | reserved                                                            | approving or denying an AI connection             |
+| `endpoint GET /agent-connections`                                                                | reserved                                                            | the list of AI connections                        |
+| `endpoint POST /agent-connections/start`                                                         | dev-only                                                            | the Development page's start button               |
+| `endpoint POST /agent-connections/disconnect`                                                    | reserved                                                            | disconnecting an AI connection                    |
 | `collection users`                                                                               | reserved                                                            | Admin accounts                                    |
 | `collection catalogs`                                                                            | `list.catalogs`, `editorial.save-draft`, `catalog.publish`          |                                                   |
 | `collection media`                                                                               | `list.media`, `media.update_metadata`                               |                                                   |
@@ -312,8 +342,8 @@ here maps to the op of its own name.
 | `view communityHistory`                                                                          | `list.events`                                                       |                                                   |
 | `view communityArticleSubmissions`                                                               | `list.article_submissions`, `community.moderate-article-submission` |                                                   |
 | `view communityWorkSubmissions`                                                                  | `list.work_submissions`, `community.moderate-work-submission`       |                                                   |
-| `view agentConnections`                                                                          | dev-only                                                            | AI connections                                    |
-| `view agentConnectionsConsent`                                                                   | dev-only                                                            | AI connections                                    |
+| `view agentConnections`                                                                          | reserved                                                            | the AI connections page                           |
+| `view agentConnectionsConsent`                                                                   | reserved                                                            | the consent page                                  |
 | `view communityAccountCapacity`                                                                  | `community.read-account-capacity`, `community.set-account-capacity` |                                                   |
 | `view communityPublishingJobs`                                                                   | `list.jobs`, `community.retry-publishing-job`                       |                                                   |
 | `view communityAgentOperations`                                                                  | dev-only                                                            | AI operations                                     |
@@ -343,7 +373,7 @@ here maps to the op of its own name.
 | `page /admin/collections/editorial-article-approvals`                                            | `list.article_approvals`                                            |                                                   |
 | `page /admin/community-moderation/publishing-jobs`                                               | `list.jobs`                                                         |                                                   |
 | `page /admin/community-moderation/agent-operations`                                              | dev-only                                                            | AI operations                                     |
-| `page /admin/agent-connections`                                                                  | dev-only                                                            | AI connections                                    |
+| `page /admin/agent-connections`                                                                  | reserved                                                            | the AI connections page                           |
 | `page /admin/community-moderation/history`                                                       | `list.events`                                                       |                                                   |
 | `page /admin/collections/editorial-receipts`                                                     | `list.receipts`                                                     |                                                   |
 | `page /admin/collections/mcp-audit-events`                                                       | reserved                                                            | audit records                                     |

@@ -20,6 +20,7 @@ import {
   editorialPublishSchema,
   catalogFilterMetadataSchema,
 } from "../packages/contracts/dist/internal/editorial/index.js";
+import { ADMIN_MCP_OPERATOR_ROW_EMAIL } from "../packages/contracts/dist/internal/admin-mcp/index.js";
 
 const task = "phase4-author-community-v1";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -308,8 +309,18 @@ async function main() {
     }
     assert(
       existing.totalDocs === 0 &&
-        (await payload.count({ collection: "users", overrideAccess: true }))
-          .totalDocs === 0,
+        (
+          await payload.count({
+            collection: "users",
+            overrideAccess: true,
+            where: {
+              or: [
+                { email: { not_equals: ADMIN_MCP_OPERATOR_ROW_EMAIL } },
+                { role: { not_equals: "ai_operator" } },
+              ],
+            },
+          })
+        ).totalDocs === 0,
       "SYNTHETIC_OWNER_BOOTSTRAP_NOT_EMPTY",
     );
     const owner = await payload.create({

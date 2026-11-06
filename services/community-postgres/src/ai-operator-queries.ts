@@ -1,6 +1,9 @@
 import {
   aiCountResultSchema,
   aiFindResultSchema,
+  aiSettlementResultSchema,
+  AI_OPERATOR_LABEL,
+  PERSONAL_INFO_OWNER_REVIEW,
   SELF_ONLY_OWNER_REVIEW,
 } from "@moya/contracts/internal/admin-mcp";
 import type {
@@ -14,6 +17,9 @@ import type {
   AiLookupType,
   AiOperatorReader,
   AiOperatorSubject,
+  AiSettlementQuery,
+  AiSettlementResult,
+  AiSettlementType,
 } from "@moya/contracts/internal/admin-mcp";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
@@ -31,11 +37,16 @@ import {
   publishingJobsWhere,
   submissionQueueWhere,
 } from "./publishing/operator.js";
+import type { PublicationSyncOptions } from "./publishing/publication-sync.js";
 import { operatorReportFilter } from "./reporting-adapter.js";
 import {
   articleUsesSelfOnlyMediaSql,
+  caseIsSelfOnlySql,
   commentIsSelfOnlySql,
+  isSelfOnlyWorkInScanSql,
   isSelfOnlyWorkSql,
+  jobSubjectIsSelfOnlySql,
+  reportAsksOfOwnProfileSql,
   reportIsSelfOnlySql,
   revisionIsSelfOnlySql,
   workInSelfOnlySetSql,
@@ -306,7 +317,7 @@ const SEARCH_BRANCHES: Readonly<Record<AiFindSource, SearchBranch>> = {
          FROM community.works w JOIN community.public_users u ON u.id=w.author_id
          LEFT JOIN community.work_revisions ar ON ar.id=w.author_revision_id AND ar.requested_visibility='public'
          CROSS JOIN LATERAL (SELECT concat_ws(' ',w.id,w.title,w.text,ar.title,ar.body,u.display_name,u.handle) AS doc) m
-         WHERE NOT ${isSelfOnlyWorkSql("w")} AND ${holdsEveryWord("m.doc")}
+         WHERE NOT ${isSelfOnlyWorkInScanSql("w")} AND ${holdsEveryWord("m.doc")}
          ORDER BY COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at) DESC,w.id LIMIT $3`,
         [...args],
       )
@@ -399,25 +410,38 @@ const LOOKUPS: Readonly<
   // The one record a withheld answer still names: its case exists, and it is the Owner's.
   report: async (db, id) =>
     (
-      await db.query<ReportRow & { owner_only: boolean }>(
-        `SELECT ${reportColumns},${reportIsSelfOnlySql("c")} AS owner_only FROM community.report_cases c WHERE c.id=$1`,
+      await db.query<
+        ReportRow & { owner_only: boolean; owner_decides: boolean }
+      >(
+        `SELECT ${reportColumns},${reportIsSelfOnlySql("c")} AS owner_only,${reportAsksOfOwnProfileSql("c")} AS owner_decides FROM community.report_cases c WHERE c.id=$1`,
         [id],
       )
-    ).rows.map((row) =>
-      row.owner_only
+    ).rows.map((row) => {
+      if (row.owner_only)
+        return {
+          type: "report" as const,
+          id: row.id,
+          state: row.status,
+          disambiguators: {
+            kind: row.kind,
+            ownerOnly: true,
+            code: SELF_ONLY_OWNER_REVIEW,
+          },
+          match: identity("id"),
+        };
+      const item = reportItem(row, identity("id"));
+      // AI reads this one, and only its writes are the Owner's, so none is offered.
+      return row.owner_decides
         ? {
-            type: "report" as const,
-            id: row.id,
-            state: row.status,
+            ...item,
             disambiguators: {
-              kind: row.kind,
+              ...item.disambiguators,
               ownerOnly: true,
-              code: SELF_ONLY_OWNER_REVIEW,
+              code: PERSONAL_INFO_OWNER_REVIEW,
             },
-            match: identity("id"),
           }
-        : reportItem(row, identity("id")),
-    ),
+        : item;
+    }),
   feedback: async (db, id) =>
     (
       await db.query<{ id: string; user_id: string; created_at: Date }>(
@@ -637,8 +661,109 @@ const countSpecOf = (query: AiCountQuery): CountSpec => {
   }
 };
 
+/**
+ * Which statements answer for each subject (section 9). `items` holds every item the
+ * subject's operations move, the union their publication sync touches: a work's across
+ * all its revisions, the set its holds use, because an approval moves the public one.
+ */
+const SETTLEMENT_SUBJECTS: Readonly<
+  Record<
+    AiSettlementType,
+    {
+      readonly found: string;
+      readonly withheld: string;
+      readonly items: string;
+    }
+  >
+> = {
+  work: {
+    found: "EXISTS(SELECT 1 FROM community.works WHERE id=$1::text)",
+    withheld: workIsSelfOnlySql("$1::text"),
+    items:
+      "SELECT DISTINCT ri.item_id AS id FROM community.work_revision_items ri JOIN community.work_revisions r ON r.id=ri.revision_id WHERE r.work_id=$1::text",
+  },
+  article: {
+    found:
+      "EXISTS(SELECT 1 FROM community.article_documents WHERE id=$1::text)",
+    withheld: articleUsesSelfOnlyMediaSql("$1::text"),
+    items: `SELECT DISTINCT ref.item_id AS id FROM community.article_revisions r
+      JOIN community.media_item_refs ref ON ref.holder_kind='article_revision'
+        AND ref.holder_id='article-revision-'||substr(encode(sha256(convert_to(r.article_id||':'||r.version::text,'UTF8')),'hex'),1,32)
+      WHERE r.article_id=$1::text`,
+  },
+  user: {
+    found: "EXISTS(SELECT 1 FROM community.public_users WHERE id=$1::text)",
+    withheld: "FALSE",
+    items: "SELECT id FROM community.media_items WHERE owner_id=$1::text",
+  },
+  // A job's own subject. It is a media item or a Catalog asset.
+  item: {
+    found:
+      "(EXISTS(SELECT 1 FROM community.media_items WHERE id=$1::text) OR EXISTS(SELECT 1 FROM community.catalog_media_assets WHERE id=$1::text))",
+    withheld: `EXISTS(SELECT 1 FROM community.work_revision_items ri
+      JOIN community.work_revisions r ON r.id=ri.revision_id
+      JOIN community.works w ON w.id=r.work_id
+      WHERE ri.item_id=$1::text AND ${isSelfOnlyWorkSql("w")})`,
+    items: "SELECT $1::text AS id",
+  },
+};
+
+/**
+ * The subject's unfinished jobs, on their partial index, and of those the ones that
+ * stopped since the operation. Its time is what it set on the subject's public asset,
+ * `desired_at`, so a replay and admin_job need carry none, and a later operation that
+ * fences the asset again starts its own. That clock is the database's on some routes and
+ * a job's is the worker's, and a job running through the operation that fails right
+ * after has no successor, so the margin reads it as failed and never as finished. A job
+ * that stopped within it before reads as failed too.
+ */
+const settlementJobsSql = (items: string): string => `
+  WITH subjects AS (${items}),
+  unfinished AS (
+    SELECT j.id,j.kind,j.subject_id,j.state,j.updated_at
+    FROM community.publishing_jobs j JOIN subjects s ON s.id=j.subject_id
+    WHERE j.kind IN ('publish_media','withdraw_media','verify_withdrawal') AND j.state<>'succeeded'
+  ),
+  stopped AS (
+    SELECT u.id,u.kind,u.subject_id,u.updated_at FROM unfinished u
+    WHERE u.state IN ('failed','abandoned')
+      AND u.updated_at>=(SELECT a.desired_at FROM community.media_public_assets a
+        WHERE a.item_id=u.subject_id OR a.catalog_asset_id=u.subject_id)-interval '1 minute'
+  )`;
+
+const settlementOpenSql = (
+  items: string,
+): string => `${settlementJobsSql(items)}
+  SELECT (SELECT count(*) FROM unfinished WHERE state IN ('queued','running'))::integer AS open,
+    (SELECT min(updated_at) FROM stopped) AS oldest_stop`;
+
+/**
+ * Only past a stop, because no index serves a subject's finished jobs: the worker's
+ * reconcile tries again, so a stop counts until a later job of its side has succeeded,
+ * and a withdrawal and its verification run one handler, so either clears the other. The
+ * stop's own time, a real value when this is planned, bounds it on the state index.
+ */
+const settlementStoppedSql = (
+  items: string,
+): string => `${settlementJobsSql(items)},
+  standing AS (
+    SELECT s.id,s.updated_at FROM stopped s
+    WHERE NOT EXISTS(SELECT 1 FROM community.publishing_jobs later
+      WHERE later.state='succeeded' AND later.updated_at>=$2::timestamptz
+        AND later.updated_at>=s.updated_at AND later.created_at>=s.updated_at
+        AND later.subject_id=s.subject_id
+        AND later.kind=ANY(CASE WHEN s.kind='publish_media' THEN ARRAY['publish_media']
+          ELSE ARRAY['withdraw_media','verify_withdrawal'] END))
+  )
+  SELECT (SELECT count(*) FROM standing)::integer AS failed,
+    ARRAY(SELECT id FROM standing ORDER BY updated_at DESC,id DESC LIMIT 3) AS failed_jobs`;
+
 export class PostgresAiOperatorReader implements AiOperatorReader {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    /** The gates publishing asks. Absent, nothing publishes, as in publication-sync. */
+    private readonly publication?: PublicationSyncOptions,
+  ) {}
 
   private async branch<T>(
     read: (db: PoolClient) => Promise<T>,
@@ -758,18 +883,85 @@ export class PostgresAiOperatorReader implements AiOperatorReader {
     });
   }
 
+  async settlement(
+    query: AiSettlementQuery,
+  ): Promise<AiSettlementResult | "timed_out" | "not_found" | "self_only"> {
+    const { found, withheld, items } = SETTLEMENT_SUBJECTS[query.type];
+    const answer = await this.branch(async (db) => {
+      const subject = (
+        await db.query<{ found: boolean; withheld: boolean }>(
+          `SELECT ${found} AS found,${withheld} AS withheld`,
+          [query.id],
+        )
+      ).rows[0]!;
+      if (!subject.found) return "not_found" as const;
+      if (subject.withheld) return "self_only" as const;
+      const { open, oldest_stop: oldestStop } = (
+        await db.query<{ open: number; oldest_stop: Date | null }>(
+          settlementOpenSql(items),
+          [query.id],
+        )
+      ).rows[0]!;
+      if (oldestStop === null) return { open, failed: 0, failedJobs: [] };
+      const { failed, failed_jobs: failedJobs } = (
+        await db.query<{ failed: number; failed_jobs: string[] }>(
+          settlementStoppedSql(items),
+          [query.id, oldestStop],
+        )
+      ).rows[0]!;
+      return { open, failed, failedJobs };
+    });
+    if (answer.status === "timed_out") return "timed_out";
+    if (answer.status !== "ok")
+      throw asCommunityOperationError(new Error("settlement failed"), "query");
+    if (typeof answer.value === "string") return answer.value;
+    const { open, failed, failedJobs } = answer.value;
+    const gateShut =
+      query.intent === "publish" &&
+      !(this.publication?.isPublic() && this.publication.allowPublish());
+    return aiSettlementResultSchema.parse({
+      open,
+      failed,
+      failedJobs,
+      ...(gateShut ? { mediaGate: "off" } : {}),
+    });
+  }
+
   async isSelfOnly(subject: AiOperatorSubject, id: string): Promise<boolean> {
     const check = {
       work: workIsSelfOnlySql,
       comment: commentIsSelfOnlySql,
       work_revision: revisionIsSelfOnlySql,
       article: articleUsesSelfOnlyMediaSql,
+      report: caseIsSelfOnlySql,
+      publishing_job: jobSubjectIsSelfOnlySql,
     }[subject]("$1::text");
+    return this.holds(`SELECT ${check} AS held`, [id]);
+  }
+
+  isPersonalInfoRequest(reportId: string): Promise<boolean> {
+    return this.holds(
+      `SELECT EXISTS(SELECT 1 FROM community.report_cases c WHERE c.id=$1::text AND ${reportAsksOfOwnProfileSql("c")}) AS held`,
+      [reportId],
+    );
+  }
+
+  hasCommentReceipt(requestId: string): Promise<boolean> {
+    return this.holds(
+      "SELECT EXISTS(SELECT 1 FROM community.discussion_command_receipts WHERE actor_label=$1 AND request_id=$2) AS held",
+      [AI_OPERATOR_LABEL, requestId],
+    );
+  }
+
+  private async holds(
+    statement: string,
+    values: readonly string[],
+  ): Promise<boolean> {
     const answer = await this.pool
-      .query<{ withheld: boolean }>(`SELECT ${check} AS withheld`, [id])
+      .query<{ held: boolean }>(statement, [...values])
       .catch((error: unknown) => {
         throw asCommunityOperationError(error, "query");
       });
-    return answer.rows[0]!.withheld;
+    return answer.rows[0]!.held;
   }
 }

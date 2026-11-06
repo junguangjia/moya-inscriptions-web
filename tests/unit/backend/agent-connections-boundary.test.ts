@@ -1,16 +1,64 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { createServer } from "node:net";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  CONNECTION_TOKEN_PREFIX,
+  PRESET_CAPABILITY_SCOPES,
   PRESET_SCOPES,
   PRESET_TOOLS,
   canonicalScopes,
+  connectionOverrideAuth,
+  connectionPresetSchema,
+  connectionsEnabled,
+  oauthSurfaceEnabled,
 } from "admin/agent-connections";
-import { createResourceRuntime } from "admin/agent-connections-resource";
+import {
+  connectionAuthDependencies,
+  createResourceRuntime,
+  resetResourceRuntime,
+  resourceRuntime,
+} from "admin/agent-connections-resource";
 import { extractModuleReferences } from "../architecture/workspace-scanner.js";
 import { agentAdminTools } from "admin/agent-admin-mcp";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+
+// The real parser and pool, recorded: this suite opens no connection, and what the
+// pool was given is the only place the TLS settings can be read back from.
+const pools = vi.hoisted(() => ({ configs: [] as unknown[] }));
+vi.mock("@moya/catalog-postgres", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("@moya/catalog-postgres")>();
+  return {
+    ...original,
+    createPostgresPool: (
+      ...args: Parameters<typeof original.createPostgresPool>
+    ) => {
+      pools.configs.push(args[0]);
+      return original.createPostgresPool(...args);
+    },
+  };
+});
 
 /**
  * Agent Connections V1 (Issue #141 r9) — F1, the access boundary, checked at
@@ -237,6 +285,507 @@ describe("F1: the NEW connection surface fails closed", () => {
     );
     // Both, never either.
     expect(composition).toMatch(/development"\s*&&/u);
+  });
+});
+
+/**
+ * Issue #355, the login door (amendment 2026-11-05). In Production one setting
+ * composes the operator surface and nothing beside it: the plugin path, the
+ * `artvenn_*` tools and the read-only and management presets stay as they were.
+ */
+describe("the login door's gate", () => {
+  const managed =
+    "postgresql://x@db.example.invalid:5432/synthetic?sslmode=verify-full";
+  const productionDoor: Record<string, string | undefined> = {
+    NODE_ENV: "production",
+    ADMIN_MCP_OAUTH_ENABLED: "true",
+    CMS_ENVIRONMENT: "production",
+    AGENT_AUTHORIZATION_ISSUER: "https://auth.artvenn.invalid",
+    AGENT_AUTHORIZATION_RESOURCE: "https://admin.artvenn.invalid/api/mcp",
+    AGENT_AUTHORIZATION_CLIENTS: JSON.stringify([
+      {
+        clientId: "https://tool.artvenn.invalid/oauth/client.json",
+        family: "synthetic",
+        label: "Synthetic tool",
+        callbackPolicy: "hosted-https",
+        redirectUris: ["https://tool.artvenn.invalid/callback"],
+      },
+    ]),
+    AGENT_RESOURCE_DATABASE_URL: managed,
+    AGENT_CONNECTION_WRAPPER_INDEX_KEY: "A".repeat(43) + "=",
+    AGENT_CONNECTION_WRAPPER_SEAL_KEY: "B".repeat(43) + "=",
+  };
+  const developmentDoor = {
+    ...productionDoor,
+    NODE_ENV: "development",
+    ADMIN_MCP_OAUTH_ENABLED: undefined,
+    AGENT_CONNECTIONS_ENABLED: "true",
+    CMS_ENVIRONMENT: undefined,
+    AGENT_AUTHORIZATION_CLIENTS: undefined,
+    AGENT_RESOURCE_DATABASE_URL: "postgresql://x@127.0.0.1:5432/synthetic",
+  };
+  const compose = (
+    base: Record<string, string | undefined>,
+    override: Record<string, string | undefined> = {},
+  ) => createResourceRuntime({ ...base, ...override } as NodeJS.ProcessEnv);
+  const refusalOf = (
+    base: Record<string, string | undefined>,
+    override: Record<string, string | undefined>,
+  ) => {
+    try {
+      compose(base, override);
+    } catch (error) {
+      return (error as { code?: string }).code;
+    }
+    return "COMPOSED";
+  };
+
+  // A CA file Production's door can read, so a refusal below is the one it names.
+  let certificates: string;
+  let authority: string;
+
+  beforeAll(() => {
+    certificates = mkdtempSync(path.join(tmpdir(), "resource-ca-"));
+    authority = path.join(certificates, "authority.pem");
+    execFileSync(
+      "openssl",
+      [
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        path.join(certificates, "authority-key.pem"),
+        "-out",
+        authority,
+        "-days",
+        "1",
+        "-subj",
+        "/CN=synthetic-resource-ca",
+      ],
+      { stdio: "pipe" },
+    );
+    productionDoor.AGENT_DATABASE_SSL_CA_FILE = authority;
+  });
+
+  afterAll(() => {
+    rmSync(certificates, { recursive: true, force: true });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    resetResourceRuntime();
+    pools.configs.length = 0;
+  });
+
+  const stubAll = (settings: Record<string, string | undefined>) => {
+    for (const [name, value] of Object.entries(settings))
+      vi.stubEnv(name, value as string);
+    resetResourceRuntime();
+  };
+
+  it("holds the closed list under operator, hosted entries included, and refuses a bad one by name", () => {
+    const listed = compose(productionDoor)!.clients;
+    expect([...listed.keys()]).toEqual([
+      "https://tool.artvenn.invalid/oauth/client.json",
+    ]);
+    expect(
+      listed.get("https://tool.artvenn.invalid/oauth/client.json")?.label,
+    ).toBe("Synthetic tool");
+    for (const [setting, code] of [
+      [undefined, "CLIENTS_MALFORMED"],
+      ["", "CLIENTS_MALFORMED"],
+      ["not json", "CLIENTS_MALFORMED"],
+      ["[]", "CLIENTS_REQUIRED"],
+    ] as const)
+      expect(
+        refusalOf(productionDoor, { AGENT_AUTHORIZATION_CLIENTS: setting }),
+      ).toBe(code);
+    const operator = {
+      AGENT_AUTHORIZATION_PROFILE: "operator",
+      CMS_ENVIRONMENT: "development",
+      AGENT_AUTHORIZATION_ENVIRONMENT: "development",
+    };
+    expect(refusalOf(developmentDoor, operator)).toBe("CLIENTS_MALFORMED");
+    expect(
+      compose(developmentDoor, {
+        ...operator,
+        AGENT_AUTHORIZATION_CLIENTS: productionDoor.AGENT_AUTHORIZATION_CLIENTS,
+      })!.clients.size,
+    ).toBe(1);
+  });
+
+  it("starts the read-only profile with no list, as it always has", () => {
+    expect(compose(developmentDoor)!.clients.size).toBe(0);
+    expect(
+      compose(developmentDoor, {
+        AGENT_AUTHORIZATION_CLIENTS: "not json",
+      })!.clients.size,
+    ).toBe(0);
+  });
+
+  it("opens each environment on its own setting, and never on the other's", () => {
+    const table: readonly [Record<string, string>, boolean][] = [
+      [{}, false],
+      [{ ADMIN_MCP_OAUTH_ENABLED: "true" }, false],
+      [{ AGENT_CONNECTIONS_ENABLED: "true" }, false],
+      [{ NODE_ENV: "development" }, false],
+      [{ NODE_ENV: "development", ADMIN_MCP_OAUTH_ENABLED: "true" }, false],
+      [{ NODE_ENV: "development", AGENT_CONNECTIONS_ENABLED: "true" }, true],
+      [{ NODE_ENV: "development", AGENT_CONNECTIONS_ENABLED: "1" }, false],
+      [{ NODE_ENV: "production" }, false],
+      [{ NODE_ENV: "production", AGENT_CONNECTIONS_ENABLED: "true" }, false],
+      [{ NODE_ENV: "production", ADMIN_MCP_OAUTH_ENABLED: "true" }, true],
+      [{ NODE_ENV: "production", ADMIN_MCP_OAUTH_ENABLED: "1" }, false],
+      [{ NODE_ENV: "production", ADMIN_MCP_OAUTH_ENABLED: "false" }, false],
+      [
+        {
+          NODE_ENV: "test",
+          ADMIN_MCP_OAUTH_ENABLED: "true",
+          AGENT_CONNECTIONS_ENABLED: "true",
+        },
+        false,
+      ],
+    ];
+    for (const [settings, open] of table)
+      expect([
+        settings,
+        oauthSurfaceEnabled(settings as NodeJS.ProcessEnv),
+      ]).toEqual([settings, open]);
+  });
+
+  it("composes the door in Production on its setting alone", async () => {
+    const runtime = compose(productionDoor);
+    expect(runtime).not.toBeNull();
+    expect(runtime?.issuer).toBe("https://auth.artvenn.invalid");
+    expect(runtime?.resource).toBe("https://admin.artvenn.invalid/api/mcp");
+    expect(runtime?.environment).toBe("production");
+    await runtime?.close();
+    expect(
+      compose(productionDoor, { ADMIN_MCP_OAUTH_ENABLED: "false" }),
+    ).toBeNull();
+    expect(
+      compose(productionDoor, {
+        ADMIN_MCP_OAUTH_ENABLED: undefined,
+        AGENT_CONNECTIONS_ENABLED: "true",
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the plugin path closed in Production with the door fully configured", async () => {
+    stubAll(productionDoor);
+    // The door really is up, so null below is the gate and not a refusal.
+    const door = resourceRuntime();
+    expect(door).not.toBeNull();
+    const report = vi.fn();
+    expect(connectionAuthDependencies(report)).toBeNull();
+    expect(report).not.toHaveBeenCalled();
+    // Refused by the closed door, and never handed on as an API key.
+    const legacy = vi.fn(async () => ({}) as never);
+    await expect(
+      connectionOverrideAuth(connectionAuthDependencies(report))(
+        {
+          headers: new Headers({
+            Authorization: ["Bearer", `${CONNECTION_TOKEN_PREFIX}door`].join(
+              " ",
+            ),
+          }),
+        } as never,
+        legacy,
+      ),
+    ).rejects.toThrow();
+    expect(legacy).not.toHaveBeenCalled();
+    await door?.close();
+  });
+
+  it("keeps the plugin path null in Production with only AGENT_CONNECTIONS_ENABLED on", () => {
+    stubAll({
+      ...productionDoor,
+      ADMIN_MCP_OAUTH_ENABLED: undefined,
+      AGENT_CONNECTIONS_ENABLED: "true",
+    });
+    expect(connectionsEnabled()).toBe(false);
+    expect(oauthSurfaceEnabled()).toBe(false);
+    expect(resourceRuntime()).toBeNull();
+    expect(connectionAuthDependencies(vi.fn())).toBeNull();
+  });
+
+  it("still hands the plugin path its runtime in Development", async () => {
+    stubAll(developmentDoor);
+    const dependencies = connectionAuthDependencies();
+    expect(dependencies).not.toBeNull();
+    expect(dependencies).toBe(resourceRuntime());
+    await resourceRuntime()?.close();
+  });
+
+  it("reports a bad setting when the Payload config loads, and leaves the rest of it running", () => {
+    stubAll({ ...productionDoor, AGENT_RESOURCE_DATABASE_URL: undefined });
+    const report = vi.fn();
+    expect(connectionAuthDependencies(report)).toBeNull();
+    expect(report.mock.calls).toEqual([["RESOURCE_DATABASE_REQUIRED"]]);
+  });
+
+  it("keeps the refusal, so a request never rebuilds the runtime", () => {
+    stubAll({ ...productionDoor, AGENT_RESOURCE_DATABASE_URL: undefined });
+    let first: unknown;
+    try {
+      resourceRuntime();
+    } catch (error) {
+      first = error;
+    }
+    expect(first).toMatchObject({ code: "RESOURCE_DATABASE_REQUIRED" });
+    vi.stubEnv("AGENT_RESOURCE_DATABASE_URL", managed);
+    expect(() => resourceRuntime()).toThrow(first as Error);
+    let second: unknown;
+    try {
+      resourceRuntime();
+    } catch (error) {
+      second = error;
+    }
+    expect(second).toBe(first);
+    expect(pools.configs).toEqual([]);
+  });
+
+  it("leaves artvenn_* answering NOT_FOUND in Production with the door on", async () => {
+    expect(read("apps/admin/src/agent-admin/mcp-tools.ts")).toContain(
+      'process.env.NODE_ENV !== "development"',
+    );
+    stubAll(productionDoor);
+    const callFor = vi.fn();
+    const tools = agentAdminTools(callFor as never);
+    expect(tools.length).toBeGreaterThan(0);
+    for (const tool of tools) {
+      const answer = (await tool.handler(
+        {},
+        {
+          headers: new Headers(),
+          user: {
+            collection: "users",
+            id: 1,
+            role: "automation",
+            agentPrincipal: "agent-reviewer",
+          },
+        } as never,
+        undefined,
+      )) as { content: { text: string }[] };
+      expect(JSON.parse(answer.content[0]!.text)).toEqual({
+        ok: false,
+        code: "NOT_FOUND",
+      });
+    }
+    expect(callFor).not.toHaveBeenCalled();
+  });
+
+  it("gives the operator preset its own scope and nothing on the plugin path", () => {
+    expect(PRESET_TOOLS.operator).toEqual([]);
+    expect(PRESET_SCOPES.operator).toEqual([]);
+    expect(PRESET_CAPABILITY_SCOPES.operator).toEqual(["artvenn:admin"]);
+    expect(connectionPresetSchema.options).toEqual([
+      "read-only",
+      "management",
+      "operator",
+    ]);
+    for (const preset of ["read-only", "management"] as const)
+      expect(PRESET_CAPABILITY_SCOPES[preset]).not.toContain("artvenn:admin");
+  });
+
+  it("drops the loopback refusal in Production and requires verify-full by its exact spelling", async () => {
+    const base = "postgresql://x@db.example.invalid:5432/synthetic";
+    for (const query of [
+      "",
+      "?sslmode=disable",
+      "?sslmode=require",
+      "?sslmode=verify-ca",
+      "?sslmode=verify-full&sslmode=disable",
+      "?sslmode=disable&sslmode=verify-full",
+      "?sslmode=verify-full&host=elsewhere.invalid",
+      "?sslrootcert=/tmp/x&sslmode=verify-full",
+    ])
+      expect([
+        query,
+        refusalOf(productionDoor, {
+          AGENT_RESOURCE_DATABASE_URL: `${base}${query}`,
+        }),
+      ]).toEqual([query, "RESOURCE_DATABASE_TLS_REQUIRED"]);
+    // Loopback is not an exemption from TLS in Production, as it is not a reason
+    // to refuse one.
+    expect(
+      refusalOf(productionDoor, {
+        AGENT_RESOURCE_DATABASE_URL: "postgresql://x@127.0.0.1:5432/synthetic",
+      }),
+    ).toBe("RESOURCE_DATABASE_TLS_REQUIRED");
+    const runtime = compose(productionDoor);
+    expect(pools.configs.at(-1)).toMatchObject({
+      max: 4,
+      ssl: { rejectUnauthorized: true, ca: readFileSync(authority, "utf8") },
+    });
+    expect(
+      (pools.configs.at(-1) as { connectionString: string }).connectionString,
+    ).not.toContain("sslmode");
+    await runtime?.close();
+    expect(
+      refusalOf(developmentDoor, {
+        AGENT_RESOURCE_DATABASE_URL: managed,
+      }),
+    ).toBe("RESOURCE_DATABASE_NOT_LOOPBACK");
+  });
+
+  it("refuses a Production door with no CA file, or one it cannot use, by name", async () => {
+    for (const unset of [undefined, ""])
+      expect(
+        refusalOf(productionDoor, { AGENT_DATABASE_SSL_CA_FILE: unset }),
+      ).toBe("RESOURCE_DATABASE_CA_REQUIRED");
+    const junk = path.join(certificates, "junk.pem");
+    writeFileSync(junk, "not a certificate");
+    for (const file of [junk, path.join(certificates, "absent.pem")])
+      expect(
+        refusalOf(productionDoor, { AGENT_DATABASE_SSL_CA_FILE: file }),
+      ).toBe("RESOURCE_DATABASE_REFUSED");
+
+    // Development's loopback database has no TLS, so nothing there reads it.
+    for (const file of [junk, undefined]) {
+      const local = compose(developmentDoor, {
+        AGENT_DATABASE_SSL_CA_FILE: file,
+      });
+      expect(pools.configs.at(-1)).toMatchObject({ max: 4, ssl: false });
+      await local?.close();
+    }
+  });
+
+  it("names a wrapper key it cannot use, and says nothing of its value", () => {
+    const short = randomBytes(16).toString("base64");
+    for (const [name, value] of [
+      ["AGENT_CONNECTION_WRAPPER_INDEX_KEY", undefined],
+      ["AGENT_CONNECTION_WRAPPER_SEAL_KEY", undefined],
+      ["AGENT_CONNECTION_WRAPPER_SEAL_KEY", ""],
+      ["AGENT_CONNECTION_WRAPPER_INDEX_KEY", short],
+    ] as const) {
+      expect(refusalOf(productionDoor, { [name]: value })).toBe(
+        "WRAPPER_KEY_REFUSED",
+      );
+      let thrown: unknown;
+      try {
+        compose(productionDoor, { [name]: value });
+      } catch (error) {
+        thrown = error;
+      }
+      expect((thrown as Error).message).toBe(
+        "agent resource runtime refused: WRAPPER_KEY_REFUSED",
+      );
+    }
+    stubAll({
+      ...productionDoor,
+      AGENT_CONNECTION_WRAPPER_INDEX_KEY: short,
+    });
+    const report = vi.fn();
+    expect(connectionAuthDependencies(report)).toBeNull();
+    expect(report.mock.calls).toEqual([["WRAPPER_KEY_REFUSED"]]);
+  });
+
+  it("gives its pool a query timeout, and gives up on a database that goes silent", async () => {
+    // Just enough of the protocol for a connect to finish, then nothing, ever.
+    const silent = createServer((socket) => {
+      socket.on("error", () => undefined);
+      socket.once("data", () => {
+        const authenticationOk = [0x52, 0, 0, 0, 8, 0, 0, 0, 0];
+        const readyForQuery = [0x5a, 0, 0, 0, 5, 0x49];
+        socket.write(Buffer.from([...authenticationOk, ...readyForQuery]));
+      });
+    });
+    await new Promise<void>((resolve) =>
+      silent.listen(0, "127.0.0.1", resolve),
+    );
+    try {
+      const { port } = silent.address() as AddressInfo;
+      const runtime = compose(developmentDoor, {
+        AGENT_RESOURCE_DATABASE_URL: `postgresql://x@127.0.0.1:${port}/synthetic`,
+      });
+      expect(
+        (pools.configs.at(-1) as { connectionString: string }).connectionString,
+      ).toContain("query_timeout=5000");
+      expect(
+        (pools.configs.at(-1) as { connectionString: string }).connectionString,
+      ).toContain("statement_timeout=4000");
+      await expect(
+        runtime?.verifyAccessToken(`${CONNECTION_TOKEN_PREFIX}silent`),
+      ).rejects.toThrow("Query read timeout");
+      await runtime?.close();
+    } finally {
+      await new Promise((resolve) => silent.close(resolve));
+    }
+  }, 15_000);
+
+  it("compares the environment with the issuer's only where the two can differ", async () => {
+    for (const [override, code] of [
+      [{ CMS_ENVIRONMENT: undefined }, "ENVIRONMENT_DISAGREES_WITH_NODE_ENV"],
+      [{ CMS_ENVIRONMENT: "synthetic" }, "ENVIRONMENT_DISAGREES_WITH_NODE_ENV"],
+    ] as const)
+      expect([override, refusalOf(productionDoor, override)]).toEqual([
+        override,
+        code,
+      ]);
+
+    // In Production both sides are forced to `production`, so `admin.env` needs no
+    // copy of the issuer's setting and a stray one decides nothing.
+    for (const copy of [undefined, "production", "development"]) {
+      const production = compose(productionDoor, {
+        AGENT_AUTHORIZATION_ENVIRONMENT: copy,
+      });
+      expect(production?.environment).toBe("production");
+      await production?.close();
+    }
+
+    const operator = { AGENT_AUTHORIZATION_PROFILE: "operator" };
+    expect(
+      refusalOf(developmentDoor, {
+        ...operator,
+        CMS_ENVIRONMENT: "synthetic",
+        AGENT_AUTHORIZATION_ENVIRONMENT: "development",
+      }),
+    ).toBe("ENVIRONMENT_DISAGREES_WITH_ISSUER");
+    expect(
+      refusalOf(developmentDoor, {
+        ...operator,
+        CMS_ENVIRONMENT: "synthetic",
+      }),
+    ).toBe("ENVIRONMENT_DISAGREES_WITH_ISSUER");
+    const agreeing = compose(developmentDoor, {
+      ...operator,
+      AGENT_AUTHORIZATION_ENVIRONMENT: "development",
+      AGENT_AUTHORIZATION_CLIENTS: productionDoor.AGENT_AUTHORIZATION_CLIENTS,
+    });
+    expect(agreeing?.environment).toBe("development");
+    await agreeing?.close();
+
+    // The read-only profile stays as #141 measured it, whatever the issuer says.
+    const readOnly = compose(developmentDoor, {
+      CMS_ENVIRONMENT: "synthetic",
+      AGENT_AUTHORIZATION_ENVIRONMENT: "development",
+    });
+    expect(readOnly?.environment).toBe("synthetic");
+    await readOnly?.close();
+  });
+
+  it("requires https on the issuer and the resource in Production only", async () => {
+    for (const name of [
+      "AGENT_AUTHORIZATION_ISSUER",
+      "AGENT_AUTHORIZATION_RESOURCE",
+    ])
+      expect(
+        refusalOf(productionDoor, {
+          [name]:
+            name === "AGENT_AUTHORIZATION_ISSUER"
+              ? "http://auth.artvenn.invalid"
+              : "http://admin.artvenn.invalid/api/mcp",
+        }),
+      ).toBe("PRODUCTION_HTTPS_REQUIRED");
+    const local = compose(developmentDoor, {
+      AGENT_AUTHORIZATION_ISSUER: "http://auth.localhost:34620",
+      AGENT_AUTHORIZATION_RESOURCE: "http://admin.localhost:3442/api/mcp",
+    });
+    expect(local).not.toBeNull();
+    await local?.close();
   });
 });
 

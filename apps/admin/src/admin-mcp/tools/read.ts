@@ -1,7 +1,12 @@
-import { adminUnknownOpDataSchema } from "@moya/contracts/internal/admin-mcp";
+import {
+  adminRetiredOpDataSchema,
+  adminUnknownOpDataSchema,
+  adminWrongToolDataSchema,
+} from "@moya/contracts/internal/admin-mcp";
 import type {
   AdminMcpEnvelope,
   AdminMcpNext,
+  AdminOpName,
   AdminReadInput,
 } from "@moya/contracts/internal/admin-mcp";
 
@@ -13,13 +18,8 @@ import {
   issuesOfError,
 } from "../envelope";
 import { NUMBERED_PAGE_SIZE, numberedPageAfter } from "../ops/define";
-import {
-  adminOpMeta,
-  isAdminOpName,
-  nearestOps,
-  opUnavailable,
-} from "../registry";
-import type { AdminOpEntry } from "../registry";
+import { adminOpMeta, lookupOp, nearestOps, opUnavailable } from "../registry";
+import type { AdminOpDeprecation, AdminOpEntry } from "../registry";
 import type { PayloadRequest } from "payload";
 
 export const READ_TOOL_NAME = "admin_read";
@@ -38,6 +38,36 @@ export const unknownOpEnvelope = (name: string): AdminMcpEnvelope =>
   failedEnvelope("UNKNOWN_OP", {
     data: adminUnknownOpDataSchema.parse({ nearest: nearestOps(name) }),
   });
+
+/** An earlier name past its last day: what replaced it, and never a near miss. */
+export const retiredOpEnvelope = (retired: {
+  readonly op: string;
+  readonly use: string;
+}): AdminMcpEnvelope =>
+  failedEnvelope("OP_RETIRED", {
+    data: adminRetiredOpDataSchema.parse(retired),
+  });
+
+/** Class decides the tool, so an op named on another one is told where it runs. */
+export const wrongToolEnvelope = (tool: string): AdminMcpEnvelope =>
+  failedEnvelope("WRONG_TOOL", {
+    data: adminWrongToolDataSchema.parse({ tool }),
+  });
+
+/** An answer given under earlier names says what to call instead. */
+export const withDeprecation = (
+  envelope: AdminMcpEnvelope,
+  deprecated: readonly AdminOpDeprecation[],
+): AdminMcpEnvelope =>
+  deprecated.length === 0
+    ? envelope
+    : {
+        ...envelope,
+        meta: {
+          ...envelope.meta,
+          deprecated: deprecated.map((row) => ({ ...row })),
+        },
+      };
 
 export const opRefusalOf = async (entry: AdminOpEntry, req: PayloadRequest) => {
   const unavailable = opUnavailable(entry, await controlFor(req));
@@ -64,13 +94,27 @@ const nulPathOf = (
 
 export const readEnvelope = async (
   rawInput: unknown,
+  context: { readonly key: AdminMcpKey; readonly req: PayloadRequest },
+): Promise<AdminMcpEnvelope> => {
+  const asCalled = rawInput as AdminReadInput;
+  const found = lookupOp(asCalled.op);
+  if ("unknown" in found) return unknownOpEnvelope(asCalled.op);
+  if ("retired" in found) return retiredOpEnvelope(found.retired);
+  // Under the registry's name, so every way on an answer gives calls it.
+  return withDeprecation(
+    await readOp(found.op, { ...asCalled, op: found.op }, context),
+    found.deprecated === undefined ? [] : [found.deprecated],
+  );
+};
+
+const readOp = async (
+  name: AdminOpName,
+  read: AdminReadInput,
   { key, req }: { readonly key: AdminMcpKey; readonly req: PayloadRequest },
 ): Promise<AdminMcpEnvelope> => {
-  const read = rawInput as AdminReadInput;
-  if (!isAdminOpName(read.op)) return unknownOpEnvelope(read.op);
-  const entry: AdminOpEntry = adminOpMeta[read.op];
+  const entry: AdminOpEntry = adminOpMeta[name];
   // Class decides the tool: a write named here is not a read of any kind.
-  if (entry.tool !== READ_TOOL_NAME) return unknownOpEnvelope(read.op);
+  if (entry.tool !== READ_TOOL_NAME) return wrongToolEnvelope(entry.tool);
   const refusal = await opRefusalOf(entry, req);
   if (refusal !== undefined) return refusal;
   // Only a list source reads these, and quietly dropping one reads as honouring it.
@@ -110,10 +154,13 @@ export const readContinuation = (
   rawInput: unknown,
   kept: readonly unknown[],
 ): AdminMcpNext | null | undefined => {
-  const read = rawInput as AdminReadInput;
+  const asCalled = rawInput as AdminReadInput;
+  const found = lookupOp(asCalled.op);
   const last = kept.at(-1) as { id?: unknown; count?: unknown } | undefined;
-  if (last === undefined || !isAdminOpName(read.op)) return undefined;
-  const entry: AdminOpEntry = adminOpMeta[read.op];
+  if (last === undefined || !("op" in found)) return undefined;
+  // Goes on under the registry's name, whatever the call used.
+  const read = { ...asCalled, op: found.op };
+  const entry: AdminOpEntry = adminOpMeta[found.op];
   if (entry.paging === undefined && entry.readArgs !== undefined) return null;
   if (entry.paging === "numbered") {
     // A count's groups are few and closed, and a page number means nothing to them.

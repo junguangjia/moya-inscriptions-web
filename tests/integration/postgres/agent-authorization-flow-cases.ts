@@ -557,6 +557,8 @@ export const registerAgentAuthorizationFlowTests = (
           capabilityScopes: consent!.capabilityScopes,
           protocolScopes: consent!.protocolScopes,
           preset: consent!.preset,
+          servedPreset: "read-only",
+          registered: undefined,
           expiresAt: consent!.expiresAt,
           environment: "development",
           now: new Date(),

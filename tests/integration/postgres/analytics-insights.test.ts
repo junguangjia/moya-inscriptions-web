@@ -1785,6 +1785,79 @@ describe("a self-only work", () => {
     expect(filtered.status).toBe(200);
   });
 
+  it.each([
+    // A purge sets only this: the row keeps its title, text and `trashed_at`.
+    ["a trash-purged work", "deleted_at=trashed_at"],
+    // #126's delete set `deleted_at` alone, so its row has no `trashed_at`.
+    [
+      "a work deleted with no trashed_at",
+      "deleted_at=trashed_at,trashed_at=NULL,trash_purge_after=NULL",
+    ],
+  ])(
+    "takes in %s, which still holds its text, wherever it would read",
+    async (_, deleted) => {
+      const start = cst("2026-03-04T00:00:00");
+      const end = cst("2026-03-11T00:00:00");
+      const hits = hitsByKey(between(start, end));
+      const { rows } = await setup.query(
+        "SELECT trashed_at,trash_purge_after FROM community.works WHERE id=$1",
+        [works.trashed.id],
+      );
+      await setup.query(`UPDATE community.works SET ${deleted} WHERE id=$1`, [
+        works.trashed.id,
+      ]);
+      try {
+        const filtered = await get("breakdown", {
+          range: "last_7_days",
+          targetType: "work",
+          targetId: works.trashed.id,
+        });
+        expect(filtered.status).toBe(403);
+        expect(filtered.body.error.code).toBe("SELF_ONLY_OWNER_REVIEW");
+        const listed = await ok("breakdown", {
+          range: "last_7_days",
+          dimension: "content",
+          limit: "100",
+        });
+        expect(JSON.stringify(listed)).not.toContain(works.trashed.name);
+        expect(JSON.stringify(listed)).not.toContain(works.trashed.id);
+        expect(listed.withheld.count).toBe(
+          hits.get(selfOnlyKey())! + hits.get(`work:${works.trashed.id}`)!,
+        );
+        const insights = new PostgresAnalyticsInsights(app, {
+          retentionDays: 180,
+        });
+        const client = await app.connect();
+        try {
+          const described = await (
+            insights as unknown as {
+              describeTargets(
+                db: unknown,
+                refs: readonly { type: string; id: string }[],
+                notes: Set<string>,
+              ): Promise<ReadonlyMap<string, Json>>;
+            }
+          ).describeTargets(
+            client,
+            [{ type: "work", id: works.trashed.id }],
+            new Set(),
+          );
+          expect(described.get(`work:${works.trashed.id}`)).toMatchObject({
+            title: null,
+            state: "unresolved",
+          });
+        } finally {
+          client.release();
+        }
+      } finally {
+        await setup.query(
+          "UPDATE community.works SET deleted_at=NULL,trashed_at=$2,trash_purge_after=$3 WHERE id=$1",
+          [works.trashed.id, rows[0]!.trashed_at, rows[0]!.trash_purge_after],
+        );
+      }
+    },
+  );
+
   it("has no title through the title lookup either, whatever row asks", async () => {
     const insights = new PostgresAnalyticsInsights(app, { retentionDays: 180 });
     const client = await app.connect();

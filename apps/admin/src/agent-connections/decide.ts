@@ -1,3 +1,5 @@
+import { mintResumeSecret } from "@moya/community-postgres";
+
 import {
   ConsentError,
   digestConsentTicket,
@@ -45,6 +47,12 @@ export interface ConsentOutcome {
  * never reached, and the provider refuses to build a grant on it. That is the
  * fail-closed direction: an approval that grants nothing, never a grant
  * nobody approved.
+ *
+ * Under `operator` the same `decide` statement stores the digest of a one-time
+ * secret, and only the answer to this request carries the secret itself. The
+ * clients on that list are public, so a stranger can start a real request and
+ * send the page to an administrator. The issuer finishes only with the secret and
+ * its own cookie together, so the click reaches only a browser that holds both.
  */
 export const decideConsent = async (
   runtime: ConsentRuntime,
@@ -69,20 +77,29 @@ export const decideConsent = async (
   }
 
   const consent = await runtime.consents.read(body.interaction);
-  if (consent === null || consent.connectionId === null)
+  // Another person's armed review page, say two administrators in one browser, is
+  // `decide`'s refusal too. Said here because the transition below would throw on it.
+  if (
+    consent === null ||
+    consent.connectionId === null ||
+    consent.humanAccountId !== humanAccountId
+  )
     throw new ConsentError("CONSENT_NOT_DECIDABLE");
   // The resource the human was shown must be the resource this Admin is the
   // server for. A mismatch is refused, never rewritten to agree.
   if (consent.resource !== runtime.resource)
     throw new ConsentError("RESOURCE_NOT_AVAILABLE");
-  if (consent.preset !== "read-only")
+  if (consent.preset !== runtime.preset)
     throw new ConsentError("PRESET_NOT_AVAILABLE");
+  // A tool taken off the list gets no new consent, from a page rendered before that.
+  if (!runtime.clients.has(consent.oauthClientId))
+    throw new ConsentError("CLIENT_NOT_REGISTERED");
 
   const stored = await runtime.connections.read(consent.connectionId);
   if (stored === null) throw new ConsentError("CONNECTION_NOT_FOUND", 404);
   const record = {
     humanAccountId,
-    preset: "read-only" as const,
+    preset: runtime.preset,
     at: new Date().toISOString(),
   };
   // Reconnecting a revoked connection is a FRESH consent, never a
@@ -93,12 +110,15 @@ export const decideConsent = async (
       ? reconnectConnection(stored.connection, record)
       : authorizeConnection(stored.connection, record);
 
+  const resumeSecret =
+    runtime.preset === "operator" ? mintResumeSecret() : null;
   const decided = await runtime.consents.decide({
     interactionUid: body.interaction,
     ticketDigest: digest,
     humanAccountId,
     decision: "approved",
     grantedGeneration: next.generation,
+    resumeSecretDigest: resumeSecret?.digest ?? null,
   });
   if (decided === null) throw new ConsentError("CONSENT_NOT_DECIDABLE");
 
@@ -116,7 +136,14 @@ export const decideConsent = async (
   // Doing it AFTER the connection write would produce the exact bug this
   // closes — an authorized connection whose every tool answers
   // AGENT_FORBIDDEN — with extra steps.
-  await provisionPrincipal(runtime.principals, stored.connection, "read-only");
+  //
+  // An operator connection acts as the one `ai_operator` row, with no principal.
+  if (runtime.preset === "read-only")
+    await provisionPrincipal(
+      runtime.principals,
+      stored.connection,
+      "read-only",
+    );
 
   const written = await runtime.connections.compareAndSet(
     consent.connectionId,
@@ -127,6 +154,30 @@ export const decideConsent = async (
 
   return {
     decision: "approved",
-    resume: providerResumeUrl(runtime.issuer, body.interaction),
+    resume: providerResumeUrl(
+      runtime.issuer,
+      body.interaction,
+      resumeSecret?.secret ?? null,
+    ),
   };
+};
+
+/**
+ * Stops every connection one person authorized, when they leave role owner or
+ * change their password. Each is tried, so one failure does not spare the others,
+ * and the first failure is then thrown for the caller to name.
+ */
+export const revokeConnectionsOf = async (
+  runtime: Pick<ConsentRuntime, "authority" | "connections">,
+  humanAccountId: string,
+  at: string = new Date().toISOString(),
+): Promise<void> => {
+  const held = await runtime.connections.listForHuman(humanAccountId);
+  const outcomes = await Promise.allSettled(
+    held
+      .filter(({ connection }) => connection.status !== "revoked")
+      .map(({ connection }) => runtime.authority.revoke(connection.id, at)),
+  );
+  for (const outcome of outcomes)
+    if (outcome.status === "rejected") throw outcome.reason;
 };

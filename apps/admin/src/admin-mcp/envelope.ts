@@ -57,7 +57,7 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     retryable: true,
   },
   MEDIA_JOB_FAILED: {
-    hint: "The state committed but a media job failed. Read the job before retrying it.",
+    hint: "The state committed but a media job stopped; jobs names it. Read it with list.jobs before retrying it with community.retry-publishing-job.",
     retryable: false,
   },
   MCP_PAUSED: {
@@ -69,7 +69,15 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     retryable: false,
   },
   SELF_ONLY_OWNER_REVIEW: {
-    hint: "This case concerns a self-only work and stays in the Owner's queue.",
+    hint: "This concerns a self-only work, or a deleted one that still holds its text, and stays in the Owner's queue.",
+    retryable: false,
+  },
+  PERSONAL_INFO_OWNER_REVIEW: {
+    hint: "This case is a person's own request about their personal information. Read it if you need to; it stays in the Owner's queue, and the Owner verifies and answers it.",
+    retryable: false,
+  },
+  URGENT_OWNER_ONLY: {
+    hint: "Urgent is one-way here: only the Owner clears it. Setting urgent:true works.",
     retryable: false,
   },
   IDEMPOTENCY_CONFLICT: {
@@ -85,7 +93,7 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     retryable: false,
   },
   PREVIEW_REQUIRED: {
-    hint: "This save binds a new identity, which is irreversible. Call admin_preview first.",
+    hint: "This input makes the op irreversible: a save binding a new identity, or a legal hold's release. Call admin_preview first.",
     retryable: false,
   },
   INPUT_INVALID: {
@@ -94,6 +102,14 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
   },
   UNKNOWN_OP: {
     hint: "That op name does not exist. Use a listed name or admin_actions.",
+    retryable: false,
+  },
+  OP_RETIRED: {
+    hint: "That op name was retired, so nothing ran. data.use names the op that replaced it; read its arguments with admin_actions.",
+    retryable: false,
+  },
+  WRONG_TOOL: {
+    hint: "This op runs on the tool named in data.tool, so nothing ran here. Call that tool; if your tool list lacks it, this credential cannot run the op.",
     retryable: false,
   },
   AUDIT_UNAVAILABLE: {
@@ -105,7 +121,7 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     retryable: false,
   },
   NOT_FOUND: {
-    hint: "No such record, or not one this key can read. Locate it with admin_find.",
+    hint: "No such record, or not one this credential can read. Locate it with admin_find.",
     retryable: false,
   },
   NOT_AVAILABLE: {
@@ -131,6 +147,10 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
   COMMUNITY_UNAVAILABLE: {
     hint: "The community store could not be read just now, so this has no answer and it is not an empty one. Retry shortly.",
     retryable: true,
+  },
+  BACKEND_CONTRACT_MISMATCH: {
+    hint: "The Backend answered in a shape this Admin cannot read, so this says nothing of what happened: no read is empty, and a write may have committed. Retrying cannot help; tell the Owner.",
+    retryable: false,
   },
   ANALYTICS_UNAVAILABLE: {
     hint: "The canonical analytics store could not be read just now, so this has no number and it is not a zero. Retry shortly.",
@@ -376,17 +396,53 @@ const allowedKeysAt = (
     : undefined;
 };
 
-/** Names the failing input by path and allowed keys, never by value. */
+/** A closed value's choices, and in a union those of each branch that has them. */
+const choicesOf = (issue: z.core.$ZodIssue): readonly unknown[] =>
+  issue.code === "invalid_value"
+    ? issue.values
+    : issue.code === "invalid_union"
+      ? issue.errors.flatMap((branch) =>
+          branch.filter(({ path }) => path.length === 0).flatMap(choicesOf),
+        )
+      : [];
+
+/**
+ * The schema's own choices for a closed value, which tools/list may show as a string.
+ * Named once per path and choices in one answer, so a slip in a shared input that
+ * every target repeats does not repeat them.
+ */
+const allowedValuesOf = (
+  issue: z.core.$ZodIssue,
+  named: Set<string>,
+): readonly string[] | undefined => {
+  const choices = [...new Set(choicesOf(issue))];
+  if (
+    choices.length === 0 ||
+    !choices.every((value): value is string => typeof value === "string")
+  )
+    return undefined;
+  const once = JSON.stringify([issue.path.map(String), choices]);
+  if (named.has(once)) return undefined;
+  named.add(once);
+  return choices;
+};
+
+/**
+ * Names the failing input by path and by what the schema allows, never by value. The
+ * calls behind one answer share `named`.
+ */
 export const issuesOfError = (
   error: z.ZodError,
   schema: unknown,
   prefix: readonly string[] = [],
+  named = new Set<string>(),
 ): readonly AdminMcpIssue[] =>
   error.issues.map((issue) => {
     const allowedKeys =
       issue.code === "unrecognized_keys"
         ? allowedKeysAt(schema, issue.path)
         : undefined;
+    const allowedValues = allowedValuesOf(issue, named);
     return {
       path: [
         ...prefix,
@@ -396,6 +452,9 @@ export const issuesOfError = (
       ],
       code: issue.code,
       ...(allowedKeys === undefined ? {} : { allowedKeys: [...allowedKeys] }),
+      ...(allowedValues === undefined
+        ? {}
+        : { allowedValues: [...allowedValues] }),
     };
   });
 
@@ -584,7 +643,7 @@ const withinCap = (
  * with no structuredContent, and Codex drops the image when structuredContent is set.
  */
 export const imageToolResult = (
-  scope: { readonly keyId: number; readonly tool: string },
+  scope: { readonly keyId: number | string; readonly tool: string },
   envelope: AdminMcpEnvelope,
   image?: { readonly data: Buffer; readonly mimeType: string },
 ) => {
@@ -614,7 +673,7 @@ export const imageToolResult = (
  * says how to go on from a cut result.
  */
 export const toolResult = (
-  scope: { readonly keyId: number; readonly tool: string },
+  scope: { readonly keyId: number | string; readonly tool: string },
   envelope: AdminMcpEnvelope,
   continuation?: CutContinuation,
 ) => {

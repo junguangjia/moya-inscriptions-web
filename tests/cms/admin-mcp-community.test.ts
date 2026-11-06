@@ -76,7 +76,12 @@ import {
   openCommunityAiMedia,
 } from "admin/community-backend";
 
-import { connectClient, serveRoutes } from "./admin-mcp-wire.js";
+import {
+  connectClient,
+  relayRewriting,
+  serveRoutes,
+  withFieldAdded,
+} from "./admin-mcp-wire.js";
 
 if (process.env.CMS_ENVIRONMENT !== "synthetic")
   throw new Error("SYNTHETIC_CMS_TARGET_REQUIRED");
@@ -591,6 +596,9 @@ const seed = async () => {
     "UPDATE community.works SET title='',text='',media_ids='{}',public_revision_id=NULL,author_revision_id=NULL,visibility='self',deleted_at=CURRENT_TIMESTAMP WHERE id=$1",
     [ids.deletedWork],
   );
+  await db.query("DELETE FROM community.work_revisions WHERE work_id=$1", [
+    ids.deletedWork,
+  ]);
   await seedPendingArticle(
     ids.pendingArticle,
     hostile("articletitle"),
@@ -3181,7 +3189,7 @@ describe("what comes back from the Backend", () => {
         const { envelope, text } = await send("admin_read", args);
         expect(envelope).toMatchObject({
           ok: false,
-          code: "COMMUNITY_UNAVAILABLE",
+          code: "BACKEND_CONTRACT_MISMATCH",
         });
         expect(text).not.toContain(CANARY.contact);
       }
@@ -3189,7 +3197,7 @@ describe("what comes back from the Backend", () => {
         type: "report",
         id: ids.rightsReport,
       });
-      expect(got.envelope.code).toBe("COMMUNITY_UNAVAILABLE");
+      expect(got.envelope.code).toBe("BACKEND_CONTRACT_MISMATCH");
       expect(got.text).not.toContain(CANARY.contact);
     } finally {
       stub.closeAllConnections();
@@ -3489,6 +3497,95 @@ describe("the release record's App-role preflight", () => {
       await pool.end();
       await setup.query(`DROP OWNED BY ${narrow}`);
       await admin.query(`DROP ROLE ${narrow}`);
+    }
+  });
+});
+
+describe("a Backend released first, with a field this Admin does not know", () => {
+  const UNKNOWN = `unknownfield${run}`;
+
+  /** Every read: as the real Backend answers it, then with the field in every object. */
+  const sweep = async (relayed: boolean) => {
+    const answers: { label: string; code: string; text: string }[] = [];
+    const reads = (label: string, { envelope, text }: Json) =>
+      answers.push({ label, code: envelope.code as string, text });
+    for (const op of ADMIN_OP_NAMES.filter(
+      (name) =>
+        adminOpMeta[name].tool === "admin_read" &&
+        /^(?:community|list)\./u.test(name) &&
+        !NOT_BUILT_HERE.has(name) &&
+        !FROM_ELSEWHERE.has(name),
+    ))
+      for (const input of inputsOf(op))
+        for (const view of adminOpMeta[op].readArgs === undefined
+          ? [{}]
+          : [{}, { view: "full" }, { view: "count" }])
+          reads(
+            `${op} ${JSON.stringify({ input, view })}`,
+            await send("admin_read", { op, input, ...view }),
+          );
+    for (const query of [`Reporter ${run}`, ids.publicWork, ids.rightsReport])
+      reads(`find ${query}`, await send("admin_find", { query }));
+    for (const [type, id] of [
+      ["user", ids.author],
+      ["work", ids.publicWork],
+      ["comment", ids.publicComment],
+      ["report", ids.rightsReport],
+      ["work_revision", ids.publicRevision],
+    ] as const)
+      reads(`get ${type}`, await send("admin_get", { type, id }));
+    reads(
+      "job settlement",
+      await send("admin_job", {
+        kind: "settlement",
+        refs: [{ type: "work", id: ids.publicWork, intent: "publish" }],
+      }),
+    );
+    expect(relayed || answers.length > 40).toBe(true);
+    return answers;
+  };
+
+  it("answers every read as it did, and the field reaches no answer", async () => {
+    const before = await sweep(false);
+    const relay = await relayRewriting(backendOrigin, (body) =>
+      withFieldAdded(body, UNKNOWN),
+    );
+    try {
+      vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", relay.origin);
+      const after = await sweep(true);
+      expect(after.map(({ label, code }) => ({ label, code }))).toEqual(
+        before.map(({ label, code }) => ({ label, code })),
+      );
+      for (const { label, text } of after)
+        expect(text, label).not.toContain(UNKNOWN);
+      // Not a sweep of refusals: the field reached the Admin and was dropped there.
+      expect(after.filter(({ code }) => code === "OK").length).toBeGreaterThan(
+        40,
+      );
+    } finally {
+      vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", backendOrigin);
+      await relay.close();
+    }
+  });
+
+  it("names an answer that breaks its contract, and says retrying cannot help", async () => {
+    const relay = await relayRewriting(backendOrigin, (body) =>
+      Array.isArray((body as Json).items)
+        ? { ...(body as Json), total: "many" }
+        : body,
+    );
+    try {
+      vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", relay.origin);
+      const { envelope } = await send("admin_read", { op: "list.reports" });
+      expect(envelope).toMatchObject({
+        ok: false,
+        code: "BACKEND_CONTRACT_MISMATCH",
+      });
+      expect(envelope).not.toHaveProperty("retryable");
+      expect(envelope).not.toHaveProperty("next");
+    } finally {
+      vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", backendOrigin);
+      await relay.close();
     }
   });
 });

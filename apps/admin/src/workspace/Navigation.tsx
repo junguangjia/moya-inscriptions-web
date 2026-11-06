@@ -10,6 +10,7 @@ import {
   usePreferences,
   useTheme,
 } from "@payloadcms/ui";
+import { NewConnectionNotice } from "../agent-connections/new-connection-notice";
 import { AdminIcon } from "../branding/Brand";
 import { excludeOwnerAnalyticsDevice } from "../analytics/device";
 import { UiIcon } from "./Icon";
@@ -17,8 +18,10 @@ import { currentWorkspace, workspacePages, workspaces } from "./routes";
 
 export const WorkspaceNavigation = ({
   developmentAgentsEnabled = false,
+  agentConnectionsEnabled = false,
 }: {
   readonly developmentAgentsEnabled?: boolean;
+  readonly agentConnectionsEnabled?: boolean;
 }) => {
   const { user } = useAuth();
   const { hydrated, navOpen, navRef, shouldAnimate, setNavOpen } = useNav();
@@ -102,8 +105,11 @@ export const WorkspaceNavigation = ({
               key={workspace.id}
               href={
                 (
-                  workspacePages(workspace, developmentAgentsEnabled)[0] ??
-                  workspace.pages[0]
+                  workspacePages(
+                    workspace,
+                    developmentAgentsEnabled,
+                    agentConnectionsEnabled,
+                  )[0] ?? workspace.pages[0]
                 ).href
               }
               prefetch={false}
@@ -156,8 +162,10 @@ export const WorkspaceNavigation = ({
 /** Flat sibling navigation also covers Payload collection create/edit/version views. */
 export const WorkspaceTabs = ({
   developmentAgentsEnabled = false,
+  agentConnectionsEnabled = false,
 }: {
   readonly developmentAgentsEnabled?: boolean;
+  readonly agentConnectionsEnabled?: boolean;
 }) => {
   const { user } = useAuth();
   const { navOpen } = useNav();
@@ -168,78 +176,83 @@ export const WorkspaceTabs = ({
   useEffect(() => {
     activeLink.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [pathname, params]);
-  if (
-    user?.collection !== "users" ||
-    user.role !== "owner" ||
-    !current ||
-    current.workspace.id === "home"
-  )
-    return null;
-  const pages = workspacePages(current.workspace, developmentAgentsEnabled);
+  if (user?.collection !== "users" || user.role !== "owner") return null;
+  // Here because this is the one slot on every page, the dashboard included,
+  // and the importMap needs no entry for it.
+  const notice = agentConnectionsEnabled ? <NewConnectionNotice /> : null;
+  if (!current || current.workspace.id === "home") return notice;
+  const pages = workspacePages(
+    current.workspace,
+    developmentAgentsEnabled,
+    agentConnectionsEnabled,
+  );
   return (
-    <div
-      className="archive-workspace-bar"
-      data-current-workspace={current.workspace.id}
-      data-nav-open={navOpen}
-    >
-      <span className="archive-workspace-name">
-        <UiIcon name={current.workspace.icon} size="sm" />
-        {current.workspace.label}
-      </span>
-      <nav
-        className="archive-workspace-tabs"
-        aria-label={`${current.workspace.label}页面`}
+    <>
+      {notice}
+      <div
+        className="archive-workspace-bar"
+        data-current-workspace={current.workspace.id}
+        data-nav-open={navOpen}
       >
-        {pages.map((page) =>
-          pathname === "/admin/community-moderation/content" &&
-          page.href.split("?")[0] === pathname ? (
-            <a
-              href={page.href}
-              key={page.href}
-              className="archive-workspace-tab"
-              title={"description" in page ? page.description : undefined}
-              aria-description={
-                "description" in page ? page.description : undefined
-              }
-              aria-current={
-                current.page.href === page.href ? "page" : undefined
-              }
-              ref={current.page.href === page.href ? activeLink : undefined}
-              onClick={(event) => {
-                if (
-                  event.button !== 0 ||
-                  event.metaKey ||
-                  event.ctrlKey ||
-                  event.shiftKey ||
-                  event.altKey
-                )
-                  return;
-                event.preventDefault();
-                window.history.pushState(null, "", page.href);
-              }}
-            >
-              {page.label}
-            </a>
-          ) : (
-            <Link
-              href={page.href}
-              key={page.href}
-              prefetch={false}
-              className="archive-workspace-tab"
-              title={"description" in page ? page.description : undefined}
-              aria-description={
-                "description" in page ? page.description : undefined
-              }
-              aria-current={
-                current.page.href === page.href ? "page" : undefined
-              }
-              ref={current.page.href === page.href ? activeLink : undefined}
-            >
-              {page.label}
-            </Link>
-          ),
-        )}
-      </nav>
-    </div>
+        <span className="archive-workspace-name">
+          <UiIcon name={current.workspace.icon} size="sm" />
+          {current.workspace.label}
+        </span>
+        <nav
+          className="archive-workspace-tabs"
+          aria-label={`${current.workspace.label}页面`}
+        >
+          {pages.map((page) =>
+            pathname === "/admin/community-moderation/content" &&
+            page.href.split("?")[0] === pathname ? (
+              <a
+                href={page.href}
+                key={page.href}
+                className="archive-workspace-tab"
+                title={"description" in page ? page.description : undefined}
+                aria-description={
+                  "description" in page ? page.description : undefined
+                }
+                aria-current={
+                  current.page.href === page.href ? "page" : undefined
+                }
+                ref={current.page.href === page.href ? activeLink : undefined}
+                onClick={(event) => {
+                  if (
+                    event.button !== 0 ||
+                    event.metaKey ||
+                    event.ctrlKey ||
+                    event.shiftKey ||
+                    event.altKey
+                  )
+                    return;
+                  event.preventDefault();
+                  window.history.pushState(null, "", page.href);
+                }}
+              >
+                {page.label}
+              </a>
+            ) : (
+              <Link
+                href={page.href}
+                key={page.href}
+                prefetch={false}
+                className="archive-workspace-tab"
+                title={"description" in page ? page.description : undefined}
+                aria-description={
+                  "description" in page ? page.description : undefined
+                }
+                aria-current={
+                  current.page.href === page.href ? "page" : undefined
+                }
+                ref={current.page.href === page.href ? activeLink : undefined}
+              >
+                {page.label}
+              </Link>
+            ),
+          )}
+        </nav>
+      </div>
+    </>
   );
 };

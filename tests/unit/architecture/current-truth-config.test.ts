@@ -21,6 +21,13 @@ const fileExists = async (filePath: string): Promise<boolean> => {
   }
 };
 
+/** Configuration lines, trimmed, without blanks or comments. */
+const lines = (source: string) =>
+  source
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("#"));
+
 describe("current repository truth and local configuration", () => {
   it("keeps native OpenCC external in the standalone Admin server", async () => {
     const config = await readFile(
@@ -505,6 +512,474 @@ describe("current repository truth and local configuration", () => {
       "ARTICLE_AUTHORING_WRAPPER_SEAL_KEY",
     ])
       expect(issuer[name]).toBe(backend[name]);
+  });
+
+  it("keeps the login door's issuer unit, settings and Nginx in agreement", async () => {
+    const text = (name: string) =>
+      readFile(path.join(repositoryRoot, name), "utf8");
+    const [
+      nginx,
+      unit,
+      articleUnit,
+      issuerText,
+      adminText,
+      articleText,
+      backendText,
+    ] = await Promise.all([
+      text("infra/production/nginx/yoyi.conf.template"),
+      text("infra/production/systemd/yoyi-admin-authorization.service"),
+      text("infra/production/systemd/yoyi-article-authorization.service"),
+      text("infra/production/env/admin-authorization.env.example"),
+      text("infra/production/env/admin.env.example"),
+      text("infra/production/env/article-authorization.env.example"),
+      text("infra/production/env/backend.env.example"),
+    ]);
+    const issuer = parseEnv(issuerText);
+    const admin = parseEnv(adminText);
+    const article = parseEnv(articleText);
+    const backend = parseEnv(backendText);
+
+    // The unit: a copy of the Article issuer's, apart from what makes it its own.
+    const own = new Set([
+      "Description",
+      "User",
+      "Group",
+      "WorkingDirectory",
+      "EnvironmentFile",
+      "ExecStart",
+    ]);
+    for (const line of lines(articleUnit))
+      if (!own.has(line.split("=")[0]!)) expect(lines(unit)).toContain(line);
+    for (const line of [
+      "User=yoyi-admin-authorization",
+      "Group=yoyi-admin-authorization",
+      "EnvironmentFile=/etc/yoyi/admin-authorization.env",
+      "UnsetEnvironment=ARTICLE_AUTHORING_ENABLED",
+      "ExecStart=/usr/bin/env NODE_ENV=production AGENT_AUTHORIZATION_PORT=3004 node services/agent-authorization/dist/main.js",
+      "WorkingDirectory=/srv/yoyi/admin-authorization/current",
+    ])
+      expect(lines(unit)).toContain(line);
+    // Its own runtime root, so no other release can start it on other code.
+    const workingDirectory = (source: string) =>
+      /^WorkingDirectory=(.+)$/mu.exec(source)?.[1];
+    expect(workingDirectory(unit)).not.toBe("/srv/yoyi/current");
+    expect(workingDirectory(unit)).not.toBe(workingDirectory(articleUnit));
+    expect(unit).not.toMatch(/ARTICLE_AUTHORIZATION_PORT|migrate/u);
+
+    // One port in the unit, the file and the upstream, and no other listener's.
+    const port = /AGENT_AUTHORIZATION_PORT=(\d+) /u.exec(unit)?.[1];
+    expect(port).toBe("3004");
+    expect(issuer.AGENT_AUTHORIZATION_PORT).toBe(port);
+    expect(nginx).toContain(
+      `upstream yoyi_admin_authorization { server 127.0.0.1:${port}; }`,
+    );
+    expect(nginx.match(/server 127\.0\.0\.1:3004;/gu)).toHaveLength(1);
+
+    // The issuer's file: every setting the issuer reads, and nothing of Article's.
+    expect(Object.keys(issuer).sort()).toEqual([
+      "ADMIN_MCP_OAUTH_ENABLED",
+      "AGENT_AUTHORIZATION_BUILD_ID",
+      "AGENT_AUTHORIZATION_CLIENTS",
+      "AGENT_AUTHORIZATION_CONSENT_URL",
+      "AGENT_AUTHORIZATION_COOKIE_KEY",
+      "AGENT_AUTHORIZATION_DATABASE_SSL_CA_FILE",
+      "AGENT_AUTHORIZATION_DATABASE_URL",
+      "AGENT_AUTHORIZATION_ENVIRONMENT",
+      "AGENT_AUTHORIZATION_ISSUER",
+      "AGENT_AUTHORIZATION_PORT",
+      "AGENT_AUTHORIZATION_RESOURCE",
+      "AGENT_AUTHORIZATION_SIGNING_JWKS_FILE",
+      "AGENT_CONNECTION_PROVIDER_INDEX_KEY",
+      "AGENT_CONNECTION_PROVIDER_SEAL_KEY",
+      "AGENT_CONNECTION_WRAPPER_INDEX_KEY",
+      "AGENT_CONNECTION_WRAPPER_SEAL_KEY",
+      "AGENT_CONSENT_DATABASE_TARGET",
+      "AGENT_RESOURCE_DATABASE_TARGET",
+      "CMS_DATABASE_TARGET",
+      "DATABASE_TARGET",
+      "NODE_ENV",
+    ]);
+    expect(issuer).toMatchObject({
+      NODE_ENV: "production",
+      ADMIN_MCP_OAUTH_ENABLED: "true",
+      AGENT_AUTHORIZATION_ENVIRONMENT: "production",
+    });
+    // The Admin's side of the door: these and no other door setting.
+    expect(
+      Object.keys(admin)
+        .filter((name) => /^(?:AGENT_|ADMIN_MCP_)/u.test(name))
+        .sort(),
+    ).toEqual([
+      "ADMIN_MCP_OAUTH_ENABLED",
+      "AGENT_AUTHORIZATION_CLIENTS",
+      "AGENT_AUTHORIZATION_ISSUER",
+      "AGENT_AUTHORIZATION_RESOURCE",
+      "AGENT_CONNECTION_WRAPPER_INDEX_KEY",
+      "AGENT_CONNECTION_WRAPPER_SEAL_KEY",
+      "AGENT_CONSENT_DATABASE_URL",
+      "AGENT_DATABASE_SSL_CA_FILE",
+      "AGENT_RESOURCE_DATABASE_URL",
+    ]);
+    expect(admin.CMS_ENVIRONMENT).toBe("production");
+    expect(admin.AGENT_DATABASE_SSL_CA_FILE).toMatch(/^\/etc\/yoyi\//u);
+
+    // The release-time equalities, each of which the running door depends on.
+    for (const name of [
+      "ADMIN_MCP_OAUTH_ENABLED",
+      "AGENT_AUTHORIZATION_ISSUER",
+      "AGENT_AUTHORIZATION_RESOURCE",
+      "AGENT_AUTHORIZATION_CLIENTS",
+      "AGENT_CONNECTION_WRAPPER_INDEX_KEY",
+      "AGENT_CONNECTION_WRAPPER_SEAL_KEY",
+    ])
+      expect(admin[name], name).toBe(issuer[name]);
+    expect(admin.AGENT_AUTHORIZATION_RESOURCE).toBe(
+      `${admin.CMS_PUBLIC_URL}/api/mcp`,
+    );
+    expect(new URL(issuer.AGENT_AUTHORIZATION_CONSENT_URL!).origin).toBe(
+      new URL(admin.CMS_PUBLIC_URL!).origin,
+    );
+    const issuerHost = new URL(issuer.AGENT_AUTHORIZATION_ISSUER!).hostname;
+    expect(issuerHost).not.toBe(new URL(admin.CMS_PUBLIC_URL!).hostname);
+    expect(issuerHost).not.toBe(
+      new URL(article.ARTICLE_AUTHORING_ISSUER!).hostname,
+    );
+    expect(nginx).toContain(`server_name ${issuerHost};`);
+
+    // Five distinct roles on one database; metadata carries no password.
+    const role = (raw: string | undefined) => {
+      const url = new URL(raw!);
+      return {
+        user: decodeURIComponent(url.username),
+        password: url.password,
+        target: `${url.host}${url.pathname}`,
+        search: url.search,
+      };
+    };
+    const roles = [
+      issuer.AGENT_AUTHORIZATION_DATABASE_URL,
+      issuer.AGENT_CONSENT_DATABASE_TARGET,
+      issuer.AGENT_RESOURCE_DATABASE_TARGET,
+      issuer.CMS_DATABASE_TARGET,
+      issuer.DATABASE_TARGET,
+    ].map(role);
+    expect(new Set(roles.map(({ user }) => user)).size).toBe(5);
+    expect(new Set(roles.map(({ target }) => target)).size).toBe(1);
+    for (const { search } of roles) expect(search).toBe("?sslmode=verify-full");
+    for (const { password } of roles.slice(1)) expect(password).toBe("");
+    expect(roles[1]!.user).toBe(role(admin.AGENT_CONSENT_DATABASE_URL).user);
+    expect(roles[2]!.user).toBe(role(admin.AGENT_RESOURCE_DATABASE_URL).user);
+    expect(roles[3]!.user).toBe(role(admin.CMS_DATABASE_URL).user);
+    expect(roles[4]!.user).toBe(role(backend.DATABASE_URL).user);
+    for (const name of [
+      "AGENT_CONSENT_DATABASE_URL",
+      "AGENT_RESOURCE_DATABASE_URL",
+    ])
+      expect(new URL(admin[name]!).search, name).toBe("?sslmode=verify-full");
+
+    // Placeholders only, each secret its own and none an Article value.
+    for (const values of [issuer, admin])
+      for (const [name, value] of Object.entries(values))
+        if (
+          /^(?:AGENT_|ADMIN_MCP_)/u.test(name) &&
+          /KEY|_URL$|_ID$/u.test(name)
+        )
+          expect(value, name).toMatch(/REPLACE_ME|example\.invalid/u);
+    const secrets = [
+      "AGENT_CONNECTION_PROVIDER_INDEX_KEY",
+      "AGENT_CONNECTION_PROVIDER_SEAL_KEY",
+      "AGENT_CONNECTION_WRAPPER_INDEX_KEY",
+      "AGENT_CONNECTION_WRAPPER_SEAL_KEY",
+      "AGENT_AUTHORIZATION_COOKIE_KEY",
+      "AGENT_AUTHORIZATION_SIGNING_JWKS_FILE",
+    ].map((name) => issuer[name]);
+    expect(new Set(secrets).size).toBe(secrets.length);
+    for (const value of Object.values(article))
+      expect(secrets).not.toContain(value);
+    expect(issuer.AGENT_AUTHORIZATION_SIGNING_JWKS_FILE).not.toBe(
+      article.ARTICLE_AUTHORIZATION_SIGNING_JWKS_FILE,
+    );
+
+    // The closed list: the five tools, by the vendors' own ids and callbacks.
+    const clients = JSON.parse(issuer.AGENT_AUTHORIZATION_CLIENTS!) as {
+      clientId: string;
+      family: string;
+      callbackPolicy: string;
+      redirectUris: string[];
+    }[];
+    expect(
+      clients.map(({ family, clientId, callbackPolicy }) => [
+        family,
+        clientId,
+        callbackPolicy,
+      ]),
+    ).toEqual([
+      [
+        "claude",
+        "https://claude.ai/oauth/mcp-oauth-client-metadata",
+        "hosted-https",
+      ],
+      [
+        "claude-code",
+        "https://claude.ai/oauth/claude-code-client-metadata",
+        "loopback-host",
+      ],
+      ["codex", "https://chatgpt.com/oauth/codex/client.json", "loopback-host"],
+      ["chatgpt", "https://chatgpt.com/oauth/client.json", "hosted-https"],
+      // Cursor's own published client id, desktop only: its web callback is not here.
+      ["cursor", "https://cursor.com/oauth/mcp-client.json", "loopback-host"],
+    ]);
+    expect(clients[0]!.redirectUris).toEqual([
+      "https://claude.ai/api/mcp/auth_callback",
+    ]);
+    expect(clients[3]!.redirectUris).toEqual([
+      "https://chatgpt.com/connector_platform_oauth_redirect",
+    ]);
+    expect(clients[4]!.redirectUris).toEqual([
+      "http://localhost:8787/callback",
+      "http://127.0.0.1:8787/callback",
+    ]);
+    for (const { redirectUris } of [...clients.slice(1, 3), clients[4]!])
+      for (const uri of redirectUris) {
+        expect(["localhost", "127.0.0.1"]).toContain(new URL(uri).hostname);
+        expect(new URL(uri).pathname).toBe("/callback");
+      }
+
+    // Article stays loopback-only and never opens the Admin's door.
+    expect(article.AGENT_AUTHORIZATION_ENABLED).toBe("false");
+    for (const name of Object.keys(article))
+      expect(name).not.toMatch(
+        /^(?:ADMIN_MCP_|AGENT_(?!AUTHORIZATION_ENABLED$))/u,
+      );
+    // The plugin connection path stays Development only.
+    for (const values of [issuer, admin, article]) {
+      expect(values.AGENT_CONNECTIONS_ENABLED).toBeUndefined();
+      expect(values.AGENT_AUTHORIZATION_PROFILE).toBeUndefined();
+    }
+    expect(admin.AGENT_AUTHORIZATION_ENVIRONMENT).toBeUndefined();
+    expect(admin.AGENT_AUTHORIZATION_ENABLED).toBeUndefined();
+  });
+
+  it("serves the login door through Nginx with no frame, no referrer and no query in a log", async () => {
+    const text = (name: string) =>
+      readFile(path.join(repositoryRoot, name), "utf8");
+    const [nginx, traffic, archive, summary] = await Promise.all([
+      text("infra/production/nginx/yoyi.conf.template"),
+      text("infra/production/logrotate/yoyi-traffic"),
+      text("scripts/operations/archive-runtime-data.mjs"),
+      text("scripts/analytics/summarize-traffic.mjs"),
+    ]);
+    // The body of the block whose header ends with the given opening brace.
+    const block = (source: string, header: string, from = 0) => {
+      const at = source.indexOf(header, from);
+      expect(at, header).toBeGreaterThanOrEqual(0);
+      let depth = 0;
+      for (let index = at + header.length - 1; index < source.length; index++) {
+        if (source[index] === "{") depth += 1;
+        else if (source[index] === "}" && (depth -= 1) === 0)
+          return source.slice(at + header.length, index);
+      }
+      throw new Error(`unclosed ${header}`);
+    };
+    const noFrame = `add_header Content-Security-Policy "frame-ancestors 'none'" always;`;
+    const noReferrer = "add_header Referrer-Policy no-referrer always;";
+
+    // The apex's exact routes to the Admin, and everything else of .well-known on Web.
+    for (const exact of [
+      "/.well-known/oauth-protected-resource/api/mcp",
+      "/.well-known/oauth-protected-resource",
+      "/.well-known/oauth-authorization-server",
+    ]) {
+      const body = block(nginx, `location = ${exact} {`);
+      expect(body).toContain("proxy_cache off;");
+      expect(body).toContain("proxy_pass http://yoyi_admin;");
+    }
+    expect(nginx).not.toMatch(/location \^?~?\s*\/\.well-known\/ \{/u);
+    for (const header of [
+      'location ~ "^/agent-connections/consent/[A-Za-z0-9_-]{1,256}$" {',
+      "location = /admin/agent-connections/consent {",
+    ]) {
+      const body = block(nginx, header);
+      expect(body, header).toContain(noFrame);
+      expect(body, header).toContain(noReferrer);
+      expect(body, header).toContain("proxy_pass http://yoyi_admin;");
+    }
+    // No /admin page may be framed: every /admin location says so, and repeats
+    // the referrer rule its own add_header would otherwise drop.
+    const adminLocations = [
+      ...nginx.matchAll(/^ {4}location (?:= |\^~ )\/admin(?:\/[^\s{]*)? \{/gmu),
+    ].map(([header]) => header.trim());
+    expect(adminLocations).toEqual([
+      "location = /admin/agent-connections/consent {",
+      "location ^~ /admin/analytics-workspace {",
+      "location = /admin {",
+      "location ^~ /admin/ {",
+    ]);
+    for (const header of adminLocations) {
+      const body = block(nginx, header);
+      expect(body, header).toContain(noFrame);
+      expect(body, header).toContain(noReferrer);
+      expect(body, header).toContain("proxy_pass http://yoyi_admin;");
+    }
+    // /api/mcp keeps its own limit block, byte for byte.
+    expect(nginx).toContain(
+      [
+        "    location = /api/mcp {",
+        "        limit_req zone=yoyi_mcp burst=40;",
+        "        limit_req_status 429;",
+        "        client_max_body_size 4m;",
+        "        proxy_pass http://yoyi_admin;",
+        "    }",
+      ].join("\n"),
+    );
+    expect(nginx).not.toContain("key-only");
+
+    // The new paths take existing route classes: the archive and the traffic
+    // summary refuse a security log row with any other.
+    for (const entry of [
+      "/.well-known/oauth-protected-resource machine-api;",
+      "/.well-known/oauth-protected-resource/api/mcp machine-api;",
+      "/.well-known/oauth-authorization-server machine-api;",
+      '"~^/agent-connections/consent/[A-Za-z0-9_-]{1,256}$" admin;',
+    ])
+      expect(block(nginx, "map $uri $yoyi_route_class {")).toContain(entry);
+    const accepted = (source: string, name: string) =>
+      new Set(
+        [
+          ...(
+            new RegExp(`const ${name} = new Set\\(\\[([^\\]]*)\\]`, "u").exec(
+              source,
+            )?.[1] ?? ""
+          ).matchAll(/"([a-z-]+)"/gu),
+        ].map(([, value]) => value),
+      );
+    const classes = lines(block(nginx, "map $uri $yoyi_route_class {")).map(
+      (line) => /\s([a-z-]+);$/u.exec(line)?.[1],
+    );
+    for (const known of [
+      accepted(archive, "routes"),
+      accepted(summary, "routeNames"),
+    ]) {
+      expect(known.size).toBeGreaterThan(0);
+      for (const name of classes) expect(known.has(name!), name).toBe(true);
+    }
+
+    // The issuer host: the Article block's forwarding, its own host and its own
+    // certificate.
+    const server = (name: string) =>
+      block(
+        nginx,
+        "server {",
+        nginx.lastIndexOf("server {", nginx.indexOf(`server_name ${name};`)),
+      );
+    const issuerHost = server("admin-auth.example.invalid");
+    const articleHost = server("article-auth.example.invalid");
+    const proxied = (body: string) =>
+      lines(block(body, "location / {")).filter((line) =>
+        line.startsWith("proxy_"),
+      );
+    expect(proxied(issuerHost)).toEqual(
+      proxied(articleHost).map((line) =>
+        line
+          .replaceAll(
+            "article-auth.example.invalid",
+            "admin-auth.example.invalid",
+          )
+          .replace(
+            "http://yoyi_article_authorization;",
+            "http://yoyi_admin_authorization;",
+          ),
+      ),
+    );
+    // A certificate of its own, renewed on its own, so no other host's renewal
+    // depends on this name.
+    const tlsLines = (body: string) =>
+      lines(body).filter((line) => /^ssl_certificate(?:_key)? /u.test(line));
+    expect(tlsLines(issuerHost)).toEqual([
+      "ssl_certificate /etc/yoyi/tls/admin-auth-fullchain.pem;",
+      "ssl_certificate_key /etc/yoyi/tls/admin-auth-privkey.pem;",
+    ]);
+    for (const line of [
+      "listen 443 ssl;",
+      "ssl_protocols TLSv1.2 TLSv1.3;",
+      "server_tokens off;",
+      "if ($host != admin-auth.example.invalid) { return 421; }",
+      "access_log /var/log/nginx/yoyi-admin-auth-status.log yoyi_admin_auth;",
+      "access_log /var/log/nginx/yoyi-security.log yoyi_status;",
+      "error_log /dev/null;",
+      noReferrer,
+      "client_max_body_size 64k;",
+      "limit_req zone=yoyi_admin_auth burst=30;",
+      "limit_req zone=yoyi_admin_auth_total burst=60;",
+      "limit_req_status 429;",
+    ])
+      expect(lines(issuerHost)).toContain(line);
+    expect(nginx).toContain(
+      "limit_req_zone $binary_remote_addr zone=yoyi_admin_auth:1m rate=5r/s;",
+    );
+    expect(nginx).toContain(
+      "limit_req_zone $server_name zone=yoyi_admin_auth_total:1m rate=20r/s;",
+    );
+    // Every certificate file is named by exactly one server block: the issuer
+    // host shares no certificate with the apex or the Article issuer.
+    for (const certificate of [
+      ...nginx.matchAll(/ssl_certificate(?:_key)? (\S+);/gu),
+    ].map(([, file]) => file!))
+      expect(nginx.split(` ${certificate};`)).toHaveLength(2);
+    expect(tlsLines(issuerHost)).not.toEqual(tlsLines(articleHost));
+
+    // No log on that host can hold the resume secret: every format it writes
+    // names fixed fields only, and the route comes from $uri, never a query.
+    const formats = new Map(
+      [
+        ...nginx.matchAll(/^log_format (\S+) (?:escape=json )?'([^']*)';$/gmu),
+      ].map(([, name, body]) => [name!, body!]),
+    );
+    const allowed = new Set([
+      "time_iso8601",
+      "status",
+      "request_time",
+      "body_bytes_sent",
+      "request_method",
+      "yoyi_route_class",
+      "yoyi_admin_auth_route",
+      "yoyi_client_class",
+      "yoyi_device_excluded",
+      "remote_addr",
+    ]);
+    const used = [...issuerHost.matchAll(/access_log \S+ (\S+);/gu)].map(
+      ([, format]) => format!,
+    );
+    expect(used.sort()).toEqual(["yoyi_admin_auth", "yoyi_status"]);
+    for (const format of used) {
+      const variables = [
+        ...formats.get(format)!.matchAll(/\$([a-z0-9_]+)/gu),
+      ].map(([, variable]) => variable!);
+      expect(variables, format).toContain("status");
+      for (const variable of variables)
+        expect(allowed.has(variable), variable).toBe(true);
+    }
+    expect(formats.get("yoyi_admin_auth")).toContain(
+      '"route":"$yoyi_admin_auth_route"',
+    );
+    // Keyed on $uri, which never holds the query, and one fixed name per step.
+    expect(lines(block(nginx, "map $uri $yoyi_admin_auth_route {"))).toEqual([
+      "default other;",
+      "/healthz health;",
+      "/auth authorize;",
+      "~^/auth/ authorize;",
+      "/token token;",
+      "/token/revocation revocation;",
+      "/jwks jwks;",
+      "~^/\\.well-known/ discovery;",
+      "~^/session/end(?:/|$) logout;",
+      '"~^/agent-connections/consent/[A-Za-z0-9_-]{1,256}/resume$" resume;',
+    ]);
+    // The new status log carries addresses, so it rotates with the other
+    // address-bearing logs rather than on the host's longer default.
+    expect(traffic).toMatch(
+      /^\/var\/log\/nginx\/yoyi-access\.log [^{]*\/var\/log\/nginx\/yoyi-admin-auth-status\.log[^{]*\{/mu,
+    );
   });
 
   it("routes Community V1 same-origin paths to Web, never to Payload", async () => {

@@ -4,15 +4,23 @@ import {
   parsePostgresConfig,
 } from "@moya/catalog-postgres";
 import {
+  RegisteredClientError,
   createAgentConnectionStore,
   createWrapperStore,
+  parseRegisteredClients,
   wrapperKeysFrom,
 } from "@moya/community-postgres";
 
-import { connectionsEnabled } from "./composition";
+import {
+  connectionsEnabled,
+  environmentRefusal,
+  oauthSurfaceEnabled,
+  servedPreset,
+} from "./composition";
 
 import type { ConnectionAuthDependencies } from "./authorization";
 import type { ConnectionRecord, VerifiedGrant } from "./contracts";
+import type { RegisteredClient } from "@moya/community-postgres";
 
 /**
  * Agent Connections V1 (Issue #141 r15 §7) — the RESOURCE server's half.
@@ -46,12 +54,18 @@ import type { ConnectionRecord, VerifiedGrant } from "./contracts";
  * What it does NOT do, and must not be described as doing: it does not ask the
  * authorization service whether the underlying provider token still exists.
  * Those are separate processes with separate roles, and this one has no read
- * on the provider's token store by design. A provider-side revocation reaches
- * this boundary when the grant destroyer invalidates the wrappers, which is
- * what a disconnect runs — not instantly by lookup.
+ * on the provider's token store by design. A disconnect reaches this boundary
+ * through the generation `admitGrant` compares on each request. A revocation at
+ * the provider, such as a tool revoking its own token or a detected replay,
+ * reaches it when the issuer stamps the wrappers, not by lookup.
  */
 
 export const RESOURCE_DATABASE_SETTING = "AGENT_RESOURCE_DATABASE_URL";
+export const AGENT_DATABASE_CA_SETTING = "AGENT_DATABASE_SSL_CA_FILE";
+/** The door's reads are single rows, so past this the database has gone silent. */
+const RESOURCE_QUERY_TIMEOUT_MS = 5_000;
+/** Shorter, so a read stuck on a lock ends at the server before the client gives up. */
+const RESOURCE_STATEMENT_TIMEOUT_MS = 4_000;
 
 export class ResourceRuntimeError extends Error {
   readonly code: string;
@@ -63,6 +77,12 @@ export class ResourceRuntimeError extends Error {
 }
 
 export interface ResourceRuntime extends ConnectionAuthDependencies {
+  /**
+   * The closed list, one setting read by both services, so taking a tool off it
+   * and restarting stops that tool at the login door. Empty under the read-only
+   * profile, whose plugin path never reads it.
+   */
+  readonly clients: ReadonlyMap<string, RegisteredClient>;
   close(): Promise<void>;
 }
 
@@ -86,13 +106,68 @@ const frozen = (value: string | undefined, code: string): URL => {
 };
 
 /**
- * Builds the resource-server boundary, or refuses. `null` only when the
- * connection surface is OFF — which is the composition gate, not a failure.
+ * A connect has its limit, and a database that goes silent after one would otherwise
+ * hold a token request open. The shared helper takes no query timeout, so it goes
+ * where pg reads one: the URL. A timed-out client leaves the pool, and its backend
+ * stays while it waits on a lock, which would grow past the pool's limit, so the
+ * server has a shorter limit of its own.
+ */
+export const withQueryTimeout = (
+  config: ReturnType<typeof parsePostgresConfig>,
+): ReturnType<typeof parsePostgresConfig> => {
+  const url = new URL(config.connectionString);
+  url.searchParams.set("query_timeout", String(RESOURCE_QUERY_TIMEOUT_MS));
+  url.searchParams.set(
+    "statement_timeout",
+    String(RESOURCE_STATEMENT_TIMEOUT_MS),
+  );
+  return { ...config, connectionString: url.toString() };
+};
+
+const operatorClients = (
+  environment: NodeJS.ProcessEnv,
+): ReadonlyMap<string, RegisteredClient> => {
+  try {
+    return parseRegisteredClients(
+      environment.AGENT_AUTHORIZATION_CLIENTS ?? "",
+      { allowHosted: true },
+    );
+  } catch (error) {
+    throw new ResourceRuntimeError(
+      error instanceof RegisteredClientError ? error.code : "CLIENTS_MALFORMED",
+    );
+  }
+};
+
+/**
+ * The client id the closed list holds for one family, for a link the AI connections
+ * page builds on the server. The list route sends no client id, so this is the page's
+ * one way to it. Null when the family is not listed, or when the list does not parse,
+ * which the door refuses on its own.
+ */
+export const listedClientId = (
+  family: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): string | null => {
+  try {
+    for (const client of operatorClients(environment).values())
+      if (client.family === family) return client.clientId;
+  } catch {
+    // The door names the code on stderr; the page just offers no link.
+  }
+  return null;
+};
+
+/**
+ * Builds the resource-server boundary, or refuses. `null` only when the login
+ * door is OFF — which is the composition gate, not a failure.
  */
 export const createResourceRuntime = (
   environment: NodeJS.ProcessEnv = process.env,
 ): ResourceRuntime | null => {
-  if (!connectionsEnabled(environment)) return null;
+  if (!oauthSurfaceEnabled(environment)) return null;
+  const production = environment.NODE_ENV === "production";
+  const operator = servedPreset(environment) === "operator";
 
   const databaseUrl = environment[RESOURCE_DATABASE_SETTING];
   if (!databaseUrl)
@@ -103,7 +178,19 @@ export const createResourceRuntime = (
   } catch {
     throw new ResourceRuntimeError("RESOURCE_DATABASE_MALFORMED");
   }
-  if (!["127.0.0.1", "localhost", "[::1]"].includes(connectionString.hostname))
+  // Development stays on loopback. Production's database is across a network, so
+  // the fence there is verified TLS, by exact spelling: the parser below also takes
+  // weaker modes for other callers, and pg reads host and TLS files from the query.
+  if (production) {
+    if (connectionString.search !== "?sslmode=verify-full")
+      throw new ResourceRuntimeError("RESOURCE_DATABASE_TLS_REQUIRED");
+    // Unset, the pool trusts only the system roots, and a private CA's database
+    // would read as an outage on every token, with no setting named.
+    if (!environment[AGENT_DATABASE_CA_SETTING])
+      throw new ResourceRuntimeError("RESOURCE_DATABASE_CA_REQUIRED");
+  } else if (
+    !["127.0.0.1", "localhost", "[::1]"].includes(connectionString.hostname)
+  )
     throw new ResourceRuntimeError("RESOURCE_DATABASE_NOT_LOOPBACK");
 
   const issuer = frozen(
@@ -116,15 +203,40 @@ export const createResourceRuntime = (
     environment.AGENT_AUTHORIZATION_RESOURCE,
     "RESOURCE_REQUIRED",
   );
+  if (
+    production &&
+    (issuer.protocol !== "https:" || resource.protocol !== "https:")
+  )
+    throw new ResourceRuntimeError("PRODUCTION_HTTPS_REQUIRED");
+  const refusedEnvironment = environmentRefusal(environment);
+  if (refusedEnvironment !== null)
+    throw new ResourceRuntimeError(refusedEnvironment);
+  const served = environment.CMS_ENVIRONMENT ?? "development";
+  const clients = operator ? operatorClients(environment) : new Map();
 
-  // A missing key is a startup refusal, never a silently generated one: a new
-  // key would make every previously sealed wrapper unreadable, which looks
-  // exactly like every connection being revoked at once.
-  const keys = wrapperKeysFrom(environment);
+  // A missing key is a refusal, never a silently generated one: a new key would
+  // make every previously sealed wrapper unreadable, which looks exactly like
+  // every connection being revoked at once. A bare code, and nothing of the value.
+  let keys: ReturnType<typeof wrapperKeysFrom>;
+  try {
+    keys = wrapperKeysFrom(environment);
+  } catch {
+    throw new ResourceRuntimeError("WRAPPER_KEY_REFUSED");
+  }
 
-  const pool = createPostgresPool(
-    parsePostgresConfig({ DATABASE_URL: databaseUrl, DATABASE_POOL_MAX: "4" }),
-  );
+  let poolConfig: ReturnType<typeof parsePostgresConfig>;
+  try {
+    poolConfig = parsePostgresConfig({
+      DATABASE_URL: databaseUrl,
+      DATABASE_POOL_MAX: "4",
+      ...(production
+        ? { DATABASE_SSL_CA_FILE: environment[AGENT_DATABASE_CA_SETTING] }
+        : {}),
+    });
+  } catch {
+    throw new ResourceRuntimeError("RESOURCE_DATABASE_REFUSED");
+  }
+  const pool = createPostgresPool(withQueryTimeout(poolConfig));
   const connections = createAgentConnectionStore({ pool });
   const wrappers = createWrapperStore({ pool, keys });
 
@@ -177,11 +289,12 @@ export const createResourceRuntime = (
   };
 
   return {
+    clients,
     verifyAccessToken,
     readConnection,
     issuer: issuer.origin,
     resource: resource.href,
-    environment: environment.CMS_ENVIRONMENT ?? "development",
+    environment: served,
     // The boundary answers one shape on the wire whatever went wrong, so an
     // operator has no way to tell a store outage from a forged signature from
     // a revoked connection unless the code is recorded HERE. Nothing was
@@ -202,17 +315,31 @@ export const createResourceRuntime = (
   };
 };
 
-/** One runtime per process, built lazily so importing never opens a pool. */
+/**
+ * One runtime per process, built lazily so importing never opens a pool. A refusal
+ * is kept as well: the door asks on every request, a process's settings do not
+ * change while it runs, and a junk token must not re-read a file each time.
+ */
 let cached: ResourceRuntime | null | undefined;
+let refusal: unknown;
 
 export const resourceRuntime = (): ResourceRuntime | null => {
-  if (cached === undefined) cached = createResourceRuntime();
+  if (refusal !== undefined) throw refusal;
+  if (cached === undefined) {
+    try {
+      cached = createResourceRuntime();
+    } catch (error) {
+      refusal = error;
+      throw error;
+    }
+  }
   return cached;
 };
 
 /** Testing seam. Never called by the composition root. */
 export const resetResourceRuntime = (): void => {
   cached = undefined;
+  refusal = undefined;
 };
 
 /**
@@ -222,17 +349,22 @@ export const resetResourceRuntime = (): void => {
  * refused outright rather than falling through to the API-key resolver.
  * Wiring the real boundary did not remove that door; it gave it a hinge.
  *
+ * This is the plugin path's, so `connectionsEnabled` alone decides what comes
+ * back, and Production always answers `null`. The login door takes its runtime
+ * from `resourceRuntime`, never from here.
+ *
  * A REFUSAL HERE MUST NOT TAKE DOWN THE ADMIN. This is called inside
  * `buildConfig`, during module evaluation of the Payload config, so a thrown
  * `ResourceRuntimeError` — a missing wrapper key, say — would stop editorial,
- * media, community and every legacy API-key caller from starting at all.
+ * media, community and every legacy API-key caller from loading at all.
  * `connectionOverrideAuth(null)` could never do that, and an independent
  * review pointed out that wiring it had quietly introduced the possibility
  * while a comment still promised legacy callers were unaffected.
  *
  * So a misconfiguration fails CLOSED and LOUD rather than fatal: the
  * connection surface is absent, connection tokens are refused, everything
- * else starts, and the operator gets a bare code on stderr. Silence would be
+ * else runs, and the operator gets a bare code on stderr, on the first request
+ * that loads the Payload config, not when the process starts. Silence would be
  * the wrong trade in the other direction.
  */
 export const connectionAuthDependencies = (
@@ -240,7 +372,11 @@ export const connectionAuthDependencies = (
     process.stderr.write(`agent-connections composition refused: ${code}\n`),
 ): ConnectionAuthDependencies | null => {
   try {
-    return resourceRuntime();
+    // Built whenever the login door is on, whichever path it serves, so a bad
+    // setting is a bare code on the first request that loads the Payload config,
+    // whatever that request is, and not on someone's first connect.
+    const runtime = resourceRuntime();
+    return connectionsEnabled() ? runtime : null;
   } catch (error) {
     report(
       error instanceof ResourceRuntimeError

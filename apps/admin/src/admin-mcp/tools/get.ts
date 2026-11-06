@@ -2,6 +2,7 @@ import { editorialPublishSchema } from "@moya/contracts/internal/editorial";
 import {
   ADMIN_CMS_RECORD_TYPES,
   adminGetDataSchema,
+  adminGetInputSchema,
 } from "@moya/contracts/internal/admin-mcp";
 import type {
   AdminCmsRecordType,
@@ -12,6 +13,7 @@ import type {
   AdminRender,
 } from "@moya/contracts/internal/admin-mcp";
 import { APIError, type PayloadRequest } from "payload";
+import { z } from "zod";
 
 import { draftContent } from "../../editorial/content";
 import { EditorialError } from "../../editorial/errors";
@@ -58,6 +60,19 @@ import { nextOf, windowOfField } from "./get-window";
 export { GET_TOOL_NAME } from "./get-window";
 
 export const GET_DESCRIPTION = `Read one record, and always say which version was read. Default outline: per-field state, length, hash, no long text. {type:"catalog",id:7}, {type:"report",id:"report-..."}. Long text in windows, offsets in code points: {type,id,field:"transcription",offset}. Inside one field: {type,id,field:"transcription",find:{text:"..."}}. view also full, published, preview, history, diff; a community record has outline, full and field only.`;
+
+/**
+ * What tools/list shows: the record type, which grows with the registry, as a string,
+ * and the nested parts open, each keeping its JSON type, because a client may read a
+ * missing one as a string. The runtime check holds the rest, and a refusal names it.
+ */
+export const getListedInput = adminGetInputSchema.extend({
+  type: z.string(),
+  fields: z.array(z.string()).optional(),
+  find: z.looseObject({}).optional(),
+  from: z.union([z.number().int(), z.string()]).optional(),
+  to: z.union([z.number().int(), z.string()]).optional(),
+});
 
 const isCms = (type: string): type is AdminCmsRecordType =>
   (ADMIN_CMS_RECORD_TYPES as readonly string[]).includes(type);

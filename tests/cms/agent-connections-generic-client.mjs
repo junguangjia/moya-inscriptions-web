@@ -7,14 +7,30 @@ import { URL } from "node:url";
 import http from "node:http";
 import { chromium } from "@playwright/test";
 import {
+  UnauthorizedError,
+  auth,
   discoverAuthorizationServerMetadata,
   discoverOAuthProtectedResourceMetadata,
   exchangeAuthorization,
   extractResourceMetadataUrl,
+  extractWWWAuthenticateParams,
   startAuthorization,
 } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { ADMIN_MCP_OPERATOR_ROW_EMAIL } from "@moya/contracts/internal/admin-mcp";
+
+import {
+  adminApi,
+  bearer,
+  clickConsent,
+  closedList,
+  consentClicks,
+  hex,
+  issueAiKey,
+  signIn,
+  toolSide,
+} from "./agent-connections-operator-kit.mjs";
 
 /**
  * Agent Connections V1 (Issue #141) — an UNFAMILIAR client, using the official
@@ -95,6 +111,13 @@ const callbackListener = async () => {
         : new Promise((resolve) => waiting.push(resolve)),
   };
 };
+
+// The login door has its own sequence, at the end of this file. The read-only one
+// below stays as #141 measured it.
+if (process.env.AGENT_AUTHORIZATION_PROFILE === "operator") {
+  await operatorAcceptance();
+  process.exit();
+}
 
 try {
   for (const value of [
@@ -302,4 +325,308 @@ try {
 } finally {
   await browser?.close();
   callbackServer?.server.close();
+}
+
+/**
+ * The first token an issuer really issued, through a real consent, on the door
+ * (Issue #355). The official SDK does all of a tool's half by itself from one URL:
+ * it takes the 401, discovers, finds no registration endpoint, offers its client id
+ * as a vendor's URL because the issuer says it may, and hands over the link a browser
+ * opens. A person signs in and clicks 允许. That URL is on the closed list, and every
+ * address this client's own requests reach, the refresh's included, is written down
+ * and checked. That the issuer never fetches it is pinned in
+ * `agent-operator-flow-cases.ts`, since no recorder here can see the issuer's own.
+ */
+async function operatorAcceptance() {
+  const vendorClientId = closedList().get("codex").clientId;
+  const reached = new Set();
+  const recordingFetch = (target, init) => {
+    reached.add(new URL(String(target)).hostname);
+    return globalThis.fetch(target, init);
+  };
+
+  /** What the SDK asks a tool to keep, kept here for as long as this run. */
+  const kept = { redirects: [] };
+  const provider = {
+    get redirectUrl() {
+      return redirectUri;
+    },
+    get clientMetadataUrl() {
+      return vendorClientId;
+    },
+    get clientMetadata() {
+      return {
+        client_name: "vendor-style tool",
+        redirect_uris: [redirectUri],
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        token_endpoint_auth_method: "none",
+      };
+    },
+    state: () => hex(),
+    clientInformation: () => kept.client,
+    saveClientInformation: (information) => {
+      kept.client = information;
+    },
+    tokens: () => kept.tokens,
+    saveTokens: (tokens) => {
+      kept.tokens = tokens;
+    },
+    redirectToAuthorization: (url) => {
+      kept.redirects.push(url);
+    },
+    saveCodeVerifier: (verifier) => {
+      kept.verifier = verifier;
+    },
+    codeVerifier: () => kept.verifier,
+    invalidateCredentials: (scope) => {
+      if (scope === "tokens" || scope === "all") delete kept.tokens;
+    },
+  };
+  const newTransport = () =>
+    new StreamableHTTPClientTransport(new URL(resourceUrl), {
+      authProvider: provider,
+      fetch: recordingFetch,
+    });
+  const newClient = () =>
+    new Client({ name: "vendor-style", version: "0" }, { capabilities: {} });
+
+  let side;
+  try {
+    assert.equal(
+      process.env.AGENT_AUTHORIZATION_ENVIRONMENT,
+      process.env.CMS_ENVIRONMENT,
+    );
+    const access = JSON.parse(
+      await readFile(process.env.CMS_QA_ACCESS_FILE, "utf8"),
+    );
+    side = await toolSide(redirectUri);
+
+    stage = "the-challenge-names-the-metadata-and-the-scope";
+    const challenge = await recordingFetch(resourceUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    assert.equal(challenge.status, 401);
+    // Read by the SDK, not by a regex of ours.
+    const { resourceMetadataUrl, scope } =
+      extractWWWAuthenticateParams(challenge);
+    assert.equal(scope, "artvenn:admin");
+    const resourceMetadata = await discoverOAuthProtectedResourceMetadata(
+      resourceUrl,
+      { resourceMetadataUrl },
+      recordingFetch,
+    );
+    assert.equal(resourceMetadata.resource, resourceUrl);
+    assert.deepEqual(resourceMetadata.scopes_supported, ["artvenn:admin"]);
+    const [authorizationServer] = resourceMetadata.authorization_servers;
+    assert.equal(authorizationServer, new URL(issuerHint).origin);
+    const metadata = await discoverAuthorizationServerMetadata(
+      authorizationServer,
+      { fetchFn: recordingFetch },
+    );
+    assert.equal(metadata.issuer, authorizationServer);
+    assert.equal(metadata.registration_endpoint, undefined);
+    assert.equal(metadata.client_id_metadata_document_supported, true);
+    assert.ok(metadata.scopes_supported.includes("artvenn:admin"));
+    assert.ok(!metadata.scopes_supported.includes("openid"));
+    completed.push(stage);
+
+    stage = "the-sdk-starts-from-one-url-with-a-vendor-client-id";
+    const client = newClient();
+    await assert.rejects(client.connect(newTransport()), UnauthorizedError);
+    assert.equal(kept.redirects.length, 1);
+    const [firstLink] = kept.redirects;
+    assert.equal(firstLink.searchParams.get("client_id"), vendorClientId);
+    assert.equal(firstLink.searchParams.get("resource"), resourceUrl);
+    assert.equal(firstLink.searchParams.get("scope"), "artvenn:admin");
+    assert.equal(firstLink.searchParams.get("code_challenge_method"), "S256");
+    assert.equal(firstLink.origin, authorizationServer);
+    completed.push(stage);
+
+    stage = "a-person-signs-in-and-allows";
+    browser = await chromium.launch({ headless: true });
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.setDefaultTimeout(120_000);
+    /** The browser's part of a connect, from the link the SDK handed over. */
+    const allow = async (link) => {
+      await page.goto(link.href);
+      const review = page.locator("[data-agent-consent]");
+      await review.waitFor({ state: "visible" });
+      assert.equal(
+        await review.getAttribute("data-agent-consent-client"),
+        vendorClientId,
+      );
+      await clickConsent(page, "approve", stage);
+      const arrival = await side.take();
+      assert.equal(arrival.error, null);
+      return arrival.code;
+    };
+    await page.goto(firstLink.href);
+    await page.waitForURL((url) => url.pathname === "/admin/login");
+    await signIn(page, access.ownerEmail, access.ownerPassword);
+    const review = page.locator("[data-agent-consent]");
+    await review.waitFor({ state: "visible" });
+    await clickConsent(page, "approve", stage);
+    const arrival = await side.take();
+    assert.equal(arrival.error, null);
+    completed.push(stage);
+
+    stage = "the-sdk-redeems-the-code-for-a-token-and-a-refresh-token";
+    await newTransport().finishAuth(arrival.code);
+    assert.match(kept.tokens.access_token, /^artvenn_ct_/u);
+    assert.ok(kept.tokens.refresh_token);
+    completed.push(stage);
+
+    stage = "the-issued-token-lists-exactly-profile-full";
+    const connected = newClient();
+    await connected.connect(newTransport());
+    const { tools } = await connected.listTools();
+    const names = tools.map(({ name }) => name);
+    assert.ok(names.length > 0 && names.length <= 15);
+    assert.deepEqual(
+      names.filter((name) => !name.startsWith("admin_")),
+      [],
+    );
+    const api = adminApi(context, origin);
+    const asKey = newClient();
+    await asKey.connect(
+      new StreamableHTTPClientTransport(new URL(resourceUrl), {
+        requestInit: { headers: bearer(await issueAiKey(api)) },
+        fetch: recordingFetch,
+      }),
+    );
+    assert.deepEqual((await asKey.listTools()).tools, tools);
+    await asKey.close();
+    completed.push(stage);
+
+    stage = "one-call-is-audited-naming-the-connection-and-the-person";
+    const answer = await connected.callTool({
+      name: "admin_whoami",
+      arguments: {},
+    });
+    assert.notEqual(answer.isError, true);
+    const whoami = answer.structuredContent;
+    assert.equal(whoami.ok, true);
+    const connectionId = whoami.data.key.id;
+    assert.match(connectionId, /^conn-[0-9a-f]{32}$/u);
+    assert.equal(whoami.data.key.toolProfile, "full");
+    assert.equal(whoami.data.key.authorizedBy, access.ownerId);
+    // No email in what a tool reads, while the audit below names the person.
+    assert.ok(!JSON.stringify(answer).includes(access.ownerEmail));
+    const rows = await api.audit({
+      "where[connectionId][equals]": connectionId,
+      "where[tool][equals]": "admin_whoami",
+    });
+    const operatorRow = (
+      await api.call(
+        "GET",
+        `users?where[email][equals]=${ADMIN_MCP_OPERATOR_ROW_EMAIL}&depth=0`,
+      )
+    ).json.docs[0];
+    assert.ok(operatorRow, "the seeded operator row");
+    assert.deepEqual(
+      rows.map(({ phase, ok, keyId, keyLabel, userId, authorizedBy }) => ({
+        phase,
+        ok,
+        keyId: keyId ?? null,
+        keyLabel,
+        userId,
+        authorizedBy,
+      })),
+      [
+        {
+          phase: "finish",
+          ok: true,
+          keyId: null,
+          keyLabel: "Codex",
+          userId: String(operatorRow.id),
+          authorizedBy: access.ownerEmail,
+        },
+      ],
+    );
+    completed.push(stage);
+
+    stage = "the-sdk-refreshes-with-no-person-and-the-token-rotates";
+    const before = kept.tokens;
+    // Through the recorder too, so the loopback check below covers the refresh.
+    assert.equal(
+      await auth(provider, { serverUrl: resourceUrl, fetchFn: recordingFetch }),
+      "AUTHORIZED",
+    );
+    assert.notEqual(kept.tokens.refresh_token, before.refresh_token);
+    assert.notEqual(kept.tokens.access_token, before.access_token);
+    const refreshed = newClient();
+    await refreshed.connect(newTransport());
+    assert.equal((await refreshed.listTools()).tools.length, tools.length);
+    await refreshed.close();
+    assert.equal(kept.redirects.length, 1, "no person was asked");
+    completed.push(stage);
+
+    stage = "a-disconnect-sends-the-sdk-back-to-a-person";
+    await page.goto(`${origin}/admin/agent-connections`);
+    const row = page.locator(`[data-agent-connection="${connectionId}"]`);
+    await row.waitFor({ state: "visible" });
+    assert.notEqual(
+      await row
+        .locator("[data-agent-connection-last-verified]")
+        .getAttribute("data-agent-connection-last-verified"),
+      "",
+    );
+    await row.locator("[data-agent-connection-disconnect]").click();
+    await page.locator("[data-agent-connections-confirm-accept]").click();
+    await row.waitFor({ state: "hidden" });
+    // Its 401 makes the SDK refresh. That answers invalid_grant, so the SDK drops
+    // the tokens and asks for the browser again rather than failing silently.
+    const stopped = newClient();
+    await assert.rejects(stopped.connect(newTransport()), UnauthorizedError);
+    assert.equal(kept.tokens, undefined);
+    assert.equal(kept.redirects.length, 2);
+    completed.push(stage);
+
+    stage = "connecting-again-is-a-fresh-consent-that-works";
+    const code = await allow(kept.redirects[1]);
+    await newTransport().finishAuth(code);
+    const again = newClient();
+    await again.connect(newTransport());
+    assert.equal(
+      (await again.callTool({ name: "admin_whoami", arguments: {} }))
+        .structuredContent.ok,
+      true,
+    );
+    await again.close();
+    completed.push(stage);
+
+    stage = "nothing-reached-a-vendor";
+    assert.deepEqual(
+      [...reached].filter(
+        (hostname) => !["127.0.0.1", "localhost"].includes(hostname),
+      ),
+      [],
+    );
+    completed.push(stage);
+
+    await connected.close().catch(() => undefined);
+    console.log(JSON.stringify({ ok: true, stage, completed, consentClicks }));
+  } catch (error) {
+    console.log(
+      JSON.stringify({
+        ok: false,
+        stage,
+        completed,
+        consentClicks,
+        category:
+          error instanceof Error ? error.constructor.name : "UnknownError",
+      }),
+    );
+    process.exitCode = 1;
+  } finally {
+    await browser?.close();
+    await side?.close();
+  }
 }

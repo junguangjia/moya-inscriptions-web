@@ -515,6 +515,12 @@ describe("preparation entry points require the marked target", () => {
     const workflow = read(".github/workflows/ci.yml");
     const testJob = workflow.split("\n  test:\n")[1]?.split("\n  cms:\n")[0];
     const cmsJob = workflow.split("\n  cms:\n")[1]?.split("\n  build:\n")[0];
+    // One step's own text, from its name to the next step.
+    const stepText = (job, name) => {
+      const at = job.indexOf(`- name: ${name}\n`);
+      assert.ok(at > 0, name);
+      return job.slice(at, job.indexOf("\n      - ", at + 1));
+    };
     for (const [job, database, user, next] of [
       [testJob, "moya_test", "moya_test", "node scripts/verify.mjs test"],
       [cmsJob, "cms_synthetic_test", "cms_qa", "pnpm test:cms"],
@@ -532,6 +538,34 @@ describe("preparation entry points require the marked target", () => {
       assert.ok(step.includes(`-U ${user} -d ${database}`));
       assert.ok(step.includes("<infra/test/disposable-test-target.sql"));
       assert.ok(job.includes(`POSTGRES_DB: ${database}`));
+      // The PostgreSQL 18 service is paused in CI (Owner, 2026-11-05), and
+      // its marker by the same switch as every step that uses that service.
+      assert.match(
+        stepText(
+          job,
+          "Mark the CI PostgreSQL service as a disposable test target",
+        ),
+        /^\s+if: env\.CI_POSTGRES_18 == 'on'$/mu,
+      );
+      // The PostgreSQL 16 service is marked unconditionally, before the first
+      // step that names it -- in the test job, before both milestones.
+      const mark16 = job.indexOf(
+        "Mark the CI PostgreSQL 16 service as a disposable test target",
+      );
+      assert.ok(mark16 > 0);
+      assert.ok(mark16 < job.indexOf("127.0.0.1:5433/"));
+      if (job === testJob) assert.ok(mark16 < job.indexOf(`run: ${next}`));
+      const step16 = stepText(
+        job,
+        "Mark the CI PostgreSQL 16 service as a disposable test target",
+      );
+      assert.match(
+        step16,
+        /docker exec -i "\$\{\{ job\.services\.postgres16\.id \}\}" psql/u,
+      );
+      assert.ok(step16.includes(`-U ${user} -d ${database}`));
+      assert.ok(step16.includes("<infra/test/disposable-test-target.sql"));
+      assert.doesNotMatch(step16, /^\s+if:/mu);
     }
     assert.doesNotMatch(cmsJob, /:5432\/cms_qa\b/u);
     const compose = read("compose.postgres.yml");

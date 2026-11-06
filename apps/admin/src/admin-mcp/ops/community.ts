@@ -2,7 +2,9 @@ import {
   communityOperationDefinitions,
   type CommunityOperationName,
 } from "../../community/endpoints";
+import { built, type Unbuilt } from "../not-built";
 import { COMMUNITY_READ_FACTS } from "./community-reads";
+import { COMMUNITY_WRITE_FACTS } from "./community-writes";
 import {
   asynchronous,
   example,
@@ -13,7 +15,10 @@ import {
 } from "./define";
 
 /** Per-target outcomes need single calls, so the bulk route has no op of its own. */
-type CommunityOpRoute = Exclude<CommunityOperationName, "moderate-comments">;
+export type CommunityOpRoute = Exclude<
+  CommunityOperationName,
+  "moderate-comments"
+>;
 
 const dm = { sensitive: "dm", tool: "admin_sensitive_read" } as const;
 
@@ -87,7 +92,6 @@ const rows: Readonly<Record<CommunityOpRoute, AdminOpEntry>> = {
     "receipt",
     {
       example: {
-        requestId: example.requestId,
         id: example.user,
         enabled: true,
         expectedVersion: 0,
@@ -102,7 +106,6 @@ const rows: Readonly<Record<CommunityOpRoute, AdminOpEntry>> = {
       selectorSources: ["list.works"],
       example: {
         id: example.work,
-        requestId: example.requestId,
         state: "hidden",
         expectedVersion: 2,
         reason: example.reason,
@@ -117,7 +120,6 @@ const rows: Readonly<Record<CommunityOpRoute, AdminOpEntry>> = {
     "receipt",
     {
       example: {
-        requestId: example.requestId,
         target: { type: "work", id: example.work },
         enabled: true,
         position: 0,
@@ -130,7 +132,6 @@ const rows: Readonly<Record<CommunityOpRoute, AdminOpEntry>> = {
     "receipt",
     {
       example: {
-        requestId: example.requestId,
         enabledQuantity: 10,
         expectedVersion: 0,
       },
@@ -190,7 +191,7 @@ const rows: Readonly<Record<CommunityOpRoute, AdminOpEntry>> = {
     example: { includeHidden: true },
   }),
   "create-thread": reversibleOp("Create a Thread.", "receipt", {
-    example: { requestId: example.requestId, title: "Synthetic thread" },
+    example: { title: "Synthetic thread" },
   }),
   "update-thread": reversibleOp(
     "Edit, close, hide or reorder a Thread.",
@@ -198,7 +199,6 @@ const rows: Readonly<Record<CommunityOpRoute, AdminOpEntry>> = {
     {
       example: {
         id: example.thread,
-        requestId: example.requestId,
         expectedVersion: 1,
         status: "closed",
       },
@@ -210,7 +210,7 @@ const rows: Readonly<Record<CommunityOpRoute, AdminOpEntry>> = {
   "read-policy": readOp("The comment publication policy.", { example: {} }),
   "set-policy": reversibleOp(
     "Change the comment publication policy.",
-    "cas_read_back",
+    "receipt",
     { example: { policy: "PRE_MODERATION" } },
   ),
   "read-comments": readOp("Comments by moderation state, kind or Catalog.", {
@@ -231,14 +231,10 @@ const rows: Readonly<Record<CommunityOpRoute, AdminOpEntry>> = {
       },
     },
   ),
-  "moderate-user": reversibleOp(
-    "Suspend or reinstate a user.",
-    "cas_read_back",
-    {
-      completion: asynchronous,
-      example: { id: example.user, action: "suspend", reason: example.reason },
-    },
-  ),
+  "moderate-user": reversibleOp("Suspend or reinstate a user.", "receipt", {
+    completion: asynchronous,
+    example: { id: example.user, action: "suspend", reason: example.reason },
+  }),
   "read-events": readOp("The moderation history of a subject.", {
     example: { subjectId: example.comment },
   }),
@@ -254,7 +250,6 @@ const rows: Readonly<Record<CommunityOpRoute, AdminOpEntry>> = {
     "receipt",
     {
       example: {
-        requestId: example.requestId,
         expectedVersion: 1,
         policy: "PRE_MODERATION",
         maxItemsPerWork: 9,
@@ -287,7 +282,6 @@ const rows: Readonly<Record<CommunityOpRoute, AdminOpEntry>> = {
       completion: asynchronous,
       example: {
         id: example.article,
-        requestId: example.requestId,
         expectedVersion: 1,
         candidateVersion: 1,
         fingerprint: example.digest,
@@ -309,7 +303,6 @@ const rows: Readonly<Record<CommunityOpRoute, AdminOpEntry>> = {
       completion: asynchronous,
       example: {
         id: example.revision,
-        requestId: example.requestId,
         action: "approve",
         expectedVersion: 1,
         reason: example.reason,
@@ -325,7 +318,6 @@ const rows: Readonly<Record<CommunityOpRoute, AdminOpEntry>> = {
     {
       example: {
         accountId: example.user,
-        requestId: example.requestId,
         capacityClass: "ordinary",
         expectedVersion: 0,
       },
@@ -340,7 +332,7 @@ const rows: Readonly<Record<CommunityOpRoute, AdminOpEntry>> = {
     {
       completion: asynchronous,
       selectorSources: ["list.jobs"],
-      example: { id: example.job, requestId: example.requestId },
+      example: { id: example.job },
     },
   ),
   "abandon-publishing-job": irreversibleOp(
@@ -362,6 +354,11 @@ const CALLS_NO_BACKEND: ReadonlySet<CommunityOpRoute> = new Set([
   "read-feature-catalogs",
 ]);
 
+/** Every route's facts, whole: a read's or a write's, or the slice that brings them. */
+const FACTS: Readonly<
+  Record<CommunityOpRoute, Partial<AdminOpEntry> | Unbuilt>
+> = { ...COMMUNITY_READ_FACTS, ...COMMUNITY_WRITE_FACTS };
+
 /** Each row takes its input and output from the definition its route runs. */
 export const communityOps = Object.fromEntries(
   (Object.entries(rows) as [CommunityOpRoute, AdminOpEntry][]).map(
@@ -370,7 +367,7 @@ export const communityOps = Object.fromEntries(
       const credential = CALLS_NO_BACKEND.has(route) ? "none" : "community";
       return [
         `community.${route}`,
-        { ...row, credential, input, output, ...COMMUNITY_READ_FACTS[route] },
+        { ...row, credential, input, output, ...built(FACTS[route]) },
       ] as const;
     },
   ),

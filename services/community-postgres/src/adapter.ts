@@ -6,8 +6,11 @@ import {
   requestOwnerPublicationSync,
   type PublicationSyncOptions,
 } from "./publishing/publication-sync.js";
+import { limitAiWrite } from "./ai-write-limit.js";
 import { asCommunityOperationError } from "./availability.js";
 import {
+  findCommandReceiptSql,
+  insertCommandReceiptSql,
   insertModerationEventSql,
   revokeUserSessionsSql,
   setUserStatusSql,
@@ -19,9 +22,11 @@ import {
   revokeSessionSql,
 } from "./queries.js";
 import { mapPublicUserRow } from "./row-mapper.js";
+import { CommunityIdempotencyConflictError } from "@moya/api";
 
 import type { PublicUserRow } from "./row-mapper.js";
 import type {
+  CommandReceipt,
   CommunityIdentityPort,
   ModerationEventDraft,
   PublicUserRecord,
@@ -90,20 +95,50 @@ export class PostgresCommunityIdentityAdapter implements CommunityIdentityPort {
    * Status, session revocation and the audit row move together or not at
    * all. The UPDATE matches only a real transition, so a repeated suspend
    * returns the unchanged user and records nothing. A deleted account is
-   * terminal: the UPDATE never matches it and nothing else is written.
+   * terminal: the UPDATE never matches it and nothing else is written. Under
+   * a receipt the replay comes first, and the receipt holds ids and counts and
+   * no name, because it outlives an account's deletion.
    */
   async setUserStatus(
     id: PublicUserId,
     status: Exclude<PublicUserRecord["status"], "deleted">,
     at: Date,
     audit?: ModerationEventDraft,
+    receipt?: CommandReceipt,
   ): Promise<{
-    readonly user: PublicUserRecord;
+    readonly user: Pick<PublicUserRecord, "id" | "status">;
     readonly revokedSessions: number;
+    readonly unchanged?: true;
+    readonly replayed?: true;
   } | null> {
+    const operator = audit?.operatorLabel ?? "owner";
     const client = await this.connect();
+    const stored = async () => {
+      if (receipt === undefined) return null;
+      const prior = (
+        await client.query<{
+          fingerprint: string;
+          result: Pick<PublicUserRecord, "id" | "status"> & {
+            readonly revokedSessions: number;
+          };
+        }>(findCommandReceiptSql, [operator, receipt.requestId])
+      ).rows[0];
+      if (prior === undefined) return null;
+      if (prior.fingerprint !== receipt.fingerprint)
+        throw new CommunityIdempotencyConflictError(
+          "Reused command identity with other content",
+        );
+      const { revokedSessions, ...user } = prior.result;
+      return { user, revokedSessions, replayed: true as const };
+    };
     try {
       await client.query("BEGIN");
+      await limitAiWrite(operator, (sql) => client.query(sql));
+      const replay = await stored();
+      if (replay !== null) {
+        await client.query("COMMIT");
+        return replay;
+      }
       const staff = await captureStaffSubject(
         client,
         { type: "user", id },
@@ -121,6 +156,15 @@ export class PostgresCommunityIdentityAdapter implements CommunityIdentityPort {
       if (user.status === "deleted") {
         await client.query("ROLLBACK");
         return { user, revokedSessions: 0 };
+      }
+      // Nothing changed: a holder of this very key may have committed it while
+      // this one waited on the row, and the receipt decides, not a guess.
+      if (row.changed !== true) {
+        const concurrent = await stored();
+        if (concurrent !== null) {
+          await client.query("COMMIT");
+          return concurrent;
+        }
       }
       if (row.changed === true && audit !== undefined)
         await client.query(insertModerationEventSql, [
@@ -152,8 +196,24 @@ export class PostgresCommunityIdentityAdapter implements CommunityIdentityPort {
           status === "suspended" ? "suspend" : "restore",
           at,
         );
+      if (receipt !== undefined)
+        await client.query(insertCommandReceiptSql, [
+          operator,
+          receipt.requestId,
+          receipt.fingerprint,
+          JSON.stringify({
+            id: user.id,
+            status: user.status,
+            revokedSessions: revoked?.rowCount ?? 0,
+          }),
+          at,
+        ]);
       await client.query("COMMIT");
-      return { user, revokedSessions: revoked?.rowCount ?? 0 };
+      return {
+        user,
+        revokedSessions: revoked?.rowCount ?? 0,
+        ...(row.changed === true ? {} : { unchanged: true as const }),
+      };
     } catch (error) {
       try {
         await client.query("ROLLBACK");

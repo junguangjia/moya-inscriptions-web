@@ -1,4 +1,7 @@
-import { RegisteredClientError } from "@moya/community-postgres";
+import {
+  RESUME_SECRET_PARAMETER,
+  RegisteredClientError,
+} from "@moya/community-postgres";
 import {
   CONSENT_LANDING_PREFIX,
   ConsentError,
@@ -32,6 +35,8 @@ describe("consent rules", () => {
     capabilityScopes: ["artvenn:read"],
     protocolScopes: ["offline_access"],
     preset: "read-only" as const,
+    servedPreset: "read-only" as const,
+    registered: undefined,
     expiresAt: new Date("2026-09-20T12:05:00Z").toISOString(),
     environment: "development",
     now: new Date("2026-09-20T12:00:00Z"),
@@ -92,6 +97,164 @@ describe("consent rules", () => {
         preset: "read-only",
         expiresAt: "2026-09-20T12:05:00.000Z",
       });
+    });
+
+    describe("under operator, in the person's words and from the closed list", () => {
+      const listed = (family: string, label: string) =>
+        [
+          ...parseRegisteredClients(
+            JSON.stringify([
+              {
+                clientId: "https://tool.invalid/client.json",
+                family,
+                label,
+                callbackPolicy: "hosted-https",
+                redirectUris: ["https://callback.tool.invalid/oauth/return"],
+              },
+            ]),
+            { allowHosted: true },
+          ).values(),
+        ][0];
+      const operator = {
+        ...live,
+        oauthClientId: "https://tool.invalid/client.json",
+        capabilityScopes: ["artvenn:admin"],
+        preset: "operator" as const,
+        servedPreset: "operator" as const,
+        registered: listed("claude", "Claude"),
+      };
+
+      it("names the tool, its vendor and the callback host", () => {
+        expect(describeConsent(operator)).toEqual({
+          interaction: "abc123_-XYZ",
+          client: "https://tool.invalid/client.json",
+          resource: "https://resource.invalid/api/mcp",
+          environment: "development",
+          capabilities: ["artvenn:admin"],
+          protocol: ["offline_access"],
+          preset: "operator",
+          expiresAt: "2026-09-20T12:05:00.000Z",
+          tool: {
+            label: "Claude",
+            vendor: "Anthropic",
+            callbackHosts: ["callback.tool.invalid"],
+            local: false,
+          },
+        });
+      });
+
+      it("names each loopback host of a local tool once, and says it is local", () => {
+        const local = [
+          ...parseRegisteredClients(
+            JSON.stringify([
+              {
+                clientId: "https://tool.invalid/client.json",
+                family: "codex",
+                label: "Codex",
+                callbackPolicy: "loopback-host",
+                redirectUris: [
+                  "http://127.0.0.1:49152/callback",
+                  "http://localhost:49152/callback",
+                  "http://127.0.0.1:49153/other",
+                ],
+              },
+            ]),
+          ).values(),
+        ][0];
+        expect(
+          describeConsent({ ...operator, registered: local }).tool,
+        ).toEqual({
+          label: "Codex",
+          vendor: "OpenAI",
+          callbackHosts: ["127.0.0.1", "localhost"],
+          local: true,
+        });
+      });
+
+      it.each(["claude", "claude-code", "codex", "chatgpt", "cursor"])(
+        "knows who is behind the %s family",
+        (family) => {
+          expect(
+            describeConsent({
+              ...operator,
+              registered: listed(family, "Tool"),
+            }).tool?.vendor,
+          ).toMatch(/^(?:Anthropic|OpenAI|Anysphere，.+)$/u);
+        },
+      );
+
+      it("names Cursor's vendor and the model the person picks in it", () => {
+        // The policy names Anysphere, Inc., and says Cursor hands content on to that
+        // model's provider, so the consent page says both.
+        expect(
+          describeConsent({
+            ...operator,
+            registered: listed("cursor", "Cursor"),
+          }).tool?.vendor,
+        ).toBe("Anysphere，以及你在 Cursor 里选用的模型的提供方");
+      });
+
+      it("stops a tool whose vendor it could not name, or one off the list", () => {
+        expect(() =>
+          describeConsent({
+            ...operator,
+            registered: listed("acme-agent", "ACME"),
+          }),
+        ).toThrow(
+          expect.objectContaining({ code: "CLIENT_VENDOR_NOT_NAMED" }) as Error,
+        );
+        // An inherited property name is not a vendor.
+        expect(() =>
+          describeConsent({
+            ...operator,
+            registered: listed("constructor", "ACME"),
+          }),
+        ).toThrow(
+          expect.objectContaining({ code: "CLIENT_VENDOR_NOT_NAMED" }) as Error,
+        );
+        expect(() =>
+          describeConsent({ ...operator, registered: undefined }),
+        ).toThrow(
+          expect.objectContaining({ code: "CLIENT_NOT_REGISTERED" }) as Error,
+        );
+      });
+
+      it("refuses a row of a preset this deployment does not serve, either way", () => {
+        for (const [preset, servedPreset, capabilityScopes] of [
+          ["operator", "read-only", ["artvenn:admin"]],
+          ["read-only", "operator", ["artvenn:read"]],
+          ["management", "management", ["artvenn:read", "artvenn:manage"]],
+        ] as const)
+          expect(() =>
+            describeConsent({
+              ...operator,
+              preset,
+              servedPreset,
+              capabilityScopes,
+            }),
+          ).toThrow(
+            expect.objectContaining({ code: "PRESET_NOT_AVAILABLE" }) as Error,
+          );
+      });
+
+      it("refuses any scope but its own, rather than narrowing", () => {
+        for (const [capabilityScopes, code] of [
+          [["artvenn:read"], "SCOPE_NOT_AVAILABLE"],
+          [["artvenn:admin", "artvenn:manage"], "SCOPE_NOT_AVAILABLE"],
+          [["offline_access"], "SCOPE_REQUIRED"],
+          [[], "SCOPE_REQUIRED"],
+        ] as const)
+          expect(() =>
+            describeConsent({
+              ...operator,
+              capabilityScopes: [...capabilityScopes],
+            }),
+          ).toThrow(expect.objectContaining({ code }) as Error);
+      });
+    });
+
+    it("gives a read-only display no tool, so its page reads as it always has", () => {
+      expect(describeConsent(live)).not.toHaveProperty("tool");
     });
 
     it("refuses an interaction that is already dead, rather than showing it as live", () => {
@@ -180,6 +343,22 @@ describe("consent rules", () => {
       expect(() =>
         providerResumeUrl("https://auth.localhost:34620", "../../elsewhere"),
       ).toThrow(ConsentError);
+    });
+
+    it("carries the one-time secret in the query the issuer reads, and only when there is one", () => {
+      const secret = "A-_".repeat(14) + "A";
+      const resume = new URL(
+        providerResumeUrl("https://auth.localhost:34620", "abc123", secret),
+      );
+      expect(resume.pathname).toBe(`${CONSENT_LANDING_PREFIX}/abc123/resume`);
+      expect([...resume.searchParams.keys()]).toEqual([
+        RESUME_SECRET_PARAMETER,
+      ]);
+      expect(resume.searchParams.get(RESUME_SECRET_PARAMETER)).toBe(secret);
+      expect(
+        new URL(providerResumeUrl("https://auth.localhost:34620", "abc123"))
+          .search,
+      ).toBe("");
     });
   });
 
@@ -443,12 +622,66 @@ describe("consent rules", () => {
               "https://chatgpt.com/connector_platform_oauth_redirect",
             ],
           },
+          {
+            clientId: "https://cursor.com/oauth/mcp-client.json",
+            family: "cursor",
+            label: "Cursor",
+            callbackPolicy: "loopback-host",
+            redirectUris: [
+              "http://localhost:8787/callback",
+              "http://127.0.0.1:8787/callback",
+            ],
+          },
         ];
         expect([
           ...parseRegisteredClients(JSON.stringify(list), {
             allowHosted: true,
           }).values(),
         ]).toEqual(list);
+      });
+
+      it("takes Cursor's own client id on both 8787 callbacks, and never its custom scheme or its hosted callback", () => {
+        // Desktop only. Cursor's web and cloud agents return to its own site under the
+        // same client id, which one loopback entry cannot also hold.
+        const cursor = {
+          clientId: "https://cursor.com/oauth/mcp-client.json",
+          family: "cursor",
+          label: "Cursor",
+          callbackPolicy: "loopback-host",
+          redirectUris: [
+            "http://localhost:8787/callback",
+            "http://127.0.0.1:8787/callback",
+          ],
+        };
+        const parse = (entry: Record<string, unknown>) =>
+          parseRegisteredClients(JSON.stringify([entry]), {
+            allowHosted: true,
+          });
+        expect(parse(cursor).get(cursor.clientId)).toEqual(cursor);
+
+        const OLD_FLOW = "cursor://anysphere.cursor-mcp/oauth/callback";
+        const HOSTED = "https://www.cursor.com/agents/mcp/oauth/callback";
+        for (const redirectUris of [
+          [OLD_FLOW],
+          [HOSTED],
+          [...cursor.redirectUris, OLD_FLOW],
+          [...cursor.redirectUris, HOSTED],
+        ])
+          expect([
+            redirectUris,
+            codeOf(() => parse({ ...cursor, redirectUris })),
+          ]).toEqual([redirectUris, "CLIENTS_REDIRECT_NOT_LOOPBACK"]);
+        // Nor its hosted callback beside the loopback ones under the hosted policy:
+        // an entry holds one hosted callback at most.
+        expect(
+          codeOf(() =>
+            parse({
+              ...cursor,
+              callbackPolicy: "hosted-https",
+              redirectUris: [HOSTED, ...cursor.redirectUris],
+            }),
+          ),
+        ).toBe("CLIENTS_REDIRECT_NOT_HOSTED");
       });
 
       it("takes one exact https URL on a named host, and refuses every other spelling", () => {

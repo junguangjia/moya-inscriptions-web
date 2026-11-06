@@ -296,6 +296,12 @@ export function classifyTask(paths, event = "pull_request") {
       file === ".mcp.json" ||
       file.startsWith(".github/ISSUE_TEMPLATE/") ||
       file === "scripts/README.md" ||
+      // The standing release tool: dependency-free Python, its own tests and
+      // a fictional profile. scripts/release-tool.test.mjs runs those tests in
+      // the lightweight job; any other file shape there stays unmapped.
+      /^scripts\/release\/(?:[a-z_]+\.py|README\.md|tests\/[a-z_]+\.py|tests\/fixtures\/[a-z0-9.-]+\.json)$/u.test(
+        file,
+      ) ||
       // Local curation owns separate pinned native runtimes and Draft-only
       // acceptance; it does not change CMS/public runtime implementation.
       file.startsWith("scripts/curation/") ||

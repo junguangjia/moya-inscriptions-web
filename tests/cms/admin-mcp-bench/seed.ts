@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { resolveAnalyticsRange } from "@moya/contracts/internal/admin-mcp";
 import { projectCatalogSearchDocument } from "@moya/search";
 
 // The Admin MCP bench seed (admin-mcp-completion-v1 section 21). Plain SQL on a
@@ -20,6 +21,8 @@ export const BENCH_SCALE = {
   works: 50_000,
   comments: 200_000,
   reports: 2_000,
+  mediaItems: 20_000,
+  publishingJobs: 20_000,
 } as const;
 
 export interface BenchDb {
@@ -816,7 +819,48 @@ const U1 = {
   canary: "u1selfonlycanary",
 };
 
+/**
+ * M3's account: 40 comments of which 12 hold the phrase inside the range and 3 hold it
+ * a few minutes before it starts, and another account of the same display name holding
+ * it too. All on a work of neither, so hiding them moves nothing else U1 or M1 reads.
+ */
+const M3 = {
+  id: `user-${"2".repeat(32)}`,
+  handle: "lishu-ads",
+  twin: `user-${"3".repeat(32)}`,
+  twinHandle: "lishu-ads-twin",
+  name: "李书",
+  work: `work-${"e".repeat(32)}`,
+  phrase: "加微信",
+};
+const M3_INSIDE = 12;
+const M3_JUST_OUTSIDE = 3;
+const M3_COMMENTS = 40;
+const m3CommentId = (name: string) =>
+  `comment-${createHash("md5").update(`m3-${name}`).digest("hex")}`;
+
+/** U3's fifteen handles: the 7th and 14th already suspended, the 15th no account's. */
+const U3_HANDLES = 15;
+const u3Handle = (index: number) => `batch-ads-${index}`;
+const u3Id = (index: number) =>
+  `user-${createHash("md5").update(`u3-${index}`).digest("hex")}`;
+const u3IsSuspended = (index: number) => index % 7 === 0;
+
 export interface CommunityOracle {
+  readonly m3: {
+    readonly handle: string;
+    readonly id: string;
+    readonly phrase: string;
+    /** What the path must hide, and nothing else moves. */
+    readonly matching: readonly string[];
+    readonly untouched: readonly string[];
+  };
+  readonly u3: {
+    readonly handles: readonly string[];
+    readonly missingHandle: string;
+    readonly changed: readonly string[];
+    readonly skipped: readonly string[];
+  };
   readonly m1: {
     readonly total: number;
     readonly oldestAt: string;
@@ -915,6 +959,71 @@ const seedU1 = async (db: BenchDb) => {
     );
 };
 
+const seedM3 = async (db: BenchDb) => {
+  await db.query(
+    `INSERT INTO community.public_users (id, handle, display_name, status, created_at, updated_at)
+     VALUES ($1, $2, $5, 'active', $6::timestamptz, $6::timestamptz),
+            ($3, $4, $5, 'active', $6::timestamptz, $6::timestamptz)`,
+    [M3.id, M3.handle, M3.twin, M3.twinHandle, M3.name, AT],
+  );
+  await db.query(
+    `INSERT INTO community.works (id, author_id, title, text, first_published_at, updated_at, visibility, operator_state)
+     VALUES ($1, $2, '合成作品', '合成作品正文', $3::timestamptz, $3::timestamptz, 'public', 'visible')`,
+    [M3.work, M3.twin, AT],
+  );
+  // Inside lies well within the days the range names, so a run that crosses a Shanghai
+  // midnight still reads the same set; just outside stays outside whichever day it is.
+  const { start, requestedEnd } = resolveAnalyticsRange(
+    { range: "last_7_days" } as never,
+    new Date(),
+  );
+  const insideAt = (index: number) =>
+    new Date(
+      requestedEnd.getTime() - (index % 6) * 86_400_000 - 86_400_000 / 2,
+    ).toISOString();
+  const outsideAt = (index: number) =>
+    new Date(start.getTime() - (index + 1) * 60_000).toISOString();
+  const insert = (id: string, author: string, text: string, at: string) =>
+    db.query(
+      `INSERT INTO community.catalog_comments (id, catalog_id, author_id, text, moderation, target_type, created_at)
+       VALUES ($1, $2, $3, $4, 'visible', 'work', $5::timestamptz)`,
+      [id, M3.work, author, text, at],
+    );
+  for (let index = 0; index < M3_COMMENTS; index += 1) {
+    const matches = index < M3_INSIDE + M3_JUST_OUTSIDE;
+    const inside =
+      index < M3_INSIDE || index >= M3_INSIDE + M3_JUST_OUTSIDE + 5;
+    await insert(
+      m3CommentId(String(index)),
+      M3.id,
+      matches ? `合成评论，${M3.phrase}${index}` : `合成评论${index}`,
+      inside ? insideAt(index) : outsideAt(index),
+    );
+  }
+  for (let index = 0; index < 3; index += 1)
+    await insert(
+      m3CommentId(`twin-${index}`),
+      M3.twin,
+      `合成评论，${M3.phrase}${index}`,
+      insideAt(index),
+    );
+};
+
+const seedU3 = async (db: BenchDb) => {
+  for (let index = 1; index < U3_HANDLES; index += 1)
+    await db.query(
+      `INSERT INTO community.public_users (id, handle, display_name, status, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5::timestamptz, $5::timestamptz)`,
+      [
+        u3Id(index),
+        u3Handle(index),
+        `合成广告账号${index}`,
+        u3IsSuspended(index) ? "suspended" : "active",
+        AT,
+      ],
+    );
+};
+
 /** Every number comes from the functions the rows came from, never through a tool. */
 const communityOracleOf = (reports: number): CommunityOracle => {
   const byKind = new Map<string, { count: number; oldestAt: string }>();
@@ -936,7 +1045,28 @@ const communityOracleOf = (reports: number): CommunityOracle => {
     value,
     ...group,
   }));
+  const u3Accounts = Array.from({ length: U3_HANDLES - 1 }, (_, at) => at + 1);
   return {
+    m3: {
+      handle: M3.handle,
+      id: M3.id,
+      phrase: M3.phrase,
+      matching: Array.from({ length: M3_INSIDE }, (_, at) =>
+        m3CommentId(String(at)),
+      ),
+      untouched: [
+        ...Array.from({ length: M3_COMMENTS - M3_INSIDE }, (_, at) =>
+          m3CommentId(String(M3_INSIDE + at)),
+        ),
+        ...[0, 1, 2].map((at) => m3CommentId(`twin-${at}`)),
+      ],
+    },
+    u3: {
+      handles: Array.from({ length: U3_HANDLES }, (_, at) => u3Handle(at + 1)),
+      missingHandle: u3Handle(U3_HANDLES),
+      changed: u3Accounts.filter((index) => !u3IsSuspended(index)).map(u3Id),
+      skipped: u3Accounts.filter(u3IsSuspended).map(u3Id),
+    },
     m1: {
       total: groups.reduce((sum, { count }) => sum + count, 0),
       oldestAt: groups
@@ -957,6 +1087,42 @@ const communityOracleOf = (reports: number): CommunityOracle => {
       canary: U1.canary,
     },
   };
+};
+
+/**
+ * Items, each on the work of the same number when that has a public revision, and the
+ * jobs a settlement reads past. One in twenty stopped, so the partial index of unfinished
+ * jobs is not the whole table. None has a public asset, so none counts as newer than an
+ * operation, and no reference path waits on them.
+ */
+const seedMediaWork = async (db: BenchDb) => {
+  const { users, mediaItems, publishingJobs } = BENCH_SCALE;
+  await db.query(
+    `INSERT INTO community.media_items (id, owner_id, kind, quality_mode, source, state, presentation, ready_at)
+     SELECT 'media-item-' || md5('bench-item-' || i),
+       'user-' || md5('bench-user-' || (1 + i % $2::int)),
+       'static', 'standard', 'upload', 'ready', '{"width":512,"height":384}', $3::timestamptz
+     FROM generate_series(1, $1::int) i`,
+    [mediaItems, users, AT],
+  );
+  await db.query(
+    `INSERT INTO community.work_revision_items (revision_id, position, item_id, edit)
+     SELECT w.public_revision_id, 1, 'media-item-' || md5('bench-item-' || i), '{"rotation":0,"crop":null}'
+     FROM generate_series(1, $1::int) i
+     JOIN community.works w ON w.id = 'work-' || md5('bench-work-' || i)
+     WHERE w.public_revision_id IS NOT NULL`,
+    [mediaItems],
+  );
+  await db.query(
+    `INSERT INTO community.publishing_jobs (id, kind, subject_id, state, run_after, created_at, updated_at, finished_at)
+     SELECT 'publishing-job-' || md5('bench-job-' || i),
+       CASE WHEN i % 2 = 0 THEN 'publish_media' ELSE 'withdraw_media' END,
+       'media-item-' || md5('bench-item-' || (1 + i % $2::int)),
+       CASE WHEN i % 20 = 0 THEN 'failed' ELSE 'succeeded' END,
+       $3::timestamptz, $3::timestamptz, $3::timestamptz, $3::timestamptz
+     FROM generate_series(1, $1::int) i`,
+    [publishingJobs, mediaItems, AT],
+  );
 };
 
 export const seedCommunity = async (db: BenchDb): Promise<CommunityOracle> => {
@@ -1010,7 +1176,10 @@ export const seedCommunity = async (db: BenchDb): Promise<CommunityOracle> => {
      FROM generate_series(1, $1::int) i`,
     [reports, users, works, AT, comments],
   );
+  await seedMediaWork(db);
   await seedU1(db);
+  await seedM3(db);
+  await seedU3(db);
   return communityOracleOf(reports);
 };
 

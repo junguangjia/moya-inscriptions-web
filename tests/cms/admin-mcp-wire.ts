@@ -61,6 +61,73 @@ export const connectClient = async (
   return { client, transport };
 };
 
+/**
+ * An answer with one more field, and each record of a list in it: what a Backend
+ * released first adds. Deeper objects stay as sent, because some are maps, where a new
+ * key is an entry and not a field.
+ */
+export const withFieldAdded = (value: unknown, name: string): unknown => {
+  const added = (item: unknown) =>
+    item === null || typeof item !== "object" || Array.isArray(item)
+      ? item
+      : { ...item, [name]: "synthetic" };
+  if (Array.isArray(value)) return value.map(added);
+  if (value === null || typeof value !== "object") return value;
+  return added(
+    Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        Array.isArray(item) ? item.map(added) : item,
+      ]),
+    ),
+  );
+};
+
+/**
+ * A relay in front of a real Backend that rewrites each JSON answer it passes on, so a
+ * suite can show what the Admin makes of a Backend that answers otherwise. Anything not
+ * JSON passes as it came.
+ */
+export const relayRewriting = async (
+  upstream: string,
+  rewrite: (body: unknown) => unknown,
+) => {
+  const relay = createServer((incoming, outgoing) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of incoming) chunks.push(chunk as Buffer);
+      const headers = new Headers();
+      for (const [name, value] of Object.entries(incoming.headers))
+        if (typeof value === "string" && name !== "host")
+          headers.set(name, value);
+      const answer = await fetch(
+        new URL((incoming.url ?? "/").slice(1), upstream),
+        {
+          method: incoming.method ?? "GET",
+          headers,
+          ...(chunks.length === 0 ? {} : { body: Buffer.concat(chunks) }),
+        },
+      );
+      const type = answer.headers.get("content-type") ?? "";
+      const body = Buffer.from(await answer.arrayBuffer());
+      outgoing.writeHead(answer.status, { "content-type": type });
+      outgoing.end(
+        type.includes("json")
+          ? JSON.stringify(rewrite(JSON.parse(body.toString("utf8"))))
+          : body,
+      );
+    })().catch(() => outgoing.destroy());
+  });
+  await new Promise<void>((resolve) => relay.listen(0, "127.0.0.1", resolve));
+  return {
+    origin: `http://127.0.0.1:${(relay.address() as AddressInfo).port}/`,
+    close: async () => {
+      relay.closeAllConnections();
+      await new Promise((resolve) => relay.close(resolve));
+    },
+  };
+};
+
 export const syntheticCatalogDraft = (catalogId: string, sourceId: string) => ({
   catalogId,
   sourceId,

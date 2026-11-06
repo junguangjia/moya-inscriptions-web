@@ -8,6 +8,7 @@ import {
   createPoolSlots,
   findEnvelope,
   inPoolShare,
+  routeCheckedAiCall,
 } from "admin/admin-mcp";
 import {
   callAiOperator,
@@ -141,6 +142,63 @@ describe("the AI's call to the Backend", () => {
     );
   };
 
+  it("refuses a route with no row for its credential before any fetch, as the Backend would", async () => {
+    const reached: string[] = [];
+    const backend = createServer((request, response) => {
+      reached.push(`${request.method} ${request.url}`);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+    servers.push(backend);
+    await new Promise<void>((resolve) =>
+      backend.listen(0, "127.0.0.1", () => resolve()),
+    );
+    stubbed(`http://127.0.0.1:${(backend.address() as AddressInfo).port}/`);
+    vi.stubEnv("OPERATOR_AI_BASE_TOKEN", randomBytes(32).toString("base64url"));
+    const report = `report-${randomBytes(16).toString("hex")}`;
+    for (const [credential, method, path] of [
+      // An irreversible write, whose row joins with the run engine.
+      ["community", "POST", `reports/${report}/forward`],
+      // A row that is there, on the other credential only.
+      ["base", "GET", "reports"],
+      // A row whose query must name exactly one type it lists.
+      ["community", "GET", "ai/settlement?type=job"],
+    ] as const) {
+      const refused = await routeCheckedAiCall(credential)(method, path).catch(
+        (error: unknown) => error,
+      );
+      expect(refused, path).toBeInstanceOf(CommunityOperatorError);
+      expect(refused, path).toMatchObject({
+        code: "AI_ROUTE_FORBIDDEN",
+        status: 403,
+      });
+      expect(communityRefusal(refused).code).toBe("AI_ROUTE_FORBIDDEN");
+    }
+    expect(reached).toEqual([]);
+    await routeCheckedAiCall("community")("GET", "reports?status=open");
+    await routeCheckedAiCall("base")("GET", "ai/settlement?type=item&id=x");
+    expect(reached).toEqual([
+      "GET /internal/community/reports?status=open",
+      "GET /internal/community/ai/settlement?type=item&id=x",
+    ]);
+  });
+
+  it("names the Backend's own refusals as this side knows them", () => {
+    // The Backend asks for a run where an input is irreversible: a preview leads to one.
+    expect(
+      communityRefusal(new CommunityOperatorError("AI_RUN_REQUIRED", 403)),
+    ).toMatchObject({ ok: false, code: "PREVIEW_REQUIRED" });
+    // An answer that cannot be read: by name, and retrying cannot help.
+    const mismatch = communityRefusal(
+      new CommunityOperatorError("BACKEND_CONTRACT_MISMATCH", 502),
+    );
+    expect(mismatch).toMatchObject({
+      ok: false,
+      code: "BACKEND_CONTRACT_MISMATCH",
+    });
+    expect(mismatch).not.toHaveProperty("retryable");
+  });
+
   it("names a call given up on at its limit apart from a refused connection", async () => {
     const hung = createServer(() => undefined);
     servers.push(hung);
@@ -231,7 +289,7 @@ describe("admin_find on a Backend that answers call by call", () => {
     }
   });
 
-  const SCOPE = { tools: [], switches: {} };
+  const SCOPE = { tools: [], userId: 9, switches: {} };
   const idOf = (prefix: string) =>
     `${prefix}-${randomBytes(16).toString("hex")}`;
   const linkTo = (parameters: string) => `https://x.example/?${parameters}`;

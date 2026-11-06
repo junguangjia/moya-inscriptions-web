@@ -350,7 +350,14 @@ export const adminReceiptListInputSchema = filterOf({
  * A queue's time filter takes a named range too, in Asia/Shanghai, and the answer
  * echoes the instants it resolved to. `last_N_days` are N finished days.
  */
-const namedRange = { range: z.enum(ANALYTICS_RANGE_PRESETS).optional() };
+const namedRange = {
+  range: z
+    .enum(ANALYTICS_RANGE_PRESETS)
+    .describe(
+      "A range that ends before now holds finished days in Asia/Shanghai, so today is not in it. To reach now, send from with no to.",
+    )
+    .optional(),
+};
 const rangeOrDates = ({
   range,
   from,

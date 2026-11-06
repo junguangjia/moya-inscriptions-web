@@ -360,7 +360,6 @@ describe("the tool on the wire", () => {
     ["another inherited key", "__proto__"],
     ["a reserved surface", "users.update"],
     ["another reserved surface", "mcp-control.pause"],
-    ["a read", "list.catalogs"],
   ])("answers UNKNOWN_OP to %s, with near names", async (_label, op) => {
     const answer = await call({ requestId: requestId(), op, input: {} });
     expect(answer).toMatchObject({ ok: false, code: "UNKNOWN_OP" });
@@ -368,6 +367,16 @@ describe("the tool on the wire", () => {
     expect((answer.data as { nearest?: unknown }).nearest).toBeInstanceOf(
       Array,
     );
+  });
+
+  it("answers a read with the tool it runs on", async () => {
+    expect(
+      await call({ requestId: requestId(), op: "list.catalogs", input: {} }),
+    ).toMatchObject({
+      ok: false,
+      code: "WRONG_TOOL",
+      data: { tool: "admin_read" },
+    });
   });
 
   it("refuses an irreversible op by name, and an op not built yet as not built", async () => {
@@ -381,7 +390,7 @@ describe("the tool on the wire", () => {
     expect(
       await call({
         requestId: requestId(),
-        op: "community.moderate-comment",
+        op: "ops.master.requeue",
         input: {},
       }),
     ).toMatchObject({ ok: false, code: "NOT_AVAILABLE" });
@@ -630,6 +639,8 @@ describe("one save", () => {
       input,
     });
     expect(replay).toMatchObject({ ok: true, meta: { replayed: true } });
+    // Only a community write's replay carries the sentence on stored answers.
+    expect(replay.hint).toBeUndefined();
     expect(replay.data.already_applied).toEqual([draft.id]);
     expect(replay.data.results?.[0]).toMatchObject({
       revision: first.data.results?.[0]?.revision,

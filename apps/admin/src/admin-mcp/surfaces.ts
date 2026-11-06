@@ -98,10 +98,16 @@ export const ADMIN_SURFACES: Readonly<Record<string, AdminSurface>> = {
   "endpoint POST /mcp": config("the transport these tools arrive on"),
   "endpoint GET /mcp": config("the transport these tools arrive on"),
   "endpoint POST /mcp-control/keys/:id/renew": reserved("key renewal"),
-  "endpoint POST /agent-connections/consent": devOnly("AI connections"),
-  "endpoint GET /agent-connections": devOnly("AI connections"),
-  "endpoint POST /agent-connections/start": devOnly("AI connections"),
-  "endpoint POST /agent-connections/disconnect": devOnly("AI connections"),
+  "endpoint POST /agent-connections/consent": reserved(
+    "approving or denying an AI connection",
+  ),
+  "endpoint GET /agent-connections": reserved("the list of AI connections"),
+  "endpoint POST /agent-connections/start": devOnly(
+    "the Development page's start button",
+  ),
+  "endpoint POST /agent-connections/disconnect": reserved(
+    "disconnecting an AI connection",
+  ),
 
   // Collections.
   "collection users": reserved("Admin accounts"),
@@ -156,8 +162,8 @@ export const ADMIN_SURFACES: Readonly<Record<string, AdminSurface>> = {
     "list.work_submissions",
     "community.moderate-work-submission",
   ),
-  "view agentConnections": devOnly("AI connections"),
-  "view agentConnectionsConsent": devOnly("AI connections"),
+  "view agentConnections": reserved("the AI connections page"),
+  "view agentConnectionsConsent": reserved("the consent page"),
   "view communityAccountCapacity": op(
     "community.read-account-capacity",
     "community.set-account-capacity",
@@ -205,7 +211,7 @@ export const ADMIN_SURFACES: Readonly<Record<string, AdminSurface>> = {
   ),
   "page /admin/community-moderation/publishing-jobs": op("list.jobs"),
   "page /admin/community-moderation/agent-operations": devOnly("AI operations"),
-  "page /admin/agent-connections": devOnly("AI connections"),
+  "page /admin/agent-connections": reserved("the AI connections page"),
   "page /admin/community-moderation/history": op("list.events"),
   "page /admin/collections/editorial-receipts": op("list.receipts"),
   "page /admin/collections/mcp-audit-events": reserved("audit records"),

@@ -11,6 +11,10 @@ import {
   auditReservedCollection,
   noticePasswordChange,
 } from "./admin-mcp/audit";
+import {
+  noticeConnectionStop,
+  stopConnections,
+} from "./agent-connections/account-hooks";
 import { isHumanOwner, isOwner } from "./editorial/access";
 import { EditorialError } from "./editorial/errors";
 
@@ -23,7 +27,8 @@ const humanOwnerOrOwnRow: Access = ({ req }) => {
   if (isHumanOwner(req)) return true;
   return isOwner(req) ? { id: { equals: req.user?.id } } : false;
 };
-// An ai_operator row acts only through an MCP key, never a password or REST key.
+// An ai_operator row acts only through a door on /api/mcp: an MCP key, or for the one
+// seeded row a person's consented connection token. Never a password or REST key.
 const refuseAiOperatorLogin: CollectionBeforeLoginHook = ({ req, user }) => {
   if (user.role === "ai_operator") throw new AuthenticationError(req.t);
   return user;
@@ -82,8 +87,12 @@ export const Users: CollectionConfig = {
     unlock: humanOwner,
   },
   hooks: {
-    beforeChange: [refuseAiOperatorRestKey, noticePasswordChange],
-    afterChange: [auditReservedCollection],
+    beforeChange: [
+      refuseAiOperatorRestKey,
+      noticePasswordChange,
+      noticeConnectionStop,
+    ],
+    afterChange: [auditReservedCollection, stopConnections],
     beforeLogin: [refuseAiOperatorLogin],
   },
   endpoints: initialUserEndpoints(),

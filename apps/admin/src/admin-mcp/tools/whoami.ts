@@ -1,4 +1,7 @@
-import { adminWhoamiDataSchema } from "@moya/contracts/internal/admin-mcp";
+import {
+  ADMIN_MCP_BYTE_WORK,
+  adminWhoamiDataSchema,
+} from "@moya/contracts/internal/admin-mcp";
 import type { MCPPluginConfig } from "@payloadcms/plugin-mcp";
 import { UnauthorizedError } from "payload";
 import { z } from "zod";
@@ -10,7 +13,7 @@ import { okEnvelope, toolResult } from "../envelope";
 export const WHOAMI_TOOL_NAME = "admin_whoami";
 
 export const WHOAMI_DESCRIPTION =
-  "Who this key is, what it can call now, when it expires. Call it first, and again when an admin_ tool is reported missing: a client may hold a stale tool list.";
+  "Who this credential is, what it can call now, when it expires. Call it first, and again when an admin_ tool is reported missing: a client may hold a stale tool list.";
 
 export const whoamiInputSchema = z.strictObject({});
 
@@ -26,7 +29,18 @@ const PLAYBOOK: Record<AdminMcpKey["path"], readonly string[]> = {
   ],
 };
 
-export const whoamiEnvelope = (key: AdminMcpKey, tools: readonly string[]) =>
+/** What the native path says of its contract; the plugin path says nothing new. */
+export interface WhoamiContract {
+  readonly version: string;
+  readonly catalog: string;
+  readonly tools: string;
+}
+
+export const whoamiEnvelope = (
+  key: AdminMcpKey,
+  tools: readonly string[],
+  contract?: WhoamiContract,
+) =>
   okEnvelope(
     adminWhoamiDataSchema.parse({
       path: key.path,
@@ -37,10 +51,22 @@ export const whoamiEnvelope = (key: AdminMcpKey, tools: readonly string[]) =>
         expiresAt: key.expiresAt,
         ...(key.lastUsedAt ? { lastUsedAt: key.lastUsedAt } : {}),
         ...(key.path === "native" ? { toolProfile: key.toolProfile } : {}),
+        ...(key.connection
+          ? { authorizedBy: key.connection.authorizedById }
+          : {}),
       },
       paused: key.paused,
       tools,
       playbook: PLAYBOOK[key.path],
+      ...(key.connection
+        ? {
+            byteChannel: {
+              available: false,
+              unavailable: [...ADMIN_MCP_BYTE_WORK],
+            },
+          }
+        : {}),
+      ...(contract === undefined ? {} : { contract: { ...contract } }),
     }),
     key.label ? ["/data/key/label"] : [],
   );

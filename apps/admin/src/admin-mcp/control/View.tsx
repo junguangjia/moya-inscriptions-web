@@ -1,6 +1,7 @@
 import { DefaultTemplate } from "@payloadcms/next/templates";
 import type { AdminViewServerProps } from "payload";
 
+import { oauthSurfaceEnabled } from "../../agent-connections/composition";
 import { isHumanOwner } from "../../editorial/access";
 import { McpControlClient } from "./client";
 import { readControlPage } from "./page-data";
@@ -9,6 +10,9 @@ import { readControlPage } from "./page-data";
  * Payload skips the login redirect for custom views, so this view gates itself,
  * and it reads nothing until it has. Only an Owner browser session passes: a key
  * or an Authorization header on the page request does not.
+ *
+ * Whether the login door is on is read here, on the server, so the page speaks of
+ * AI connections only where they can exist.
  */
 export const McpControlView = async (props: AdminViewServerProps) => {
   const { req, visibleEntities } = props.initPageResult;
@@ -16,7 +20,10 @@ export const McpControlView = async (props: AdminViewServerProps) => {
     <DefaultTemplate {...props} req={req} visibleEntities={visibleEntities}>
       <div className="archive-view">
         {isHumanOwner(req) ? (
-          <McpControlClient page={await readControlPage(req)} />
+          <McpControlClient
+            connections={oauthSurfaceEnabled()}
+            page={await readControlPage(req)}
+          />
         ) : (
           <p role="alert">此工作区仅限 Owner。</p>
         )}
