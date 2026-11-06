@@ -10,6 +10,9 @@ import { classifyTask } from "./ci-task-scope.mjs";
 test("the release tool's own tests pass on a fake host made from the fictional profile", () => {
   const env = { ...processEnv };
   // The private profile is for the operator's machine; CI uses the fixture.
+  // The lightweight job runs every script test under the script-tests
+  // profile (scripts/validation-profiles.mjs, 120 s for the whole run), so
+  // this run's own ceiling stays inside it and a hang is reported here.
   delete env.ARTVENN_RELEASE_PROFILE;
   const result = spawnSync(
     "python3",
@@ -18,11 +21,37 @@ test("the release tool's own tests pass on a fake host made from the fictional p
       "-B",
       fileURLToPath(new URL("./release/tests/run_all.py", import.meta.url)),
     ],
-    { encoding: "utf8", timeout: 100_000, maxBuffer: 16 * 1024 * 1024, env },
+    { encoding: "utf8", timeout: 110_000, maxBuffer: 16 * 1024 * 1024, env },
   );
   assert.equal(result.error, undefined);
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(result.stderr, /Ran \d+ tests/);
+});
+
+test("new migrations sort after main's latest, only expand, and new CMS ones extract", () => {
+  // The release tool applies migrations forward only, before any service
+  // starts on the new code, and runs a CMS migration's own SQL: a migration
+  // that sorts before main's latest, drops, renames or tightens, or hides its
+  // SQL behind sql.raw or ${} cannot be released. CI's lightweight job names
+  // the task's base; elsewhere main as last fetched.
+  const sha = processEnv.BASE_SHA ?? "";
+  const base =
+    /^[0-9a-f]{40}$/u.test(sha) && !/^0+$/u.test(sha) ? sha : "origin/main";
+  const result = spawnSync(
+    "python3",
+    [
+      "-I",
+      "-B",
+      fileURLToPath(new URL("./release/release.py", import.meta.url)),
+      "check-migrations",
+      "--base",
+      base,
+    ],
+    { encoding: "utf8", timeout: 60_000, maxBuffer: 4 * 1024 * 1024 },
+  );
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /"status": "PASS"/u);
 });
 
 test("the release tool routes through the script tests without product jobs", () => {

@@ -1,26 +1,40 @@
 #!/usr/bin/env python3
-"""Standing release tool, local side (phase A). Python standard library only.
+"""Standing release tool, local side (phase A, plus phase B's migrate). Python standard library only.
 
   python3 -I scripts/release/release.py --profile <private profile.json> <verb> [options]
 
   install                         the host tool and the host part of the profile, versioned and sha-pinned (idempotent)
   baseline | status               read-only host facts
-  plan <40-hex commit> --services web,admin,issuer [--env FILES:KEY ...] [--force-root S] [--unit-applied S]
-                                  local git checks and read-only host facts; refuses a release phase A cannot finish
+  plan <40-hex commit> --services web,admin,issuer [--env FILES:KEY ...] [--migrations FAMILY:NAME ...]
+       [--ungranted FAMILY:SCHEMA.TABLE ...] [--force-root S] [--unit-applied S]
+                                  local git checks and read-only host facts; refuses a release this tool cannot finish;
+                                  a declared migration is checked (expand only, CMS SQL extractable) and pinned, with
+                                  what the runtime grant file means for each table it creates
   build [--plan ID]               local only: compile (the profile's builder), delta against the live manifests,
                                   a content-addressed payload in parts
   stage [--plan ID]               the plan, the missing parts, the payload assembled on the host
   adopt [--rebaseline]            the ledger's first entry: the live state as found (again after an outside change;
                                   --rebaseline also records roots a release outside this tool moved)
   prepare [--plan ID]             new roots, static unions, caches, rendered pins; no service change
+  migrate --family cms|app [--plan ID] --pitr-confirmed   the plan's migrations of one family, forward only: a dump of
+                                  the objects they touch, each migration with its ledger row, then (cms) the runtime
+                                  grants and their check; run it again after a failure and it resumes
+  migrate --family cms|app [--plan ID] --check            the same checks, nothing changed (the CMS grant file is
+                                  rehearsed in a transaction that is rolled back)
+  migrate --family cms|app --rebaseline                   verify's migration baseline as it is now
   env set FILES KEY (--value-file PATH | --generate token64) [--add] [--plan ID]
                                   one key in the named env files and their staged copies; prints no value
   switch SERVICES [--plan ID] --outage-ok    in the order given; undoes itself on any failure or SIGTERM; without
-                                  --plan a restart on the same roots (RESTARTED), refused while a staged plan is pending
+                                  --plan a restart on the same roots (RESTARTED), refused while a staged plan is pending;
+                                  refused while the plan's migrations are not done
   verify                          read-only checks on the host
-  rollback --to previous --outage-ok         the state before the latest release, from the host's ledger
+  rollback --to previous --outage-ok [--unswitched-ok]   the state before the latest release, from the host's ledger
+                                  (never a migration: the schema stays); refused while a later plan was prepared or
+                                  migrated but never switched, unless --unswitched-ok
   close-out --accepted            after a PASS verify: earlier env versions and payloads removed; roots listed
-  migrate | dns | cert | edgeone | nginx | unit    not in phase A: refused, with the next step in plain words
+  dns | cert | edgeone | nginx | unit    not built yet: refused, with the next step in plain words
+  check-migrations [--base REF]   no profile: the repository's new migrations sort after REF's latest, only expand, and
+                                  each new CMS migration's SQL can be extracted (a CI check)
 
 Every host verb takes --dry-run (prints the ssh argv and stores the script; no network). Long steps run as transient
 systemd units on the host, so an ssh drop never stops them; the client polls their journal. Nothing printed or
@@ -50,13 +64,16 @@ HOST_TOOL = HERE / 'release_host.py'
 TEST = None          # set by main() from RELEASE_CLIENT_TEST: the tool's own tests only
 EXIT = {'ok': 0, 'local': 1, 'refused': 2, 'rolled_back': 3, 'rollback_failed': 4, 'no_result': 5, 'transport': 6}
 LONG = {'adopt': (600, 60), 'prepare': (3600, 120), 'env-set': (300, 60), 'switch': (1800, 600), 'rollback': (1800, 600),
-        'close-out': (300, 30)}            # RuntimeMaxSec, TimeoutStopSec floors; see limits()
-STUBS = ('migrate', 'dns', 'cert', 'edgeone', 'nginx', 'unit')
-# The next step for what phase A does not do, in plain words. {toolkit} is the profile's login-door toolkit pointer.
+        'close-out': (300, 30), 'migrate': (3600, 120)}   # RuntimeMaxSec, TimeoutStopSec floors; see limits()
+STUBS = ('dns', 'cert', 'edgeone', 'nginx', 'unit')
+# The next step for what this tool does not do, in plain words. {toolkit} is the profile's login-door toolkit pointer.
 NEXT_STEP = {
-    'migrate': 'Phase A applies no migration. Until phase B, apply it with the login-door toolkit ({toolkit}), its '
-               'migration steps, reviewed for this release. If that release moves a root, run `adopt --rebaseline` '
-               'here afterwards, then plan again.',
+    'migrate': 'Declare each pending migration: plan again with --migrations <family>:<name> for each one (expand '
+               'only; the plan pins each CMS migration\'s SQL). Then, after prepare and before switch, run '
+               '`migrate --family <family> --pitr-confirmed`. A migration that must do more than expand needs the '
+               'Owner\'s approval written into its SQL (`-- release: contraction-ok KIND:object`, see the README).',
+    'order': 'A pending migration sorts before one the database already holds, so it cannot be applied forward: give '
+             'it a later id in the repository, then plan again.',
     'cert': 'Phase A installs or renews no certificate. Until phase B, use the login-door toolkit ({toolkit}), its '
             'certificate steps. This tool records no certificate, so nothing here needs re-recording.',
     'dns': 'Phase A changes no DNS record. Until phase B, make the change with a toolkit written and reviewed for that '
@@ -301,8 +318,8 @@ STATE = P['state']
 PREFIX = P['prefix']
 LOCK = P['lock']
 PY = P.get('python') if TESTING else P['hostPython']
-LONG = ('adopt', 'prepare', 'env-set', 'switch', 'rollback', 'close-out')
-READS = ('baseline', 'facts', 'status', 'verify', 'manifest')
+LONG = ('adopt', 'prepare', 'env-set', 'switch', 'rollback', 'close-out', 'migrate')
+READS = ('baseline', 'facts', 'status', 'verify', 'manifest', 'migrate-check')
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'SYSTEMD_PAGER': '', 'SYSTEMD_COLORS': '0'}
 TEST_ENV = P.get('testEnv') or {}
 
@@ -730,7 +747,7 @@ def follow(remote, step, unit):
 
 
 SUCCESS = ('ADOPTED', 'PREPARED', 'ENV_SET', 'SWITCHED', 'RESTARTED', 'PASS', 'ROLLED_BACK', 'ALREADY', 'CLOSED_OUT',
-           'DRY_RUN')
+           'MIGRATED', 'BASELINED', 'DRY_RUN')
 
 
 def outcome(result, step=None):
@@ -753,7 +770,9 @@ def outcome(result, step=None):
 KEEP = ('status', 'code', 'failure', 'problems', 'runId', 'failures', 'warnings', 'exactState', 'undone', 'entry', 'plan',
         'label', 'services', 'restart', 'order', 'target', 'roots', 'pins', 'union', 'cache', 'key', 'files', 'sameInAll',
         'generated', 'pendingRestart', 'drift', 'units', 'pages', 'mcpDoor', 'issuer', 'reportQueue', 'equalities',
-        'removed', 'removable', 'guards', 'ledger', 'unit', 'unitState', 'rebaselined', 'added', 'hint')
+        'removed', 'removable', 'guards', 'ledger', 'unit', 'unitState', 'rebaselined', 'added', 'hint', 'family',
+        'applied', 'already', 'backup', 'privileges', 'ledgers', 'migrations', 'backups', 'changes', 'conflicts',
+        'grantRehearsal', 'appRole', 'runtimeRole')
 
 
 def print_result(step, result):
@@ -928,8 +947,8 @@ def code_paths(service, live_commit, commit):
 def refuse(refusals):
     """A plan refusal with the next step for each kind, in plain words."""
     toolkit = PROFILE['local'].get('pointers', {}).get('loginDoorToolkit', 'named in the profile')
-    kinds = {'MIGRATIONS_PENDING': 'migrate', 'UNIT_TEMPLATE_CHANGED': 'unit', 'LEDGER_UNREADABLE': 'ledger',
-             'NOT_ADOPTED': 'adopt', 'ROOT_MOVED': 'rebaseline'}
+    kinds = {'MIGRATIONS_PENDING': 'migrate', 'MIGRATION_ORDER': 'order', 'UNIT_TEMPLATE_CHANGED': 'unit',
+             'LEDGER_UNREADABLE': 'ledger', 'NOT_ADOPTED': 'adopt', 'ROOT_MOVED': 'rebaseline'}
     steps = []
     for code in refusals:
         step = NEXT_STEP[kinds[code.split(':', 1)[0]]].format(toolkit=toolkit)
@@ -937,6 +956,666 @@ def refuse(refusals):
             steps.append(step)
     say({'status': 'REFUSED', 'code': refusals[0], 'refusals': refusals, 'pointer': steps[0], 'next': steps})
     return EXIT['refused']
+
+
+# ------------------------------------------------------------------------------------------------ migrations (local)
+
+# Where the repository keeps its migrations, the App migration launcher and the runtime grant files (the CMS one this
+# tool runs; the App one it only reads). A profile may name other paths (local.migrationSources, local.grantFiles).
+MIGRATION_SOURCES = {'app': 'database/community-migrations', 'cms': 'apps/admin/src/migrations/index.ts',
+                     'appLauncher': 'scripts/migrate-community.mjs'}
+GRANT_FILES = {'cms': 'infra/development/grant-cms-runtime.sql', 'app': 'infra/development/work-publishing/grant-runtime.sql'}
+GRANT_VARIABLES = {'cms': 'cms_role', 'app': 'app_role'}
+FAMILIES = ('app', 'cms')
+CMS_NAME = re.compile(r'20[0-9]{6}_[0-9]{6}_[a-z0-9_]{1,80}')
+APP_ID = re.compile(r'[0-9]{14}')
+APP_FILE = re.compile(r'[0-9]{14}_[a-z0-9_]{1,80}\.sql')
+IDENT = re.compile(r'[a-z_][a-z0-9_]{0,62}')
+RELATION = re.compile(r'[a-z_][a-z0-9_]{0,62}\.[a-z_][a-z0-9_]{0,62}')
+TABLE_PRIVILEGES = ('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER')
+SEQUENCE_PRIVILEGES = ('USAGE', 'SELECT', 'UPDATE')
+COLUMN_PRIVILEGES = ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES')
+SCHEMA_PRIVILEGES = ('USAGE', 'CREATE')
+KINDS = r'TABLE|INDEX|VIEW|MATERIALIZED\s+VIEW|FUNCTION|PROCEDURE|TRIGGER|TYPE|SEQUENCE|SCHEMA|POLICY|DOMAIN|RULE'
+TRANSACTION_CONTROL = r'(?:BEGIN|COMMIT|ROLLBACK|ABORT|END|START\s+TRANSACTION|SAVEPOINT|RELEASE|PREPARE\s+TRANSACTION)\b'
+# A statement that is more than an expand, when its object is not one the same SQL created before it. The first
+# pattern a statement matches names it. DROP, TRUNCATE, DELETE, REVOKE and a dynamic EXECUTE count as statements (at
+# the start, or a PL/pgSQL statement inside a DO block) or, for DROP, as an ALTER's clause: `ON COMMIT DROP`, a
+# `BEFORE TRUNCATE` trigger and a trigger's `EXECUTE FUNCTION` are not. A function body runs when it is called, not
+# when the migration runs, and is not read.
+STATEMENT_START = r'(?:^|\b(?:BEGIN|THEN|ELSE|LOOP)\s+)'
+CONTRACT = (('DROP', STATEMENT_START + r'DROP\b|\bALTER\s+(?:%s)\b.*\bDROP\b' % KINDS),
+            ('RENAME', r'\bALTER\b.*\bRENAME\b'), ('TRUNCATE', STATEMENT_START + r'TRUNCATE\b'),
+            ('TYPE', r'\bALTER\s+COLUMN\s+\S+\s+(?:SET\s+DATA\s+)?TYPE\b'), ('SET_NOT_NULL', r'\bSET\s+NOT\s+NULL\b'),
+            ('ADD_CONSTRAINT', r'\bALTER\s+TABLE\b.*\bADD\s+(?:CONSTRAINT|CHECK|UNIQUE|PRIMARY\s+KEY|FOREIGN\s+KEY|EXCLUDE)\b'),
+            ('ADD_NOT_NULL', r'\bALTER\s+TABLE\b.*\bADD\b.*\bNOT\s+NULL\b'), ('UNIQUE_INDEX', r'\bCREATE\s+UNIQUE\s+INDEX\b'),
+            ('DELETE', STATEMENT_START + r'DELETE\s+FROM\b'), ('REVOKE', STATEMENT_START + r'REVOKE\b'),
+            ('OWNER', r'\bOWNER\s+TO\b'), ('RLS', r'\b(?:ENABLE|FORCE)\s+ROW\s+LEVEL\s+SECURITY\b'),
+            ('DYNAMIC', STATEMENT_START + r'EXECUTE\b(?!\s+(?:FUNCTION|PROCEDURE)\b)'))
+# What an expand may do that still changes what the earlier code meets: reported with the plan, never refused.
+NOTES = (('UPDATE', STATEMENT_START + r'UPDATE\s+(?:ONLY\s+)?([^\s(,]+)'),
+         ('REPLACE', r'\bCREATE\s+OR\s+REPLACE\s+(?:%s)\s+([^\s(]+)' % KINDS),
+         ('TRIGGER', r'\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:CONSTRAINT\s+)?TRIGGER\b.*?\bON\s+(?:ONLY\s+)?([^\s(]+)'))
+# The words a CHECK expression may hold besides its columns, functions and types.
+CHECK_WORDS = frozenset('''is not null and or in any all some array true false between symmetric like ilike similar to
+escape case when then else end distinct from value collate at time zone interval date timestamp timestamptz with
+without varying character precision double unknown overlaps current_date current_timestamp localtimestamp'''.split())
+# An exception the Owner approved, written in the migration's SQL: `-- release: contraction-ok KIND:object ...`.
+MARK = re.compile(r'^[ \t]*--[ \t]*release:[ \t]*contraction-ok\b(.*)$', re.M | re.I)
+SERIAL = r'(?:small|big)?serial[248]?'
+# What, after a column's name in ALTER TABLE ... ADD, gives it a value where the earlier code writes none.
+VALUED = r'\b(?:DEFAULT|NOT\s+NULL|GENERATED|PRIMARY\s+KEY)\b|^\s*%s\b' % SERIAL
+
+
+def names_sha(names):
+    """A ledger's names as one digest (sorted, compact JSON): the host computes the same to see the ledger the plan
+    saw, besides the plan's own migrations."""
+    return sha_bytes(json.dumps(sorted(names), separators=(',', ':')).encode())
+
+
+def sql_code(text, bodies=True):
+    """SQL with comments removed and every single-quoted string emptied. Dollar-quote delimiters go; the body of a DO
+    block stays and is read the same way (it runs now), a function's or procedure's body goes (it runs when called);
+    with bodies=False every body goes."""
+    def keep(match):
+        token = match.group(0)
+        if token.startswith(('--', '/*')):
+            return ' '
+        if match.group(1) is None:
+            return "''"
+        now = bodies and re.search(r'\bDO\s*(?:LANGUAGE\s+\w+\s*)?\Z', match.string[:match.start()], re.I)
+        return ' %s ' % (sql_code(match.group(2)) if now else '')
+    return re.sub(r"--[^\n]*|/\*.*?\*/|(\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$)(.*?)\1|[Ee]?'(?:[^']|'')*'", keep, text,
+                  flags=re.S)
+
+
+def sql_split(text):
+    """The statements of SQL text as written (comments, strings, quoted names and dollar-quoted bodies kept whole), each
+    with its ';'; pieces that hold only comments are left out."""
+    pieces, start = [], 0
+    for match in re.finditer(r"--[^\n]*|/\*.*?\*/|(\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$).*?\1|[Ee]?'(?:[^']|'')*'|"
+                             r"\"(?:[^\"]|\"\")*\"|;", text, re.S):
+        if match.group(0) == ';':
+            pieces.append(text[start:match.end()])
+            start = match.end()
+    pieces.append(text[start:])
+    return [p.strip('\n') for p in pieces if sql_code(p, bodies=False).strip(' \t\n;')]
+
+
+def statements(code):
+    return [' '.join(part.split()) for part in code.split(';') if part.strip()]
+
+
+def object_name(raw):
+    """public.x and "x" are x; another schema stays named."""
+    name = raw.strip().strip(',').split('(')[0].replace('"', '').lower()
+    return name[len('public.'):] if name.startswith('public.') else name
+
+
+def qualified(name):
+    return name if '.' in name else 'public.' + name
+
+
+def created_in(chunk):
+    found = re.search(r'\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:UNIQUE\s+)?(?:UNLOGGED\s+)?(?:TEMP(?:ORARY)?\s+)?'
+                      r'(?:CONSTRAINT\s+)?(?:%s)\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?([^\s(]+)' % KINDS,
+                      chunk, re.I)
+    return {object_name(found.group(1))} if found else set()
+
+
+def target_of(chunk, label=None):
+    patterns = {'DELETE': (r'\bDELETE\s+FROM\s+(?:ONLY\s+)?([^\s(,]+)',), 'DYNAMIC': ()}.get(label, (
+        r'\bDROP\s+(?:%s)\s+(?:IF\s+EXISTS\s+)?([^\s(,]+)' % KINDS,
+        r'\bALTER\s+(?:%s)\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?([^\s(,]+)' % KINDS,
+        r'\bCREATE\s+UNIQUE\s+INDEX\b.*?\bON\s+(?:ONLY\s+)?([^\s(]+)'))
+    for pattern in patterns:
+        found = re.search(pattern, chunk, re.I)
+        if found:
+            return object_name(found.group(1))
+    return None
+
+
+def revoke_targets(chunk):
+    """Every object a REVOKE names (function argument lists left out); [None] for ALL ... IN SCHEMA or a shape this
+    cannot read."""
+    found = re.search(r'\bREVOKE\b.*?\bON\s+(?:(?:TABLE|SEQUENCE|FUNCTION|PROCEDURE|ROUTINE|SCHEMA|TYPE|DOMAIN)\s+)?(.+?)'
+                      r'\s+FROM\b', chunk, re.I)
+    names = re.sub(r'\([^)]*\)', '', found.group(1)) if found else ''
+    if not names.strip() or re.match(r'ALL\s', names, re.I):
+        return [None]
+    return [object_name(n) for n in names.split(',') if n.strip()]
+
+
+def keyed_columns(chunk):
+    """The columns a unique index covers; None when this cannot read them."""
+    found = re.findall(r'\bON\s+(?:ONLY\s+)?[^\s(]+\s*(?:USING\s+\w+\s*)?\(([^)]*)\)', chunk, re.I)
+    return {object_name(c) for group in found for c in group.split(',')} if found else None
+
+
+def check_expressions(chunk):
+    """The expression of every `ADD [CONSTRAINT n] CHECK (...)` clause in a statement, its parentheses balanced."""
+    out = []
+    for found in re.finditer(r'\bADD\s+(?:CONSTRAINT\s+\S+\s+)?CHECK\s*\(', chunk, re.I):
+        depth = 1
+        for at in range(found.end(), len(chunk)):
+            depth += {'(': 1, ')': -1}.get(chunk[at], 0)
+            if depth == 0:
+                out.append(chunk[found.end():at])
+                break
+        else:
+            out.append(None)
+    return out
+
+
+def expression_columns(expression):
+    """The names an expression reads: identifiers that are not a function called, a type after ::, a keyword, or a
+    part of a qualified name."""
+    names = set()
+    for token in re.finditer(r'(::\s*|\.\s*)?("(?:[^"]|"")+"|[A-Za-z_][A-Za-z0-9_$]*)(\s*[(.])?', expression):
+        word = token.group(2)
+        if token.group(1) or token.group(3) or word.lower() in CHECK_WORDS:
+            continue
+        names.add(object_name(word))
+    return names
+
+
+def top_level(text, separator):
+    """`text` split at each match of the regex `separator` outside parentheses."""
+    parts, depth, start = [], 0, 0
+    for found in re.finditer(r'[()]|' + separator, text, re.I):
+        if found.group(0) in ('(', ')'):
+            depth += 1 if found.group(0) == '(' else -1
+        elif depth == 0:
+            parts.append(text[start:found.start()])
+            start = found.end()
+    return parts + [text[start:]]
+
+
+def unwrapped(text):
+    """`text` without the parentheses that enclose all of it."""
+    text = text.strip()
+    while text.startswith('(') and text.endswith(')'):
+        depth = 0
+        for at, char in enumerate(text):
+            depth += {'(': 1, ')': -1}.get(char, 0)
+            if depth == 0:
+                break
+        if at != len(text) - 1:
+            break
+        text = text[1:-1].strip()
+    return text
+
+
+def null_passes(expression, valued):
+    """A CHECK on columns the same SQL added that the earlier code's rows pass: it reads no column the SQL gives a value
+    (VALUED: a DEFAULT, NOT NULL, ...), and it is a top-level OR with a `<column> IS NULL` branch for every column it
+    reads (`kind IS NULL OR kind IN (...)`). `kind IS NOT NULL`, `coalesce(n, 0) > 0` or `n > 0` are not."""
+    branches = [unwrapped(b) for b in top_level(unwrapped(expression), r'\bOR\b')]
+    nulls = {object_name(hit.group(1)) for hit in (re.fullmatch(r'("?[A-Za-z_][A-Za-z0-9_]*"?)\s+IS\s+NULL', b, re.I)
+                                                   for b in branches) if hit}
+    columns = expression_columns(expression)
+    return len(branches) > 1 and columns <= nulls and not columns & valued
+
+
+def constraint_columns(chunk, valued=frozenset()):
+    """The columns every constraint an ALTER TABLE adds covers: a key's, a unique or a foreign key's column list, the
+    columns a CHECK expression reads (null_passes for `valued`, the columns the SQL gives a value). None when one of
+    them cannot be read (an EXCLUDE, a USING INDEX, ...) or a CHECK binds the earlier code's rows."""
+    kinds = re.findall(r'\bADD\s+(?:CONSTRAINT\s+\S+\s+)?(UNIQUE|PRIMARY\s+KEY|FOREIGN\s+KEY|EXCLUDE)\b', chunk, re.I)
+    keyed = re.findall(r'\bADD\s+(?:CONSTRAINT\s+\S+\s+)?(?:FOREIGN\s+KEY|UNIQUE|PRIMARY\s+KEY)\s*\(([^)]*)\)', chunk, re.I)
+    checks = check_expressions(chunk)
+    if not (kinds or checks) or None in checks or len(keyed) != len(kinds) or \
+            not all(null_passes(e, valued) for e in checks):
+        return None
+    columns = {object_name(c) for group in keyed for c in group.split(',')}
+    for expression in checks:
+        columns |= expression_columns(expression)
+    return columns
+
+
+def expand_review(sql):
+    """(problems, notes) for a migration's SQL. A problem makes it more than an expand: a DROP, RENAME, TRUNCATE, a
+    column type change, a tightened constraint (SET NOT NULL, an added constraint, an added NOT NULL column without a
+    default, a unique index), a DELETE, a REVOKE, an ownership change, row level security switched on, or a dynamic
+    EXECUTE whose text cannot be read, on an object the same SQL did not create before it. A key, unique or foreign-key
+    constraint or a unique index that covers only columns the same SQL added (what Payload writes for a new collection)
+    binds nothing the earlier code writes; nor does a CHECK on such columns when the SQL gives them no DEFAULT and no
+    NOT NULL and it reads `<column> IS NULL OR ...` for each (null_passes): the earlier code leaves them NULL. A
+    statement's accepted constraint hides nothing else it does. A note is what an expand may still change for the
+    earlier code (an UPDATE of existing rows, a CREATE OR REPLACE, a trigger on an existing table). Comments and string
+    contents are not read; DO block bodies are, function bodies are not. Each answers 'KIND:object'."""
+    created, added, valued, problems, notes = set(), {}, {}, [], []
+    for chunk in statements(sql_code(sql)):
+        upper = chunk.upper()
+        if re.match(r'ALTER\s+TABLE\b', chunk, re.I):
+            table = target_of(chunk)
+            for clause in top_level(chunk, ','):
+                found = re.search(r'\bADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?(?!(?:CONSTRAINT|CHECK|UNIQUE|PRIMARY|'
+                                  r'FOREIGN|EXCLUDE)\b)("?[A-Za-z_][A-Za-z0-9_]*"?)(.*)', clause, re.I | re.S)
+                if found:
+                    added.setdefault(table, set()).add(object_name(found.group(1)))
+                given = re.search(r'\bALTER\s+(?:COLUMN\s+)?("?[A-Za-z_][A-Za-z0-9_]*"?)\s+SET\s+DEFAULT\b', clause, re.I)
+                if given or (found and re.search(VALUED, found.group(2), re.I)):
+                    valued.setdefault(table, set()).add(object_name((given or found).group(1)))
+        for label, pattern in CONTRACT:
+            if re.search(pattern, upper) and not (label == 'ADD_NOT_NULL' and re.search(r'\bDEFAULT\b', upper)):
+                columns = constraint_columns(chunk, valued.get(target_of(chunk), set())) if label == 'ADD_CONSTRAINT' else \
+                    keyed_columns(chunk) if label == 'UNIQUE_INDEX' else None
+                hits = [t for t in (revoke_targets(chunk) if label == 'REVOKE' else [target_of(chunk, label)])
+                        if not (t in created or (columns is not None and t and columns <= added.get(t, set())))]
+                problems += ['%s:%s' % (label, t or '?') for t in hits]
+                if hits:
+                    break
+        for label, pattern in NOTES:
+            found = re.search(pattern, chunk, re.I)
+            if found and object_name(found.group(1)) not in created:
+                notes.append('%s:%s' % (label, object_name(found.group(1))))
+        created |= created_in(chunk)
+    return problems, notes
+
+
+def expand_problems(sql):
+    return expand_review(sql)[0]
+
+
+def expand_verdict(sql):
+    """A migration judged with the exceptions written in it: `-- release: contraction-ok KIND:object ...` lines name
+    problems the Owner approved (accepted). Every other problem stands, and so does a mark that names none
+    (MARK_UNUSED), so a mark covers exactly what was approved."""
+    problems, notes = expand_review(sql)
+    marked = {t for found in MARK.finditer(sql) for t in re.split(r'[\s,]+', found.group(1))
+              if re.fullmatch(r'[A-Z_]+:[^\s,]+', t)}
+    return {'problems': [p for p in problems if p not in marked] + ['MARK_UNUSED:' + m for m in sorted(marked - set(problems))],
+            'accepted': sorted(set(problems) & marked), 'notes': notes}
+
+
+def pg_object_name(name1, name2, label):
+    """PostgreSQL's own name for an implicit object (makeObjectName): name1_name2_label in 63 bytes at most, the
+    longer of the two names shortened first."""
+    while len(name1) + len(name2) + len(label) + 2 > 63:
+        if len(name1) > len(name2):
+            name1 = name1[:-1]
+        else:
+            name2 = name2[:-1]
+    return '%s_%s_%s' % (name1, name2, label)
+
+
+def owned_sequences(body, create):
+    """[(column, serial?)] for the serial and identity columns a CREATE TABLE's column list, or an ALTER TABLE's ADD
+    COLUMN and ADD GENERATED clauses, define: each comes with a sequence PostgreSQL creates and names itself."""
+    lead = r'(?:\(|,)\s*' if create else r'\bADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?'
+    column = r'("?[A-Za-z_][A-Za-z0-9_]*"?)'
+    found = [(object_name(h.group(1)), True) for h in re.finditer(lead + column + r'\s+%s\b' % SERIAL, body, re.I)]
+    found += [(object_name(h.group(1)), False) for h in re.finditer(
+        lead + column + r'\s+[^,()]*?\bGENERATED\s+(?:ALWAYS|BY\s+DEFAULT)\s+AS\s+IDENTITY\b', body, re.I)]
+    if not create:
+        found += [(object_name(h.group(1)), False) for h in re.finditer(
+            r'\bALTER\s+(?:COLUMN\s+)?' + column + r'\s+ADD\s+GENERATED\s+(?:ALWAYS|BY\s+DEFAULT)\s+AS\s+IDENTITY\b', body, re.I)]
+    return found
+
+
+def created_relations(sql):
+    """The tables, views and sequences the SQL creates at its top level, in order; a serial or identity column's
+    sequence (named as PostgreSQL names it) among them, with its table."""
+    found = []
+    for chunk in statements(sql_code(sql, bodies=False)):
+        hit = re.match(r'CREATE\s+(?:OR\s+REPLACE\s+)?(?:UNLOGGED\s+)?(TABLE|VIEW|MATERIALIZED\s+VIEW|SEQUENCE)\s+'
+                       r'(?:IF\s+NOT\s+EXISTS\s+)?([^\s(]+)', chunk, re.I)
+        table = None
+        if hit:
+            name = qualified(object_name(hit.group(2)))
+            found.append({'name': name, 'kind': 'sequence' if hit.group(1).upper() == 'SEQUENCE' else 'table'})
+            if hit.group(1).upper() == 'TABLE':
+                table, body, create = name, chunk[hit.end():], True
+        else:
+            hit = re.match(r'ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?([^\s(,]+)', chunk, re.I)
+            if hit:
+                table, body, create = qualified(object_name(hit.group(1))), chunk[hit.end():], False
+        if table:
+            schema, bare = table.split('.', 1)
+            for column, serial in owned_sequences(body, create):
+                found.append({'name': '%s.%s' % (schema, pg_object_name(bare, column, 'seq')), 'kind': 'sequence',
+                              'table': table, 'column': column, 'serial': serial})
+    return found
+
+
+def created_names(sql):
+    """Every object the SQL creates, of any kind (a function, view, type or schema as much as a table; a DO block's
+    too, and the sequences PostgreSQL makes for it): 'schema.name', a schema as its bare name."""
+    names = {c['name'] for c in created_relations(sql)}
+    for chunk in statements(sql_code(sql)):
+        schema = re.match(r'CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s;]+)', chunk, re.I)
+        names |= {schema.group(1).replace('"', '').lower()} if schema else {qualified(n) for n in created_in(chunk)}
+    return sorted(names)
+
+
+def mentions(piece, names):
+    """Whether SQL text names one of `names` (created_names) or anything in a schema among them: any name in its own
+    code, a schema-qualified one inside a string or a DO block's body (`format('GRANT ... ON TABLE community.t ...')`,
+    `to_regclass('community.t')`); comments are not read."""
+    schemas = {n for n in names if '.' not in n}
+    words = r'[a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)?'
+    inner = ' '.join(body + ' ' + string for _, body, string in re.findall(
+        r"--[^\n]*|/\*.*?\*/|(\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$)(.*?)\1|[Ee]?'((?:[^']|'')*)'", piece, re.S))
+    found = re.findall(words, sql_code(piece, bodies=False).lower().replace('"', ''))
+    found += [w for w in re.findall(words, inner.lower().replace('"', '')) if '.' in w]
+    return any(qualified(w) in names or w.split('.')[0] in schemas for w in found)
+
+
+TS_COMMENTS = r'(?:(?://[^\n]*|/\*.*?\*/)\s*)*'
+UP_BODY = re.compile(r'export\s+async\s+function\s+up\s*\([^)]*\)\s*(?::\s*Promise<void>\s*)?\{\s*' + TS_COMMENTS +
+                     r'await\s+db\.execute\(\s*sql`([^`]*)`\s*\)\s*;?\s*' + TS_COMMENTS + r'\}\s*' + TS_COMMENTS, re.S)
+
+
+def cms_sql(name, source):
+    """A CMS migration's own up() SQL: up()'s whole body is one `await db.execute(sql`...`)`, with no sql.raw, no ${}
+    interpolation and no backslash (so the template's text is exactly what Payload runs, and psql reads no meta-command
+    in it), no psql variable (`:name` outside quotes: psql would put its own value in), no transaction control (the
+    tool runs it in one transaction with its ledger row), and nothing that changes the session it runs in (SET, RESET,
+    set_config: the tool's lock and statement timeouts and its role stay)."""
+    text = source.decode('utf-8') if isinstance(source, bytes) else source
+    start = re.search(r'export\s+async\s+function\s+up\s*\(', text)
+    need(start is not None, 'CMS_MIGRATION_NOT_EXTRACTABLE:%s:NO_UP' % name)
+    end = re.search(r'export\s+async\s+function\s+down\s*\(', text[start.end():])
+    region = text[start.start():start.end() + end.start()] if end else text[start.start():]
+    body = UP_BODY.fullmatch(region)
+    reason = ('SQL_RAW' if 'sql.raw' in region else
+              'SHAPE' if region.count('db.execute(') != 1 or body is None else
+              'INTERPOLATION' if '${' in body.group(1) else
+              'BACKSLASH' if '\\' in body.group(1) else
+              'EMPTY' if not body.group(1).strip() else None)
+    need(reason is None, 'CMS_MIGRATION_NOT_EXTRACTABLE:%s:%s' % (name, reason))
+    sql = body.group(1).strip() + '\n'
+    control = [s for s in statements(sql_code(sql, bodies=False)) if re.match(TRANSACTION_CONTROL, s, re.I)]
+    need(not control, 'CMS_MIGRATION_NOT_EXTRACTABLE:%s:TRANSACTION_CONTROL' % name)
+    code = sql_code(sql)
+    session = [s for s in statements(code) if re.search(STATEMENT_START + r'(?:SET|RESET)\b', s, re.I)]
+    need(not session and not re.search(r'\bset_config\s*\(', code, re.I), 'CMS_MIGRATION_NOT_EXTRACTABLE:%s:SESSION' % name)
+    bare = re.sub(r'(?<!:)"(?:[^"]|"")*"', ' ', sql_code(sql, bodies=False))
+    need(re.search(r"(?<!:):(?![:=])[A-Za-z_'\"{]", bare) is None, 'CMS_MIGRATION_NOT_EXTRACTABLE:%s:PSQL_VARIABLE' % name)
+    return sql
+
+
+def cms_index_names(raw):
+    """The CMS migration names in the index, in its order."""
+    found = re.findall(r'name: "(20[0-9]{6}_[0-9]{6}_[a-z0-9_]+)"', (raw or b'').decode('utf-8', 'replace'))
+    return list(dict.fromkeys(found))
+
+
+def judged(family, name, sql):
+    """A pending migration's verdict, refused unless it only expands (or the Owner's marks cover what does not)."""
+    verdict = expand_verdict(sql)
+    need(not verdict['problems'], 'MIGRATION_NOT_EXPAND_ONLY:%s:%s:%s' % (family, name, ','.join(verdict['problems'][:3])))
+    return {'contractions': verdict['accepted'], 'notes': verdict['notes']}
+
+
+def cms_section(entries):
+    """entries: [(name, migration source)] in apply order. Each migration's SQL is extracted, checked to only expand
+    and pinned by sha256; the plan carries it to the host."""
+    items = []
+    for name, source in entries:
+        sql = cms_sql(name, source)
+        items.append(dict(judged('cms', name, sql), name=name, sha256=sha_bytes(sql.encode()), sql=sql,
+                          creates=created_relations(sql), made=created_names(sql)))
+    return {'names': [i['name'] for i in items], 'items': items}
+
+
+def privilege_items(text, kind):
+    """'SELECT, UPDATE (a, b)' as [('SELECT', []), ('UPDATE', ['a', 'b'])]; ALL as every privilege of the kind."""
+    allowed = {'TABLE': TABLE_PRIVILEGES, 'SEQUENCE': SEQUENCE_PRIVILEGES, 'SCHEMA': SCHEMA_PRIVILEGES}[kind]
+    items, rest = [], text.strip()
+    while rest:
+        found = re.match(r'(ALL(?:\s+PRIVILEGES)?|[A-Za-z]+)\s*(?:\(([^)]*)\))?\s*(?:,\s*|$)', rest)
+        need(found is not None and found.end() > 0, 'GRANT_FILE_SHAPE:' + text[:60])
+        word = ' '.join(found.group(1).upper().split())
+        columns = [object_name(c) for c in (found.group(2) or '').split(',') if c.strip()]
+        need(all(IDENT.fullmatch(c) for c in columns) and (not columns or (kind == 'TABLE' and word in COLUMN_PRIVILEGES)),
+             'GRANT_FILE_SHAPE:' + word)
+        need(word.startswith('ALL') or word in allowed, 'GRANT_FILE_SHAPE:' + word)
+        items += [(p, []) for p in allowed] if word.startswith('ALL') else [(word, columns)]
+        rest = rest[found.end():]
+    return items
+
+
+# A grant file's DO block whose every statement is EXECUTE format('GRANT <privileges> ON TABLE|SEQUENCE <objects> TO
+# %I', current_setting('<setting>')), the text a constant, under at most one `IF to_regclass('<relation>') IS NOT NULL`
+# guard: the App file's way to grant on a table an earlier migration phase may lack. Each counts as that GRANT to the
+# file's role when the file bound the setting to the role's psql variable before (`SET LOCAL <setting> = :"app_role"`
+# or `SELECT set_config('<setting>', :'app_role', true)`).
+SETTING = r'[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*'
+DYNAMIC_GRANT = (r"EXECUTE\s+format\(\s*'(GRANT\s[^'%%]+?\sON\s+(?:TABLE|SEQUENCE)\s[^'%%]+?\sTO\s+%%I)'\s*,\s*"
+                 r"current_setting\(\s*'(%s)'\s*\)\s*\)\s*;" % SETTING)
+DYNAMIC_BLOCK = re.compile(r"\s*BEGIN\s+(?:IF\s+to_regclass\(\s*'%s'\s*\)\s+IS\s+NOT\s+NULL\s+THEN\s+(?:%s\s*)+END\s+IF\s*;"
+                           r"|(?:%s\s*)+)\s*END\s*;?\s*" % (SETTING, DYNAMIC_GRANT, DYNAMIC_GRANT), re.I)
+
+
+def grant_statements(text, variable):
+    """[(statement, dynamic)] of a grant file in order: its own statements (comments out, strings emptied, DO bodies
+    gone) and each grant a DO block of the DYNAMIC_BLOCK shape makes, written as the GRANT it runs (dynamic)."""
+    mark, bound, out = ':"%s"' % variable, set(), []
+    for piece in sql_split(text):
+        plain = re.sub(r"--[^\n]*|/\*.*?\*/|(?P<keep>(?P<tag>\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$).*?(?P=tag)|[Ee]?'(?:[^']|'')*')",
+                       lambda m: m.group('keep') or ' ', piece, flags=re.S).strip()
+        setting = re.fullmatch(r"SET\s+(?:LOCAL\s+)?(%s)\s*(?:=|TO)\s*(.*?)\s*;?" % SETTING, plain, re.I | re.S) or \
+            re.fullmatch(r"SELECT\s+set_config\(\s*'(%s)'\s*,\s*(.*?)\s*,\s*(?:true|false)\s*\)\s*;?" % SETTING, plain, re.I | re.S)
+        if setting:
+            (bound.add if setting.group(2) in (mark, ":'%s'" % variable) else bound.discard)(setting.group(1).lower())
+        block = re.fullmatch(r"DO\s+(\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$)(.*)\1\s*;?", plain, re.I | re.S)
+        body = re.sub(r"--[^\n]*|('(?:[^']|'')*')", lambda m: m.group(1) or ' ', block.group(2)) if block else ''
+        if block and DYNAMIC_BLOCK.fullmatch(body):
+            out += [(' '.join(grant[:-2].split()) + ' ' + mark, True) for grant, name in re.findall(DYNAMIC_GRANT, body, re.I)
+                    if name.lower() in bound]
+        out += [(chunk, False) for chunk in statements(sql_code(piece, bodies=False))]
+    return out
+
+
+def grant_section(raw, path, creates, variable, ungranted=(), made=()):
+    """A runtime grant file read for one release (statements GRANT ... TO :"<variable>" and REVOKE ... FROM it, in
+    order, and the grants of a DO block of the DYNAMIC_BLOCK shape). For each table this release creates: the table
+    privileges the file grants and the ones that must stay absent (DELETE and TRUNCATE among them unless granted), and
+    the columns it grants privileges on; for each sequence it creates (a serial or identity column's among them), the
+    same. A new table the file grants nothing on refuses (GRANT_FILE_MISSES_NEW_TABLE) unless declared --ungranted,
+    and a serial column's sequence must be usable wherever its table takes INSERT. For what exists already: every
+    relation the file's own statements name (the host checks each exists and is the migration role's before anything
+    changes) and every privilege they grant (there once the file ran, schema USAGE among them); a DO block's grant
+    counts for a new object only (its guard may skip what is not there). `rehearsal` is the file without every
+    statement that names an object the release creates, of any kind (`made`, created_names): the host runs it in a
+    transaction it rolls back, before anything changes, so the file's own guards speak first."""
+    text = raw.decode('utf-8')
+    need('\\' not in text, 'GRANT_FILE_SHAPE:backslash')
+    mark = ':"%s"' % variable
+    need(mark in text, 'GRANT_FILE_SHAPE:variable')
+    tables = [c['name'] for c in creates if c['kind'] == 'table']
+    sequences = [c for c in creates if c['kind'] == 'sequence']
+    kind_of = dict({t: 'TABLE' for t in tables}, **{s['name']: 'SEQUENCE' for s in sequences})
+    granted, columns, present, objects = {n: set() for n in kind_of}, {t: {} for t in tables}, {}, {}
+    for chunk, dynamic in grant_statements(text, variable):
+        need(not re.match(TRANSACTION_CONTROL, chunk, re.I), 'GRANT_FILE_SHAPE:transaction control')
+        grant = re.match(r'GRANT\b', chunk, re.I) is not None
+        if not grant and not re.match(r'REVOKE\b', chunk, re.I):
+            continue
+        found = re.match(r'GRANT\s+(.+?)\s+ON\s+(?:(TABLE|SEQUENCE|SCHEMA|FUNCTION)\s+)?(.+?)\s+TO\s+(\S+)$' if grant else
+                         r'REVOKE\s+(.+?)\s+ON\s+(?:(TABLE|SEQUENCE|SCHEMA|FUNCTION)\s+)?(.+?)\s+FROM\s+(\S+)'
+                         r'(?:\s+(?:CASCADE|RESTRICT))?$', chunk, re.I)
+        need(found is not None and found.group(4) == mark, 'GRANT_FILE_SHAPE:' + chunk[:60])
+        kind = (found.group(2) or 'TABLE').upper()
+        if kind == 'FUNCTION':
+            continue
+        items = privilege_items(found.group(1), kind)
+        for raw_name in found.group(3).split(','):
+            if kind == 'SCHEMA':
+                name = raw_name.strip().replace('"', '').lower()
+                need(IDENT.fullmatch(name) is not None, 'GRANT_FILE_SHAPE:' + name)
+                keys = [('schema', name, '', p) for p, _ in items]
+            else:
+                name = qualified(object_name(raw_name))
+                need(RELATION.fullmatch(name) is not None, 'GRANT_FILE_SHAPE:' + name)
+                if name in kind_of:
+                    need(kind == kind_of[name], 'GRANT_KIND:' + name)
+                    for privilege, cols in items:
+                        if cols and grant:
+                            columns[name].setdefault(privilege, set()).update(cols)
+                        elif cols:
+                            columns[name].get(privilege, set()).difference_update(cols)
+                        elif grant:
+                            granted[name].add(privilege)
+                        else:
+                            granted[name].discard(privilege)
+                            columns.get(name, {}).pop(privilege, None)
+                    continue
+                if dynamic:
+                    continue
+                objects[name] = kind.lower()
+                keys = [k for p, cols in items for k in ([('column', name, c, p) for c in cols] or [(kind.lower(), name, '', p)])]
+                if not grant and kind == 'TABLE':      # a table-level REVOKE takes that privilege's column grants too
+                    keys += [k for k in present if k[:2] == ('column', name) and k[3] in [p for p, c in items if not c]]
+            for key in keys:
+                if grant:
+                    present[key] = True
+                else:
+                    present.pop(key, None)
+    ungranted = sorted(set(ungranted))
+    for name in ungranted:
+        need(name in tables, 'UNGRANTED_NOT_NEW:' + name)
+        need(not granted[name] and not any(columns[name].values()), 'UNGRANTED_BUT_GRANTED:' + name)
+    for name in tables:
+        need(granted[name] or any(columns[name].values()) or name in ungranted,
+             'GRANT_FILE_MISSES_NEW_TABLE:%s:grant it in %s (a GRANT, or a DO block of EXECUTE format(\'GRANT ... ON TABLE '
+             '%s TO %%I\', current_setting(<a setting the file binds to %s>)) under at most one to_regclass guard); '
+             '--ungranted only when the role is to have nothing' % (name, path, name, mark))
+    for item in sequences:
+        table = item.get('table')
+        if item.get('serial') and table in granted and ('INSERT' in granted[table] or columns[table].get('INSERT')):
+            need(granted[item['name']] & {'USAGE', 'UPDATE'}, 'GRANT_FILE_MISSES_SEQUENCE:' + item['name'])
+    rehearsal = '\n'.join(p for p in sql_split(text) if not mentions(p, set(kind_of) | set(made)))
+    return {'file': path, 'sha256': sha_bytes(raw), 'sql': text, 'variable': variable, 'ungranted': ungranted,
+            'tables': [{'table': t, 'granted': [p for p in TABLE_PRIVILEGES if p in granted[t]],
+                        'absent': [p for p in TABLE_PRIVILEGES if p not in granted[t]],
+                        'columns': {p: sorted(c) for p, c in sorted(columns[t].items()) if c}} for t in tables],
+            'sequences': [{'sequence': s['name'], 'granted': [p for p in SEQUENCE_PRIVILEGES if p in granted[s['name']]],
+                           'absent': [p for p in SEQUENCE_PRIVILEGES if p not in granted[s['name']]]} for s in sequences],
+            'objects': [{'name': n, 'kind': k} for n, k in sorted(objects.items())],
+            'present': [dict({'kind': k, 'name': n, 'privilege': p}, **({'column': c} if c else {}))
+                        for k, n, c, p in sorted(present)],
+            'rehearsal': rehearsal, 'rehearsalSha256': sha_bytes(rehearsal.encode())}
+
+
+def app_section(pending, files, directory, launcher, launcher_raw, service):
+    """files: {file name: bytes} for every SQL file of the App migration directory at the release commit (the
+    release's own runner checks the whole set against its compiled manifest). The release's own launcher runs them
+    on the host from the new root of `service`; build carries the files as payload blobs, pinned here, and the host
+    checks the modules the launcher imports from that root are there."""
+    items = []
+    for migration_id in pending:
+        hits = [f for f in files if f[:15] == migration_id + '_']
+        need(len(hits) == 1 and APP_FILE.fullmatch(hits[0]) is not None, 'MIGRATION_SOURCE:app:' + migration_id)
+        sql = files[hits[0]].decode('utf-8')
+        items.append(dict(judged('app', migration_id, sql), name=migration_id, file=hits[0], creates=created_relations(sql),
+                          made=created_names(sql)))
+    need(re.fullmatch(r'[a-z0-9_-]+(?:/[a-z0-9_-]+)*\.mjs', launcher) is not None and
+         re.fullmatch(r'[a-z0-9_-]+(?:/[a-z0-9_-]+)*', directory) is not None, 'MIGRATION_SOURCE_PATHS')
+    modules = sorted(set(re.findall(r'import\(\s*["\']\.\./(services/[A-Za-z0-9_./-]+\.m?js)["\']\s*\)',
+                                    launcher_raw.decode('utf-8', 'replace'))))
+    need(all('..' not in m.split('/') for m in modules), 'MIGRATION_SOURCE_PATHS')
+    return {'names': list(pending), 'items': items, 'directory': directory, 'service': service, 'modules': modules,
+            'files': [{'name': f, 'sha256': sha_bytes(files[f])} for f in sorted(files)],
+            'launcher': {'path': launcher, 'sha256': sha_bytes(launcher_raw)}}
+
+
+def parse_migrations(items):
+    declared = {f: [] for f in FAMILIES}
+    for item in [x for arg in items or [] for x in arg.split(',') if x]:
+        family, _, name = item.partition(':')
+        shape = CMS_NAME if family == 'cms' else APP_ID
+        need(family in FAMILIES and shape.fullmatch(name) is not None and name not in declared[family],
+             'MIGRATION_DECLARATION:%s' % item[:100])
+        declared[family].append(name)
+    return declared
+
+
+def parse_ungranted(items):
+    """--ungranted FAMILY:SCHEMA.TABLE: a new table the runtime role is meant to have no privilege on."""
+    declared = {f: [] for f in FAMILIES}
+    for item in [x for arg in items or [] for x in arg.split(',') if x]:
+        family, _, name = item.partition(':')
+        need(family in FAMILIES and RELATION.fullmatch(name) is not None, 'UNGRANTED_DECLARATION:%s' % item[:100])
+        declared[family].append(name)
+    return declared
+
+
+def migration_check(root, base):
+    """The CI check, no profile and no host: against `base` (main), every new App migration file and every new CMS
+    migration name sorts after the latest one there, the CMS index stays in name order, each new migration only
+    expands (or carries the Owner's contraction-ok marks for exactly what does not), and each new CMS migration's SQL
+    can be extracted. The new side is the working tree at `root`. Accepted marks and notes are reported."""
+    def run_git(*args):
+        return subprocess.run(['git', '-C', root] + list(args), capture_output=True, timeout=60)
+    found = run_git('rev-parse', '--verify', '-q', base + '^{commit}')
+    need(found.returncode == 0, 'BASE_UNKNOWN:' + base)
+    commit = found.stdout.decode().strip()
+    app_dir, index = MIGRATION_SOURCES['app'], MIGRATION_SOURCES['cms']
+    listing = run_git('ls-tree', '--name-only', commit, app_dir + '/').stdout.decode().split('\n')
+    old_app = sorted(os.path.basename(l) for l in listing if l.endswith('.sql'))
+    folder = os.path.join(root, app_dir)
+    new_app = sorted(f for f in (os.listdir(folder) if os.path.isdir(folder) else []) if f.endswith('.sql') and f not in old_app)
+    shown = run_git('show', '%s:%s' % (commit, index))
+    old_cms = cms_index_names(shown.stdout if shown.returncode == 0 else b'')
+    index_path = os.path.join(root, index)
+    cms = cms_index_names(open(index_path, 'rb').read() if os.path.isfile(index_path) else b'')
+    new_cms = [n for n in cms if n not in old_cms]
+    problems, accepted, notes = [], [], []
+
+    def judge(prefix, name, sql):
+        verdict = expand_verdict(sql)
+        accepted.extend('%s:%s' % (name, p) for p in verdict['accepted'])
+        notes.extend('%s:%s' % (name, p) for p in verdict['notes'])
+        return ['%s_NOT_EXPAND_ONLY:%s:%s' % (prefix, name, p) for p in verdict['problems']]
+    latest = max([f[:14] for f in old_app] or [''])
+    for name in new_app:
+        if APP_FILE.fullmatch(name) is None:
+            problems.append('APP_NAME:' + name)
+            continue
+        if name[:14] <= latest:
+            problems.append('APP_NOT_AFTER_MAIN:%s:%s' % (name, latest))
+        problems += judge('APP', name, open(os.path.join(folder, name), 'rb').read().decode('utf-8', 'replace'))
+    if cms != sorted(cms):
+        problems.append('CMS_INDEX_ORDER')
+    latest = max(old_cms or [''])
+    for name in new_cms:
+        if CMS_NAME.fullmatch(name) is None:
+            problems.append('CMS_NAME:' + name)
+            continue
+        if name <= latest:
+            problems.append('CMS_NOT_AFTER_MAIN:%s:%s' % (name, latest))
+        path = os.path.join(root, os.path.dirname(index), name + '.ts')
+        if not os.path.isfile(path):
+            problems.append('CMS_SOURCE_MISSING:' + name)
+            continue
+        try:
+            problems += judge('CMS', name, cms_sql(name, open(path, 'rb').read()))
+        except ClientError as error:
+            problems.append(str(error))
+    return {'status': 'FAIL' if problems else 'PASS', 'base': base, 'commit': commit,
+            'new': {'app': new_app, 'cms': new_cms}, 'problems': problems, 'accepted': accepted, 'notes': notes}
+
+
+def cmd_check_migrations(args):
+    root = args.repo or str(HERE.parent.parent)
+    try:
+        value = migration_check(root, args.base)
+    except ClientError as error:
+        say({'status': 'REFUSED', 'code': str(error)})
+        return EXIT['local']
+    say(value)
+    return EXIT['ok'] if value['status'] == 'PASS' else EXIT['refused']
+
+
+def migration_sources():
+    return dict(MIGRATION_SOURCES, **((PROFILE.get('local') or {}).get('migrationSources') or {}))
+
+
+def grant_files():
+    return dict(GRANT_FILES, **((PROFILE.get('local') or {}).get('grantFiles') or {}))
 
 
 # ------------------------------------------------------------------------------------------------ plan
@@ -1001,20 +1680,33 @@ def cmd_plan(args):
         if mode == 'root' and h['services'][service].get('cloneOf'):
             base = h['services'][service]['cloneOf']
             need(facts['services'][base].get('manifestSha256'), 'LIVE_MANIFEST_MISSING:' + base)
-    # Migrations: phase A cannot apply any, so a commit that carries one the host's ledgers lack is refused.
+    # Migrations: each one the commit carries and the host's ledgers lack must be declared (--migrations), sort after
+    # the ledger's latest (forward only) and only expand; an undeclared one refuses the plan.
     ledgers = facts.get('ledgers') or {}
-    listing = git('ls-tree', '--name-only', commit, local['migrationSources']['app'] + '/').stdout.decode().split('\n')
-    app_ids = sorted({os.path.basename(l)[:14] for l in listing if re.match(r'.*/[0-9]{14}_[^/]*\.sql$', l)})
-    index = (git_show(commit, local['migrationSources']['cms']) or b'').decode()
-    cms_names = sorted(set(re.findall(r'name: "(20[0-9]{6}_[0-9]{6}_[a-z0-9_]+)"', index)))
-    for which, wanted in (('app', app_ids), ('cms', cms_names)):
+    sources = migration_sources()
+    listing = git('ls-tree', '--name-only', commit, sources['app'] + '/').stdout.decode().split('\n')
+    app_files = sorted(os.path.basename(l) for l in listing if re.match(r'.*/[0-9]{14}_[^/]*\.sql$', l))
+    wanted = {'app': sorted({f[:14] for f in app_files}), 'cms': cms_index_names(git_show(commit, sources['cms']))}
+    asked = parse_migrations(args.migrations)
+    pending = {}
+    for which in FAMILIES:
         have = (ledgers.get(which) or {}).get('names')
         if not isinstance(have, list):
             refusals.append('LEDGER_UNREADABLE:' + which)
             continue
-        missing = [m for m in wanted if m not in have]
-        if missing:
-            refusals.append('MIGRATIONS_PENDING:%s:%s' % (which, ','.join(missing[:10])))
+        missing = [m for m in wanted[which] if m not in have]
+        for name in asked[which]:
+            need(name in wanted[which], 'MIGRATION_UNKNOWN:%s:%s' % (which, name))
+            if name in have:
+                warnings.append('MIGRATION_ALREADY_APPLIED:%s:%s' % (which, name))
+        late = [m for m in missing if have and m < max(have)]
+        undeclared = [m for m in missing if m not in asked[which]]
+        if late:
+            refusals.append('MIGRATION_ORDER:%s:%s' % (which, ','.join(late[:10])))
+        if undeclared:
+            refusals.append('MIGRATIONS_PENDING:%s:%s' % (which, ','.join(undeclared[:10])))
+        if missing and not late and not undeclared:
+            pending[which] = missing
     declared = []
     for item in args.env or []:
         files, _, key = item.partition(':')
@@ -1047,22 +1739,77 @@ def cmd_plan(args):
         warnings.append('NGINX_TEMPLATE_CHANGED')
     if refusals:
         return refuse(refusals)
+    migrations, grants = {}, {}
+    ungranted = parse_ungranted(args.ungranted)
+    paths = grant_files()
+    # The services that log in as the CMS runtime role: a CMS grant file changed since their live commit is run (and
+    # checked) before they switch, migration or not.
+    cms_runtime = [s for s in names if (h.get('database', {}).get('cmsRuntimeRole') or {}).get('envFile') in
+                   h['services'][s].get('envFiles', [])]
+    if pending.get('cms'):
+        folder = os.path.dirname(sources['cms'])
+        entries = [(name, git_show(commit, '%s/%s.ts' % (folder, name))) for name in pending['cms']]
+        missing = [name for name, source in entries if source is None]
+        need(not missing, 'MIGRATION_SOURCE:cms:' + ','.join(missing))
+        migrations['cms'] = cms_section(entries)
+    elif any(changed(live_commits[s], commit, [paths['cms']]) for s in cms_runtime):
+        migrations['cms'] = {'names': [], 'items': [], 'grantsOnly': True}
+        warnings.append('GRANT_FILE_CHANGED:cms')
+    if 'cms' in migrations:
+        raw = git_show(commit, paths['cms'])
+        need(raw is not None, 'GRANT_FILE_MISSING:' + paths['cms'])
+        items = migrations['cms']['items']
+        grants['cms'] = grant_section(raw, paths['cms'], [c for i in items for c in i['creates']], GRANT_VARIABLES['cms'],
+                                      ungranted['cms'], [n for i in items for n in i['made']])
+    if pending.get('app'):
+        # The release's own runner applies them from the new root of this service (its compiled manifest names them).
+        runner = h.get('database', {}).get('appMigrationService')
+        need(runner in services and services[runner]['mode'] == 'root', 'MIGRATION_NEEDS_ROOT:app:%s' % runner)
+        launcher = git_show(commit, sources['appLauncher'])
+        need(launcher is not None, 'MIGRATION_SOURCE:app:' + sources['appLauncher'])
+        files = {f: git_show(commit, '%s/%s' % (sources['app'], f)) for f in app_files}
+        migrations['app'] = app_section(pending['app'], files, sources['app'], sources['appLauncher'], launcher, runner)
+        creates = [c for i in migrations['app']['items'] for c in i['creates']]
+        if creates:
+            # The App grant file is the operator's to run; the plan carries only what it means for the new objects,
+            # which migrate and verify read back for the App role.
+            raw = git_show(commit, paths['app'])
+            need(raw is not None, 'GRANT_FILE_MISSING:' + paths['app'])
+            section = grant_section(raw, paths['app'], creates, GRANT_VARIABLES['app'], ungranted['app'],
+                                    [n for i in migrations['app']['items'] for n in i['made']])
+            grants['app'] = {k: section[k] for k in ('file', 'sha256', 'variable', 'ungranted', 'tables', 'sequences')}
+    for family in FAMILIES:
+        need(not ungranted[family] or family in grants, 'UNGRANTED_NOT_NEW:' + ','.join(ungranted[family]))
+        for item in (migrations.get(family) or {}).get('items') or []:
+            warnings += ['MIGRATION_CONTRACTION_OK:%s:%s:%s' % (family, item['name'], p) for p in item['contractions']]
+            warnings += ['MIGRATION_NOTE:%s:%s:%s' % (family, item['name'], p) for p in item['notes']]
+    order = [s for s in h.get('restartOrder', sorted(h['services'])) if s in services]
+    # The order the release takes: every migration (and a changed CMS grant file) before any service starts on code
+    # that reads it.
+    sequence = ['migrate --family ' + f for f in FAMILIES if f in migrations] + ['switch ' + ','.join(order)]
     categories = sorted({'code' if s['mode'] == 'root' else 'restart' for s in services.values()} |
-                        ({'+env'} if declared else set()))
-    plan = {'kind': 'artvenn-release-plan', 'schema': 1, 'source': commit, 'label': commit[:8],
-            'order': [s for s in h.get('restartOrder', sorted(h['services'])) if s in services],
+                        ({'+env'} if declared else set()) |
+                        ({'+migration'} if any(m['names'] for m in migrations.values()) else set()) |
+                        ({'+grants'} if (migrations.get('cms') or {}).get('grantsOnly') else set()))
+    plan = {'kind': 'artvenn-release-plan', 'schema': 1, 'source': commit, 'label': commit[:8], 'order': order,
             'services': {s: {'mode': v['mode'], 'artifact': v['artifact'], 'dependsOn': v['dependsOn']}
                          for s, v in services.items()},
             'live': {s: {'label': facts['services'][s]['label'], 'commit': facts['services'][s]['commit'],
                          'manifestSha256': facts['services'][s].get('manifestSha256')} for s in facts['services']},
             'env': declared, 'categories': categories, 'warnings': warnings,
             'ledgerHead': (facts.get('ledger') or {}).get('head'), 'createdAt': stamp()}
+    if migrations:
+        plan.update(migrations=migrations, grants=grants, sequence=sequence,
+                    ledgers={f: {'count': len(ledgers[f]['names']), 'namesSha256': names_sha(ledgers[f]['names'])}
+                             for f in migrations})
     raw = json.dumps(plan, indent=1, sort_keys=True).encode()
     plan_id = sha_bytes(raw)[:16]
     write_private(work('plans', plan_id, 'plan.json'), raw)
     write_private(work('plans', 'latest'), plan_id.encode())
     say({'status': 'PLANNED', 'plan': plan_id, 'source': commit, 'services': services, 'categories': categories,
-         'warnings': warnings, 'env': declared})
+         'warnings': warnings, 'env': declared, 'sequence': sequence,
+         'migrations': {f: v['names'] for f, v in migrations.items()},
+         'privileges': {f: {'tables': v['tables'], 'sequences': v['sequences']} for f, v in grants.items()}})
     return EXIT['ok']
 
 
@@ -1143,6 +1890,18 @@ def cmd_build(args):
         (stage / 'manifests' / ('%s.json' % artifact)).write_bytes(annotated)
         manifests[artifact] = sha_bytes(annotated)
         counts[artifact] = {'linked': linked, 'blobs': blobs}
+    app = (plan.get('migrations') or {}).get('app')
+    if app:
+        # The App migration directory and the release's own launcher, as blobs named by the sha256 the plan pins.
+        rows = [('%s/%s' % (app['directory'], f['name']), f['sha256']) for f in app['files']]
+        rows.append((app['launcher']['path'], app['launcher']['sha256']))
+        for path, digest in rows:
+            raw = git_show(commit, path)
+            need(raw is not None and sha_bytes(raw) == digest, 'MIGRATION_SOURCE_CHANGED:' + path)
+            target = stage / 'blobs' / digest
+            if not target.exists():
+                target.write_bytes(raw)
+        counts['migrations'] = {'blobs': len(rows)}
     payload = tar_payload(stage)
     part_bytes = PROFILE['local'].get('partBytes', 4 << 20)
     parts_dir = out / 'parts'
@@ -1297,7 +2056,8 @@ def cmd_switch(args):
 def cmd_rollback(args):
     outage_ok(args)
     need(args.to == 'previous', 'ROLLBACK_TO:only --to previous')
-    return outcome(run_step(args, 'rollback', ['--to', 'previous']), 'rollback')
+    return outcome(run_step(args, 'rollback', ['--to', 'previous'] + (['--unswitched-ok'] if args.unswitched_ok else [])),
+                   'rollback')
 
 
 def cmd_close_out(args):
@@ -1358,6 +2118,34 @@ def cmd_verify(args):
     return EXIT['ok'] if inner.get('status') == 'PASS' else EXIT['transport'] if transport_failed(answer) else EXIT['refused']
 
 
+def cmd_migrate(args):
+    """One family of the plan's migrations, after prepare and before switch. The primary backup is TencentDB's
+    automatic backup and point-in-time recovery: the operator confirms it is on (--pitr-confirmed); the host then dumps
+    only the objects these migrations touch. --check runs the same checks on the host and changes nothing.
+    --rebaseline records the family's ledger count and the new objects' privileges as they are now (after a change
+    made outside this tool), for verify to read from then on."""
+    need(args.family in FAMILIES, 'FAMILY:--family cms or --family app')
+    if args.rebaseline:
+        need(not args.check and not args.plan, 'REBASELINE_ALONE:--rebaseline takes no plan and no --check')
+        return outcome(run_step(args, 'migrate', ['--family', args.family, '--rebaseline']), 'migrate')
+    plan_id, _, plan = load_local_plan(args.plan)
+    section = (plan.get('migrations') or {}).get(args.family) or {}
+    need(section.get('names') or section.get('grantsOnly'), 'NO_MIGRATIONS_IN_PLAN:' + args.family)
+    extra = ['--plan', plan_id, '--family', args.family]
+    if args.check:
+        answer = run_read(args, 'migrate-check', extra)
+        if args.dry_run:
+            return EXIT['ok']
+        inner = answer.get('answer') or answer
+        say(inner)
+        if inner.get('status') == 'MIGRATE_CHECKED':
+            return EXIT['ok']
+        return EXIT['transport'] if transport_failed(answer) else EXIT['refused']
+    need(args.pitr_confirmed or args.dry_run or args.attach, 'NEEDS_--pitr-confirmed:confirm in the TencentDB console '
+         'that automatic backup and point-in-time recovery are on for this instance, then pass --pitr-confirmed')
+    return outcome(run_step(args, 'migrate', extra + ['--pitr', 'confirmed']), 'migrate')
+
+
 def cmd_stub(verb):
     def handler(args):
         toolkit = PROFILE['local'].get('pointers', {}).get('loginDoorToolkit', 'named in the profile')
@@ -1374,19 +2162,29 @@ def main(argv=None):
     p.add_argument('commit')
     p.add_argument('--services', required=True)
     p.add_argument('--env', action='append', metavar='FILES:KEY')
+    p.add_argument('--migrations', action='append', metavar='FAMILY:NAME')
+    p.add_argument('--ungranted', action='append', metavar='FAMILY:SCHEMA.TABLE')
     p.add_argument('--force-root', action='append')
     p.add_argument('--unit-applied', action='append', metavar='SERVICE')
     p.add_argument('--dry-run', action='store_true')
     p = sub.add_parser('build')
     p.add_argument('--plan')
-    for name in ('install', 'baseline', 'status', 'stage', 'adopt', 'prepare', 'switch', 'verify', 'rollback', 'close-out',
-                 'env') + STUBS:
+    p = sub.add_parser('check-migrations')
+    p.add_argument('--base', default='origin/main')
+    p.add_argument('--repo')
+    for name in ('install', 'baseline', 'status', 'stage', 'adopt', 'prepare', 'migrate', 'switch', 'verify', 'rollback',
+                 'close-out', 'env') + STUBS:
         s = sub.add_parser(name)
         s.add_argument('--dry-run', action='store_true')
-        if name in ('stage', 'prepare', 'switch'):
+        if name in ('stage', 'prepare', 'switch', 'migrate'):
             s.add_argument('--plan')
-        if name in ('adopt', 'prepare', 'switch', 'rollback', 'close-out', 'env'):
+        if name in ('adopt', 'prepare', 'switch', 'rollback', 'close-out', 'env', 'migrate'):
             s.add_argument('--attach', metavar='UNIT|last')
+        if name == 'migrate':
+            s.add_argument('--family', required=True)
+            s.add_argument('--pitr-confirmed', action='store_true')
+            s.add_argument('--check', action='store_true')
+            s.add_argument('--rebaseline', action='store_true')
         if name == 'adopt':
             s.add_argument('--rebaseline', action='store_true')
         if name == 'switch':
@@ -1395,6 +2193,7 @@ def main(argv=None):
         if name == 'rollback':
             s.add_argument('--to', required=True)
             s.add_argument('--outage-ok', action='store_true')
+            s.add_argument('--unswitched-ok', action='store_true')
         if name == 'close-out':
             s.add_argument('--accepted', action='store_true')
         if name == 'env':
@@ -1406,6 +2205,8 @@ def main(argv=None):
             s.add_argument('--add', action='store_true')
             s.add_argument('--plan')
     args = parser.parse_args(argv)
+    if args.command == 'check-migrations':
+        return cmd_check_migrations(args)          # CI: the repository alone, no profile, no host
     global TEST
     TEST = json.loads(pathlib.Path(os.environ['RELEASE_CLIENT_TEST']).read_text()) if os.environ.get('RELEASE_CLIENT_TEST') else None
     os.umask(0o077)
@@ -1418,7 +2219,7 @@ def main(argv=None):
                     'build': cmd_build, 'stage': cmd_stage,
                     'adopt': cmd_long('adopt', lambda a: ['--rebaseline'] if a.rebaseline else []),
                     'prepare': lambda a: outcome(run_step(a, 'prepare', ['--plan', load_local_plan(a.plan)[0]]), 'prepare'),
-                    'switch': cmd_switch, 'verify': cmd_verify, 'rollback': cmd_rollback, 'close-out': cmd_close_out,
+                    'migrate': cmd_migrate, 'switch': cmd_switch, 'verify': cmd_verify, 'rollback': cmd_rollback, 'close-out': cmd_close_out,
                     'env': cmd_env}
         commands.update({verb: cmd_stub(verb) for verb in STUBS})
         code = commands[args.command](args)
