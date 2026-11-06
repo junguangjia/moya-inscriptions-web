@@ -191,22 +191,6 @@
   opacity: 1;
 }
 
-/* The compact control stays in the 48px input. Its management panel is anchored
-   to this full-height column, so it remains usable above the software keyboard
-   even when the column has shrunk to its 160px visible minimum. */
-.column :global([data-comment-image-controls][data-orientation="vertical"]) {
-  position: static;
-}
-
-.column
-  :global([data-comment-image-controls][data-orientation="vertical"])
-  :global([data-comment-image-panel]) {
-  top: var(--yoyi-space-4);
-  bottom: auto;
-  left: 0;
-  max-height: calc(100% - var(--yoyi-space-4) - var(--yoyi-space-3));
-}
-
 .imagePreview {
   height: min(240px, 35svh);
   max-width: 100%;
@@ -354,6 +338,27 @@
 
 .attachments[hidden] {
   display: none;
+}
+
+/* Management is in the tray while it is open. Keep the native picker alive,
+   and leave the compact editor's remaining room to its text and Send. */
+.column[data-colophon-attachments-open] {
+  padding-block: var(--yoyi-space-2);
+}
+
+.column[data-colophon-attachments-open] .attachments {
+  position: absolute;
+  bottom: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.column[data-colophon-attachments-open] .send {
+  box-sizing: border-box;
+  min-height: 44px;
+  height: 44px;
+  margin-top: var(--yoyi-space-1);
+  padding: var(--yoyi-space-2);
 }
 
 .signIn,

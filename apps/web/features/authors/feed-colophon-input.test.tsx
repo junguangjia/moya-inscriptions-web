@@ -154,7 +154,7 @@ const render = (props: Partial<FeedColophonInputProps> = {}) =>
   });
 
 const $ = <T extends Element = HTMLElement>(selector: string) =>
-  strip.querySelector<T>(selector);
+  strip.querySelector<T>(selector) ?? document.body.querySelector<T>(selector);
 const box = () => $<HTMLTextAreaElement>("textarea")!;
 const send = () => $<HTMLButtonElement>("[data-colophon-input-send]")!;
 const type = (text: string) =>
@@ -450,10 +450,65 @@ describe("FeedColophonInput", () => {
     await selectImages(0);
     render({ onWritingChange, shown: false });
     expect(
+      document.body.querySelector("[data-comment-image-panel]"),
+    ).toBeNull();
+    render({ onWritingChange, shown: true });
+    expect(
+      document.body.querySelector("[data-comment-image-panel]"),
+    ).toBeNull();
+    render({ onWritingChange, shown: false });
+    expect(
       $("[data-colophon-input]")?.hasAttribute("data-colophon-input-focused"),
     ).toBe(false);
     expect(onWritingChange).toHaveBeenLastCalledWith(false, null);
   });
+
+  it.each([
+    { stageHeight: 500, panelTop: 228, expected: "78px" },
+    { stageHeight: 250, panelTop: 600, expected: "250px" },
+  ])(
+    "reserves editor space without collapsing a stage above the tray: $expected",
+    async ({ stageHeight, panelTop, expected }) => {
+      const original = HTMLElement.prototype.getBoundingClientRect;
+      vi.spyOn(
+        HTMLElement.prototype,
+        "getBoundingClientRect",
+      ).mockImplementation(function (this: HTMLElement) {
+        if (this === strip)
+          return {
+            top: 150,
+            height: stageHeight,
+            bottom: 150 + stageHeight,
+            left: 0,
+            right: 390,
+            width: 390,
+            x: 0,
+            y: 150,
+            toJSON() {},
+          };
+        if (this.hasAttribute("data-comment-image-panel"))
+          return {
+            top: panelTop,
+            height: 160,
+            bottom: panelTop + 160,
+            left: 12,
+            right: 378,
+            width: 366,
+            x: 12,
+            y: panelTop,
+            toJSON() {},
+          };
+        return original.call(this);
+      });
+      try {
+        render();
+        await selectImages();
+        expect($("form")!.style.height).toBe(expected);
+      } finally {
+        vi.restoreAllMocks();
+      }
+    },
+  );
 
   it("is a vertical text input with a vertical placeholder and a disabled 发送 while empty", () => {
     render();
