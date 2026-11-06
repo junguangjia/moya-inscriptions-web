@@ -11,6 +11,7 @@ synthetic. Six host behaviours the tool must handle are reproduced:
 
 The stubs keep their state in <root>/stub.json under a lock and log their argv to <root>/stub-argv.log.
 """
+import fcntl
 import hashlib
 import json
 import os
@@ -607,10 +608,19 @@ class FakeHost:
         return json.loads((pathlib.Path(self.root) / 'stub.json').read_text())
 
     def set(self, **knobs):
+        """Under the stubs' lock and replaced whole, as the stubs write it: a stub running beside the test never
+        reads a half-written file, and neither side loses the other's change."""
         path = pathlib.Path(self.root) / 'stub.json'
-        value = json.loads(path.read_text())
-        value.update(knobs)
-        path.write_text(json.dumps(value))
+        fd = os.open(str(path) + '.lock', os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            value = json.loads(path.read_text())
+            value.update(knobs)
+            tmp = path.with_name('stub.json.set')
+            tmp.write_text(json.dumps(value))
+            os.replace(tmp, path)
+        finally:
+            os.close(fd)
 
     def unit(self, service):
         return self.state()['units'][self.h['services'][service]['unit']]
