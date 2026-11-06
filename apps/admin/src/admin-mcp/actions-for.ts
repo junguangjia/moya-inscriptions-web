@@ -8,6 +8,7 @@ import type {
   AdminRecordType,
 } from "@moya/contracts/internal/admin-mcp";
 
+import { built, none, notBuilt, type Unbuilt } from "./not-built";
 import { adminOpMeta, opUnavailable } from "./registry";
 
 /**
@@ -214,12 +215,24 @@ const queue = (op: AdminOpName, input: Record<string, unknown>) => ({
   args: { op, input },
 });
 
+type Around = (id: string) => readonly AdminActionSkeleton[];
+
+const CMS_SKELETONS = none("A CMS record: actionsFor files its skeletons.");
+
 /** What reads around a community record. */
-const COMMUNITY_READS: Readonly<
-  Partial<
-    Record<AdminRecordType, (id: string) => readonly AdminActionSkeleton[]>
-  >
+export const COMMUNITY_READS: Readonly<
+  Record<AdminRecordType, Around | Unbuilt>
 > = {
+  catalog: CMS_SKELETONS,
+  collection: CMS_SKELETONS,
+  media: CMS_SKELETONS,
+  article: none("Its outline names its owner."),
+  thread: none("Its outline names no other record."),
+  report: none("Its outline names its target and users."),
+  feedback: none("Its outline names its user."),
+  publishing_job: none("Its outline names its subject."),
+  work_revision: none("Its outline names its work and author."),
+  invitation: notBuilt("S10"),
   user: (id) => [
     queue("list.users", { userId: id }),
     queue("list.works", { authorId: id }),
@@ -243,12 +256,19 @@ const write = (op: AdminOpName, input: Record<string, unknown>) => ({
   args: { op, input },
 });
 
-/** What can be done to it. `requestId`, a reason and a version stay the caller's. */
-const COMMUNITY_WRITES: Readonly<
-  Partial<
-    Record<AdminRecordType, (id: string) => readonly AdminActionSkeleton[]>
-  >
+/**
+ * What can be done to it. `requestId`, a reason and a version stay the caller's. An
+ * irreversible op joins with the run engine, through admin_preview.
+ */
+export const COMMUNITY_WRITES: Readonly<
+  Record<AdminRecordType, Around | Unbuilt>
 > = {
+  catalog: CMS_SKELETONS,
+  collection: CMS_SKELETONS,
+  media: CMS_SKELETONS,
+  feedback: none("No op writes feedback."),
+  media_item: none("No op writes a media item; its jobs are publishing_job."),
+  invitation: notBuilt("S10"),
   user: (id) => [write("community.moderate-user", { id })],
   work: (id) => [write("community.moderate-work", { id })],
   comment: (id) => [write("community.moderate-comment", { id })],
@@ -275,6 +295,6 @@ export const communityActionsFor = (
 ): readonly AdminActionSkeleton[] =>
   [
     ...candidateActions(type, id),
-    ...(COMMUNITY_READS[type]?.(id) ?? []),
-    ...(ownerOnly ? [] : (COMMUNITY_WRITES[type]?.(id) ?? [])),
+    ...(built(COMMUNITY_READS[type])?.(id) ?? []),
+    ...(ownerOnly ? [] : (built(COMMUNITY_WRITES[type])?.(id) ?? [])),
   ].filter(({ tool }) => tools.includes(tool));

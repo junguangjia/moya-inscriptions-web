@@ -10,6 +10,7 @@ import {
   ADMIN_MCP_TEXT_CAP_BYTES,
   ADMIN_MCP_TOKEN_BUDGET,
   ADMIN_MCP_TOOL_PROFILES,
+  ADMIN_OP_ALIASES,
   ADMIN_OP_NAMES,
   ADMIN_OP_TOOLS,
   adminActionDetailSchema,
@@ -22,14 +23,18 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   ACTIONS_TOOL_NAME,
+  ADMIN_ACTIONS_INDEX_ALARM_SHARE,
   ADMIN_MCP_TOOLS,
   ADMIN_SURFACES,
   actionDetail,
+  adminMcpBudgets,
   actionsContinuation,
   actionsEnvelope,
   actionsIndex,
   adminOpMeta,
   classToolViolations,
+  isAdminOpName,
+  lookupOp,
   okEnvelope,
   nearestOps,
   opUnavailable,
@@ -219,6 +224,52 @@ describe("op names", () => {
         route === "save-draft" || route === "save-article-draft",
       );
     }
+  });
+});
+
+describe("earlier op names", () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  it("point each at a current op, never shadow one, and stay at least 30 days", () => {
+    for (const [name, { use, since, until }] of Object.entries(
+      ADMIN_OP_ALIASES,
+    )) {
+      expect(isAdminOpName(name), name).toBe(false);
+      expect(isAdminOpName(use), name).toBe(true);
+      for (const day of [since, until])
+        expect(day, name).toMatch(/^\d{4}-\d{2}-\d{2}$/u);
+      expect(
+        Date.parse(until) - Date.parse(since),
+        name,
+      ).toBeGreaterThanOrEqual(30 * DAY_MS);
+    }
+  });
+
+  it("run the op that replaced them through their last day, then answer as retired", () => {
+    const aliases = {
+      "list.catalog_rows": {
+        use: "list.catalogs",
+        since: "2026-11-06",
+        until: "2026-12-31",
+      },
+    } as const;
+    const on = (day: string, name = "list.catalog_rows") =>
+      lookupOp(name, new Date(`${day}T23:59:59Z`), aliases);
+    expect(on("2026-12-31")).toEqual({
+      op: "list.catalogs",
+      deprecated: {
+        op: "list.catalog_rows",
+        use: "list.catalogs",
+        until: "2026-12-31",
+      },
+    });
+    expect(on("2027-01-01")).toEqual({
+      retired: { op: "list.catalog_rows", use: "list.catalogs" },
+    });
+    // The registry's own name, and a typo, are as they always were.
+    expect(on("2027-01-01", "list.catalogs")).toEqual({ op: "list.catalogs" });
+    expect(on("2027-01-01", "list.catalog")).toEqual({ unknown: true });
+    expect(lookupOp("list.catalog_rows")).toEqual({ unknown: true });
   });
 });
 
@@ -1058,6 +1109,31 @@ describe("admin_actions", () => {
     expect(estimatedTokens(envelope)).toBeLessThanOrEqual(
       ADMIN_MCP_TOKEN_BUDGET,
     );
+  });
+
+  it("raises its alarm at 80% of the text cap, measured in its largest form", () => {
+    const { index } = adminMcpBudgets();
+    expect(index.alarm).toBe(
+      Math.floor(ADMIN_MCP_TEXT_CAP_BYTES * ADMIN_ACTIONS_INDEX_ALARM_SHARE),
+    );
+    expect(ADMIN_ACTIONS_INDEX_ALARM_SHARE).toBe(0.8);
+    // Before it reaches the cap: past this, page the index by family first.
+    expect(index.bytes).toBeLessThanOrEqual(index.alarm);
+    // The figure is what a client receives with no AI token placed, and the most it gets.
+    const answered = () =>
+      Buffer.byteLength(
+        toolResult(scope, actionsEnvelope({}, allTools, open)).content[0]!.text,
+      );
+    vi.stubEnv("COMMUNITY_OPERATOR_AI_TOKEN", "");
+    vi.stubEnv("OPERATOR_AI_BASE_TOKEN", "");
+    try {
+      expect(answered()).toBe(index.bytes);
+      vi.stubEnv("COMMUNITY_OPERATOR_AI_TOKEN", "synthetic-placed");
+      vi.stubEnv("OPERATOR_AI_BASE_TOKEN", "synthetic-placed");
+      expect(answered()).toBeLessThanOrEqual(index.bytes);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("lists every op once, with the fields it requires", () => {

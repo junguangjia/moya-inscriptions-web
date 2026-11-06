@@ -2,6 +2,7 @@ import {
   communityOperationDefinitions,
   type CommunityOperationName,
 } from "../../community/endpoints";
+import { built, type Unbuilt } from "../not-built";
 import { COMMUNITY_READ_FACTS } from "./community-reads";
 import { COMMUNITY_WRITE_FACTS } from "./community-writes";
 import {
@@ -14,7 +15,10 @@ import {
 } from "./define";
 
 /** Per-target outcomes need single calls, so the bulk route has no op of its own. */
-type CommunityOpRoute = Exclude<CommunityOperationName, "moderate-comments">;
+export type CommunityOpRoute = Exclude<
+  CommunityOperationName,
+  "moderate-comments"
+>;
 
 const dm = { sensitive: "dm", tool: "admin_sensitive_read" } as const;
 
@@ -350,6 +354,11 @@ const CALLS_NO_BACKEND: ReadonlySet<CommunityOpRoute> = new Set([
   "read-feature-catalogs",
 ]);
 
+/** Every route's facts, whole: a read's or a write's, or the slice that brings them. */
+const FACTS: Readonly<
+  Record<CommunityOpRoute, Partial<AdminOpEntry> | Unbuilt>
+> = { ...COMMUNITY_READ_FACTS, ...COMMUNITY_WRITE_FACTS };
+
 /** Each row takes its input and output from the definition its route runs. */
 export const communityOps = Object.fromEntries(
   (Object.entries(rows) as [CommunityOpRoute, AdminOpEntry][]).map(
@@ -358,14 +367,7 @@ export const communityOps = Object.fromEntries(
       const credential = CALLS_NO_BACKEND.has(route) ? "none" : "community";
       return [
         `community.${route}`,
-        {
-          ...row,
-          credential,
-          input,
-          output,
-          ...COMMUNITY_READ_FACTS[route],
-          ...COMMUNITY_WRITE_FACTS[route],
-        },
+        { ...row, credential, input, output, ...built(FACTS[route]) },
       ] as const;
     },
   ),

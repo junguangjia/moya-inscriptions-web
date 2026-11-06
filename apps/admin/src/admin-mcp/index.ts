@@ -25,6 +25,7 @@ export { controlFor, readMcpControl } from "./control/state";
 export { ADMIN_MCP_INSTRUCTIONS } from "./native";
 export {
   ADMIN_MCP_TOOLS,
+  contractOf,
   listingTable,
   toolFor,
   toolListingFor,
@@ -42,6 +43,7 @@ export {
 export {
   ACTIONS_TOOL_NAME,
   actionDetail,
+  actionsCatalogHash,
   actionsContinuation,
   actionsEnvelope,
   actionsIndex,
@@ -49,17 +51,38 @@ export {
 export {
   adminOpMeta,
   classToolViolations,
+  currentOpName,
   isAdminOpName,
+  lookupOp,
   nearestOps,
   opUnavailable,
   opsOnTool,
   toolForOp,
 } from "./registry";
-export type { AdminOpContext, AdminOpEntry } from "./registry";
+export type {
+  AdminOpContext,
+  AdminOpDeprecation,
+  AdminOpEntry,
+  AdminOpLookup,
+} from "./registry";
+export { BACKEND_CONTRACT_MISMATCH, readBackendAnswer } from "./backend-answer";
 export { ADMIN_SURFACES } from "./surfaces";
 export type { AdminSurface, AdminSurfaceExclusion } from "./surfaces";
-export { renderAdminMcpCapabilities } from "./capabilities";
-export { actionsFor, candidateActions } from "./actions-for";
+export {
+  ADMIN_ACTIONS_INDEX_ALARM_SHARE,
+  adminMcpBudgets,
+  renderAdminMcpCapabilities,
+} from "./capabilities";
+export {
+  actionsFor,
+  candidateActions,
+  COMMUNITY_READS,
+  COMMUNITY_WRITES,
+} from "./actions-for";
+export { built, none, notBuilt } from "./not-built";
+export type { AdminMcpSlice, Unbuilt } from "./not-built";
+export { COMMUNITY_WRITE_FACTS } from "./ops/community-writes";
+export { RECORDS as COMMUNITY_RECORDS } from "./tools/get-community";
 export {
   classifyQuery,
   LINK_PARAMETER_EXCLUSIONS,
@@ -79,8 +102,10 @@ export {
 export { analyticsEnvelope, CANONICAL_POOL_SHARE } from "./analytics/service";
 export {
   communityRefusal,
+  COMMUNITY_READ_FACTS,
   COMMUNITY_READ_POOL_SHARE,
   inPoolShare,
+  routeCheckedAiCall,
 } from "./ops/community-reads";
 export {
   createUmamiGuard,

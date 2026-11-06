@@ -1853,7 +1853,7 @@ describe("a source that does not answer is never a miss", () => {
     );
   });
 
-  it("reads a Backend that has gone as unread, and a garbled answer too", async () => {
+  it("reads a Backend that has gone as unread, and names a garbled answer, which a repeat cannot change", async () => {
     const { work } = await publicWork();
     await withStandIn(
       (_incoming, outgoing) => outgoing.destroy(),
@@ -1868,11 +1868,17 @@ describe("a source that does not answer is never a miss", () => {
         outgoing.writeHead(200, { "content-type": "application/json" });
         outgoing.end(JSON.stringify({ open: "none" }));
       },
-      async () =>
-        expect(await job([workRef(work)])).toMatchObject({
-          code: "QUEUED",
-          state: "settlement_unread",
-        }),
+      async () => {
+        const answer = await job([workRef(work)]);
+        expect(answer).toMatchObject({
+          ok: false,
+          code: "BACKEND_CONTRACT_MISMATCH",
+          data: {
+            refs: [{ state: "refused", code: "BACKEND_CONTRACT_MISMATCH" }],
+          },
+        });
+        expect(answer).not.toHaveProperty("next");
+      },
     );
   });
 

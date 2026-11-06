@@ -1,13 +1,42 @@
 # Admin MCP capabilities
 
-Generated from `apps/admin/src/admin-mcp/registry.ts` and
-`apps/admin/src/admin-mcp/surfaces.ts`. Do not edit by hand. To regenerate, run
+Generated from `apps/admin/src/admin-mcp/registry.ts`,
+`apps/admin/src/admin-mcp/surfaces.ts` and the tool list in
+`apps/admin/src/admin-mcp/tools/index.ts`. Do not edit by hand. To regenerate,
+run
 `pnpm --filter @moya/tests exec vitest run unit/backend/admin-mcp-registry.test.ts -u`;
 the same test fails while this file is stale.
 
 Scope and rules: `docs/development/admin-mcp-completion-v1.md`. "Built" says
 whether a slice has given the op its implementation yet; an op that is not built
 reports `not_available`.
+
+## Budgets
+
+Bytes of JSON as a client receives it. tools/list counts against
+`ADMIN_MCP_TOKEN_BUDGET` at 3 bytes a token. The `admin_actions` index counts
+against the 9000-byte text cap, measured on every op tool with every switch open
+and no AI token placed, its largest form; the registry test fails past 7200
+bytes, 80% of the cap.
+
+| Measure                       | Bytes | Ceiling | Used | Left |
+| ----------------------------- | ----- | ------- | ---- | ---- |
+| tools/list, profile `read`    | 9578  | 12000   | 80%  | 2422 |
+| tools/list, profile `operate` | 11046 | 12000   | 92%  | 954  |
+| tools/list, profile `full`    | 11046 | 12000   | 92%  | 954  |
+| `admin_actions` index         | 5307  | 9000    | 59%  | 3693 |
+
+| Tool               | Bytes listed |
+| ------------------ | ------------ |
+| `admin_whoami`     | 552          |
+| `admin_find`       | 1322         |
+| `admin_get`        | 1462         |
+| `admin_read`       | 1323         |
+| `admin_analytics`  | 2339         |
+| `admin_actions`    | 774          |
+| `admin_view_media` | 1061         |
+| `admin_job`        | 736          |
+| `admin_execute`    | 1467         |
 
 ## Ops (133)
 

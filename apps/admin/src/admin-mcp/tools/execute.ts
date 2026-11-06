@@ -13,11 +13,13 @@ import type {
   AdminMcpEnvelope,
   AdminCmsRecordType,
   AdminMcpNext,
+  AdminOpName,
 } from "@moya/contracts/internal/admin-mcp";
 import type { PayloadRequest } from "payload";
 import { z } from "zod";
 
 import { writeAuditEvent } from "../audit";
+import { BACKEND_CONTRACT_MISMATCH } from "../backend-answer";
 import { EXECUTE_BUDGET_MS } from "../budget";
 import { readMcpControl } from "../control/state";
 import { auditIdentity } from "../door";
@@ -34,10 +36,16 @@ import {
 import { CMS_FAMILIES, heldLocksOf, rowIdOf } from "../records";
 import { envelopeCodeOf, targetFailureOf } from "../refusal";
 import type { TargetFailure } from "../refusal";
-import { adminOpMeta, isAdminOpName } from "../registry";
+import { adminOpMeta, currentOpName, lookupOp } from "../registry";
 import type { AdminOpContext, AdminOpEntry } from "../registry";
 import { JOB_TOOL_NAME, settlementNext } from "../settlement";
-import { opRefusalOf, unknownOpEnvelope } from "./read";
+import {
+  opRefusalOf,
+  retiredOpEnvelope,
+  unknownOpEnvelope,
+  withDeprecation,
+  wrongToolEnvelope,
+} from "./read";
 
 export const EXECUTE_TOOL_NAME = "admin_execute";
 
@@ -120,8 +128,10 @@ export const executeReferences = (args: unknown) => {
   const { op, requestId, targets, input } = (args ?? {}) as Partial<
     Record<keyof AdminExecuteInput, unknown>
   >;
-  const entry =
-    typeof op === "string" && isAdminOpName(op) ? adminOpMeta[op] : undefined;
+  // The registry's name, so an earlier one is recorded as the op that ran.
+  const found = typeof op === "string" ? lookupOp(op) : undefined;
+  const name = found !== undefined && "op" in found ? found.op : undefined;
+  const entry = name === undefined ? undefined : adminOpMeta[name];
   const count = Array.isArray(targets) ? targets.length : 1;
   const target =
     entry?.target !== undefined && count === 1
@@ -138,7 +148,7 @@ export const executeReferences = (args: unknown) => {
       : undefined;
   const targetId = safeRef(target?.id);
   return {
-    ...(entry === undefined ? {} : { op: op as string }),
+    ...(name === undefined ? {} : { op: name }),
     ...(typeof requestId === "string" &&
     /^[A-Za-z0-9._:-]{1,128}$/u.test(requestId)
       ? { requestId }
@@ -510,8 +520,9 @@ export const executeContinuation = (
   kept: readonly unknown[],
 ): AdminMcpNext | undefined => {
   const { index } = (kept.at(-1) ?? {}) as { index?: unknown };
+  const call = rawInput as AdminExecuteInput;
   return typeof index === "number"
-    ? nextCall(rawInput as AdminExecuteInput, index + 1, true)
+    ? nextCall({ ...call, op: currentOpName(call.op) }, index + 1, true)
     : undefined;
 };
 
@@ -574,6 +585,9 @@ const answerOf = (
     });
     return stopped === "ledger" ? { ...answer, hint: LEDGER_STOPPED } : answer;
   }
+  // A replay reads an unreadable answer the same way, so only a lost one is offered again.
+  if (data.unknown?.every(({ code }) => code === BACKEND_CONTRACT_MISMATCH))
+    return failedEnvelope(BACKEND_CONTRACT_MISMATCH, fields);
   if (data.unknown !== undefined)
     return failedEnvelope("OUTCOME_UNKNOWN", {
       ...fields,
@@ -681,16 +695,30 @@ let inFlight = 0;
 
 const runCall = async (
   rawInput: unknown,
+  context: { readonly key: AdminMcpKey; readonly req: PayloadRequest },
+): Promise<AdminMcpEnvelope> => {
+  const asCalled = rawInput as AdminExecuteInput;
+  const found = lookupOp(asCalled.op);
+  if ("unknown" in found) return unknownOpEnvelope(asCalled.op);
+  if ("retired" in found) return retiredOpEnvelope(found.retired);
+  // Under the registry's name, so every way on an answer gives calls it.
+  return withDeprecation(
+    await runOp(found.op, { ...asCalled, op: found.op }, context),
+    found.deprecated === undefined ? [] : [found.deprecated],
+  );
+};
+
+const runOp = async (
+  name: AdminOpName,
+  call: AdminExecuteInput,
   { key, req }: { readonly key: AdminMcpKey; readonly req: PayloadRequest },
 ): Promise<AdminMcpEnvelope> => {
   const started = performance.now();
-  const call = rawInput as AdminExecuteInput;
-  if (!isAdminOpName(call.op)) return unknownOpEnvelope(call.op);
-  const entry: AdminOpEntry = adminOpMeta[call.op];
+  const entry: AdminOpEntry = adminOpMeta[name];
   if (entry.tool === "admin_execute_irreversible")
     return failedEnvelope("USE_EXECUTE_IRREVERSIBLE");
   // Class decides the tool: a read named here is not a write of any kind.
-  if (entry.tool !== EXECUTE_TOOL_NAME) return unknownOpEnvelope(call.op);
+  if (entry.tool !== EXECUTE_TOOL_NAME) return wrongToolEnvelope(entry.tool);
   const refusal = await opRefusalOf(entry, req);
   if (refusal !== undefined) return refusal;
   const total = call.targets?.length ?? 1;
@@ -726,7 +754,7 @@ const runCall = async (
   let reached = startAt;
   let stopped: Stopped | undefined;
   // Past a start row that named no target, this call's own target row names it.
-  const startNamedIt = executeReferences(rawInput).targetId !== undefined;
+  const startNamedIt = executeReferences(call).targetId !== undefined;
   while (reached < total) {
     if (reached > startAt) {
       if (performance.now() - started >= EXECUTE_BUDGET_MS) {

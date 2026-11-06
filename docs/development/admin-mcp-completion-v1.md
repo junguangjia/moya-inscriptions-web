@@ -1070,6 +1070,78 @@ tests/unit/admin/admin-mcp-native.test.ts:
 - `meta.mediaGate` joins the envelope. `data.failed[].jobs` names what stopped
   on MEDIA_JOB_FAILED, at most three, newest first.
 
+Recorded when built in E1, the guards, tests in
+tests/unit/backend/admin-mcp-totality.test.ts,
+tests/unit/backend/admin-mcp-route-parity.test.ts,
+tests/unit/admin/admin-mcp-community-share.test.ts,
+tests/unit/backend/admin-mcp-registry.test.ts and
+tests/unit/architecture/admin-mcp-extending.test.ts:
+
+- The tables that said "not built" by leaving a key out are whole Records now:
+  the community read and write facts, `admin_get`'s community records and what
+  reads and writes around a record. A row without an entry says
+  `notBuilt('<slice>')` or `none('<reason>')`, so a new route or record type
+  fails typecheck until it says which. `NOT_BUILT`, in the tests, files every op
+  with no body under its slice, and a test holds the two to each other. Nothing
+  answers differently.
+- Every built op on an AI credential runs its example over a recording call, and
+  each route it calls has a row of its class, on its credential, naming the
+  self-only subject of its target where it has one. The four irreversible
+  community routes wait in `AI_ROUTE_PENDING` for S8. The AI's JSON call now
+  asks the route table before any fetch and refuses an unlisted route with the
+  Backend's own `AI_ROUTE_FORBIDDEN`, 403.
+- The capability document carries a budget table, tools/list per profile and per
+  tool and the `admin_actions` index, and the registry test fails once the index
+  passes 80% of the text cap. The index is measured in its largest form, with no
+  AI token placed, so the document does not depend on the process.
+- docs/development/admin-mcp-extending.md lists the touch points of four kinds
+  of change, each marked forced, guarded or review, and its test fails when it
+  names a file or table that is gone.
+
+Recorded when built in E1, room and compatibility, tests in
+tests/cms/admin-mcp-contract.test.ts, the added blocks of
+tests/cms/admin-mcp-community.test.ts,
+tests/cms/admin-mcp-community-writes.test.ts and
+tests/cms/admin-mcp-analytics.test.ts,
+tests/unit/admin/admin-mcp-backend-answer.test.ts and
+tests/unit/backend/admin-mcp-registry.test.ts. The suites that pinned the old
+code for these cases now pin the new one, and nothing else changed in them: a
+stub answer holding a contact field, a garbled analytics or settlement reply,
+and an op named on the wrong tool.
+
+- tools/list shows `type` on `admin_find` and `admin_get` and `report` on
+  `admin_analytics` as plain strings, and `admin_get`'s `find` as an open
+  object, `from` and `to` as an integer or a string and `fields` as strings.
+  Each keeps its JSON type, because a client may read a missing one as a string.
+  Descriptions are unchanged. The runtime check is as strict as it was, and
+  `INPUT_INVALID` now names a closed value's choices in `allowedValues`. As the
+  official client receives it, full and operate went from 11,939 to 11,090 bytes
+  and read from 10,471 to 9,622, 849 bytes each; the ceiling stays 12,000. The
+  reservation test, the listing plus 1,000 bytes for each tool still to come, is
+  not in: three tools need the listing at 9,000 bytes or less, and it is 2,046
+  over. That room comes from the descriptions, which S8 plans to cut.
+- On the AI path a Backend answer loses any key its schema does not name, and
+  the same strict schema reads the rest, so either side may be released first
+  with a new answer field and no unknown field reaches a tool. A union is read
+  by the branch that matches with the fewest keys dropped. Anything else wrong
+  answers `BACKEND_CONTRACT_MISMATCH`, which retrying cannot change. On a write
+  it is an unknown target and never a failed one, with no `next`, because the
+  write may have committed and a replay reads the same answer; `admin_job` files
+  it as refused. The Backend's `AI_RUN_REQUIRED` answers `PREVIEW_REQUIRED`, as
+  the Admin does for the same input.
+- `ADMIN_MCP_CONTRACT_VERSION` is serverInfo's version, and `admin_whoami` on
+  the native path gives `contract`: that version, a hash of the op catalog
+  (names, tools, classes, inputs) and a hash of this credential's tools/list.
+  The plugin path's answer is unchanged. The `initialize` instructions are
+  unchanged.
+- `ADMIN_OP_ALIASES` keeps an op's earlier name: through its last day the name
+  runs the op that replaced it, under that op's name in every `next`, and the
+  answer carries `meta.deprecated`; after it the name answers `OP_RETIRED` with
+  `use`. An op named on another tool answers `WRONG_TOOL` with the tool, where
+  it answered `UNKNOWN_OP`; an irreversible op on `admin_execute` still answers
+  `USE_EXECUTE_IRREVERSIBLE`. Near names answer only a name that was never an
+  op. The table is empty: no op has been renamed.
+
 ## 6. Locate
 
 Principle: one call resolves a human reference to a stable ref and says whether

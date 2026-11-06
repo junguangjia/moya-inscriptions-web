@@ -1,6 +1,12 @@
 import { z } from "zod";
 
 /**
+ * The contract the native path serves, as its serverInfo.version and in admin_whoami. A
+ * date: raised on the day a release changes what a client sees, and only then.
+ */
+export const ADMIN_MCP_CONTRACT_VERSION = "2026-11-06";
+
+/**
  * Server-only result shape of the `admin_*` MCP tools (admin-mcp-completion-v1,
  * amendment 2026-11-03). Nothing here is a Public DTO or appears in the OpenAPI
  * document. `ok:true` means the whole requested effect verifiably completed,
@@ -29,6 +35,8 @@ export const ADMIN_MCP_CODES = [
   "PREVIEW_REQUIRED",
   "INPUT_INVALID",
   "UNKNOWN_OP",
+  "OP_RETIRED",
+  "WRONG_TOOL",
   "AUDIT_UNAVAILABLE",
   "AI_CREDENTIAL_NOT_CONFIGURED",
   "NOT_FOUND",
@@ -38,6 +46,7 @@ export const ADMIN_MCP_CODES = [
   "AI_ROUTE_FORBIDDEN",
   "READ_TIMED_OUT",
   "COMMUNITY_UNAVAILABLE",
+  "BACKEND_CONTRACT_MISMATCH",
   "ANALYTICS_UNAVAILABLE",
   "UMAMI_QUERY_TIMEOUT",
   "UMAMI_NOT_CONFIGURED",
@@ -89,11 +98,15 @@ export const ADMIN_MCP_CODES = [
 
 export const adminMcpCodeSchema = z.enum(ADMIN_MCP_CODES);
 
-/** Names the failing input by path and allowed keys, never by value. */
+/**
+ * Names the failing input by path, and by the keys or the choices the schema allows,
+ * never by the value sent. A choice tools/list shows as a plain string is named here.
+ */
 export const adminMcpIssueSchema = z.strictObject({
   path: z.array(z.union([z.string(), z.number()])),
   code: z.string().min(1),
   allowedKeys: z.array(z.string()).optional(),
+  allowedValues: z.array(z.string()).optional(),
 });
 
 /** The explicit-handle pattern: the client continues, nothing runs without it. */
@@ -118,6 +131,16 @@ export const adminMcpMetaSchema = z.strictObject({
     .optional(),
   /** The op asked to publish with a publish gate shut, so no job exists to wait for. */
   mediaGate: z.literal("off").optional(),
+  /** An op called by a name it replaced: what to call instead, and until when. */
+  deprecated: z
+    .array(
+      z.strictObject({
+        op: z.string().min(1),
+        use: z.string().min(1),
+        until: z.iso.date(),
+      }),
+    )
+    .optional(),
 });
 
 export const adminMcpEnvelopeSchema = z

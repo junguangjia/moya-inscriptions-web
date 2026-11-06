@@ -823,14 +823,18 @@ describe("the other CMS sources", () => {
     }
   });
 
-  it("answers UNKNOWN_OP with near names for a typo, and for a write named here", async () => {
+  it("answers UNKNOWN_OP with near names for a typo, and WRONG_TOOL for a write named here", async () => {
     const typo = await call("admin_read", { op: "list.catalog" });
     expect(typo).toMatchObject({ ok: false, code: "UNKNOWN_OP" });
     expect((typo.data as { nearest: string[] }).nearest).toContain(
       "list.catalogs",
     );
     const write = await call("admin_read", { op: "catalog.publish" });
-    expect(write).toMatchObject({ ok: false, code: "UNKNOWN_OP" });
+    expect(write).toMatchObject({
+      ok: false,
+      code: "WRONG_TOOL",
+      data: { tool: "admin_execute" },
+    });
   });
 });
 

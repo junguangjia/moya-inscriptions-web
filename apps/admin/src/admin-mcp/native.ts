@@ -7,6 +7,7 @@ import {
   McpError,
   SUPPORTED_PROTOCOL_VERSIONS,
 } from "@modelcontextprotocol/sdk/types.js";
+import { ADMIN_MCP_CONTRACT_VERSION } from "@moya/contracts/internal/admin-mcp";
 import type { PayloadRequest } from "payload";
 
 import type { AdminMcpKey } from "./door";
@@ -131,7 +132,7 @@ export const nativeMcp = async (
     return rpcError(400, -32600, "Invalid Request: batches are not accepted.");
 
   const server = new Server(
-    { name: "artvenn-admin", version: "1.0.0" },
+    { name: "artvenn-admin", version: ADMIN_MCP_CONTRACT_VERSION },
     { capabilities: { tools: {} }, instructions: ADMIN_MCP_INSTRUCTIONS },
   );
   server.setRequestHandler(ListToolsRequestSchema, () => ({

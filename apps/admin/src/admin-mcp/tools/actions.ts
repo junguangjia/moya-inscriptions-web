@@ -22,11 +22,14 @@ import { z } from "zod";
 import { failedEnvelope, inputInvalidEnvelope, okEnvelope } from "../envelope";
 import {
   adminOpMeta,
-  isAdminOpName,
+  currentOpName,
+  lookupOp,
   nearestOps,
   opUnavailable,
 } from "../registry";
-import type { AdminOpEntry } from "../registry";
+import type { AdminOpDeprecation, AdminOpEntry } from "../registry";
+import { textHash } from "../text-window";
+import { retiredOpEnvelope, withDeprecation } from "./read";
 
 export const ACTIONS_TOOL_NAME = "admin_actions";
 
@@ -120,10 +123,29 @@ const rowOf = (name: AdminOpName): string => {
   return required.length === 0 ? name : `${name}(${required.join(",")})`;
 };
 
+let catalogHash: string | undefined;
+
+/**
+ * The op catalog as one short hash: each name, its tool, its class and its input, as
+ * admin_actions gives them. Whatever a key may call, so it says what changed in a release.
+ */
+export const actionsCatalogHash = (): string =>
+  (catalogHash ??= textHash(
+    JSON.stringify(
+      ADMIN_OP_NAMES.map((name) => [
+        name,
+        entryOf(name).tool,
+        entryOf(name).klass,
+        inputSchemaOf(name) ?? null,
+      ]),
+    ),
+  ).slice(0, 16));
+
 /** The index a key sees: only the tools it can call now, in listing order. */
 export const actionsIndex = (
   tools: readonly string[],
   switches: ActionSwitches,
+  configured?: Parameters<typeof opUnavailable>[2],
 ): AdminActionsIndex => {
   const groups = ADMIN_OP_TOOLS.filter((tool) => tools.includes(tool)).map(
     (tool) => {
@@ -133,7 +155,7 @@ export const actionsIndex = (
       const ops: string[] = [];
       const unavailable: Record<string, string[]> = {};
       for (const name of names) {
-        const code = opUnavailable(entryOf(name), switches);
+        const code = opUnavailable(entryOf(name), switches, configured);
         if (code === undefined) ops.push(rowOf(name));
         else (unavailable[code] ??= []).push(rowOf(name));
       }
@@ -207,27 +229,41 @@ export const actionsEnvelope = (
   if (names.length === 0) return okEnvelope(actionsIndex(tools, switches));
   if (names.length > ADMIN_ACTIONS_MAX_OPS)
     return inputInvalidEnvelope([{ path: ["ops"], code: "too_big" }]);
-  const unknown = names.find((name) => !isAdminOpName(name));
+  const found = names.map((name) => ({ name, found: lookupOp(name) }));
+  const unknown = found.find(({ found }) => "unknown" in found);
   if (unknown !== undefined)
     return failedEnvelope("UNKNOWN_OP", {
-      data: adminUnknownOpDataSchema.parse({ nearest: nearestOps(unknown) }),
+      data: adminUnknownOpDataSchema.parse({
+        nearest: nearestOps(unknown.name),
+      }),
     });
-  return okEnvelope(
-    adminActionDetailsSchema.parse({
-      details: (names as AdminOpName[]).map((name) =>
-        actionDetail(name, tools, switches),
-      ),
-    }),
+  const ops: AdminOpName[] = [];
+  const deprecated: AdminOpDeprecation[] = [];
+  for (const { found: one } of found) {
+    if ("retired" in one) return retiredOpEnvelope(one.retired);
+    if ("unknown" in one) continue;
+    if (!ops.includes(one.op)) ops.push(one.op);
+    if (one.deprecated !== undefined) deprecated.push(one.deprecated);
+  }
+  return withDeprecation(
+    okEnvelope(
+      adminActionDetailsSchema.parse({
+        details: ops.map((name) => actionDetail(name, tools, switches)),
+      }),
+    ),
+    deprecated,
   );
 };
 
-/** A cut detail call continues with the names it did not reach. */
+/** A cut detail call continues with the names it did not reach, by the registry's name. */
 export const actionsContinuation = (
   rawInput: unknown,
   kept: readonly unknown[],
 ): AdminMcpNext | undefined => {
   const reached = new Set(kept.map((detail) => (detail as { op: string }).op));
-  const rest = askedNames(rawInput).filter((name) => !reached.has(name));
+  const rest = [...new Set(askedNames(rawInput).map(currentOpName))].filter(
+    (name) => !reached.has(name),
+  );
   return rest.length === 0
     ? undefined
     : { tool: ACTIONS_TOOL_NAME, args: { ops: rest } };

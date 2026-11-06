@@ -34,6 +34,10 @@ import {
   CommunityOperatorError,
   operatorBaseUrl,
 } from "../../community/backend";
+import {
+  BACKEND_CONTRACT_MISMATCH,
+  readBackendAnswer,
+} from "../backend-answer";
 import { failedEnvelope, inputInvalidEnvelope, okEnvelope } from "../envelope";
 import {
   ANALYTICS_SETTLED_AFTER_MS,
@@ -181,9 +185,11 @@ const fetchInsight = async <Report extends AnalyticsInsightReport>(
       (body as { error?: { code?: unknown; issues?: unknown } } | null)
         ?.error ?? {},
     );
-  const parsed = analyticsInsightResultSchemas[report].safeParse(body);
-  if (!parsed.success) throw unavailable("reply_invalid");
-  return parsed.data as AnalyticsInsightResults[Report];
+  // A field the Backend adds first is dropped; a reply that breaks its contract is named.
+  const read = readBackendAnswer(analyticsInsightResultSchemas[report], body);
+  if (read === undefined)
+    throw new AnalyticsReadFailure(failedEnvelope(BACKEND_CONTRACT_MISMATCH));
+  return read.data as AnalyticsInsightResults[Report];
 };
 
 interface CanonicalLimits {

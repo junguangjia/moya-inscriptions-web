@@ -180,3 +180,18 @@ export const ADMIN_OP_NAMES = [
 export type AdminOpName = (typeof ADMIN_OP_NAMES)[number];
 export type AdminMcpNativeTool = (typeof ADMIN_MCP_NATIVE_TOOLS)[number];
 export type AdminMcpCompanionTool = (typeof ADMIN_MCP_COMPANION_TOOLS)[number];
+
+/** An op's earlier name, and the op that now answers it. Dates are UTC days. */
+export interface AdminOpAlias {
+  readonly use: AdminOpName;
+  readonly since: string;
+  readonly until: string;
+}
+
+/**
+ * Renamed ops, by their earlier name (extensibility plan 2.8). Until `until` that name
+ * runs `use` and the answer says so in meta.deprecated; after it the name answers
+ * OP_RETIRED with `use`. A row stays once retired, so an earlier name is never answered
+ * as a typo. The window is at least 30 days and one Production release, the longer.
+ */
+export const ADMIN_OP_ALIASES: Readonly<Record<string, AdminOpAlias>> = {};
