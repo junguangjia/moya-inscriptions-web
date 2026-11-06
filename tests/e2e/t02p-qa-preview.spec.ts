@@ -371,9 +371,13 @@ test("QA chrome uses only its URL mode", async ({ page }) => {
     await expect(
       shell.locator("[data-primary-navigation-destination]"),
     ).toHaveCount(3);
-    const dock = await shell
-      .locator("[data-primary-navigation-dock]")
-      .boundingBox();
+    // #260: full desktop navigation is a right rail rather than the dock. A
+    // missing locator must fail here: boundingBox() alone waits without limit.
+    const dockLocator = shell.locator(
+      ":is([data-primary-navigation-dock], [data-desktop-navigation])",
+    );
+    await expect(dockLocator).toHaveCount(1);
+    const dock = await dockLocator.boundingBox();
     if (dock === null) throw new Error("Missing product navigation geometry");
     if (initialDock === undefined) initialDock = dock;
     for (const dimension of ["x", "y", "width", "height"] as const) {
@@ -463,10 +467,14 @@ test("hidden QA keeps Catalog identity and the existing Search Filter User Setti
   await expect(search).toBeVisible();
   await expect(search).toHaveAttribute("aria-modal", "true");
   await expect(userTrigger).toHaveAttribute("inert", "");
-  await expect(shell.locator("[data-primary-navigation-dock]")).toHaveAttribute(
-    "inert",
-    "",
-  );
+  // #260: desktop has no dock to isolate; its rail's own navigation goes inert.
+  await expect(
+    shell.locator(
+      (await shell.getAttribute("data-desktop")) === "true"
+        ? "[data-primary-navigation]"
+        : "[data-primary-navigation-dock]",
+    ),
+  ).toHaveAttribute("inert", "");
   const input = search.getByRole("searchbox", { name: "搜索关键词" });
   await expect(input).toBeFocused();
   await input.fill("  龙门石窟  ");

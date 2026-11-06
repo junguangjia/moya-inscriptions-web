@@ -280,6 +280,15 @@
   }
 }
 
+/* Centred 8px below the QA User trigger, which sits left of the desktop rail. */
+:global(html[data-device-class="desktop"][data-platform="pc"]) .root {
+  top: calc(var(--yoyi-space-7) + 52px);
+  right: calc(
+    var(--yoyi-desktop-navigation-width) + var(--yoyi-desktop-category-width) +
+      var(--yoyi-space-11) - 14px
+  );
+}
+
 :global(:root[data-theme="dark"]) .root {
   --qa-filter-confirm-foreground: var(--yoyi-color-background-page);
 }

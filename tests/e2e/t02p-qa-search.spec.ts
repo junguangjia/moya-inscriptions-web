@@ -436,7 +436,7 @@ test("keyboard utility switches keep one owner and Settings returns through User
   await expect(shell.getByRole("dialog", { name: "设置" })).toBeVisible();
 });
 
-test("all approved viewport matrices keep the three-item capsule and independent Search aligned with a fullscreen scene", async ({
+test("all approved viewport matrices keep the three-item navigation and independent Search aligned with the Search scene", async ({
   page,
 }, testInfo) => {
   const matrices = {
@@ -469,7 +469,13 @@ test("all approved viewport matrices keep the three-item capsule and independent
   const { search, shell, surface } = await openQa(page);
   await selectHomeFeed(surface, shell, "碑刻", "inscriptions");
   const trigger = shell.locator("[data-search-trigger]");
-  const dock = shell.locator("[data-primary-navigation-dock]");
+  // #260: desktop Search sits in a right rail below the three destinations,
+  // not beside them in a bottom dock. Modal isolation holds the rail's navigation.
+  const desktop = expectedPlatform(testInfo.project.name) === "pc";
+  const dock = shell.locator(
+    desktop ? "[data-desktop-navigation]" : "[data-primary-navigation-dock]",
+  );
+  const isolated = desktop ? shell.locator("[data-primary-navigation]") : dock;
   const navigation = shell.locator("[data-primary-navigation]");
   await expect(dock).toHaveCount(1);
   await expect(navigation).toHaveCount(1);
@@ -493,17 +499,33 @@ test("all approved viewport matrices keep the three-item capsule and independent
         `Missing utility geometry at ${viewport.width}x${viewport.height}`,
       );
     }
-    expect(Math.abs(navigationBox.y - searchBox.y)).toBeLessThanOrEqual(1);
-    expect(
-      Math.abs(navigationBox.height - searchBox.height),
-    ).toBeLessThanOrEqual(1);
     expect(Math.abs(searchBox.width - searchBox.height)).toBeLessThanOrEqual(1);
-    expect(
-      searchBox.x - (navigationBox.x + navigationBox.width),
-    ).toBeGreaterThanOrEqual(8);
-    expect(
-      searchBox.x - (navigationBox.x + navigationBox.width),
-    ).toBeLessThanOrEqual(12);
+    if (desktop) {
+      expect(
+        Math.abs(
+          navigationBox.x +
+            navigationBox.width / 2 -
+            (searchBox.x + searchBox.width / 2),
+        ),
+      ).toBeLessThanOrEqual(1);
+      expect(searchBox.y).toBeGreaterThanOrEqual(
+        navigationBox.y + navigationBox.height,
+      );
+      expect(searchBox.y + searchBox.height).toBeLessThanOrEqual(
+        viewport.height,
+      );
+    } else {
+      expect(Math.abs(navigationBox.y - searchBox.y)).toBeLessThanOrEqual(1);
+      expect(
+        Math.abs(navigationBox.height - searchBox.height),
+      ).toBeLessThanOrEqual(1);
+      expect(
+        searchBox.x - (navigationBox.x + navigationBox.width),
+      ).toBeGreaterThanOrEqual(8);
+      expect(
+        searchBox.x - (navigationBox.x + navigationBox.width),
+      ).toBeLessThanOrEqual(12);
+    }
     expect(searchBox.x + searchBox.width).toBeLessThanOrEqual(viewport.width);
     expect(filterBox.x).toBeGreaterThanOrEqual(0);
     expect(filterBox.x + filterBox.width).toBeLessThanOrEqual(
@@ -518,13 +540,32 @@ test("all approved viewport matrices keep the three-item capsule and independent
     );
     const panel = search.locator("[data-search-panel]");
     await expect(panel).toHaveAttribute("role", "dialog");
-    await expect(dock).toHaveAttribute("inert", "");
+    await expect(isolated).toHaveAttribute("inert", "");
     const panelBox = await panel.boundingBox();
     if (panelBox === null) throw new Error("Missing search panel geometry");
-    expect(Math.abs(panelBox.x)).toBeLessThanOrEqual(1);
-    expect(Math.abs(panelBox.y)).toBeLessThanOrEqual(1);
-    expect(Math.abs(panelBox.width - viewport.width)).toBeLessThanOrEqual(1);
-    expect(Math.abs(panelBox.height - viewport.height)).toBeLessThanOrEqual(1);
+    if (desktop) {
+      // #260 bounds desktop Search to a dialog centred in its fixed scene, not
+      // a fullscreen scene. That scene stops at the scrollbar gutter the page
+      // keeps reserved, so it is measured rather than taken from the viewport.
+      const sceneWidth = await panel.evaluate(
+        (node) => node.parentElement!.getBoundingClientRect().width,
+      );
+      expect(panelBox.x).toBeGreaterThan(0);
+      expect(panelBox.y).toBeGreaterThan(0);
+      expect(
+        Math.abs(sceneWidth - panelBox.width - 2 * panelBox.x),
+      ).toBeLessThanOrEqual(1);
+      expect(
+        Math.abs(viewport.height - panelBox.height - 2 * panelBox.y),
+      ).toBeLessThanOrEqual(1);
+    } else {
+      expect(Math.abs(panelBox.x)).toBeLessThanOrEqual(1);
+      expect(Math.abs(panelBox.y)).toBeLessThanOrEqual(1);
+      expect(Math.abs(panelBox.width - viewport.width)).toBeLessThanOrEqual(1);
+      expect(Math.abs(panelBox.height - viewport.height)).toBeLessThanOrEqual(
+        1,
+      );
+    }
     const composer = await search
       .locator("[data-search-composer]")
       .boundingBox();

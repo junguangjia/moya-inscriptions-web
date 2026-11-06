@@ -1348,8 +1348,15 @@
   );
   top: var(--yoyi-space-7);
 }
-:global(html[data-device-class="desktop"][data-platform="pc"]) .header {
+/* The tabs' pin and the page offsets read this, so it belongs on their roots. */
+:global(html[data-device-class="desktop"][data-platform="pc"]) .root,
+:global(html[data-device-class="desktop"][data-platform="pc"]) .page,
+:global(html[data-device-class="desktop"][data-platform="pc"]) .overlay {
   --profile-header-height: 76px;
+}
+:global(html[data-device-class="desktop"][data-platform="pc"]) .header {
+  /* The leading slot holds the desktop Search field, not a 44px icon. */
+  grid-template-columns: auto minmax(48px, 1fr) auto;
   padding-inline: var(--yoyi-space-7);
   gap: var(--yoyi-space-5);
 }

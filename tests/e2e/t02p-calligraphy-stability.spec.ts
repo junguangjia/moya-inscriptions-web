@@ -139,6 +139,10 @@ const enterCalligraphy = async (page: Page, hidden: boolean) => {
 const activePanel = (shell: Locator) =>
   shell.locator('[data-home-feed-panel][aria-hidden="false"]');
 
+// #260 made the book gallery the desktop default, so a fresh reveal converges in
+// the layout a viewer actually gets. It reports readiness as Masonry does.
+const feedLayoutSelector = "[data-home-masonry], [data-desktop-feed]";
+
 const expectCalligraphy = async (shell: Locator) => {
   await expect(shell).toHaveAttribute("data-active-destination", "home");
   await expect(shell.locator("[data-home-surface]")).toHaveAttribute(
@@ -157,9 +161,10 @@ const expectCalligraphy = async (shell: Locator) => {
     "data-home-pager-scrolling",
     "false",
   );
-  await expect(
-    activePanel(shell).locator("[data-home-masonry]"),
-  ).toHaveAttribute("data-layout-ready", "true");
+  await expect(activePanel(shell).locator(feedLayoutSelector)).toHaveAttribute(
+    "data-layout-ready",
+    "true",
+  );
 };
 
 const observeConvergence = async (
@@ -167,7 +172,7 @@ const observeConvergence = async (
   testInfo: TestInfo,
   label: string,
 ) => {
-  const samples = await shell.evaluate(async (node) => {
+  const samples = await shell.evaluate(async (node, layoutSelector) => {
     const frames = [];
     for (let index = 0; index < 12; index += 1) {
       await new Promise<void>((resolve) =>
@@ -177,7 +182,7 @@ const observeConvergence = async (
       const panel = node.querySelector<HTMLElement>(
         '[data-home-feed-panel][aria-hidden="false"]',
       )!;
-      const masonry = panel.querySelector<HTMLElement>("[data-home-masonry]")!;
+      const masonry = panel.querySelector<HTMLElement>(layoutSelector)!;
       frames.push({
         frameHeight: frame.getBoundingClientRect().height,
         frameWidth: frame.getBoundingClientRect().width,
@@ -189,7 +194,7 @@ const observeConvergence = async (
       });
     }
     return frames;
-  });
+  }, feedLayoutSelector);
   await testInfo.attach(`layout-${label}`, {
     body: JSON.stringify(samples, null, 2),
     contentType: "application/json",
@@ -307,6 +312,14 @@ test("ordinary QA Home Calligraphy reveal converges without any raw browser erro
 test("hidden QA all-Calligraphy survives native reading resize and reveal without raw errors", async ({
   page,
 }, testInfo) => {
+  // This case asserts a numeric scroll position across a width change, which is
+  // Masonry's behaviour. #260's book gallery regroups its rows and keeps the
+  // reading card anchored instead (desktop-feed.test.tsx), so desktop reads in
+  // its normal layout here.
+  if (testInfo.project.name.startsWith("desktop"))
+    await page.addInitScript(() =>
+      localStorage.setItem("yoyi.desktop-feed-layout.v1", "double"),
+    );
   const shell = await enterCalligraphy(page, true);
   const viewport = page.viewportSize();
   if (viewport === null) throw new Error("This matrix requires a viewport");

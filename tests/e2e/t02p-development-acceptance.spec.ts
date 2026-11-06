@@ -25,6 +25,27 @@ const expectedInitialAutoPlatform = (
   return "pc";
 };
 
+// #260 gave desktop its own layout preference, defaulting to the book gallery
+// ([data-desktop-feed]). This matrix audits the normal-mode Masonry, which a
+// desktop viewer reaches by choosing it; desktop-normal-default.spec.ts covers
+// the fresh default. Only an absent choice is seeded, so a choice a test makes
+// through Settings survives its own reloads.
+test.beforeEach(async ({ page }, testInfo) => {
+  if (expectedInitialAutoPlatform(testInfo.project.name) === "pc")
+    await page.addInitScript(() => {
+      if (localStorage.getItem("yoyi.desktop-feed-layout.v1") === null)
+        localStorage.setItem("yoyi.desktop-feed-layout.v1", "double");
+    });
+});
+
+// #260's full desktop rail has no bubble, drag, glass or touch gesture, and a
+// different DOM tree from the dock. A desktop browser below the PC width keeps
+// the dock and all of these, so their regressions run there on desktop.
+const useDesktopDockWindow = async (page: Page, projectName: string) => {
+  if (expectedInitialAutoPlatform(projectName) === "pc")
+    await page.setViewportSize({ height: 720, width: 800 });
+};
+
 const platformSelector = (surface: Locator) =>
   surface.getByRole("combobox", { name: "QA presentation platform" });
 
@@ -548,7 +569,12 @@ const expectActiveDestination = async (
     shell.locator("[data-primary-destination]:not([hidden])"),
   ).toHaveCount(1);
   const bubble = navigation.locator("[data-primary-navigation-bubble]");
-  if ((await navigation.getAttribute("data-minimized")) === "true") {
+  if ((await productShell(surface).getAttribute("data-desktop")) === "true") {
+    // #260: the full desktop rail has no sliding bubble; its active item is
+    // the aria-current button checked below.
+    await expect(surface.locator("[data-desktop-navigation]")).toBeVisible();
+    await expect(bubble).toHaveCount(0);
+  } else if ((await navigation.getAttribute("data-minimized")) === "true") {
     await expect(bubble).toBeHidden();
   } else {
     await expect(bubble).toBeVisible();
@@ -905,17 +931,17 @@ test("Clean Product Preview preserves shell state, scroll, and preferences set t
     "data-theme-preference",
     "dark",
   );
-  // Phone and tablet open in calligraphy mode; the toggle selects normal mode.
-  const toggledLayout = "double";
-  if (expectedInitialAutoPlatform(testInfo.project.name) === "pc") {
-    await expect(settings.locator("[data-feed-layout-toggle]")).toHaveCount(0);
-  } else {
-    await settings.locator("[data-feed-layout-toggle]").click();
-    await expect(productShell(qa)).toHaveAttribute(
-      "data-feed-layout",
-      toggledLayout,
-    );
-  }
+  // Phone and tablet open in calligraphy mode and toggle to normal mode. #260
+  // gave PC the same toggle, which leaves this file's seeded normal mode.
+  const toggledLayout =
+    expectedInitialAutoPlatform(testInfo.project.name) === "pc"
+      ? "single"
+      : "double";
+  await settings.locator("[data-feed-layout-toggle]").click();
+  await expect(productShell(qa)).toHaveAttribute(
+    "data-feed-layout",
+    toggledLayout,
+  );
   await closeSettingsAndUserPage(settings, userPage);
   const response = await page.goto("/dev/t02p?acceptance=r01-clean");
   expect(response?.status()).toBe(200);
@@ -963,9 +989,7 @@ test("Clean Product Preview preserves shell state, scroll, and preferences set t
   await expect(reloadedShell).toHaveAttribute("data-theme-preference", "dark");
   await expect(reloadedShell).toHaveAttribute(
     "data-feed-layout",
-    expectedInitialAutoPlatform(testInfo.project.name) === "pc"
-      ? "double"
-      : toggledLayout,
+    toggledLayout,
   );
 });
 
@@ -1282,11 +1306,22 @@ test("Development QA Harness observes the shared Product Shell without owning it
   await expect(surface).toBeVisible();
   const navigation = surface.getByRole("navigation", { name: "主要内容" });
   await expect(navigation).toBeVisible();
-  await expect(surface.locator("[data-primary-navigation-dock]")).toHaveCSS(
-    "position",
-    "fixed",
-  );
-  await expect(navigation).toHaveCSS("position", "relative");
+  if (expectedInitialAutoPlatform(testInfo.project.name) === "pc") {
+    // #260: the full desktop composition fixes a right rail instead of the dock.
+    await expect(surface.locator("[data-desktop-navigation]")).toHaveCSS(
+      "position",
+      "fixed",
+    );
+    await expect(surface.locator("[data-primary-navigation-dock]")).toHaveCount(
+      0,
+    );
+  } else {
+    await expect(surface.locator("[data-primary-navigation-dock]")).toHaveCSS(
+      "position",
+      "fixed",
+    );
+    await expect(navigation).toHaveCSS("position", "relative");
+  }
   await expect(
     navigation.locator("[data-primary-navigation-destination]"),
   ).toHaveCount(3);
@@ -2362,8 +2397,10 @@ test("Visual Catalog covers valid, absent, and failed media with long-scroll nav
   if (lastCardBox === null || navigationBox === null) {
     throw new Error("Expected Catalog card and navigation geometry");
   }
-  expect(lastCardBox.y + lastCardBox.height).toBeLessThanOrEqual(
-    navigationBox.y + 2,
+  // #260 moved desktop navigation from a bottom dock to a right rail, so the
+  // last card now clears it sideways rather than above it.
+  expect(lastCardBox.x + lastCardBox.width).toBeLessThanOrEqual(
+    navigationBox.x + 2,
   );
 });
 
@@ -2435,16 +2472,10 @@ test("Catalog scenario selector maps every state without changing destination", 
   }
 });
 
-test("Feed layout remains bounded to phone/tablet while PC stays responsive", async ({
+test("Feed layout reaches every platform while normal PC columns stay responsive", async ({
   page,
 }, testInfo) => {
   const platform = expectedInitialAutoPlatform(testInfo.project.name);
-  // This legacy matrix preserves normal PC columns; fresh desktop defaults
-  // are covered separately by desktop-normal-default.spec.ts.
-  if (platform === "pc")
-    await page.addInitScript(() =>
-      localStorage.setItem("yoyi.desktop-feed-layout.v1", "double"),
-    );
   const { surface } = await openDevelopmentSurface(page);
   const masonry = activeHomeMasonry(surface);
   await expect(masonry).toHaveAttribute("data-layout-ready", "true");
@@ -2457,7 +2488,8 @@ test("Feed layout remains bounded to phone/tablet while PC stays responsive", as
   if (platform === "pc") {
     const { settings, userPage } =
       await openSettingsThroughAvailableEntry(surface);
-    await expect(settings.locator("[data-feed-layout-toggle]")).toHaveCount(0);
+    // #260 retired the phone/tablet bound: PC settings offer the toggle too.
+    await expect(settings.locator("[data-feed-layout-toggle]")).toBeVisible();
     await closeSettingsAndUserPage(settings, userPage);
     const columnCount = Number(
       await masonry.getAttribute("data-masonry-columns"),
@@ -2809,6 +2841,7 @@ test("Reduced motion preserves tap and release-only primary commits", async ({
     "Reduced-motion Product semantics run once in Desktop Chromium.",
   );
 
+  await useDesktopDockWindow(page, testInfo.project.name);
   await page.emulateMedia({ reducedMotion: "reduce" });
   const { navigation, surface } = await openCleanProductSurface(page);
   const discussionButton = navigation.getByRole("button", {
@@ -2889,7 +2922,8 @@ test("Mobile WebKit locator click commits each primary destination", async ({
 
 test("R02 keeps one navigation tree and isolates accepted marks from the glass compositor", async ({
   page,
-}) => {
+}, testInfo) => {
+  await useDesktopDockWindow(page, testInfo.project.name);
   const navigationAssetResponses: { status: number; url: string }[] = [];
   const navigationAssetFailures: string[] = [];
   const consoleErrors: string[] = [];
@@ -3215,7 +3249,8 @@ test("Mobile and Tablet navigation minimize with hysteresis, idle restore, and a
 
 test("Mouse regression: navigation drag previews only the bubble and commits on release", async ({
   page,
-}) => {
+}, testInfo) => {
+  await useDesktopDockWindow(page, testInfo.project.name);
   const { navigation, surface } = await openDevelopmentSurface(page);
   await confirmMouseNavigationReady(surface, navigation);
   const homeButton = navigation.getByRole("button", {
@@ -3378,7 +3413,8 @@ test("Mouse regression: navigation drag previews only the bubble and commits on 
 
 test("Synthetic touch pointer logic: passive candidate, intent threshold, and drag-click isolation", async ({
   page,
-}) => {
+}, testInfo) => {
+  await useDesktopDockWindow(page, testInfo.project.name);
   const { navigation, surface } = await openDevelopmentSurface(page);
   const homeButton = navigation.getByRole("button", {
     exact: true,
@@ -3530,7 +3566,8 @@ test("Synthetic touch pointer logic: passive candidate, intent threshold, and dr
 
 test("Mouse and synthetic pointer regressions: current-item release and cancellation do not commit", async ({
   page,
-}) => {
+}, testInfo) => {
+  await useDesktopDockWindow(page, testInfo.project.name);
   const { navigation, surface } = await openDevelopmentSurface(page);
   await confirmMouseNavigationReady(surface, navigation);
   const homeButton = navigation.getByRole("button", {

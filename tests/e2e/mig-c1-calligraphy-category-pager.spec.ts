@@ -154,14 +154,15 @@ const waitForInitialFeedScroll = async (
         )!;
         const scroller =
           shell.dataset.platform === "pc" ? document.scrollingElement! : panel;
+        // #260: a desktop book gallery reports readiness as Masonry does.
         const content = panel.querySelector<HTMLElement>(
-          "[data-home-masonry], [data-catalog-presentation]",
+          "[data-home-masonry], [data-desktop-feed], [data-catalog-presentation]",
         )!;
         let previous = "";
         let stableFrames = 0;
         const sample = () => {
           const ready =
-            (content.hasAttribute("data-home-masonry")
+            (content.matches("[data-home-masonry], [data-desktop-feed]")
               ? content.dataset.layoutReady === "true"
               : content.dataset.catalogPresentationState === "populated") &&
             [...panel.querySelectorAll("img")].every((image) => {
@@ -885,6 +886,12 @@ for (const chrome of ["default", "hidden"] as const) {
       ...devices["iPhone 15"],
       baseURL: testInfo.project.use.baseURL as string,
     });
+    // #379's one-time policy notice pushes the first post down until its image
+    // stage, which owns horizontal swipes, fills the whole exposed pager range.
+    // This case is about the pager, so it reads as a viewer who closed the notice.
+    await context.addInitScript(() =>
+      localStorage.setItem("yoyi.policy-update-notice.ai-tools.v1", "closed"),
+    );
     const page = await context.newPage();
     const cdp = await context.newCDPSession(page);
     const evidence: unknown[] = [];
