@@ -24,7 +24,10 @@ import {
   adminActionDetailSchema,
   adminCommunityWriteEchoSchema,
   adminMcpEnvelopeSchema,
+  adminToolDetailSchema,
+  type AdminMcpNativeTool,
   type AdminOpName,
+  type AdminToolExample,
 } from "@moya/contracts/internal/admin-mcp";
 import type { PayloadRequest } from "payload";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -32,22 +35,27 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   ACTIONS_TOOL_NAME,
   ADMIN_ACTIONS_INDEX_ALARM_SHARE,
+  ADMIN_MCP_TOOL_RESERVE_BYTES,
   ADMIN_MCP_TOOLS,
   ADMIN_SURFACES,
+  ADMIN_TOOL_EXAMPLES,
   actionDetail,
   adminMcpBudgets,
   actionsContinuation,
   actionsEnvelope,
   actionsIndex,
   adminOpMeta,
+  built,
   classToolViolations,
   isAdminOpName,
+  listingTable,
   lookupOp,
   okEnvelope,
   nearestOps,
   opUnavailable,
   opsOnTool,
   renderAdminMcpCapabilities,
+  toolDetail,
   toolFor,
   toolListingFor,
   toolResult,
@@ -581,13 +589,16 @@ describe("every surface maps to an op, a tool or a stated exclusion", () => {
       "page /admin/collections/payload-mcp-api-keys",
       "page /admin/collections/mcp-audit-events",
       "endpoint POST /mcp-control/keys/:id/renew",
+      // S8: past the threshold only the Owner confirms a run, and may cancel any.
+      "endpoint POST /mcp-control/runs/:id/confirm",
+      "endpoint POST /mcp-control/runs/:id/cancel",
     ])
       expect(ADMIN_SURFACES[surface], surface).toMatchObject({
         excluded: "reserved",
       });
     for (const name of ADMIN_OP_NAMES)
       expect(name).not.toMatch(
-        /payload-mcp-api-keys|mcp-control|mcp_control|mcp-audit|audit|\.keys?\b|\.control\b|\.pause\b|\.threshold\b/u,
+        /payload-mcp-api-keys|mcp-control|mcp_control|mcp-audit|audit|\.keys?\b|\.control\b|\.pause\b|\.threshold\b|confirm/u,
       );
   });
 
@@ -916,6 +927,37 @@ describe("op rows", () => {
       }
   });
 
+  // S8 plan 2.5: a preview freezes the state of each record a stamp source reads, so a
+  // write on one that forgot to say so would run on state it never froze.
+  it("stamps every built community write on a record a stamp source reads", () => {
+    const STAMPED_BY: Readonly<Record<string, string>> = {
+      comment: "comments",
+      work: "works",
+      user: "users",
+      publishing_job: "jobs",
+      report: "reports",
+    };
+    const stamped: string[] = [];
+    for (const [name, entry] of rows()) {
+      if (entry.credential !== "community" || entry.run === undefined) continue;
+      if (entry.klass === "read") continue;
+      const type = entry.target?.(entry.example ?? {})?.type;
+      const source = type === undefined ? undefined : STAMPED_BY[type];
+      if (source === undefined) continue;
+      expect(entry.previewHooks?.stampSource, name).toBe(source);
+      stamped.push(name);
+    }
+    expect(stamped).toEqual(
+      expect.arrayContaining([
+        "community.moderate-comment",
+        "community.moderate-work",
+        "community.moderate-user",
+        "community.retry-publishing-job",
+        "community.decide-report",
+      ]),
+    );
+  });
+
   it("says why an op cannot run now, in the order a call meets it", () => {
     const entry = entryOf("analytics.ips");
     const run = async () => okEnvelope(null);
@@ -1133,14 +1175,71 @@ describe("size gates", () => {
     },
   );
 
-  it("would still fit every tool the design lists, at the size each has now", () => {
-    // Each later tool brings a description of about this size; the one result schema
-    // per tool must not be what breaks the budget.
-    const [listed] = toolListingFor("full", false);
-    const perTool = estimatedTokens({ ...listed, description: "" });
-    expect(perTool * ADMIN_MCP_NATIVE_TOOLS.length).toBeLessThan(
-      ADMIN_MCP_TOKEN_BUDGET / 2,
+  // Section 5: the slice that adds a tool finds its room, and cuts no one else's.
+  it("keeps room on the full profile for each native tool still to come", () => {
+    const listing = toolListingFor("full", false);
+    const toCome = ADMIN_MCP_NATIVE_TOOLS.filter(
+      (name) => !listing.some((tool) => tool.name === name),
     );
+    const { toolsList } = adminMcpBudgets();
+    const wire = Buffer.byteLength(JSON.stringify(listing)) + toolsList.frame;
+    expect(toolsList.reserved).toEqual({
+      toCome,
+      bytes: wire + ADMIN_MCP_TOOL_RESERVE_BYTES * toCome.length,
+    });
+    expect(toolsList.reserved.bytes).toBeLessThanOrEqual(
+      ADMIN_MCP_TOKEN_BUDGET * 3,
+    );
+    expect(ADMIN_MCP_TOOL_RESERVE_BYTES).toBe(1_000);
+  });
+
+  // The tools E1 listed were past this before it came, so the snapshot pins each
+  // one's size; a tool added later answers to it.
+  const SIZED_BY_SNAPSHOT: ReadonlySet<string> = new Set([
+    "admin_whoami",
+    "admin_find",
+    "admin_get",
+    "admin_read",
+    "admin_analytics",
+    "admin_actions",
+    "admin_view_media",
+    "admin_job",
+    "admin_execute",
+  ]);
+  const DESCRIPTION_MAX_BYTES = 400;
+  const LATER_TOOL_MAX_BYTES = 1_100;
+  const listedBytes = (value: unknown) =>
+    Buffer.byteLength(JSON.stringify(value));
+  const sizeFaults = (
+    listing: readonly { readonly name: string; readonly description: string }[],
+  ) =>
+    listing.flatMap((tool) => [
+      ...(listedBytes(tool.description) - 2 > DESCRIPTION_MAX_BYTES
+        ? [`${tool.name}: description`]
+        : []),
+      ...(!SIZED_BY_SNAPSHOT.has(tool.name) &&
+      listedBytes(tool) > LATER_TOOL_MAX_BYTES
+        ? [`${tool.name}: listed`]
+        : []),
+    ]);
+
+  it("holds each description to 400 bytes, and each tool added after E1 to 1,100 listed", () => {
+    const every = listingTable(ADMIN_MCP_TOOLS).map(({ listing }) => listing);
+    expect(sizeFaults(every)).toEqual([]);
+    // Every tool to come answers to the cap; none slips into the pinned set.
+    for (const name of SIZED_BY_SNAPSHOT)
+      expect(every.map((tool) => tool.name)).toContain(name);
+    const [whoami] = every;
+    const padded = {
+      ...whoami!,
+      name: "admin_preview",
+      inputSchema: { type: "object", description: "x".repeat(800) },
+    };
+    expect(listedBytes(padded)).toBeGreaterThan(LATER_TOOL_MAX_BYTES);
+    expect(sizeFaults([padded])).toEqual(["admin_preview: listed"]);
+    expect(sizeFaults([{ ...whoami!, description: "x".repeat(401) }])).toEqual([
+      "admin_whoami: description",
+    ]);
   });
 
   it("advertises a result schema true of the whole envelope", () => {
@@ -1363,6 +1462,210 @@ describe("admin_actions", () => {
         ops.map((op) => ({ op })),
       ),
     ).toBeUndefined();
+  });
+});
+
+describe("worked examples, by tool", () => {
+  const listed = ADMIN_MCP_TOOLS.map(({ name }) => name);
+  const open = { dm: true, evidence: true, rawIp: true, selfOnly: true };
+  const scope = { keyId: 2_000_002, tool: ACTIONS_TOOL_NAME };
+  const examplesOf = (name: string) =>
+    built(ADMIN_TOOL_EXAMPLES[name as AdminMcpNativeTool]) ?? [];
+
+  it("gives every tool built its examples, and every tool to come its slice", () => {
+    for (const name of ADMIN_MCP_NATIVE_TOOLS) {
+      const row = ADMIN_TOOL_EXAMPLES[name];
+      if (listed.includes(name))
+        expect(built(row)?.length, name).toBeGreaterThan(0);
+      else expect(row, name).toHaveProperty("notBuilt");
+    }
+  });
+
+  it("parses every example on its tool, and on the op it names", () => {
+    for (const tool of ADMIN_MCP_TOOLS)
+      for (const { args } of examplesOf(tool.name)) {
+        const at = `${tool.name} ${JSON.stringify(args)}`;
+        const parsed = tool.input.safeParse(args);
+        expect(parsed.success ? [] : parsed.error.issues, at).toEqual([]);
+        const { op, input, targets } = args as {
+          op?: string;
+          input?: object;
+          targets?: object[];
+        };
+        // A name that is no op is the next test's to refuse.
+        if (tool.name === ACTIONS_TOOL_NAME || !isAdminOpName(op ?? ""))
+          continue;
+        // As each tool reads it: admin_read the input, admin_execute each target over it.
+        const entry = entryOf(op as AdminOpName);
+        for (const command of (targets ?? [{}]).map((target) => ({
+          ...input,
+          ...target,
+        }))) {
+          const own = entry.input?.safeParse(command);
+          expect(own?.success === false ? own.error.issues : [], at).toEqual(
+            [],
+          );
+        }
+      }
+  });
+
+  // A tool's own ops, but the catalog's, which tells of any, and a preview's, which
+  // freezes a write of either execute tool.
+  const PREVIEWED: ReadonlySet<string> = new Set([
+    "admin_execute",
+    "admin_execute_irreversible",
+  ]);
+  const takesOp = (tool: string, op: string) =>
+    isAdminOpName(op) &&
+    (tool === ACTIONS_TOOL_NAME ||
+      entryOf(op).tool === tool ||
+      (tool === "admin_preview" && PREVIEWED.has(entryOf(op).tool)));
+  /** Every op and tool a tool's text and examples name, that a call there would miss. */
+  const namingFaults = (
+    tool: string,
+    description: string,
+    examples: readonly AdminToolExample[],
+  ) => {
+    const texts = [description, ...examples.map(({ says }) => says)];
+    const ops = [
+      ...texts.flatMap((text) =>
+        [...text.matchAll(/\bop:"([^"]*)"/gu)].map(([, op]) => op!),
+      ),
+      ...examples.flatMap(({ args }) => {
+        const { op, ops } = args as { op?: unknown; ops?: unknown[] };
+        return [op, ...(ops ?? [])].filter(
+          (name): name is string => typeof name === "string",
+        );
+      }),
+    ];
+    const tools = [
+      ...texts.flatMap((text) =>
+        [...text.matchAll(/\badmin_[a-z_]+/gu)].map(([name]) => name),
+      ),
+      ...(tool === ACTIONS_TOOL_NAME
+        ? examples.flatMap(({ args }) =>
+            typeof args.tool === "string" ? [args.tool] : [],
+          )
+        : []),
+    ];
+    return [
+      ...ops.filter((op) => !takesOp(tool, op)).map((op) => `op ${op}`),
+      ...tools
+        .filter((name) => examplesOf(name).length === 0)
+        .map((name) => `tool ${name}`),
+    ];
+  };
+
+  it("names only ops its tool runs and tools that are listed, in descriptions and examples", () => {
+    for (const tool of ADMIN_MCP_TOOLS)
+      expect(
+        namingFaults(tool.name, tool.description, examplesOf(tool.name)),
+        tool.name,
+      ).toEqual([]);
+    // What the check is for: a slip in either place, and a tool not built yet.
+    expect(
+      namingFaults(
+        "admin_read",
+        'Read {op:"bogus"} or {op:"catalog.publish"}.',
+        [{ args: { op: "list.catalog" }, says: "admin_sensitive_read first." }],
+      ),
+    ).toEqual([
+      "op bogus",
+      "op catalog.publish",
+      "op list.catalog",
+      "tool admin_sensitive_read",
+    ]);
+    expect(
+      namingFaults(ACTIONS_TOOL_NAME, "", [
+        {
+          args: { ops: ["catalog.publish"], tool: "admin_sensitive_read" },
+          says: "x",
+        },
+      ]),
+    ).toEqual(["tool admin_sensitive_read"]);
+    // A preview freezes writes of either execute tool, and never a read.
+    expect(
+      namingFaults("admin_preview", "", [
+        { args: { op: "list.catalogs" }, says: "x" },
+        { args: { op: "community.delete-body" }, says: "x" },
+        { args: { op: "editorial.save-draft" }, says: "x" },
+      ]),
+    ).toEqual(["op list.catalogs"]);
+  });
+
+  it("gives admin_analytics a call for each report it answers", () => {
+    const reports = examplesOf("admin_analytics").map(
+      ({ args }) => args.report,
+    );
+    // traffic answers NOT_AVAILABLE until its hourly snapshot is built.
+    expect(new Set(reports)).toEqual(
+      new Set(ADMIN_ANALYTICS_REPORTS.filter((name) => name !== "traffic")),
+    );
+  });
+
+  it("answers {tool} with that tool's examples, each within the text cap", () => {
+    for (const tool of ADMIN_MCP_TOOLS) {
+      const envelope = actionsEnvelope({ tool: tool.name }, listed, open);
+      const { content, structuredContent } = toolResult(scope, envelope);
+      expect(structuredContent.meta, tool.name).toEqual({});
+      expect(
+        Buffer.byteLength(content[0]!.text),
+        tool.name,
+      ).toBeLessThanOrEqual(ADMIN_MCP_TEXT_CAP_BYTES);
+      expect(adminToolDetailSchema.parse(envelope.data), tool.name).toEqual({
+        tool: tool.name,
+        available: true,
+        examples: examplesOf(tool.name),
+      });
+    }
+  });
+
+  it("says when a tool is not on this credential, and shows no example of it", () => {
+    expect(toolDetail("admin_execute", ["admin_whoami", "admin_read"])).toEqual(
+      {
+        tool: "admin_execute",
+        available: false,
+        unavailable: "tool_not_listed",
+      },
+    );
+    // A tool not built yet is on no credential.
+    expect(toolDetail("admin_sensitive_read", listed)).toEqual({
+      tool: "admin_sensitive_read",
+      available: false,
+      unavailable: "tool_not_listed",
+    });
+  });
+
+  it("takes {tool} alone, and checks the name at run time while tools/list shows a string", () => {
+    expect(
+      actionsEnvelope(
+        { tool: "admin_read", ops: ["list.media"] },
+        listed,
+        open,
+      ),
+    ).toMatchObject({
+      ok: false,
+      code: "INPUT_INVALID",
+      issues: [{ path: ["tool"], code: "not_with_ops" }],
+    });
+    const actions = toolFor("read", ACTIONS_TOOL_NAME)!;
+    expect(actions.input.safeParse({ tool: "admin_nothing" }).success).toBe(
+      false,
+    );
+    const [listing] = toolListingFor("read", false).filter(
+      ({ name }) => name === ACTIONS_TOOL_NAME,
+    );
+    expect(
+      (listing!.inputSchema.properties as Record<string, unknown>).tool,
+    ).toEqual({ type: "string" });
+  });
+
+  it("returns a copy, so an answer never reaches the table", () => {
+    const detail = toolDetail("admin_find", listed);
+    (detail.examples![0]!.args as { query: string }).query = "changed";
+    expect(toolDetail("admin_find", listed).examples![0]!.args).not.toEqual({
+      query: "changed",
+    });
   });
 });
 

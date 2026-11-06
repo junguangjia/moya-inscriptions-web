@@ -172,7 +172,10 @@ const parse = <Schema extends { parse: (input: unknown) => unknown }>(
   }
 };
 
-/** Validated query fields only, in a fixed order, each URL-encoded once. */
+/**
+ * The whole validated query, each field URL-encoded once. No field is named here, so a
+ * filter the schema takes always reaches the Backend, which refuses one it does not.
+ */
 const toQuery = (
   values: Readonly<Record<string, string | number | undefined>>,
 ): string => {
@@ -449,22 +452,7 @@ export const communityOperationDefinitions = {
     input: operatorCommentQuerySchema,
     output: { ai: operatorCommentPageSchema },
     body: "optional",
-    run: (query, call) =>
-      call(
-        "GET",
-        `comments${toQuery({
-          moderation: query.moderation,
-          kind: query.kind,
-          catalogId: query.catalogId,
-          search: query.search,
-          authorId: query.authorId,
-          from: query.from,
-          to: query.to,
-          order: query.order,
-          page: query.page,
-          pageSize: query.pageSize,
-        })}`,
-      ),
+    run: (query, call) => call("GET", `comments${toQuery(query)}`),
   }),
   "read-comment": define({
     input: adminReadCommentRequestSchema,
@@ -490,23 +478,13 @@ export const communityOperationDefinitions = {
     input: moderationEventQuerySchema,
     output: { ai: moderationEventPageSchema },
     body: "optional",
-    run: (query, call) =>
-      call(
-        "GET",
-        `moderation-events${toQuery({
-          subjectId: query.subjectId,
-          action: query.action,
-          page: query.page,
-          pageSize: query.pageSize,
-        })}`,
-      ),
+    run: (query, call) => call("GET", `moderation-events${toQuery(query)}`),
   }),
   "read-summary": define({
     input: moderationSummaryQuerySchema,
     output: { ai: moderationSummarySchema },
     body: "optional",
-    run: (query, call) =>
-      call("GET", `summary${toQuery({ range: query.range })}`),
+    run: (query, call) => call("GET", `summary${toQuery(query)}`),
   }),
   // Work publishing (Development): the independent work publication policy
   // and limits, explicit submissions, account capacity and job outcomes.
@@ -523,14 +501,7 @@ export const communityOperationDefinitions = {
   "read-article-submissions": define({
     input: articlePendingListQuerySchema,
     output: { owner: articlePendingPageSchema },
-    run: (query, call) =>
-      call(
-        "GET",
-        `articles/submissions${toQuery({
-          cursor: query.cursor,
-          pageSize: query.pageSize,
-        })}`,
-      ),
+    run: (query, call) => call("GET", `articles/submissions${toQuery(query)}`),
   }),
   "read-article-submission": define({
     input: adminReadArticleSubmissionRequestSchema,
@@ -550,16 +521,7 @@ export const communityOperationDefinitions = {
     input: operatorWorkSubmissionQuerySchema,
     output: { owner: operatorWorkSubmissionPageSchema },
     run: (query, call) =>
-      call(
-        "GET",
-        `publishing/submissions${toQuery({
-          state: query.state,
-          authorId: query.authorId,
-          workId: query.workId,
-          page: query.page,
-          pageSize: query.pageSize,
-        })}`,
-      ),
+      call("GET", `publishing/submissions${toQuery(query)}`),
   }),
   "read-work-submission": define({
     input: adminReadWorkSubmissionRequestSchema,
@@ -591,18 +553,7 @@ export const communityOperationDefinitions = {
   "read-publishing-jobs": define({
     input: operatorPublishingJobQuerySchema,
     output: { owner: operatorPublishingJobPageSchema },
-    run: (query, call) =>
-      call(
-        "GET",
-        `publishing/jobs${toQuery({
-          state: query.state,
-          kind: query.kind,
-          subjectId: query.subjectId,
-          id: query.id,
-          page: query.page,
-          pageSize: query.pageSize,
-        })}`,
-      ),
+    run: (query, call) => call("GET", `publishing/jobs${toQuery(query)}`),
   }),
   "retry-publishing-job": define({
     input: adminPublishingJobActionRequestSchema,

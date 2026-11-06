@@ -6,6 +6,7 @@ import {
 } from "@moya/contracts/schemas";
 import {
   AI_OPERATOR_RUN_HEADER,
+  isAiRunHeader,
   URGENT_OWNER_ONLY,
 } from "@moya/contracts/internal/admin-mcp";
 import {
@@ -335,7 +336,7 @@ export async function handleReportingOperatorRequest(
       aiOperator &&
       action === "metadata" &&
       (body as { legalHold?: unknown } | null)?.legalHold === false &&
-      !request.headers[AI_OPERATOR_RUN_HEADER]
+      !isAiRunHeader(request.headers[AI_OPERATOR_RUN_HEADER])
     ) {
       sendJson(response, 403, {
         error: { status: 403, code: "AI_RUN_REQUIRED" },

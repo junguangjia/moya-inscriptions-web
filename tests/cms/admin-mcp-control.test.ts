@@ -1154,4 +1154,404 @@ describe("the control page", () => {
     });
     expect(missing.status).toBe(404);
   });
+
+  it("compares admin_preview with its budget up to 100 targets, and a run's call with none", async () => {
+    const timing = async (tool: string) =>
+      (
+        await readControlPage(await ownerSessionRequest())
+      ).figures?.timings.find((row) => row.tool === tool);
+    const before = {
+      preview: (await timing("admin_preview"))?.calls ?? 0,
+      batch: (await timing("admin_preview (batch)"))?.calls ?? 0,
+      run: (await timing("admin_execute_irreversible (run)"))?.calls ?? 0,
+    };
+    await db().execute(sql`
+      INSERT INTO mcp_audit_events (at, call_id, phase, class, tool, op, run_id, count, ok, code, duration_ms)
+      VALUES
+        (now(), gen_random_uuid(), 'finish', 'reversible', 'admin_preview', 'editorial.save-draft', NULL, 100, true, 'OK', 900),
+        (now(), gen_random_uuid(), 'finish', 'reversible', 'admin_preview', 'editorial.save-draft', NULL, 101, true, 'OK', 7000),
+        (now(), gen_random_uuid(), 'finish', 'irreversible', 'admin_execute_irreversible', NULL, ${randomUUID()}, NULL, true, 'OK', 9000)`);
+    expect(await timing("admin_preview")).toMatchObject({
+      calls: before.preview + 1,
+      budgetMs: 1500,
+    });
+    expect(await timing("admin_preview (batch)")).toMatchObject({
+      calls: before.batch + 1,
+      budgetMs: null,
+    });
+    expect(await timing("admin_execute_irreversible (run)")).toMatchObject({
+      calls: before.run + 1,
+      budgetMs: null,
+    });
+  });
+});
+
+// S8-11, Behavior Matrix "Irreversible op above threshold" and "Reserved surface by any
+// key or Authorization header": past the threshold a run waits for one confirmation on
+// the control page, bound to the seal the page showed, by the Owner browser session
+// from the Admin's own origin, and the AI resumes it by its id.
+describe("a run past the threshold, on the control page", () => {
+  let aiJwt: string;
+
+  beforeAll(async () => {
+    // A token outlives a role change, which is how a JWT can sit on an AI row.
+    const holder = await payload.create({
+      collection: "users",
+      overrideAccess: true,
+      data: {
+        email: email("run-holder"),
+        password,
+        role: "automation",
+        scopeCatalogIds: [],
+      },
+    });
+    const login = await call("users/login", {
+      method: "POST",
+      body: { email: email("run-holder"), password },
+    });
+    aiJwt = ((await login.json()) as { token: string }).token;
+    await payload.update({
+      collection: "users",
+      id: holder.id,
+      overrideAccess: true,
+      data: { role: "ai_operator" },
+    });
+  });
+
+  const withThreshold = async <T>(work: () => Promise<T>): Promise<T> => {
+    await payload.updateGlobal({
+      slug: "mcp-control",
+      overrideAccess: true,
+      data: { threshold: 1 },
+    });
+    try {
+      return await work();
+    } finally {
+      await payload.updateGlobal({
+        slug: "mcp-control",
+        overrideAccess: true,
+        data: { threshold: CLOSED.threshold },
+      });
+    }
+  };
+
+  let made = 0;
+  /** Two new Catalogs, so irreversible: previewed, then sent to wait for the Owner. */
+  const awaitingRun = async () => {
+    made += 1;
+    const drafts = [`run-${made}-a`, `run-${made}-b`];
+    const preview = replyOf(
+      await callTool("ai", "admin_preview", {
+        requestId: randomUUID(),
+        op: "editorial.save-draft",
+        targets: drafts.map((suffix) => ({ content: catalogDraft(suffix) })),
+      }),
+    );
+    expect(preview).toMatchObject({
+      ok: true,
+      data: { class: "irreversible" },
+    });
+    const runId = String(preview.runId);
+    const waiting = await withThreshold(async () =>
+      replyOf(
+        await callTool("ai", "admin_execute_irreversible", {
+          requestId: randomUUID(),
+          previewId: runId,
+        }),
+      ),
+    );
+    expect(waiting).toMatchObject({ ok: false, code: "AWAITING_OWNER" });
+    const shown = (
+      await readControlPage(await ownerSessionRequest())
+    ).runs?.awaiting.find((run) => run.runId === runId);
+    expect(shown).toBeDefined();
+    return {
+      runId,
+      sealHash: shown!.sealHash,
+      drafts,
+      previewed: preview.data as Record<string, unknown>,
+    };
+  };
+  const stateOf = async (runId: string) =>
+    String(
+      (
+        await db().execute(
+          sql`SELECT state FROM mcp_runs WHERE run_id = ${runId}::uuid`,
+        )
+      ).rows[0]?.state,
+    );
+  const routeOf = (runId: string, action: "confirm" | "cancel") =>
+    `mcp-control/runs/${runId}/${action}`;
+  const act = (
+    runId: string,
+    action: "confirm" | "cancel",
+    headers: HeadersInit,
+    body: unknown = {},
+  ) => call(routeOf(runId, action), { method: "POST", headers, body });
+  const owned = (headers: HeadersInit = {}) => ({
+    ...browser(),
+    origin: ORIGIN,
+    ...Object.fromEntries(new Headers(headers)),
+  });
+  const draftsNamed = async (suffix: string) =>
+    (
+      await payload.find({
+        collection: "catalogs",
+        draft: true,
+        overrideAccess: true,
+        depth: 0,
+        limit: 2,
+        where: { catalogId: { equals: `control-${run}-${suffix}` } },
+      })
+    ).totalDocs;
+  const everyRefusedCredential = () =>
+    [
+      ...refusedCredentials(),
+      ["ai_operator JWT", { authorization: `JWT ${aiJwt}` }],
+      ["ai_operator session cookie", { cookie: `payload-token=${aiJwt}` }],
+      [
+        "connection token",
+        { authorization: `Bearer artvenn_ct_${"a".repeat(43)}` },
+      ],
+    ] as const;
+
+  it("lists it for the Owner by what its preview froze, and from which credential", async () => {
+    const { runId, sealHash, previewed } = await awaitingRun();
+    const page = await readControlPage(await ownerSessionRequest());
+    const shown = page.runs?.awaiting.find((row) => row.runId === runId);
+    // As the preview answered when it sealed: the Owner confirms what the AI was shown.
+    expect(shown).toMatchObject({
+      op: "editorial.save-draft",
+      credential: `key:${keyIds.ai}`,
+      credentialLabel: `synthetic-ai-${run}`,
+      reason: null,
+      count: 2,
+      conflicts: 0,
+      consequences: previewed.consequences,
+      userNotifications: previewed.userNotifications,
+      newIdentities: previewed.newIdentities ?? null,
+      sample: [
+        { index: 0, ref: null },
+        { index: 1, ref: null },
+      ],
+    });
+    const stored = await db().execute(
+      sql`SELECT seal_hash FROM mcp_runs WHERE run_id = ${runId}::uuid`,
+    );
+    expect(sealHash).toBe(stored.rows[0]!.seal_hash);
+  });
+
+  it("refuses every credential but the Owner browser session, and any other origin, and moves nothing", async () => {
+    const { runId, sealHash } = await awaitingRun();
+    for (const action of ["confirm", "cancel"] as const) {
+      for (const [label, headers] of everyRefusedCredential()) {
+        const refused = await act(
+          runId,
+          action,
+          { ...headers, origin: ORIGIN },
+          { expectedSealHash: sealHash },
+        );
+        expect([action, label, refused.status]).toEqual([action, label, 403]);
+      }
+      for (const headers of [
+        browser(),
+        { ...browser(), origin: "https://invalid.example" },
+      ]) {
+        const refused = await act(runId, action, headers, {
+          expectedSealHash: sealHash,
+        });
+        expect(refused.status).toBe(403);
+        expect(await refused.json()).toEqual({ error: "ORIGIN_REQUIRED" });
+      }
+    }
+    expect(await stateOf(runId)).toBe("awaiting_owner");
+    expect(
+      await auditRows(sql`run_id = ${runId} AND class = 'reserved'`),
+    ).toEqual([]);
+  });
+
+  it("confirms once, bound to the seal shown, and the AI then runs it to the end by its id", async () => {
+    const { runId, sealHash, drafts } = await awaitingRun();
+    for (const body of [{}, { expectedSealHash: "not-a-hash" }]) {
+      const refused = await act(runId, "confirm", owned(), body);
+      expect(refused.status).toBe(400);
+      expect(await refused.json()).toEqual({ error: "SEAL_HASH_REQUIRED" });
+    }
+    const mismatch = await act(runId, "confirm", owned(), {
+      expectedSealHash: "b".repeat(64),
+    });
+    expect(mismatch.status).toBe(409);
+    expect(await mismatch.json()).toEqual({ error: "SEAL_HASH_MISMATCH" });
+    for (const missing of [randomUUID(), "not-a-run"]) {
+      const absent = await act(missing, "confirm", owned(), {
+        expectedSealHash: sealHash,
+      });
+      expect(absent.status).toBe(404);
+    }
+    expect(await stateOf(runId)).toBe("awaiting_owner");
+
+    const confirmed = await act(runId, "confirm", owned(), {
+      expectedSealHash: sealHash,
+    });
+    expect(confirmed.status).toBe(200);
+    expect(confirmed.headers.get("cache-control")).toBe("private, no-store");
+    expect(await confirmed.json()).toEqual({ state: "confirmed" });
+    const again = await act(runId, "confirm", owned(), {
+      expectedSealHash: sealHash,
+    });
+    expect(await again.json()).toEqual({ state: "confirmed", already: true });
+    const stored = (
+      await db().execute(
+        sql`SELECT confirmed_by, confirmed_seal_hash FROM mcp_runs WHERE run_id = ${runId}::uuid`,
+      )
+    ).rows[0]!;
+    expect(stored).toEqual({
+      confirmed_by: owner.id,
+      confirmed_seal_hash: sealHash,
+    });
+    // Each attempt a reserved start and finish, named for the run, with no content.
+    const rows = await auditRows(
+      sql`run_id = ${runId} AND class = 'reserved' AND op = 'mcp-control.confirm-run'`,
+    );
+    expect(rows.map(({ phase, ok, code }) => [phase, ok, code])).toEqual([
+      ["start", null, null],
+      ["finish", false, "STATE_CONFLICT"],
+      ["start", null, null],
+      ["finish", true, "OK"],
+      ["start", null, null],
+      ["finish", true, "OK"],
+    ]);
+    expect(rows.every(({ user_id }) => user_id === String(owner.id))).toBe(
+      true,
+    );
+
+    const ran = replyOf(
+      await callTool("ai", "admin_execute_irreversible", {
+        requestId: randomUUID(),
+        runId,
+      }),
+    );
+    expect(ran).toMatchObject({ ok: true, state: "succeeded", done: 2 });
+    for (const suffix of drafts) expect(await draftsNamed(suffix)).toBe(1);
+    expect(
+      (await readControlPage(await ownerSessionRequest())).runs?.awaiting.map(
+        (row) => row.runId,
+      ),
+    ).not.toContain(runId);
+  });
+
+  it("refuses a run past its wait or frozen under another schema, and confirms nothing", async () => {
+    const late = await awaitingRun();
+    await db().execute(sql`
+      UPDATE mcp_runs SET expires_at = now() - interval '1 minute'
+      WHERE run_id = ${late.runId}::uuid`);
+    const expired = await act(late.runId, "confirm", owned(), {
+      expectedSealHash: late.sealHash,
+    });
+    expect(expired.status).toBe(409);
+    expect(await expired.json()).toEqual({ error: "RUN_EXPIRED" });
+    expect(await stateOf(late.runId)).toBe("expired");
+
+    const stale = await awaitingRun();
+    await db().execute(
+      sql`ALTER TABLE mcp_runs DISABLE TRIGGER mcp_runs_guard`,
+    );
+    try {
+      await db().execute(sql`
+        UPDATE mcp_runs SET op_schema_hash = ${"0".repeat(64)}
+        WHERE run_id = ${stale.runId}::uuid`);
+    } finally {
+      await db().execute(
+        sql`ALTER TABLE mcp_runs ENABLE TRIGGER mcp_runs_guard`,
+      );
+    }
+    const refused = await act(stale.runId, "confirm", owned(), {
+      expectedSealHash: stale.sealHash,
+    });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: "RUN_STALE" });
+    for (const { drafts } of [late, stale])
+      for (const suffix of drafts) expect(await draftsNamed(suffix)).toBe(0);
+  });
+
+  it("is cancelled by the Owner, once, and the AI's execute then answers RUN_CANCELLED", async () => {
+    const { runId, drafts } = await awaitingRun();
+    const cancelled = await act(runId, "cancel", owned());
+    expect(cancelled.status).toBe(200);
+    expect(await cancelled.json()).toEqual({ state: "cancelled" });
+    expect(await (await act(runId, "cancel", owned())).json()).toEqual({
+      state: "cancelled",
+      already: true,
+    });
+    expect(
+      replyOf(
+        await callTool("ai", "admin_execute_irreversible", {
+          requestId: randomUUID(),
+          runId,
+        }),
+      ),
+    ).toMatchObject({ ok: false, code: "RUN_CANCELLED" });
+    for (const suffix of drafts) expect(await draftsNamed(suffix)).toBe(0);
+    expect(
+      (
+        await auditRows(
+          sql`run_id = ${runId} AND op = 'mcp-control.cancel-run' AND phase = 'finish'`,
+        )
+      ).map(({ ok }) => ok),
+    ).toEqual([true, true]);
+  });
+
+  it("changes nothing when the ledger cannot record the confirmation", async () => {
+    const { runId, sealHash } = await awaitingRun();
+    await withFailingAudit("NEW.op = 'mcp-control.confirm-run'", async () => {
+      const refused = await act(runId, "confirm", owned(), {
+        expectedSealHash: sealHash,
+      });
+      expect(refused.status).toBe(503);
+      expect(await refused.json()).toEqual({ error: "AUDIT_UNAVAILABLE" });
+    });
+    expect(await stateOf(runId)).toBe("awaiting_owner");
+  });
+
+  it("lists a run left with no live lease as stalled, and the Owner cancels it", async () => {
+    const preview = replyOf(
+      await callTool("ai", "admin_preview", {
+        requestId: randomUUID(),
+        op: "editorial.save-draft",
+        targets: [{ content: catalogDraft(`stalled-${made}`) }],
+      }),
+    );
+    const runId = String(preview.runId);
+    // As a call that died mid-run leaves it: running, no lease, quiet for a while.
+    await db().execute(sql`
+      UPDATE mcp_runs SET state = 'running', updated_at = now() - interval '11 minutes'
+      WHERE run_id = ${runId}::uuid`);
+    const page = await readControlPage(await ownerSessionRequest());
+    expect(page.runs?.stalled.find((row) => row.runId === runId)).toMatchObject(
+      {
+        op: "editorial.save-draft",
+        state: "running",
+        count: 1,
+        done: 0,
+        credential: `key:${keyIds.ai}`,
+      },
+    );
+    expect(page.runs?.awaiting.map((row) => row.runId)).not.toContain(runId);
+    const cancelled = await act(runId, "cancel", owned());
+    expect(await cancelled.json()).toEqual({ state: "cancelled" });
+    expect(
+      (await readControlPage(await ownerSessionRequest())).runs?.stalled.map(
+        (row) => row.runId,
+      ),
+    ).not.toContain(runId);
+  });
+
+  afterAll(async () => {
+    // As the tables' owner: the runtime role may never delete a run.
+    await db().execute(sql`
+      DELETE FROM mcp_run_targets WHERE run_id IN (
+        SELECT run_id FROM mcp_runs WHERE credential = ${`key:${keyIds.ai}`})`);
+    await db().execute(sql`
+      DELETE FROM mcp_runs WHERE credential = ${`key:${keyIds.ai}`}`);
+  });
 });

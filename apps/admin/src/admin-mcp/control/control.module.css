@@ -14,6 +14,45 @@
   border-top: 1px solid var(--yoyi-color-border-subtle);
 }
 
+.runList {
+  display: grid;
+  gap: var(--yoyi-space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.runRow {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding-top: var(--yoyi-space-4);
+  border-top: 1px solid var(--yoyi-color-border-subtle);
+}
+
+/* What a caller wrote: kept as typed, wrapped on a narrow screen. */
+.reason {
+  margin: 0;
+  color: var(--yoyi-color-text-primary);
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.reason span {
+  color: var(--yoyi-color-text-secondary);
+}
+
+.facts {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--yoyi-color-text-secondary);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
 .switchHead {
   display: flex;
   flex-wrap: wrap;

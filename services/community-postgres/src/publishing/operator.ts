@@ -69,7 +69,11 @@ import { applyPublicRevision, touchWork } from "./submissions.js";
 import { revisionAuthorship } from "./authorship.js";
 import type { RevisionAuthorshipColumns } from "./authorship.js";
 import { presentationDto } from "./works.js";
-import { isSelfOnlyWorkSql } from "../self-only.js";
+import {
+  OPERATOR_SOURCES,
+  slotAfter,
+  submissionFrom,
+} from "../operator-filters.js";
 
 /*
  * Operator work publishing commands: the independent policy and limits, the
@@ -173,12 +177,6 @@ interface SubmissionRow extends QueryResultRow, RevisionAuthorshipColumns {
   decided_by: string | null;
   version: number;
 }
-
-/** Queue-visible revisions: explicit or legacy, never self-only, of works that are not purged. */
-export const submissionFrom = `FROM community.work_revisions r
-  JOIN community.works w ON w.id=r.work_id
-  JOIN community.public_users u ON u.id=r.author_id
-  WHERE r.disposition<>'not_required' AND w.deleted_at IS NULL`;
 
 const submissionProjection = `SELECT r.id,r.work_id,r.sequence,r.origin,r.author_id,u.handle,u.display_name,
   u.status AS author_status,r.title,r.body,r.authorship_kind,r.reference_title,r.original_author,r.source_note,
@@ -285,12 +283,6 @@ const submissionDtos = async (
 };
 
 /** PublishingOperatorPort.listSubmissions */
-export const submissionQueueWhere = `${submissionFrom} AND r.origin='submission'
-  AND ($1::text IS NULL OR r.disposition=$1::text)
-  AND ($2::text IS NULL OR r.author_id=$2::text)
-  AND ($3::text IS NULL OR r.work_id=$3::text)
-  AND NOT ($4::boolean AND ${isSelfOnlyWorkSql("w")})`;
-
 export const listSubmissions = async (
   pool: Pool,
   query: OperatorWorkSubmissionQuery,
@@ -299,29 +291,25 @@ export const listSubmissions = async (
   readTransaction(pool, async (db) => {
     // The queue holds explicit submissions only; legacy baselines are readable
     // by id but never queued.
-    const state = query.state ?? null;
-    const filters = [
-      state,
-      query.authorId ?? null,
-      query.workId ?? null,
-      scope?.withholdSelfOnly === true,
-    ];
+    const submissions = OPERATOR_SOURCES.work_submissions;
+    const queue = `${submissions.from} ${submissions.where()}`;
+    const filters = submissions.values(query, scope);
     const total = Number(
       (
         await db.query<{ total: string }>(
-          `SELECT count(*) AS total ${submissionQueueWhere}`,
+          `SELECT count(*) AS total ${queue}`,
           filters,
         )
       ).rows[0]?.total ?? 0,
     );
     const { limit, offset } = pageBounds(query);
     const order =
-      state === "pending"
+      query.state === "pending"
         ? "r.submitted_at ASC,r.id ASC"
         : "r.submitted_at DESC,r.id DESC";
     const rows = (
       await db.query<SubmissionRow>(
-        `${submissionProjection} ${submissionQueueWhere} ORDER BY ${order} LIMIT $5 OFFSET $6`,
+        `${submissionProjection} ${queue} ORDER BY ${order} LIMIT ${slotAfter(filters, 1)} OFFSET ${slotAfter(filters, 2)}`,
         [...filters, limit, offset],
       )
     ).rows;
@@ -613,24 +601,17 @@ const jobDto = (row: JobRow): OperatorPublishingJob =>
   });
 
 /** PublishingOperatorPort.listJobs */
-export const publishingJobsWhere =
-  "WHERE ($1::text IS NULL OR state=$1::text) AND ($2::text IS NULL OR kind=$2::text) AND ($3::text IS NULL OR subject_id=$3::text) AND ($4::text IS NULL OR id=$4::text)";
-
 export const listJobs = async (
   pool: Pool,
   query: OperatorPublishingJobQuery,
 ): Promise<OperatorPublishingJobPage> =>
   readTransaction(pool, async (db) => {
-    const filters = [
-      query.state ?? null,
-      query.kind ?? null,
-      query.subjectId ?? null,
-      query.id ?? null,
-    ];
+    const jobs = OPERATOR_SOURCES.jobs;
+    const filters = jobs.values(query);
     const total = Number(
       (
         await db.query<{ total: string }>(
-          `SELECT count(*) AS total FROM community.publishing_jobs ${publishingJobsWhere}`,
+          `SELECT count(*) AS total ${jobs.from} ${jobs.where()}`,
           filters,
         )
       ).rows[0]?.total ?? 0,
@@ -638,7 +619,7 @@ export const listJobs = async (
     const { limit, offset } = pageBounds(query);
     const rows = (
       await db.query<JobRow>(
-        `SELECT ${jobColumns} FROM community.publishing_jobs ${publishingJobsWhere} ORDER BY updated_at DESC,id DESC LIMIT $5 OFFSET $6`,
+        `SELECT ${jobColumns} ${jobs.from} ${jobs.where()} ORDER BY updated_at DESC,id DESC LIMIT ${slotAfter(filters, 1)} OFFSET ${slotAfter(filters, 2)}`,
         [...filters, limit, offset],
       )
     ).rows;

@@ -11,8 +11,8 @@ import type { AdminMcpSlice } from "admin/admin-mcp";
 export const NOT_BUILT: Readonly<
   Partial<Record<AdminMcpSlice, readonly AdminOpName[]>>
 > = {
-  // Preview and the run engine: every irreversible community write, the duplicates
-  // that bind a new identity, and the run ledger's own read and cancel.
+  // Preview and the run engine: every irreversible community write, and the duplicates
+  // that bind a new identity.
   S8: [
     "community.forward-report",
     "community.delete-body",
@@ -21,8 +21,6 @@ export const NOT_BUILT: Readonly<
     "catalog.duplicate",
     "article.duplicate",
     "collection.duplicate",
-    "list.runs",
-    "run.cancel",
   ],
   // The byte channel: a new mediaId is registered through it.
   S9: ["media.register_upload"],

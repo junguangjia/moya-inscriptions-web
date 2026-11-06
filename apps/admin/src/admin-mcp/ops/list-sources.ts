@@ -9,14 +9,24 @@ import {
   adminReadRowsDataSchema,
   adminReceiptListInputSchema,
 } from "@moya/contracts/internal/admin-mcp";
-import type { AdminMcpEnvelope } from "@moya/contracts/internal/admin-mcp";
+import type {
+  AdminListFilterOf,
+  AdminMcpEnvelope,
+} from "@moya/contracts/internal/admin-mcp";
 import { EDITORIAL_STATEFUL_FIELDS } from "@moya/contracts/internal/editorial";
+import type { EditorialStatefulField } from "@moya/contracts/internal/editorial";
 import { sql } from "@payloadcms/db-postgres";
 import type { PayloadRequest, Where } from "payload";
 import type { z } from "zod";
 
 import { actsAsOwner } from "../../editorial/access";
 import { withinBudget } from "../budget";
+import {
+  offsetCursor,
+  offsetOfCursor,
+  rowCursor,
+  rowIdOfCursor,
+} from "../cursor";
 import { failedEnvelope, inputInvalidEnvelope, okEnvelope } from "../envelope";
 import {
   findDocuments,
@@ -34,9 +44,10 @@ import type { AdminOpContext } from "./define";
  * The CMS queues and pages admin_read serves (admin-mcp-completion-v1 section 6).
  * Rows are compact, a `fields` projection comes from a whitelist, and long text only
  * ever leaves as state, length and hash. view=count answers in SQL with the same
- * filter, so counting never pages rows through the model; a test holds the two
- * translations of each filter equal. It runs under a search branch's budget, and a
- * count past its time answers READ_TIMED_OUT, never a number.
+ * filter, so counting never pages rows through the model: each filter key is written
+ * once, in Payload's terms and in SQL side by side, and a test holds the two equal. It
+ * runs under a search branch's budget, and a count past its time answers
+ * READ_TIMED_OUT, never a number.
  */
 
 type SqlFragment = ReturnType<typeof sql>;
@@ -52,6 +63,18 @@ interface CountGroup {
   readonly state?: string;
 }
 
+/** One filter key: the Payload where a row read uses, and the same rule in SQL. */
+interface FilterKey<Value> {
+  readonly where: (value: Value) => readonly Where[];
+  /** Column names from this file only, never from a caller. */
+  readonly sql: (value: Value) => readonly SqlFragment[];
+}
+
+/** A rule for every key a source's filter takes: one the schema adds fails typecheck. */
+type FilterTable<Filter> = {
+  readonly [Key in keyof Filter]-?: FilterKey<NonNullable<Filter[Key]>>;
+};
+
 export interface ListSource {
   readonly target: Pick<CmsFamily, "versioned"> & { readonly slug: string };
   readonly family?: CmsFamily;
@@ -60,7 +83,16 @@ export interface ListSource {
   readonly resolve: (
     filter: Record<string, unknown>,
   ) => Record<string, unknown>;
-  readonly where: (filter: Record<string, unknown>) => readonly Where[];
+  /** The source's filter table; the row read and the count both apply each key. */
+  readonly filters: Readonly<
+    Record<
+      string,
+      {
+        readonly where: (value: never) => readonly Where[];
+        readonly sql: (value: never) => readonly SqlFragment[];
+      }
+    >
+  >;
   readonly compactSelect: Readonly<Record<string, unknown>>;
   readonly compact: (
     doc: RecordDocument,
@@ -70,12 +102,24 @@ export interface ListSource {
   readonly count: {
     readonly table: string;
     readonly latestOnly: boolean;
-    readonly conditions: (
-      filter: Record<string, unknown>,
-    ) => readonly SqlFragment[];
     readonly groups: Readonly<Record<string, CountGroup>>;
   };
 }
+
+/** Each key of a filter as the row read asks it. */
+const whereOf = (source: ListSource, filter: Record<string, unknown>) =>
+  Object.entries(source.filters).flatMap(([key, rule]) =>
+    filter[key] === undefined ? [] : rule.where(filter[key] as never),
+  );
+
+/** Each key of a filter as a count, and later a selector, asks it in SQL. */
+export const conditionsOf = (
+  source: ListSource,
+  filter: Record<string, unknown>,
+): readonly SqlFragment[] =>
+  Object.entries(source.filters).flatMap(([key, rule]) =>
+    filter[key] === undefined ? [] : rule.sql(filter[key] as never),
+  );
 
 const plain = (name: string): Projection => ({
   select: { [name]: true },
@@ -128,12 +172,58 @@ const snake = (name: string) =>
 
 const STATEFUL: ReadonlySet<string> = new Set(EDITORIAL_STATEFUL_FIELDS);
 
-/** Whichever version is latest decides, as Payload's draft read does. */
-const statusWhere = (status: unknown): readonly Where[] =>
-  status === "all" ? [] : [{ _status: { equals: status as string } }];
+/**
+ * How a row shows each stateful text: a short one as its value, a long one by length
+ * and hash. A stateful field the editorial contract adds fails typecheck here until
+ * it is placed, so none reaches a row unread.
+ */
+const STATEFUL_PROJECTIONS = {
+  dynasty: statefulShort,
+  dateText: statefulShort,
+  province: statefulShort,
+  prefecture: statefulShort,
+  county: statefulShort,
+  currentLocation: statefulShort,
+  currentCustodian: statefulShort,
+  scriptStyle: statefulLong,
+  description: statefulLong,
+  transcription: statefulLong,
+  historicalContext: statefulLong,
+  scholarlyResearch: statefulLong,
+} satisfies Record<EditorialStatefulField, (name: string) => Projection>;
 
-const statusSql = (status: unknown): readonly SqlFragment[] =>
-  status === "all" ? [] : [sql`version__status::text = ${String(status)}`];
+const statefulFields = Object.fromEntries(
+  Object.entries(STATEFUL_PROJECTIONS).map(([name, projection]) => [
+    name,
+    projection(name),
+  ]),
+);
+
+/** Whichever version is latest decides, as Payload's draft read does. */
+const statusKey: FilterKey<string> = {
+  where: (status) =>
+    status === "all" ? [] : [{ _status: { equals: status } }],
+  sql: (status) =>
+    status === "all" ? [] : [sql`version__status::text = ${status}`],
+};
+
+/** A plain column, equal in both. */
+const equalsKey = (field: string, column: string): FilterKey<string> => ({
+  where: (value) => [{ [field]: { equals: value } }],
+  sql: (value) => [sql`${sql.raw(column)} = ${value}`],
+});
+
+/** A stateful text: only a VALUE equal to it, never an unsupplied one. */
+const statefulKey = (field: string): FilterKey<string> => ({
+  where: (value) => [
+    { [`${field}.state`]: { equals: "VALUE" } },
+    { [`${field}.value`]: { equals: value } },
+  ],
+  sql: (value) => [
+    sql.raw(`version_${snake(field)}_state::text = 'VALUE'`),
+    sql`${sql.raw(`version_${snake(field)}_value`)} = ${value}`,
+  ],
+});
 
 const valueGroup = (field: string): CountGroup => ({
   state: `version_${snake(field)}_state::text`,
@@ -172,27 +262,31 @@ const catalogs: ListSource = {
   input: adminCatalogListInputSchema,
   // The Matrix's "matching drafts": a live record with a newer draft is a draft here.
   resolve: (filter) => ({ status: "draft", ...filter }),
-  where: ({ status, missing, kind, dynasty, province }) => [
-    ...statusWhere(status),
-    ...((missing as readonly string[] | undefined) ?? []).map((field) =>
-      STATEFUL.has(field)
-        ? { [`${field}.state`]: { in: ["UNSUPPLIED", "CLEAR"] } }
-        : { [field]: { exists: false } },
-    ),
-    ...(kind === undefined ? [] : [{ kind: { equals: kind as string } }]),
-    ...(dynasty === undefined
-      ? []
-      : [
-          { "dynasty.state": { equals: "VALUE" } },
-          { "dynasty.value": { equals: dynasty as string } },
-        ]),
-    ...(province === undefined
-      ? []
-      : [
-          { "province.state": { equals: "VALUE" } },
-          { "province.value": { equals: province as string } },
-        ]),
-  ],
+  filters: {
+    status: statusKey,
+    missing: {
+      where: (fields) =>
+        fields.map((field) =>
+          STATEFUL.has(field)
+            ? { [`${field}.state`]: { in: ["UNSUPPLIED", "CLEAR"] } }
+            : { [field]: { exists: false } },
+        ),
+      sql: (fields) =>
+        fields.map((field) =>
+          // Names from the contract's enum, so this is no caller text.
+          sql.raw(
+            STATEFUL.has(field)
+              ? `version_${snake(field)}_state::text IN ('UNSUPPLIED', 'CLEAR')`
+              : `version_${snake(field)} IS NULL`,
+          ),
+        ),
+    },
+    kind: equalsKey("kind", "version_kind::text"),
+    dynasty: statefulKey("dynasty"),
+    province: statefulKey("province"),
+  } satisfies FilterTable<
+    AdminListFilterOf<typeof adminCatalogListInputSchema>
+  >,
   compactSelect: versionedSelect(catalog),
   compact: (doc, live) => ({
     ...versionedRow(catalog, doc, live),
@@ -203,18 +297,7 @@ const catalogs: ListSource = {
     kind: plain("kind"),
     summary: longText("summary"),
     periodLabel: plain("periodLabel"),
-    dynasty: statefulShort("dynasty"),
-    dateText: statefulShort("dateText"),
-    province: statefulShort("province"),
-    prefecture: statefulShort("prefecture"),
-    county: statefulShort("county"),
-    currentLocation: statefulShort("currentLocation"),
-    currentCustodian: statefulShort("currentCustodian"),
-    scriptStyle: statefulLong("scriptStyle"),
-    description: statefulLong("description"),
-    transcription: statefulLong("transcription"),
-    historicalContext: statefulLong("historicalContext"),
-    scholarlyResearch: statefulLong("scholarlyResearch"),
+    ...statefulFields,
     ownerNote: longText("ownerNote"),
     mediaCount: countOf("media", "mediaId"),
     aliasCount: countOf("aliases", "alias"),
@@ -222,32 +305,6 @@ const catalogs: ListSource = {
   count: {
     table: "_catalogs_v",
     latestOnly: true,
-    conditions: ({ status, missing, kind, dynasty, province }) => [
-      ...statusSql(status),
-      ...((missing as readonly string[] | undefined) ?? []).map((field) =>
-        // Names from the contract's enum, so this is no caller text.
-        sql.raw(
-          STATEFUL.has(field)
-            ? `version_${snake(field)}_state::text IN ('UNSUPPLIED', 'CLEAR')`
-            : `version_${snake(field)} IS NULL`,
-        ),
-      ),
-      ...(kind === undefined
-        ? []
-        : [sql`version_kind::text = ${String(kind)}`]),
-      ...(dynasty === undefined
-        ? []
-        : [
-            sql`version_dynasty_state::text = 'VALUE'`,
-            sql`version_dynasty_value = ${String(dynasty)}`,
-          ]),
-      ...(province === undefined
-        ? []
-        : [
-            sql`version_province_state::text = 'VALUE'`,
-            sql`version_province_value = ${String(province)}`,
-          ]),
-    ],
     groups: {
       status: { value: "version__status::text" },
       kind: { value: "version_kind::text" },
@@ -265,12 +322,12 @@ const articles: ListSource = {
   family: article,
   input: adminArticleListInputSchema,
   resolve: (filter) => ({ status: "all", ...filter }),
-  where: ({ status, presentation }) => [
-    ...statusWhere(status),
-    ...(presentation === undefined
-      ? []
-      : [{ presentation: { equals: presentation as string } }]),
-  ],
+  filters: {
+    status: statusKey,
+    presentation: equalsKey("presentation", "version_presentation::text"),
+  } satisfies FilterTable<
+    AdminListFilterOf<typeof adminArticleListInputSchema>
+  >,
   compactSelect: versionedSelect(article),
   compact: (doc, live) => ({
     ...versionedRow(article, doc, live),
@@ -291,12 +348,6 @@ const articles: ListSource = {
   count: {
     table: "_articles_v",
     latestOnly: true,
-    conditions: ({ status, presentation }) => [
-      ...statusSql(status),
-      ...(presentation === undefined
-        ? []
-        : [sql`version_presentation::text = ${String(presentation)}`]),
-    ],
     groups: {
       status: { value: "version__status::text" },
       presentation: { value: "version_presentation::text" },
@@ -310,12 +361,12 @@ const collections: ListSource = {
   family: collection,
   input: adminCollectionListInputSchema,
   resolve: (filter) => ({ status: "all", ...filter }),
-  where: ({ status, category }) => [
-    ...statusWhere(status),
-    ...(category === undefined
-      ? []
-      : [{ category: { equals: category as string } }]),
-  ],
+  filters: {
+    status: statusKey,
+    category: equalsKey("category", "version_category"),
+  } satisfies FilterTable<
+    AdminListFilterOf<typeof adminCollectionListInputSchema>
+  >,
   compactSelect: versionedSelect(collection),
   compact: (doc, live) => ({
     ...versionedRow(collection, doc, live),
@@ -332,12 +383,6 @@ const collections: ListSource = {
   count: {
     table: "_article_collections_v",
     latestOnly: true,
-    conditions: ({ status, category }) => [
-      ...statusSql(status),
-      ...(category === undefined
-        ? []
-        : [sql`version_category = ${String(category)}`]),
-    ],
     groups: {
       status: { value: "version__status::text" },
       category: { value: "version_category" },
@@ -350,12 +395,10 @@ const media: ListSource = {
   family: CMS_FAMILIES.media,
   input: adminMediaListInputSchema,
   resolve: (filter) => filter,
-  where: ({ catalogId, origin }) => [
-    ...(catalogId === undefined
-      ? []
-      : [{ catalogId: { equals: catalogId as string } }]),
-    ...(origin === undefined ? [] : [{ origin: { equals: origin as string } }]),
-  ],
+  filters: {
+    catalogId: equalsKey("catalogId", "catalog_id"),
+    origin: equalsKey("origin", "origin::text"),
+  } satisfies FilterTable<AdminListFilterOf<typeof adminMediaListInputSchema>>,
   compactSelect: {
     mediaId: true,
     catalogId: true,
@@ -383,12 +426,6 @@ const media: ListSource = {
   count: {
     table: "media",
     latestOnly: false,
-    conditions: ({ catalogId, origin }) => [
-      ...(catalogId === undefined
-        ? []
-        : [sql`catalog_id = ${String(catalogId)}`]),
-      ...(origin === undefined ? [] : [sql`origin::text = ${String(origin)}`]),
-    ],
     groups: {
       origin: { value: "origin::text" },
       mimeType: { value: "mime_type" },
@@ -402,8 +439,11 @@ const approvals = (slug: string, table: string): ListSource => ({
   target: { slug, versioned: false },
   input: adminApprovalListInputSchema,
   resolve: (filter) => filter,
-  where: ({ status }) =>
-    status === undefined ? [] : [{ status: { equals: status as string } }],
+  filters: {
+    status: equalsKey("status", "status::text"),
+  } satisfies FilterTable<
+    AdminListFilterOf<typeof adminApprovalListInputSchema>
+  >,
   compactSelect: { label: true, status: true, updatedAt: true },
   compact: (doc) => ({
     id: doc.id,
@@ -420,8 +460,6 @@ const approvals = (slug: string, table: string): ListSource => ({
   count: {
     table,
     latestOnly: false,
-    conditions: ({ status }) =>
-      status === undefined ? [] : [sql`status::text = ${String(status)}`],
     groups: { status: { value: "status::text" } },
   },
 });
@@ -430,12 +468,12 @@ const receipts: ListSource = {
   target: { slug: "editorial-receipts", versioned: false },
   input: adminReceiptListInputSchema,
   resolve: (filter) => filter,
-  where: ({ status, operation }) => [
-    ...(status === undefined ? [] : [{ status: { equals: status as string } }]),
-    ...(operation === undefined
-      ? []
-      : [{ operation: { equals: operation as string } }]),
-  ],
+  filters: {
+    status: equalsKey("status", "status::text"),
+    operation: equalsKey("operation", "operation::text"),
+  } satisfies FilterTable<
+    AdminListFilterOf<typeof adminReceiptListInputSchema>
+  >,
   compactSelect: { operation: true, status: true, updatedAt: true },
   compact: (doc) => ({
     id: doc.id,
@@ -455,12 +493,6 @@ const receipts: ListSource = {
   count: {
     table: "editorial_receipts",
     latestOnly: false,
-    conditions: ({ status, operation }) => [
-      ...(status === undefined ? [] : [sql`status::text = ${String(status)}`]),
-      ...(operation === undefined
-        ? []
-        : [sql`operation::text = ${String(operation)}`]),
-    ],
     groups: {
       status: { value: "status::text" },
       operation: { value: "operation::text" },
@@ -483,10 +515,9 @@ export const LIST_SOURCES = {
 
 const DEFAULT_PAGE_SIZE = 25;
 const DEFAULT_GROUP_PAGE = 200;
-const ROW_ID_PATTERN = /^[1-9]\d{0,15}$/u;
-/** A row id is an int4: past this the column cannot compare, and no `next` says it. */
-const ROW_ID_MAX = 2_147_483_647;
-const OFFSET_PATTERN = /^\d{1,9}$/u;
+
+const invalidCursorEnvelope = () =>
+  inputInvalidEnvelope([{ path: ["cursor"], code: "invalid_cursor" }]);
 
 const unknownFieldsEnvelope = (source: ListSource) =>
   inputInvalidEnvelope([
@@ -522,18 +553,17 @@ const countEnvelope = async (
         allowedKeys: Object.keys(source.count.groups),
       },
     ]);
-  if (read.cursor !== undefined && !OFFSET_PATTERN.test(read.cursor))
-    return inputInvalidEnvelope([{ path: ["cursor"], code: "invalid_cursor" }]);
+  const offset = read.cursor === undefined ? 0 : offsetOfCursor(read.cursor);
+  if (offset === undefined) return invalidCursorEnvelope();
   const conditions = [
     ...(source.count.latestOnly ? [sql`latest = true`] : []),
-    ...source.count.conditions(filter),
+    ...conditionsOf(source, filter),
   ];
   const from = sql.raw(`"${source.count.table}"`);
   const where =
     conditions.length === 0
       ? sql``
       : sql`WHERE ${sql.join(conditions, sql` AND `)}`;
-  const offset = Number(read.cursor ?? 0);
   const limit = read.pageSize ?? DEFAULT_GROUP_PAGE;
   const counted = await withinBudget(req, async (_branch, db) => {
     const totalOf = async () =>
@@ -592,7 +622,7 @@ const countEnvelope = async (
         ...envelope,
         next: {
           tool: "admin_read",
-          args: { ...read, cursor: String(offset + limit) },
+          args: { ...read, cursor: offsetCursor(offset + limit) },
         },
       }
     : envelope;
@@ -604,11 +634,10 @@ const rowsEnvelope = async (
   filter: Record<string, unknown>,
   read: NonNullable<AdminOpContext["read"]>,
 ): Promise<AdminMcpEnvelope> => {
-  if (
-    read.cursor !== undefined &&
-    (!ROW_ID_PATTERN.test(read.cursor) || Number(read.cursor) > ROW_ID_MAX)
-  )
-    return inputInvalidEnvelope([{ path: ["cursor"], code: "invalid_cursor" }]);
+  const below =
+    read.cursor === undefined ? undefined : rowIdOfCursor(read.cursor);
+  if (read.cursor !== undefined && below === undefined)
+    return invalidCursorEnvelope();
   const asked =
     read.view === "full" ? Object.keys(source.fields) : (read.fields ?? []);
   const projections = asked.map(
@@ -625,10 +654,8 @@ const rowsEnvelope = async (
     ADMIN_READ_PAGE_SIZE_MAX,
   );
   const where = [
-    ...source.where(filter),
-    ...(read.cursor === undefined
-      ? []
-      : [{ id: { less_than: Number(read.cursor) } }]),
+    ...whereOf(source, filter),
+    ...(below === undefined ? [] : [{ id: { less_than: below } }]),
   ];
   // Keyset on the record's own id: every row exactly once, however rows change.
   const docs = await findDocuments(req, source.target, {
@@ -657,7 +684,7 @@ const rowsEnvelope = async (
     ),
   }));
   const nextCursor =
-    docs.length > pageSize ? String(page.at(-1)!.id) : undefined;
+    docs.length > pageSize ? rowCursor(Number(page.at(-1)!.id)) : undefined;
   // `next` is the one way on: a cut page keeps fewer rows than this page read.
   const envelope = okEnvelope(adminReadRowsDataSchema.parse({ rows, filter }), [
     "/data/rows",

@@ -47,7 +47,12 @@ import {
   saveDraft,
 } from "admin/editorial";
 import { approveArticleBatch } from "admin/editorial-content";
-import { textHash, withinBudget } from "admin/admin-mcp";
+import {
+  LIST_SOURCES,
+  rowCursor,
+  textHash,
+  withinBudget,
+} from "admin/admin-mcp";
 import { cmsRuntimeLogFields } from "admin/runtime-settings";
 
 import { InMemoryCommunityCommentPort } from "../unit/backend/community-comment-fixture.js";
@@ -298,10 +303,16 @@ describe("tools/list and the size budgets, over the wire", () => {
     expect(Buffer.byteLength(JSON.stringify(tools)) / 3).toBeLessThanOrEqual(
       ADMIN_MCP_TOKEN_BUDGET,
     );
+    // The writes are the three that freeze or run one; only the irreversible run destroys.
+    const writes = [
+      "admin_preview",
+      "admin_execute",
+      "admin_execute_irreversible",
+    ];
     for (const tool of tools) {
       expect(tool.annotations).toEqual({
-        readOnlyHint: tool.name !== "admin_execute",
-        destructiveHint: false,
+        readOnlyHint: !writes.includes(tool.name),
+        destructiveHint: tool.name === "admin_execute_irreversible",
         idempotentHint: true,
         openWorldHint: false,
       });
@@ -463,6 +474,10 @@ describe("Catalog missing transcription", () => {
       { missing: ["title"], dynasty: dynastyA },
       { status: "all", dynasty: dynastyA, province: `省${run}` },
     ];
+    // Every key of the source's filter table, so a key added there is tried here.
+    expect(new Set(filters.flatMap((filter) => Object.keys(filter)))).toEqual(
+      new Set(Object.keys(LIST_SOURCES.catalogs.filters)),
+    );
     for (const filter of filters) {
       const rows = (
         await followAll("admin_read", {
@@ -671,16 +686,41 @@ describe("the other CMS sources", () => {
 
   it("refuses a cursor past the integer range by name, and takes the last one in it", async () => {
     for (const op of ["list.catalogs", "list.media"]) {
-      for (const cursor of ["2147483648", "9999999999", "9999999999999999"]) {
+      for (const cursor of [
+        "2147483648",
+        "9999999999",
+        "9999999999999999",
+        rowCursor(2147483648),
+        rowCursor(9_999_999_999),
+      ]) {
         const envelope = await call("admin_read", { op, cursor });
         expect(envelope).toMatchObject({ ok: false, code: "INPUT_INVALID" });
         expect(envelope.issues).toEqual([
           { path: ["cursor"], code: "invalid_cursor" },
         ]);
       }
-      expect((await call("admin_read", { op, cursor: "2147483647" })).ok).toBe(
-        true,
-      );
+      expect(
+        (await call("admin_read", { op, cursor: rowCursor(2147483647) })).ok,
+      ).toBe(true);
+    }
+  });
+
+  it("refuses a cursor of another kind or version by name, on rows and on a count", async () => {
+    const page = await call("admin_read", { op: "list.catalogs", pageSize: 1 });
+    const row = page.next!.args.cursor as string;
+    expect(row).toMatch(/^k1:/u);
+    const count = { op: "list.catalogs", view: "count", groupBy: "dynasty" };
+    for (const [args, cursor] of [
+      [{ op: "list.catalogs" }, `k2:${row.slice(3)}`],
+      [{ op: "list.catalogs" }, `o1:${row.slice(3)}`],
+      [count, row],
+      [count, `o2:${row.slice(3)}`],
+    ] as const) {
+      const envelope = await call("admin_read", { ...args, cursor });
+      expect({ cursor, issues: envelope.issues }).toEqual({
+        cursor,
+        issues: [{ path: ["cursor"], code: "invalid_cursor" }],
+      });
     }
   });
 
@@ -979,7 +1019,7 @@ describe("every other source: the two translations of each filter", () => {
   });
 
   // Named without the run's own values, so a test's name is the same in every run.
-  it.each<[string, string, Record<string, unknown>]>([
+  const cases: [string, string, Record<string, unknown>][] = [
     ["list.articles", "no filter", {}],
     ["list.articles", "status all", { status: "all" }],
     ["list.articles", "status draft", { status: "draft" }],
@@ -1029,7 +1069,32 @@ describe("every other source: the two translations of each filter", () => {
       "completed publishes",
       { status: "completed", operation: "publish-approved" },
     ],
-  ])(
+  ];
+
+  it("tries every key of each source's filter table", () => {
+    const sources = {
+      "list.articles": LIST_SOURCES.articles,
+      "list.collections": LIST_SOURCES.collections,
+      "list.media": LIST_SOURCES.media,
+      "list.approvals": LIST_SOURCES.approvals,
+      "list.article_approvals": LIST_SOURCES.article_approvals,
+      "list.receipts": LIST_SOURCES.receipts,
+    };
+    for (const [op, source] of Object.entries(sources))
+      expect({
+        op,
+        keys: new Set(
+          cases
+            .filter(([named]) => named === op)
+            .flatMap(([, , filter]) => Object.keys(filter)),
+        ),
+      }).toEqual({ op, keys: new Set(Object.keys(source.filters)) });
+    expect(new Set(cases.map(([op]) => op))).toEqual(
+      new Set(Object.keys(sources)),
+    );
+  });
+
+  it.each(cases)(
     "gives %s, %s, the same answer in rows and in SQL",
     async (op, _name, filter) => {
       const rows = (
@@ -4333,7 +4398,7 @@ describe("text results stay under the cap", () => {
     const kept = adminReadRowsDataSchema.parse(first.data).rows;
     expect(kept.length).toBeLessThan(8);
     expect(kept.length + first.remaining!).toBe(8);
-    expect(first.next?.args.cursor).toBe(String(kept.at(-1)!.id));
+    expect(first.next?.args.cursor).toBe(rowCursor(kept.at(-1)!.id as number));
     const pages = await followAll("admin_read", {
       op: "list.catalogs",
       view: "full",

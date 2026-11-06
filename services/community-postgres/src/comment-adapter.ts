@@ -31,16 +31,15 @@ import {
   insertReplySql,
   listEmbeddedRepliesSql,
   listModerationEventsSql,
-  listOperatorCommentsNewestSql,
-  listOperatorCommentsOldestSql,
+  listOperatorCommentsSql,
   listVisibleCommentsSql,
   listVisibleRepliesSql,
   readPublicationSettingSql,
   recentModerationEventsSql,
   selectHotCommentsSql,
-  toSearchPattern,
   writePublicationSettingSql,
 } from "./comment-queries.js";
+import { OPERATOR_SOURCES } from "./operator-filters.js";
 import {
   mapCommentRow,
   mapModerationEventRow,
@@ -431,16 +430,8 @@ export class PostgresCommunityCommentAdapter
     query: OperatorCommentQueryInput,
     scope?: OperatorReadScope,
   ): Promise<OperatorCommentListing> {
-    const filters = [
-      query.moderation ?? null,
-      query.kind ?? null,
-      query.catalogId ?? null,
-      query.search === undefined ? null : toSearchPattern(query.search),
-      query.authorId ?? null,
-      query.from ?? null,
-      query.to ?? null,
-      scope?.withholdSelfOnly === true,
-    ];
+    const comments = OPERATOR_SOURCES.comments;
+    const filters = comments.values(query, scope);
     return this.scopedSnapshot(scope, async (run) => {
       const totals = await run<{ total: unknown } & QueryResultRow>(
         countOperatorCommentsSql,
@@ -448,11 +439,12 @@ export class PostgresCommunityCommentAdapter
       );
       const byState = await run<
         { moderation: unknown; total: unknown } & QueryResultRow
-      >(countOperatorCommentsByStateSql, [null, ...filters.slice(1)]);
+      >(
+        countOperatorCommentsByStateSql,
+        comments.values({ ...query, moderation: undefined }, scope),
+      );
       const rows = await run<OperatorCommentRow>(
-        query.order === "oldest"
-          ? listOperatorCommentsOldestSql
-          : listOperatorCommentsNewestSql,
+        listOperatorCommentsSql(query.order, filters),
         [...filters, query.pageSize, offset(query.page, query.pageSize)],
       );
       return {
@@ -514,16 +506,10 @@ export class PostgresCommunityCommentAdapter
     return this.scopedSnapshot(scope, async (run) => {
       const byState = await run<
         { moderation: unknown; total: unknown } & QueryResultRow
-      >(countOperatorCommentsByStateSql, [
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        withhold,
-      ]);
+      >(
+        countOperatorCommentsByStateSql,
+        OPERATOR_SOURCES.comments.values({}, scope),
+      );
       const byAction = await run<
         { action: unknown; total: unknown } & QueryResultRow
       >(countModerationActionsInRangeSql, [range.from, range.to, withhold]);

@@ -13,7 +13,7 @@ import { okEnvelope, toolResult } from "../envelope";
 export const WHOAMI_TOOL_NAME = "admin_whoami";
 
 export const WHOAMI_DESCRIPTION =
-  "Who this credential is, what it can call now, when it expires. Call it first, and again when an admin_ tool is reported missing: a client may hold a stale tool list.";
+  "Who this credential is, what it can call now, when it expires. Call it first, and again when an admin_ tool is reported missing.";
 
 export const whoamiInputSchema = z.strictObject({});
 

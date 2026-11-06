@@ -40,6 +40,13 @@ GRANT SELECT, INSERT ON TABLE
   public.mcp_audit_events
 TO :"cms_role";
 
+-- The MCP run ledger moves its rows through states and never deletes one; its triggers
+-- are a second net. Keys are uuids and composite, so no sequence is granted.
+GRANT SELECT, INSERT, UPDATE ON TABLE
+  public.mcp_run_targets,
+  public.mcp_runs
+TO :"cms_role";
+
 -- Payload updates replace array/relationship rows; maxPerDoc prunes retained versions;
 -- native sessions, document locks/preferences and existing API-key management delete rows.
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE

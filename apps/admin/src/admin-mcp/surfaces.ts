@@ -98,6 +98,12 @@ export const ADMIN_SURFACES: Readonly<Record<string, AdminSurface>> = {
   "endpoint POST /mcp": config("the transport these tools arrive on"),
   "endpoint GET /mcp": config("the transport these tools arrive on"),
   "endpoint POST /mcp-control/keys/:id/renew": reserved("key renewal"),
+  "endpoint POST /mcp-control/runs/:id/confirm": reserved(
+    "the Owner's confirmation of a run past the threshold",
+  ),
+  "endpoint POST /mcp-control/runs/:id/cancel": reserved(
+    "the Owner's cancel of a run",
+  ),
   "endpoint POST /agent-connections/consent": reserved(
     "approving or denying an AI connection",
   ),

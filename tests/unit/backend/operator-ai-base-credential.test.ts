@@ -45,6 +45,8 @@ const syntheticToken = () => randomBytes(32).toString("base64url");
 const ownerToken = syntheticToken();
 const baseToken = syntheticToken();
 const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
+/** A run id as the run engine sets it: the only run header the Backend reads as one. */
+const SYNTHETIC_RUN_ID = "00000000-0000-4000-8000-0000000000a1";
 
 const source = {
   mediaId: "synthetic-thumb",
@@ -390,10 +392,17 @@ describe("the base token on the Backend", () => {
     expect(
       await backend.send("POST", `${master}/erase`, bearer(baseToken)),
     ).toEqual({ status: 403, code: "AI_RUN_REQUIRED" });
+    // Only a run id passes: a word in the header is no run at all.
     expect(
       await backend.send("POST", `${master}/erase`, {
         ...bearer(baseToken),
         "x-admin-mcp-run": "synthetic",
+      }),
+    ).toEqual({ status: 403, code: "AI_RUN_REQUIRED" });
+    expect(
+      await backend.send("POST", `${master}/erase`, {
+        ...bearer(baseToken),
+        "x-admin-mcp-run": SYNTHETIC_RUN_ID,
       }),
     ).toEqual({ status: 404, code: "NOT_FOUND" });
   });
@@ -418,9 +427,18 @@ describe("the base token on the Backend", () => {
     expect(refusal(asking("POST", `${insights}/prune`))).toBe(
       "AI_RUN_REQUIRED",
     );
+    for (const header of ["synthetic", "", SYNTHETIC_RUN_ID.toUpperCase()])
+      expect(
+        refusal(
+          asking("POST", `${insights}/prune`, { "x-admin-mcp-run": header }),
+        ),
+        header,
+      ).toBe("AI_RUN_REQUIRED");
     expect(
       refusal(
-        asking("POST", `${insights}/prune`, { "x-admin-mcp-run": "synthetic" }),
+        asking("POST", `${insights}/prune`, {
+          "x-admin-mcp-run": SYNTHETIC_RUN_ID,
+        }),
       ),
     ).toBeNull();
     expect(refusal(asking("GET", "/internal/community/analytics/ips"))).toBe(

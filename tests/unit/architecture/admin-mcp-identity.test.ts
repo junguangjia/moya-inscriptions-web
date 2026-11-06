@@ -263,6 +263,7 @@ describe("Admin MCP identity (admin-mcp-completion-v1, section 2)", () => {
     }
     expect(found).toEqual({
       "src/admin-mcp/guard.ts": 1,
+      "src/admin-mcp/runs/executor.ts": 1,
       "src/admin-mcp/tools/execute.ts": 1,
     });
   });

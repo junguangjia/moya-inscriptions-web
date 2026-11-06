@@ -1,6 +1,7 @@
 import {
   aiCountResultSchema,
   aiFindResultSchema,
+  aiSelectResultSchema,
   aiSettlementResultSchema,
   AI_OPERATOR_LABEL,
   PERSONAL_INFO_OWNER_REVIEW,
@@ -9,6 +10,7 @@ import {
 import type {
   AiCountQuery,
   AiCountResult,
+  AiCountSource,
   AiFindItem,
   AiFindQuery,
   AiFindResult,
@@ -17,28 +19,20 @@ import type {
   AiLookupType,
   AiOperatorReader,
   AiOperatorSubject,
+  AiSelectIdsQuery,
+  AiSelectItem,
+  AiSelectResult,
   AiSettlementQuery,
   AiSettlementResult,
   AiSettlementType,
+  AiStampSource,
 } from "@moya/contracts/internal/admin-mcp";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
 import { asCommunityOperationError } from "./availability.js";
-import {
-  operatorCommentUnion,
-  operatorFilter,
-  toSearchPattern,
-} from "./comment-queries.js";
-import {
-  operatorUsersWhere,
-  operatorWorksWhere,
-} from "./content-operator-adapter.js";
-import {
-  publishingJobsWhere,
-  submissionQueueWhere,
-} from "./publishing/operator.js";
+import { OPERATOR_SOURCES } from "./operator-filters.js";
+import type { SourceQuery, SourceSpec } from "./operator-filters.js";
 import type { PublicationSyncOptions } from "./publishing/publication-sync.js";
-import { operatorReportFilter } from "./reporting-adapter.js";
 import {
   articleUsesSelfOnlyMediaSql,
   caseIsSelfOnlySql,
@@ -558,108 +552,93 @@ const LOOKUPS: Readonly<
 const withheld = (types: readonly string[]): string[] =>
   types.includes("article") ? ["private_draft"] : ["self_only"];
 
-interface CountSpec {
-  /** A FROM and WHERE from this package, never caller text. */
-  readonly from: string;
-  readonly values: readonly unknown[];
-  readonly oldest: string;
-  readonly groups: Readonly<Record<string, string>>;
-  /** Decided by the query alone, so saying it says nothing about any one case. */
-  readonly leavesOutOwnerOnly?: true;
-}
+/** A count reads as the AI does: what only the Owner may see stays out. */
+const AI_READ = { withholdSelfOnly: true } as const;
+
+/** The same table, typed by source for a count of any of them. */
+const SOURCES: {
+  readonly [Source in AiCountSource]: SourceSpec<SourceQuery<Source>>;
+} = OPERATOR_SOURCES;
 
 /** Each source's own list filter, so a count and its list cannot disagree. */
-const countSpecOf = (query: AiCountQuery): CountSpec => {
-  switch (query.source) {
-    case "reports": {
-      // Grouping reads back what a row shows no more than filtering does.
-      const leavesOut =
-        operatorReportFilter.namesWithheld(query) ||
-        query.groupBy === "reason" ||
-        query.groupBy === "targetType";
-      return {
-        from: `FROM community.report_cases c WHERE ${operatorReportFilter.sql}${
-          leavesOut ? ` AND NOT ${reportIsSelfOnlySql("c")}` : ""
-        }`,
-        values: operatorReportFilter.values(query),
-        oldest: "c.created_at",
-        groups: {
-          kind: "c.kind",
-          status: "c.status",
-          reason: "c.reason",
-          targetType: "c.target_type",
-        },
-        ...(leavesOut ? { leavesOutOwnerOnly: true as const } : {}),
-      };
-    }
-    case "comments":
-      return {
-        from: `FROM (${operatorCommentUnion}) entries ${operatorFilter}`,
-        values: [
-          query.moderation ?? null,
-          query.kind ?? null,
-          query.catalogId ?? null,
-          query.search === undefined ? null : toSearchPattern(query.search),
-          query.authorId ?? null,
-          query.from ?? null,
-          query.to ?? null,
-          true,
-        ],
-        oldest: "entries.created_at",
-        groups: {
-          moderation: "entries.moderation",
-          kind: "entries.kind",
-          targetType: "entries.target_type",
-        },
-      };
-    case "works":
-      return {
-        from: `FROM community.works w JOIN community.public_users u ON u.id=w.author_id${operatorWorksWhere}`,
-        values: [
-          query.search,
-          query.authorId ?? null,
-          query.workId ?? null,
-          query.from ?? null,
-          query.to ?? null,
-          true,
-        ],
-        oldest:
-          "COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at)",
-        groups: { state: "w.operator_state" },
-      };
-    case "users":
-      return {
-        from: `FROM community.public_users u ${operatorUsersWhere}`,
-        values: [query.search, query.userId ?? null],
-        oldest: "u.created_at",
-        groups: { status: "u.status" },
-      };
-    case "work_submissions":
-      return {
-        from: submissionQueueWhere,
-        values: [
-          query.state ?? null,
-          query.authorId ?? null,
-          query.workId ?? null,
-          true,
-        ],
-        oldest: "r.submitted_at",
-        groups: { state: "r.disposition" },
-      };
-    case "jobs":
-      return {
-        from: `FROM community.publishing_jobs ${publishingJobsWhere}`,
-        values: [
-          query.state ?? null,
-          query.kind ?? null,
-          query.subjectId ?? null,
-          query.id ?? null,
-        ],
-        oldest: "created_at",
-        groups: { state: "state", kind: "kind" },
-      };
-  }
+const countOf = <Source extends AiCountSource>(
+  query: Extract<AiCountQuery, { readonly source: Source }>,
+) => {
+  const spec = SOURCES[query.source as Source];
+  return {
+    from: `${spec.from} ${spec.where(query, AI_READ)}`,
+    values: spec.values(query, AI_READ),
+    oldest: spec.oldest,
+    groups: spec.groups,
+    leavesOutOwnerOnly: spec.withholds?.(query) === true,
+  };
 };
+
+interface SelectRow extends QueryResultRow {
+  id: string;
+  stamp: string;
+  version: number | null;
+  state: string | null;
+  kind: string | null;
+  affected: number | null;
+  withheld: "self_only" | "personal_info" | null;
+}
+
+/**
+ * By ids, `$1` (admin-mcp-completion-v1 section 8): each row's stamp, the counter its
+ * moderation bumps or its version, and the facts an op's preview reads. Each withheld
+ * test is a lookup per row, so these few rows never read a whole table's self-only set.
+ * A comment's stamp holds its thread's counter too, and a job's its attempts.
+ */
+const SELECT_BY_IDS: Readonly<Record<AiStampSource, string>> = {
+  comments: `SELECT e.id,e.stamp,NULL::integer AS version,e.moderation AS state,e.kind,e.affected,
+      CASE WHEN e.target_type='work' AND ${workIsSelfOnlySql("e.catalog_id")} THEN 'self_only' END AS withheld
+    FROM (
+      SELECT c.id,'comment' AS kind,c.moderation,c.target_type,c.catalog_id,
+        'c'||c.reporting_revision||'.'||c.reporting_thread_revision AS stamp,
+        1+(SELECT count(*) FROM community.catalog_comment_replies x WHERE x.root_comment_id=c.id)::integer AS affected
+      FROM community.catalog_comments c WHERE c.id=ANY($1::text[])
+      UNION ALL
+      SELECT r.id,'reply',r.moderation,c.target_type,c.catalog_id,'r'||r.reporting_revision,NULL
+      FROM community.catalog_comment_replies r JOIN community.catalog_comments c ON c.id=r.root_comment_id
+      WHERE r.id=ANY($1::text[])
+    ) e`,
+  works: `SELECT w.id,'w'||w.version AS stamp,w.version,w.operator_state AS state,NULL AS kind,NULL::integer AS affected,
+      CASE WHEN ${isSelfOnlyWorkSql("w")} THEN 'self_only' END AS withheld
+    FROM community.works w WHERE w.id=ANY($1::text[])`,
+  users: `SELECT u.id,'u'||u.reporting_revision AS stamp,NULL::integer AS version,u.status AS state,NULL AS kind,
+      NULL::integer AS affected,NULL AS withheld
+    FROM community.public_users u WHERE u.id=ANY($1::text[])`,
+  jobs: `SELECT j.id,'j'||j.state||'.'||j.attempts AS stamp,NULL::integer AS version,j.state,j.kind,NULL::integer AS affected,
+      CASE WHEN ${jobSubjectIsSelfOnlySql("j.id")} THEN 'self_only' END AS withheld
+    FROM community.publishing_jobs j WHERE j.id=ANY($1::text[])`,
+  reports: `SELECT c.id,'r'||c.version AS stamp,c.version,c.status AS state,c.kind,NULL::integer AS affected,
+      CASE WHEN ${reportIsSelfOnlySql("c")} THEN 'self_only'
+        WHEN ${reportAsksOfOwnProfileSql("c")} THEN 'personal_info' END AS withheld
+    FROM community.report_cases c WHERE c.id=ANY($1::text[])`,
+};
+
+/** What a source can withhold, named on every answer whatever it holds. */
+const SELECT_WITHHOLDS: Readonly<Record<AiStampSource, readonly string[]>> = {
+  comments: ["self_only"],
+  works: ["self_only"],
+  users: [],
+  jobs: ["self_only"],
+  reports: ["self_only", "personal_info"],
+};
+
+/** A withheld row says why and nothing of its state, so the mark reads back nothing. */
+const selectItem = (row: SelectRow): AiSelectItem =>
+  row.withheld !== null
+    ? { id: row.id, stamp: "withheld", withheld: row.withheld }
+    : {
+        id: row.id,
+        stamp: row.stamp,
+        ...(row.version === null ? {} : { version: row.version }),
+        ...(row.state === null ? {} : { state: row.state }),
+        ...(row.kind === null ? {} : { kind: row.kind }),
+        ...(row.affected === null ? {} : { affected: row.affected }),
+      };
 
 /**
  * Which statements answer for each subject (section 9). `items` holds every item the
@@ -840,7 +819,7 @@ export class PostgresAiOperatorReader implements AiOperatorReader {
   }
 
   async count(query: AiCountQuery): Promise<AiCountResult | "timed_out"> {
-    const spec = countSpecOf(query);
+    const spec = countOf(query);
     const group =
       query.groupBy === undefined ? undefined : spec.groups[query.groupBy];
     const answer = await this.branch(
@@ -880,6 +859,21 @@ export class PostgresAiOperatorReader implements AiOperatorReader {
               oldestAt: iso(row.oldest) ?? null,
             })),
           }),
+    });
+  }
+
+  async select(query: AiSelectIdsQuery): Promise<AiSelectResult | "timed_out"> {
+    const answer = await this.branch(
+      async (db) =>
+        (await db.query<SelectRow>(SELECT_BY_IDS[query.source], [query.ids]))
+          .rows,
+    );
+    if (answer.status === "timed_out") return "timed_out";
+    if (answer.status !== "ok")
+      throw asCommunityOperationError(new Error("select failed"), "query");
+    return aiSelectResultSchema.parse({
+      items: answer.value.map(selectItem),
+      excluded: [...SELECT_WITHHOLDS[query.source]],
     });
   }
 

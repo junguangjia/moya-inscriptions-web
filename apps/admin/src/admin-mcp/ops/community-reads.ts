@@ -4,9 +4,12 @@ import {
   adminReadCountDataSchema,
   adminReadRowsDataSchema,
   aiCountResultSchema,
+  AI_OPERATOR_RUN_HEADER,
   aiFindResultSchema,
   aiOperatorRouteFor,
+  aiSelectResultSchema,
   aiSettlementResultSchema,
+  isAiRunHeader,
   resolveAnalyticsRange,
 } from "@moya/contracts/internal/admin-mcp";
 import type {
@@ -16,8 +19,10 @@ import type {
   AiCountSource,
   AiFindResult,
   AiOperatorCredential,
+  AiSelectResult,
   AiSettlementQuery,
   AiSettlementResult,
+  AiStampSource,
   AnalyticsInsightQuery,
 } from "@moya/contracts/internal/admin-mcp";
 import type { PayloadRequest } from "payload";
@@ -130,8 +135,8 @@ export const inPoolShare =
 /**
  * The AI credential's call, refused before any fetch where the route table holds no row
  * for it, as the Backend refuses it: an op that calls an unlisted route fails its test,
- * not a live request. Only the row is asked for here; a run mark and a sensitive switch
- * stay the Backend's to answer.
+ * not a live request. So is an irreversible row without a run id, which only the run
+ * engine sets; the Backend asks the same, and a sensitive switch stays its to answer.
  */
 export const routeCheckedAiCall = (
   credential: AiOperatorCredential,
@@ -147,6 +152,11 @@ export const routeCheckedAiCall = (
     const route = aiOperatorRouteFor(method, pathname, searchParams);
     if (route === undefined || !route.credentials.includes(credential))
       throw new CommunityOperatorError("AI_ROUTE_FORBIDDEN", 403);
+    if (
+      route.klass === "irreversible" &&
+      !isAiRunHeader(headers[AI_OPERATOR_RUN_HEADER])
+    )
+      throw new CommunityOperatorError("AI_RUN_REQUIRED", 403);
     return backend<Result>(...call);
   };
 };
@@ -286,6 +296,22 @@ const naming = (
           ...(redacted === undefined ? {} : { redacted: [...redacted] }),
         },
       };
+
+/**
+ * The Backend's select route by ids: up to 100 rows' stamps in one statement, inside
+ * the same share of the App pool every community read takes.
+ */
+export const askStamps = async (
+  source: AiStampSource,
+  ids: readonly string[],
+): Promise<AiSelectResult> =>
+  backendAnswer(
+    aiSelectResultSchema,
+    await community(
+      "GET",
+      `ai/select?${new URLSearchParams({ source, ids: ids.join(",") }).toString()}`,
+    ),
+  ).data;
 
 /** The Backend's settlement route: what is left of the media work behind a subject. */
 export const askSettlement = async (

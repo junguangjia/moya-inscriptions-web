@@ -3,23 +3,21 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   ADMIN_EXECUTE_MAX_TARGETS,
   ADMIN_MCP_TEXT_CAP_BYTES,
-  adminExecuteListedShape,
+  adminExecuteCallListedShape,
 } from "@moya/contracts/internal/admin-mcp";
 import type {
+  AdminExecuteCall,
   AdminExecuteData,
   AdminExecuteInput,
   AdminExecuteRow,
   AdminJobRef,
   AdminMcpEnvelope,
-  AdminCmsRecordType,
   AdminMcpNext,
   AdminOpName,
-  AdminOpSettlement,
 } from "@moya/contracts/internal/admin-mcp";
 import type { PayloadRequest } from "payload";
 import { z } from "zod";
 
-import { CommunityOperatorError } from "../../community/backend";
 import { writeAuditEvent } from "../audit";
 import { BACKEND_CONTRACT_MISMATCH } from "../backend-answer";
 import { EXECUTE_BUDGET_MS } from "../budget";
@@ -35,11 +33,14 @@ import {
   okEnvelope,
   pointerResolves,
 } from "../envelope";
-import { CMS_FAMILIES, heldLocksOf, rowIdOf } from "../records";
-import { envelopeCodeOf, targetFailureOf } from "../refusal";
-import type { TargetFailure } from "../refusal";
+import { COMPLETE, runTarget, safeRef } from "../ops/target";
+import type { TargetOutcome } from "../ops/target";
+import { envelopeCodeOf } from "../refusal";
 import { adminOpMeta, currentOpName, lookupOp } from "../registry";
 import type { AdminOpContext, AdminOpEntry } from "../registry";
+import { dataOf } from "../runs/answer";
+import { executeRunEnvelope } from "../runs/executor";
+import { uuidOfDigest } from "../runs/keys";
 import { JOB_TOOL_NAME, settlementNext } from "../settlement";
 import {
   opRefusalOf,
@@ -51,11 +52,21 @@ import {
 
 export const EXECUTE_TOOL_NAME = "admin_execute";
 
-export const EXECUTE_DESCRIPTION = `Run one reversible write, or the same one on up to ${ADMIN_EXECUTE_MAX_TARGETS} targets, in order, each with its own outcome. One: {requestId,op:"editorial.save-draft",input:{id,expectedRevision,content}}. Many: {requestId,op:"editorial.publish-approved",input:{approvalId},targets:[{id:7},{id:8}]}; each target merges over input. A new requestId per intention: the same requestId replays and never repeats, and it is what to retry after OUTCOME_UNKNOWN. ok:true means every target's whole effect completed. Anything else names each target's state in data and gives next when you can go on. admin_actions gives each op's input.`;
+export const EXECUTE_DESCRIPTION = `Run one reversible write, or one op on up to ${ADMIN_EXECUTE_MAX_TARGETS} targets: {requestId,op:"editorial.publish-approved",input:{approvalId},targets:[{id:7},{id:8}]}; each merges over input. Or a run admin_preview sealed: {requestId,previewId}. A new requestId per intention; the same one replays, never repeats: retry it after OUTCOME_UNKNOWN. ok:true means every target completed; else data names each state.`;
 
 // A plain string for op, as on admin_read: tools/list cannot carry the names within
 // its token budget (section 5). A wrong name answers UNKNOWN_OP with near ones.
-export const executeListedInput = z.strictObject(adminExecuteListedShape);
+export const executeListedInput = z.strictObject(adminExecuteCallListedShape);
+
+const RUN_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+
+/** A call naming a previewed run, by either name: it carries nothing else. */
+const runOf = (args: unknown): string | undefined => {
+  const { previewId, runId } = (args ?? {}) as Record<string, unknown>;
+  const run = previewId ?? runId;
+  return typeof run === "string" ? run : undefined;
+};
 
 /**
  * A key per target, stable across retries: a uuid, so a Backend route takes it too.
@@ -78,30 +89,17 @@ export const requestKeyFor = (
       ),
     )
     .digest("hex");
-  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+  return uuidOfDigest(hash);
 };
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
-/** A community record's id: a fixed word and hex, so no caller's text fits in it. */
-const PLATFORM_ID =
-  /^(?:comment|user|work|work-revision|report|thread|article|publishing-job|media-item)-[0-9a-f]{32}$/u;
 const SIMPLE_KEY = /^[\w-]{1,64}$/u;
 const INPUT_MAX_DEPTH = 32;
-
-/** An id is echoed only in a shape no text fits in: the caller's string stays theirs. */
-const safeRef = (value: unknown): number | string | undefined => {
-  if (typeof value === "number")
-    return Number.isSafeInteger(value) && value > 0 ? value : undefined;
-  if (typeof value !== "string") return undefined;
-  if (/^[1-9]\d{0,14}$/u.test(value)) return Number(value);
-  return UUID.test(value) || PLATFORM_ID.test(value) ? value : undefined;
-};
 
 /**
  * PostgreSQL holds no NUL, no input grows a prototype, and hashing a command must not
  * run out of stack. Named here, and never met as a driver error.
  */
-const unsafeInputOf = (
+export const unsafeInputOf = (
   value: unknown,
   path: readonly (string | number)[],
 ):
@@ -130,6 +128,16 @@ export const executeReferences = (args: unknown) => {
   const { op, requestId, targets, input } = (args ?? {}) as Partial<
     Record<keyof AdminExecuteInput, unknown>
   >;
+  const run = runOf(args);
+  // A run's own call: its targets are frozen, and each writes a row of its own.
+  if (run !== undefined)
+    return {
+      ...(typeof requestId === "string" &&
+      /^[A-Za-z0-9._:-]{1,128}$/u.test(requestId)
+        ? { requestId }
+        : {}),
+      ...(RUN_ID.test(run) ? { runId: run } : {}),
+    };
   // The registry's name, so an earlier one is recorded as the op that ran.
   const found = typeof op === "string" ? lookupOp(op) : undefined;
   const name = found !== undefined && "op" in found ? found.op : undefined;
@@ -159,215 +167,13 @@ export const executeReferences = (args: unknown) => {
     ...(target === undefined || targetId === undefined
       ? {}
       : { targetType: target.type, targetId: String(targetId) }),
+    // A cancel is filed with the run it ended, beside that run's own rows.
+    ...(name === "run.cancel" &&
+    typeof targetId === "string" &&
+    RUN_ID.test(targetId)
+      ? { runId: targetId }
+      : {}),
   };
-};
-
-type CompleteState = "applied" | "already_applied";
-
-interface TargetOutcome {
-  readonly index: number;
-  readonly id?: number | string | undefined;
-  readonly state: CompleteState | "queued" | TargetFailure["state"];
-  readonly code: string;
-  readonly fields?: readonly string[];
-  readonly lock?: AdminExecuteRow["lock"];
-  readonly replayed?: boolean;
-  readonly result?: Readonly<Record<string, unknown>>;
-  /** A queued target whose effect was there before this call. */
-  readonly alreadyApplied?: true;
-  /** Settlement's own word on a queued target. */
-  readonly settledState?: string;
-  readonly settledNext?: AdminMcpNext;
-  readonly settledHint?: string;
-  /** On MEDIA_JOB_FAILED: what stopped. */
-  readonly jobs?: readonly string[];
-  /** Asked to publish with a gate shut, so no job exists. */
-  readonly mediaGate?: "off";
-}
-
-const COMPLETE: ReadonlySet<TargetOutcome["state"]> = new Set([
-  "applied",
-  "already_applied",
-]);
-
-/**
- * A refused lock says who holds it and until when; a failed read of that adds nothing.
- * The record may be named by its public identity, so its row is read here.
- */
-const lockBlockOf = async (
-  entry: AdminOpEntry,
-  raw: unknown,
-  context: AdminOpContext,
-  target: ReturnType<NonNullable<AdminOpEntry["target"]>> | undefined,
-  id: number | string | undefined,
-): Promise<{ id?: number; lock?: AdminExecuteRow["lock"] }> => {
-  const { req } = context;
-  try {
-    const record = await entry.lockedRecord?.(raw, context);
-    const type = record?.type ?? target?.type;
-    const named = record?.id ?? (typeof id === "number" ? id : target?.id);
-    if (
-      type === undefined ||
-      named === undefined ||
-      !Object.hasOwn(CMS_FAMILIES, type)
-    )
-      return {};
-    const family = CMS_FAMILIES[type as AdminCmsRecordType];
-    const row =
-      typeof named === "number" ? named : await rowIdOf(req, family, named);
-    if (row === undefined) return {};
-    return { id: row, lock: (await heldLocksOf(req, family, [row])).get(row) };
-  } catch {
-    return {};
-  }
-};
-
-const settlementOf = async (
-  entry: AdminOpEntry,
-  raw: unknown,
-  result: unknown,
-  context: AdminOpContext,
-): Promise<AdminOpSettlement | undefined> => {
-  if (entry.completion.kind !== "async") return undefined;
-  if (entry.completion.settle === undefined)
-    return { ok: false, code: "QUEUED" as const, state: "accepted" };
-  try {
-    return await entry.completion.settle(raw, result, context);
-  } catch (error) {
-    // The state committed. An answer it cannot read reads the same on a repeat, so it
-    // is refused by name, as admin_job files it; any other failed read shows nothing
-    // about the work left.
-    if (
-      error instanceof CommunityOperatorError &&
-      error.code === BACKEND_CONTRACT_MISMATCH
-    )
-      return { ok: false, code: BACKEND_CONTRACT_MISMATCH };
-    return { ok: false, code: "QUEUED" as const, state: "settlement_unread" };
-  }
-};
-
-/**
- * A complete target unless its op says otherwise: an op that found its effect already
- * in place asks the same question, since the work it queued may still be open.
- */
-const settledOutcome = async (
-  entry: AdminOpEntry,
-  raw: unknown,
-  result: unknown,
-  context: AdminOpContext,
-  row: Pick<TargetOutcome, "index" | "id" | "result" | "replayed">,
-  complete: CompleteState,
-): Promise<TargetOutcome> => {
-  const settlement = await settlementOf(entry, raw, result, context);
-  if (settlement === undefined) return { ...row, state: complete, code: "OK" };
-  const gate =
-    settlement.mediaGate === undefined
-      ? {}
-      : { mediaGate: settlement.mediaGate };
-  if (settlement.ok) return { ...row, ...gate, state: complete, code: "OK" };
-  if (settlement.code === "QUEUED")
-    return {
-      ...row,
-      ...gate,
-      state: "queued",
-      code: "QUEUED",
-      ...(complete === "already_applied" ? { alreadyApplied: true } : {}),
-      settledState: settlement.state ?? "accepted",
-      ...(settlement.next === undefined
-        ? {}
-        : { settledNext: settlement.next }),
-      ...(settlement.hint === undefined
-        ? {}
-        : { settledHint: settlement.hint }),
-    };
-  return {
-    ...row,
-    ...gate,
-    state: "failed",
-    code: settlement.code,
-    ...(settlement.jobs === undefined ? {} : { jobs: settlement.jobs }),
-  };
-};
-
-/** The row a public identity names, for an answer and an audit row that did not read one. */
-const namedRow = async (
-  { req }: AdminOpContext,
-  target: ReturnType<NonNullable<AdminOpEntry["target"]>> | undefined,
-) => {
-  if (target?.id === undefined || !Object.hasOwn(CMS_FAMILIES, target.type))
-    return undefined;
-  try {
-    return await rowIdOf(
-      req,
-      CMS_FAMILIES[target.type as AdminCmsRecordType],
-      target.id,
-    );
-  } catch {
-    return undefined;
-  }
-};
-
-/** Each target's one operation. Nothing thrown here is lost and none is a success. */
-const runTarget = async (
-  entry: AdminOpEntry,
-  raw: Readonly<Record<string, unknown>>,
-  index: number,
-  context: AdminOpContext,
-): Promise<TargetOutcome> => {
-  let target: ReturnType<NonNullable<AdminOpEntry["target"]>> | undefined;
-  let id: number | string | undefined;
-  try {
-    target = entry.target?.(raw);
-    id = safeRef(target?.id);
-    // The class rises with the input. Bound identities only ever grow, so a save read
-    // as binding none here cannot bind one by the time it runs.
-    const klass = (await entry.classify?.(raw, context)) ?? entry.klass;
-    if (klass !== "reversible")
-      return { index, id, state: "failed", code: "PREVIEW_REQUIRED" };
-    const answer = await entry.run!(raw, context);
-    if (!answer.ok) {
-      const failure = targetFailureOf(new Error(answer.code));
-      return { index, id, ...failure };
-    }
-    const { replayed, ...result } = (answer.data ?? {}) as Record<
-      string,
-      unknown
-    >;
-    const resolved = id ?? safeRef(result.id) ?? safeRef(result.approvalId);
-    return await settledOutcome(
-      entry,
-      raw,
-      result,
-      context,
-      {
-        index,
-        id: resolved,
-        result,
-        ...(replayed === true ? { replayed: true } : {}),
-      },
-      replayed === true ? "already_applied" : "applied",
-    );
-  } catch (error) {
-    const failure = targetFailureOf(error);
-    const named = id ?? (await namedRow(context, target));
-    if (failure.state === "already_applied")
-      return settledOutcome(
-        entry,
-        raw,
-        undefined,
-        context,
-        { index, id: named },
-        "already_applied",
-      );
-    return {
-      index,
-      id: named,
-      ...failure,
-      ...(failure.code === "DOCUMENT_LOCKED"
-        ? await lockBlockOf(entry, raw, context, target, id)
-        : {}),
-    };
-  }
 };
 
 /** Whether the row landed: a ledger that stopped must not watch more writes go by. */
@@ -399,60 +205,6 @@ const auditTarget = async (
   }
 };
 
-const rowOf = ({
-  index,
-  id,
-  code,
-  fields,
-  replayed,
-  lock,
-  jobs,
-}: TargetOutcome): AdminExecuteRow => ({
-  index,
-  ...(id === undefined ? {} : { id }),
-  code,
-  ...(fields === undefined ? {} : { fields: [...fields] }),
-  ...(replayed ? { replayed: true as const } : {}),
-  ...(lock === undefined ? {} : { lock }),
-  ...(jobs === undefined ? {} : { jobs: [...jobs] }),
-});
-
-const dataOf = (outcomes: readonly TargetOutcome[]): AdminExecuteData => {
-  const ids = (state: TargetOutcome["state"]) =>
-    outcomes
-      .filter((outcome) => outcome.state === state)
-      .map(({ id, index }) => id ?? `#${index}`);
-  const rows = (state: TargetOutcome["state"]) =>
-    outcomes.filter((outcome) => outcome.state === state).map(rowOf);
-  const queued = outcomes
-    .filter(({ state }) => state === "queued")
-    .map(({ index, id, settledState, alreadyApplied }) => ({
-      index,
-      ...(id === undefined ? {} : { id }),
-      state: settledState ?? "accepted",
-      ...(alreadyApplied ? { alreadyApplied } : {}),
-    }));
-  const groups: AdminExecuteData = {
-    applied: ids("applied"),
-    already_applied: ids("already_applied"),
-    queued,
-    conflict: rows("conflict"),
-    failed: rows("failed"),
-    unknown: rows("unknown"),
-  };
-  const moderationCases = outcomes.filter(
-    ({ result }) => result?.caseOpened === true,
-  ).length;
-  return {
-    ...(Object.fromEntries(
-      Object.entries(groups).filter(
-        ([, group]) => Array.isArray(group) && group.length > 0,
-      ),
-    ) as AdminExecuteData),
-    ...(moderationCases === 0 ? {} : { moderationCases }),
-  };
-};
-
 // Long enough to carry a list of ids and short counters, and no real text: a cut
 // answer has to hold its groups and `next` under the text cap.
 const NEXT_ARGS_MAX_BYTES = 1_500;
@@ -462,6 +214,8 @@ const RETRY_AFTER_MS = 2_000;
 const CAP_MARGIN_BYTES = 300;
 
 const RESEND = " next leaves out input and targets: send the same ones again.";
+const PREVIEW_RESEND =
+  " next leaves out input and targets: send the same ones to admin_preview.";
 
 const CONTINUED =
   "An earlier call of this batch left a target incomplete, and this answer covers only the targets from startAt on. Repeat the whole call with the same requestId and no startAt to see every target.";
@@ -514,6 +268,31 @@ const nextCall = (
   };
 };
 
+const PREVIEW_TOOL = "admin_preview";
+
+/**
+ * Where a call that needs a preview goes: the same op and requestId on admin_preview,
+ * with what it sent while that fits. A run's requestId lives in its own ledger, so the
+ * one this call used is free there.
+ */
+const previewNext = (call: AdminExecuteInput): AdminMcpNext => {
+  const body = {
+    ...(call.input === undefined ? {} : { input: call.input }),
+    ...(call.targets === undefined ? {} : { targets: call.targets }),
+    ...(call.selector === undefined ? {} : { selector: call.selector }),
+  };
+  return {
+    tool: PREVIEW_TOOL,
+    args: {
+      requestId: call.requestId,
+      op: call.op,
+      ...(bytesOf(body) <= NEXT_ARGS_MAX_BYTES && !holdsInvisible(body)
+        ? body
+        : {}),
+    },
+  };
+};
+
 const afterMsOf = (row: AdminExecuteRow) => {
   const left = Date.parse(row.lock?.expiresAt ?? "") - Date.now();
   return Number.isFinite(left) ? Math.max(0, left) : RETRY_AFTER_MS;
@@ -522,12 +301,14 @@ const afterMsOf = (row: AdminExecuteRow) => {
 /**
  * Past the cut in withResults, a group too long to fit: on from the last row kept,
  * because each row knows its index. It reads as incomplete: a cut group is a refused
- * one, since the ids of completed targets always fit.
+ * one, since the ids of completed targets always fit. A run's call goes on by its own
+ * next, which repeats it and runs nothing twice.
  */
 export const executeContinuation = (
   rawInput: unknown,
   kept: readonly unknown[],
 ): AdminMcpNext | undefined => {
+  if (runOf(rawInput) !== undefined) return undefined;
   const { index } = (kept.at(-1) ?? {}) as { index?: unknown };
   const call = rawInput as AdminExecuteInput;
   return typeof index === "number"
@@ -615,11 +396,14 @@ const answerOf = (
       {
         ...fields,
         // A target still waiting on its jobs has a way on, whatever stopped the others.
-        ...(retry !== undefined
-          ? { next: nextCall(call, 0, false, afterMsOf(retry)) }
-          : data.queued === undefined
-            ? {}
-            : { next: queuedNext(call, outcomes) }),
+        // One whose input made it irreversible goes on through a preview of the same.
+        ...(single?.code === "PREVIEW_REQUIRED"
+          ? { next: previewNext(call) }
+          : retry !== undefined
+            ? { next: nextCall(call, 0, false, afterMsOf(retry)) }
+            : data.queued === undefined
+              ? {}
+              : { next: queuedNext(call, outcomes) }),
       },
     );
     return call.priorIncomplete === true
@@ -698,14 +482,39 @@ const withResults = (
  * call holds one at a time, but a target can stall on it for a lock wait or the
  * Backend's readiness read, so calls at once are what could starve the Owner. Past
  * this share a call is refused at once and never waits: a queue would hold its request.
+ * A preview and a run's execution take the same share: each holds the pool as a write.
  */
 const EXECUTE_POOL_SHARE = 2;
 let inFlight = 0;
+
+export const withinExecuteShare = async (
+  work: () => Promise<AdminMcpEnvelope>,
+): Promise<AdminMcpEnvelope> => {
+  if (inFlight >= EXECUTE_POOL_SHARE) return failedEnvelope("EXECUTE_BUSY");
+  inFlight += 1;
+  try {
+    return await work();
+  } finally {
+    inFlight -= 1;
+  }
+};
 
 const runCall = async (
   rawInput: unknown,
   context: { readonly key: AdminMcpKey; readonly req: PayloadRequest },
 ): Promise<AdminMcpEnvelope> => {
+  const call = rawInput as AdminExecuteCall;
+  // A previewed run carries only its id: what runs is what was frozen.
+  if (call.previewId !== undefined || call.runId !== undefined)
+    return executeRunEnvelope(
+      {
+        requestId: call.requestId,
+        ...(call.previewId === undefined ? {} : { previewId: call.previewId }),
+        ...(call.runId === undefined ? {} : { runId: call.runId }),
+      },
+      EXECUTE_TOOL_NAME,
+      context,
+    );
   const asCalled = rawInput as AdminExecuteInput;
   const found = lookupOp(asCalled.op);
   if ("unknown" in found) return unknownOpEnvelope(asCalled.op);
@@ -731,8 +540,14 @@ const runOp = async (
   const refusal = await opRefusalOf(entry, req);
   if (refusal !== undefined) return refusal;
   const total = call.targets?.length ?? 1;
-  if (call.selector !== undefined || total > ADMIN_EXECUTE_MAX_TARGETS)
-    return failedEnvelope("USE_PREVIEW");
+  if (call.selector !== undefined || total > ADMIN_EXECUTE_MAX_TARGETS) {
+    const answer = failedEnvelope("USE_PREVIEW", { next: previewNext(call) });
+    return "input" in answer.next!.args ||
+      "targets" in answer.next!.args ||
+      "selector" in answer.next!.args
+      ? answer
+      : { ...answer, hint: `${answer.hint}${PREVIEW_RESEND}` };
+  }
   const startAt = call.startAt ?? 0;
   if (startAt >= total)
     return inputInvalidEnvelope([{ path: ["startAt"], code: "too_big" }]);
@@ -766,7 +581,8 @@ const runOp = async (
   let reached = startAt;
   let stopped: Stopped | undefined;
   // Past a start row that named no target, this call's own target row names it.
-  const startNamedIt = executeReferences(call).targetId !== undefined;
+  const startNamedIt =
+    (executeReferences(call) as { targetId?: string }).targetId !== undefined;
   while (reached < total) {
     if (reached > startAt) {
       if (performance.now() - started >= EXECUTE_BUDGET_MS) {
@@ -791,7 +607,14 @@ const runOp = async (
       key,
       requestKey: requestKeyFor(call.requestId, reached, key.connection?.id),
     };
-    const outcome = await runTarget(entry, command, reached, context);
+    // Never more than reversible here: a target that rises answers PREVIEW_REQUIRED.
+    const outcome = await runTarget(
+      entry,
+      command,
+      reached,
+      context,
+      "reversible",
+    );
     outcomes.push(outcome);
     reached += 1;
     if (total > 1 || (!startNamedIt && outcome.id !== undefined)) {
@@ -819,13 +642,17 @@ const runOp = async (
   const hasBody = call.input !== undefined || call.targets !== undefined;
   const next = answer.next;
   const resend =
-    next?.tool === EXECUTE_TOOL_NAME &&
+    (next?.tool === EXECUTE_TOOL_NAME || next?.tool === PREVIEW_TOOL) &&
     hasBody &&
     !("input" in next.args) &&
     !("targets" in next.args);
   return {
     ...answer,
-    ...(resend ? { hint: `${answer.hint ?? ""}${RESEND}`.trim() } : {}),
+    ...(resend
+      ? {
+          hint: `${answer.hint ?? ""}${next.tool === PREVIEW_TOOL ? PREVIEW_RESEND : RESEND}`.trim(),
+        }
+      : {}),
     // Only what this answer holds: a result may be cut, and a field is often absent.
     untrusted: entry.untrusted.filter((pointer) =>
       pointerResolves(answer, pointer.split("/").slice(1)),
@@ -843,15 +670,8 @@ const runOp = async (
   };
 };
 
-export const executeEnvelope = async (
+export const executeEnvelope = (
   rawInput: unknown,
   context: { readonly key: AdminMcpKey; readonly req: PayloadRequest },
-): Promise<AdminMcpEnvelope> => {
-  if (inFlight >= EXECUTE_POOL_SHARE) return failedEnvelope("EXECUTE_BUSY");
-  inFlight += 1;
-  try {
-    return await runCall(rawInput, context);
-  } finally {
-    inFlight -= 1;
-  }
-};
+): Promise<AdminMcpEnvelope> =>
+  withinExecuteShare(() => runCall(rawInput, context));

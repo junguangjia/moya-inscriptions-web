@@ -13,7 +13,7 @@ import { isMissingRecord } from "../../editorial/transaction";
 import { articleContentSubset } from "../../editorial-content/approvals";
 import { saveArticleDraft } from "../../editorial-content/operations";
 import { clearedWithheldLinks } from "../records";
-import { requestKeyOf, type AdminOpContext } from "./define";
+import { requestKeyOf, requireAdmission, type AdminOpContext } from "./define";
 
 /**
  * Saves on admin_execute: the operation the Admin's batch route runs, plus what a
@@ -256,6 +256,7 @@ export const saveCatalogDraft = async (
   raw: unknown,
   context: AdminOpContext,
 ) => {
+  requireAdmission(context);
   const { allowRemoving, ...command } = raw as SaveCommand;
   const before =
     command.id === undefined
@@ -272,6 +273,7 @@ export const saveCatalogDraft = async (
 };
 
 export const saveArticle = async (raw: unknown, context: AdminOpContext) => {
+  requireAdmission(context);
   const { allowRemoving, ...command } = raw as SaveCommand;
   const before =
     command.id === undefined

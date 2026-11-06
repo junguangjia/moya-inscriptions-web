@@ -48,7 +48,12 @@ import {
   type CmsFamily,
   type RecordDocument,
 } from "../records";
-import { requestKeyOf, type AdminOpContext, type AdminOpEntry } from "./define";
+import {
+  requestKeyOf,
+  requireAdmission,
+  type AdminOpContext,
+  type AdminOpEntry,
+} from "./define";
 import {
   beforeOf,
   echoOf,
@@ -415,6 +420,7 @@ export const classifyCollectionSave = async (
     : "reversible";
 
 export const saveCollection = async (raw: unknown, context: AdminOpContext) => {
+  requireAdmission(context);
   const parsed = adminCollectionSaveInputSchema.parse(raw);
   const { req } = context;
   const spec = SPECS.collection;
@@ -530,8 +536,10 @@ export const classifyMediaRegistration = async (
 /** Only a row that is there comes here: the identical row replays, others are refused. */
 export const answerMediaRegistration = async (
   raw: unknown,
-  { req }: AdminOpContext,
+  context: AdminOpContext,
 ) => {
+  requireAdmission(context);
+  const { req } = context;
   const input = adminMediaRegisterInputSchema.parse(raw);
   const row = await registeredRow(req, input.mediaId);
   if (
