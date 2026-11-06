@@ -21,6 +21,7 @@ import {
   type AdminMcpCodeGuide,
   type AdminOpMeta,
 } from "@moya/contracts/internal/admin-mcp";
+import { TOOL_VENDOR_LEGAL_NAMES } from "admin/agent-connections-consent";
 
 import { repositoryRoot } from "../architecture/workspace-scanner.js";
 
@@ -248,10 +249,11 @@ describe("Admin MCP control constants", () => {
     expect({
       disclosure: AI_POLICY_DISCLOSURE,
       policyText: createHash("sha256").update(content).digest("hex"),
-      // Every vendor on the consent page's map, Cursor's (#355 O5) included.
-      vendors: ["Anthropic PBC", "OpenAI OpCo, LLC", "Anysphere, Inc."].filter(
-        (vendor) => content.includes(vendor),
-      ),
+      // Every vendor on the consent page's map, read from the map itself, so a family
+      // added there with no policy change fails here (#355 O5).
+      vendorsMissingFromPolicy: [
+        ...new Set(TOOL_VENDOR_LEGAL_NAMES.values()),
+      ].filter((vendor) => !content.includes(vendor)),
       selfOnlyPromise: visibility
         .split("\n")
         .find((line) => line.includes('value: "self"'))
@@ -260,7 +262,7 @@ describe("Admin MCP control constants", () => {
       disclosure: { dm: false, evidence: false, rawIp: false, selfOnly: false },
       policyText:
         "2a91398b3432d7460a77196deab1fefece619e9828065e53670ac859cfc00795",
-      vendors: ["Anthropic PBC", "OpenAI OpCo, LLC", "Anysphere, Inc."],
+      vendorsMissingFromPolicy: [],
       selfOnlyPromise:
         '{ value: "self", label: "仅自己可见", description: "只有你能看到" },',
     });

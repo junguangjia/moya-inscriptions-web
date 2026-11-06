@@ -165,21 +165,39 @@ export interface ConsentTool {
  * here; a release ships the policy before the Admin that carries the line. A family
  * with no line stops at the consent page, which could not otherwise say where the
  * content goes. Cursor passes what it reads on to the model the person picks in it,
- * as the policy says, so its line names both.
+ * as the policy says, so its line names both. Each line also carries the vendor's
+ * name as the policy spells it.
  */
-const TOOL_VENDORS: ReadonlyMap<string, string> = new Map([
-  ["claude", "Anthropic"],
-  ["claude-code", "Anthropic"],
-  ["codex", "OpenAI"],
-  ["chatgpt", "OpenAI"],
-  ["cursor", "Anysphere，以及你在 Cursor 里选用的模型的提供方"],
+const TOOL_VENDORS: ReadonlyMap<
+  string,
+  { readonly shown: string; readonly legal: string }
+> = new Map([
+  ["claude", { shown: "Anthropic", legal: "Anthropic PBC" }],
+  ["claude-code", { shown: "Anthropic", legal: "Anthropic PBC" }],
+  ["codex", { shown: "OpenAI", legal: "OpenAI OpCo, LLC" }],
+  ["chatgpt", { shown: "OpenAI", legal: "OpenAI OpCo, LLC" }],
+  [
+    "cursor",
+    {
+      shown: "Anysphere，以及你在 Cursor 里选用的模型的提供方",
+      legal: "Anysphere, Inc.",
+    },
+  ],
 ]);
+
+/**
+ * Each family's vendor as the public policy names it. A test holds every name here
+ * to the policy text, so a family added above with no policy change fails.
+ */
+export const TOOL_VENDOR_LEGAL_NAMES: ReadonlyMap<string, string> = new Map(
+  [...TOOL_VENDORS].map(([family, { legal }]) => [family, legal]),
+);
 
 const consentToolOf = (
   registered: RegisteredClient | undefined,
 ): ConsentTool => {
   if (registered === undefined) throw new ConsentError("CLIENT_NOT_REGISTERED");
-  const vendor = TOOL_VENDORS.get(registered.family);
+  const vendor = TOOL_VENDORS.get(registered.family)?.shown;
   if (vendor === undefined) throw new ConsentError("CLIENT_VENDOR_NOT_NAMED");
   return {
     label: registered.label,

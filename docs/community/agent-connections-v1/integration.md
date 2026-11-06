@@ -209,8 +209,10 @@ button hands it an install link whose settings name its own published client id
 in `auth.CLIENT_ID`. Its web and cloud agents return to a callback on its own
 site under the same id, which one loopback entry cannot also hold, and its old
 `cursor://` callback is refused. ChatGPT and Codex have no link that fills in
-the address, so their buttons copy it and open the right page. What this says
-about Cursor and ChatGPT comes from their documents until a real one connects.
+the address, so ChatGPT's button and Codex's settings link copy it and open
+ChatGPT's plugins page or Codex's settings. What this says about Cursor and
+ChatGPT comes from their documents, and Cursor's client and labels from reading
+its 3.22.7 app, until a real one connects.
 
 What a client should expect:
 

@@ -1738,8 +1738,14 @@ describe("the AI connections page under the login door", () => {
     expect(buttons[2]?.getAttribute("href")).toBe(CURSOR_LINK);
   });
 
-  it("copies the address in the ChatGPT click, and lets the browser open ChatGPT's page", async () => {
-    const writeText = vi.fn(async () => undefined);
+  it("copies the address in the ChatGPT click, says so only once the write resolved, and lets the browser open ChatGPT's page", async () => {
+    let written: () => void = () => undefined;
+    const writeText = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          written = resolve;
+        }),
+    );
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     await mount(operatorList());
     expect(chatgptButton().getAttribute("href")).toBe(
@@ -1749,12 +1755,17 @@ describe("the AI connections page under the login door", () => {
     expect(clickThrough(chatgptButton())).toBe(true);
     expect(writeText).toHaveBeenCalledOnce();
     expect(writeText).toHaveBeenCalledWith(ADDRESS);
+    // The write is still pending, so nothing says it was copied.
+    await act(async () => undefined);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText("地址已复制。")).toBeNull();
+    await act(async () => written());
     expect((await screen.findByRole("status")).textContent).toBe(
       "地址已复制。",
     );
   });
 
-  it("shows ChatGPT's four steps unfolded, and says ChatGPT and Codex are two connections", async () => {
+  it("shows ChatGPT's four steps unfolded, and says a Codex added on its own is another connection", async () => {
     await mount(operatorList());
     const steps = document.querySelector(
       '[data-agent-connections-steps="chatgpt"]',
@@ -1765,11 +1776,16 @@ describe("the AI connections page under the login door", () => {
     expect(items).toHaveLength(4);
     expect(items[0]).toContain("Add custom MCP server");
     expect(items[1]).toContain("「由于艺后台」");
+    // Read on ChatGPT's tab, where a refused copy does not show, so it claims no copy.
+    expect(items[1]).toContain("没复制上，就回到这一页手动复制");
+    expect(items[1]).not.toContain("地址已复制");
     expect(items[2]).toContain("OAuth");
     expect(items[3]).toContain("「允许」");
     expect(
       document.querySelector("[data-agent-connections-two]")?.textContent,
-    ).toBe("ChatGPT 和 Codex 是两条连接，断开一个不影响另一个。");
+    ).toBe(
+      "在 Codex 设置或终端里另外添加的，是另一条连接，断开一个不影响另一个。",
+    );
   });
 
   it("copies the address from the Codex link in the ChatGPT card, and keeps the terminal commands", async () => {

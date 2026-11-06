@@ -72,7 +72,7 @@ const CODEX_SETTINGS = "codex://settings";
 
 const CHATGPT_STEPS: readonly string[] = [
   "在 ChatGPT 里点 +，选 Add custom MCP server。",
-  `名称填「${CONNECTOR_NAME}」，Server URL 处粘贴（地址已复制）。`,
+  `名称填「${CONNECTOR_NAME}」，Server URL 处粘贴地址（点上面的按钮时会自动复制；没复制上，就回到这一页手动复制）。`,
   "认证方式选 OAuth，Client ID 和 Secret 留空，勾选提示，点 Create，再安装。",
   `在打开的页面里登录后台，点「允许」。之后在新对话里输入 @${CONNECTOR_NAME} 使用。`,
 ];
@@ -389,7 +389,9 @@ export const OperatorConnectionsClient = ({
                   >
                     {chatgpt ? (
                       <p className={community.lead} data-agent-connections-two>
-                        ChatGPT 和 Codex 是两条连接，断开一个不影响另一个。
+                        {
+                          "在 Codex 设置或终端里另外添加的，是另一条连接，断开一个不影响另一个。"
+                        }
                       </p>
                     ) : null}
                     {/* A custom scheme, so no new tab: the browser hands it to the app. */}
