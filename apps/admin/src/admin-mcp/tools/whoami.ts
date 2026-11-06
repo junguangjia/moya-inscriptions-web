@@ -29,7 +29,18 @@ const PLAYBOOK: Record<AdminMcpKey["path"], readonly string[]> = {
   ],
 };
 
-export const whoamiEnvelope = (key: AdminMcpKey, tools: readonly string[]) =>
+/** What the native path says of its contract; the plugin path says nothing new. */
+export interface WhoamiContract {
+  readonly version: string;
+  readonly catalog: string;
+  readonly tools: string;
+}
+
+export const whoamiEnvelope = (
+  key: AdminMcpKey,
+  tools: readonly string[],
+  contract?: WhoamiContract,
+) =>
   okEnvelope(
     adminWhoamiDataSchema.parse({
       path: key.path,
@@ -55,6 +66,7 @@ export const whoamiEnvelope = (key: AdminMcpKey, tools: readonly string[]) =>
             },
           }
         : {}),
+      ...(contract === undefined ? {} : { contract: { ...contract } }),
     }),
     key.label ? ["/data/key/label"] : [],
   );

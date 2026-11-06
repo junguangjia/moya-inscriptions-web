@@ -104,6 +104,14 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     hint: "That op name does not exist. Use a listed name or admin_actions.",
     retryable: false,
   },
+  OP_RETIRED: {
+    hint: "That op name was retired, so nothing ran. data.use names the op that replaced it; read its arguments with admin_actions.",
+    retryable: false,
+  },
+  WRONG_TOOL: {
+    hint: "This op runs on the tool named in data.tool, so nothing ran here. Call that tool; if your tool list lacks it, this credential cannot run the op.",
+    retryable: false,
+  },
   AUDIT_UNAVAILABLE: {
     hint: "The audit ledger could not record this call, so nothing was done or delivered. Retry shortly.",
     retryable: true,
@@ -139,6 +147,10 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
   COMMUNITY_UNAVAILABLE: {
     hint: "The community store could not be read just now, so this has no answer and it is not an empty one. Retry shortly.",
     retryable: true,
+  },
+  BACKEND_CONTRACT_MISMATCH: {
+    hint: "The Backend answered in a shape this Admin cannot read, so this says nothing of what happened: no read is empty, and a write may have committed. Retrying cannot help; tell the Owner.",
+    retryable: false,
   },
   ANALYTICS_UNAVAILABLE: {
     hint: "The canonical analytics store could not be read just now, so this has no number and it is not a zero. Retry shortly.",
@@ -384,17 +396,53 @@ const allowedKeysAt = (
     : undefined;
 };
 
-/** Names the failing input by path and allowed keys, never by value. */
+/** A closed value's choices, and in a union those of each branch that has them. */
+const choicesOf = (issue: z.core.$ZodIssue): readonly unknown[] =>
+  issue.code === "invalid_value"
+    ? issue.values
+    : issue.code === "invalid_union"
+      ? issue.errors.flatMap((branch) =>
+          branch.filter(({ path }) => path.length === 0).flatMap(choicesOf),
+        )
+      : [];
+
+/**
+ * The schema's own choices for a closed value, which tools/list may show as a string.
+ * Named once per path and choices in one answer, so a slip in a shared input that
+ * every target repeats does not repeat them.
+ */
+const allowedValuesOf = (
+  issue: z.core.$ZodIssue,
+  named: Set<string>,
+): readonly string[] | undefined => {
+  const choices = [...new Set(choicesOf(issue))];
+  if (
+    choices.length === 0 ||
+    !choices.every((value): value is string => typeof value === "string")
+  )
+    return undefined;
+  const once = JSON.stringify([issue.path.map(String), choices]);
+  if (named.has(once)) return undefined;
+  named.add(once);
+  return choices;
+};
+
+/**
+ * Names the failing input by path and by what the schema allows, never by value. The
+ * calls behind one answer share `named`.
+ */
 export const issuesOfError = (
   error: z.ZodError,
   schema: unknown,
   prefix: readonly string[] = [],
+  named = new Set<string>(),
 ): readonly AdminMcpIssue[] =>
   error.issues.map((issue) => {
     const allowedKeys =
       issue.code === "unrecognized_keys"
         ? allowedKeysAt(schema, issue.path)
         : undefined;
+    const allowedValues = allowedValuesOf(issue, named);
     return {
       path: [
         ...prefix,
@@ -404,6 +452,9 @@ export const issuesOfError = (
       ],
       code: issue.code,
       ...(allowedKeys === undefined ? {} : { allowedKeys: [...allowedKeys] }),
+      ...(allowedValues === undefined
+        ? {}
+        : { allowedValues: [...allowedValues] }),
     };
   });
 

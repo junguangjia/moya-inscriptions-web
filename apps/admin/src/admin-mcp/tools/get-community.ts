@@ -17,6 +17,7 @@ import type { CommunityOperationName } from "../../community/endpoints";
 import { communityActionsFor } from "../actions-for";
 import type { ActionScope } from "../actions-for";
 import { failedEnvelope, inputInvalidEnvelope, okEnvelope } from "../envelope";
+import { built, none, notBuilt, type Unbuilt } from "../not-built";
 import {
   askCommunity,
   askFind,
@@ -87,6 +88,8 @@ const oneRecord =
       : ((await askCommunity(route, parsed, req)) as CommunityItem);
   };
 
+const CMS_RECORD = none("A CMS record, read in Admin on the Local API.");
+
 /** What the locate route found for an id. A source that did not answer is never a miss. */
 const foundById = async (type: AiLookupType, id: string) => {
   const { items, sources } = await askFind({ type, id });
@@ -98,7 +101,14 @@ const foundById = async (type: AiLookupType, id: string) => {
   return items[0];
 };
 
-const RECORDS: Readonly<Partial<Record<AdminRecordType, CommunityRecord>>> = {
+/** Every record type, so a new one says how admin_get reads it before it compiles. */
+export const RECORDS: Readonly<
+  Record<AdminRecordType, CommunityRecord | Unbuilt>
+> = {
+  catalog: CMS_RECORD,
+  collection: CMS_RECORD,
+  media: CMS_RECORD,
+  invitation: notBuilt("S10"),
   report: {
     excluded: SELF_ONLY_CATEGORY,
     fields: [
@@ -409,7 +419,7 @@ export const isCommunityArticleId = ({ type, id }: AdminGetInput): boolean =>
   type === "article" && typeof id === "string" && ARTICLE_ID.test(id);
 
 export const communityFieldNames = (type: AdminRecordType): readonly string[] =>
-  RECORDS[type]?.fields.map(({ name }) => name) ?? [];
+  built(RECORDS[type])?.fields.map(({ name }) => name) ?? [];
 
 const unknownField = (record: CommunityRecord, path: string) =>
   inputInvalidEnvelope([
@@ -438,7 +448,7 @@ export const communityGetEnvelope = async (
   input: AdminGetInput,
   scope: ActionScope,
 ): Promise<AdminMcpEnvelope> => {
-  const record = RECORDS[input.type];
+  const record = built(RECORDS[input.type]);
   // Withheld or unbuilt is never the same answer as nothing being there.
   if (record === undefined) return failedEnvelope("NOT_AVAILABLE");
   const named = (envelope: AdminMcpEnvelope): AdminMcpEnvelope =>

@@ -65,6 +65,17 @@ export const adminUnknownOpDataSchema = z.strictObject({
   nearest: z.array(opName),
 });
 
+/** OP_RETIRED: the earlier name, from the alias table, and the op that replaced it. */
+export const adminRetiredOpDataSchema = z.strictObject({
+  op: opName,
+  use: opName,
+});
+
+/** WRONG_TOOL: the tool this op runs on. */
+export const adminWrongToolDataSchema = z.strictObject({
+  tool: z.string().min(1),
+});
+
 export type AdminActionsInput = z.infer<typeof adminActionsInputSchema>;
 export type AdminActionsIndex = z.infer<typeof adminActionsIndexSchema>;
 export type AdminActionDetail = z.infer<typeof adminActionDetailSchema>;

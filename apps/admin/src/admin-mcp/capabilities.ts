@@ -1,20 +1,28 @@
 import {
   ADMIN_ANALYTICS_REPORTS,
+  ADMIN_MCP_TEXT_CAP_BYTES,
+  ADMIN_MCP_TOKEN_BUDGET,
+  ADMIN_MCP_TOOL_PROFILES,
   ADMIN_OP_NAMES,
+  ADMIN_OP_TOOLS,
 } from "@moya/contracts/internal/admin-mcp";
 import type {
   AdminAnalyticsReport,
   AdminOpName,
 } from "@moya/contracts/internal/admin-mcp";
 
+import { okEnvelope } from "./envelope";
 import { adminOpMeta } from "./registry";
 import { ADMIN_SURFACES } from "./surfaces";
 import type { AdminSurface } from "./surfaces";
+import { toolListingFor } from "./tools";
+import { actionsIndex } from "./tools/actions";
 
 const DESCRIPTION = `# Admin MCP capabilities
 
-Generated from \`apps/admin/src/admin-mcp/registry.ts\` and
-\`apps/admin/src/admin-mcp/surfaces.ts\`. Do not edit by hand. To regenerate, run
+Generated from \`apps/admin/src/admin-mcp/registry.ts\`,
+\`apps/admin/src/admin-mcp/surfaces.ts\` and the tool list in
+\`apps/admin/src/admin-mcp/tools/index.ts\`. Do not edit by hand. To regenerate, run
 \`pnpm --filter @moya/tests exec vitest run unit/backend/admin-mcp-registry.test.ts -u\`;
 the same test fails while this file is stale.
 
@@ -49,6 +57,74 @@ const ANALYTICS_REPORT_FACTS: Readonly<
   native: { source: "Umami", built: true },
   reconcile: { source: "canonical against Umami", built: true },
   traffic: { source: "hourly snapshot", built: false },
+};
+
+const bytesOf = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
+
+/** The registry test's estimate: 3 bytes a token. */
+const TOOLS_LIST_CEILING_BYTES = ADMIN_MCP_TOKEN_BUDGET * 3;
+
+/**
+ * What JSON-RPC wraps the tools array in on the wire, for the official client's first
+ * request after initialize. The measures here leave it out.
+ */
+const TOOLS_LIST_FRAME_BYTES =
+  bytesOf({ result: { tools: [] }, jsonrpc: "2.0", id: 1 }) - bytesOf([]);
+
+/**
+ * The share of the text cap past which the registry test fails, so the index is paged
+ * by family before it is cut (extensibility plan 2.11), not after.
+ */
+export const ADMIN_ACTIONS_INDEX_ALARM_SHARE = 0.8;
+
+const EVERY_SWITCH = { dm: true, evidence: true, rawIp: true, selfOnly: true };
+
+/**
+ * What each budget holds now, from the registry and the tool list. The index is the
+ * whole one, on every op tool with every switch open and no AI token placed, which
+ * files each built community op under that code: its largest form, whatever this
+ * process holds.
+ */
+export const adminMcpBudgets = () => ({
+  toolsList: {
+    ceiling: TOOLS_LIST_CEILING_BYTES,
+    frame: TOOLS_LIST_FRAME_BYTES,
+    profiles: ADMIN_MCP_TOOL_PROFILES.map((profile) => ({
+      profile,
+      bytes: bytesOf(toolListingFor(profile, false)),
+    })),
+    tools: toolListingFor("full", false).map((listing) => ({
+      name: listing.name,
+      bytes: bytesOf(listing),
+    })),
+  },
+  index: {
+    bytes: bytesOf(
+      okEnvelope(actionsIndex([...ADMIN_OP_TOOLS], EVERY_SWITCH, () => false)),
+    ),
+    cap: ADMIN_MCP_TEXT_CAP_BYTES,
+    alarm: Math.floor(
+      ADMIN_MCP_TEXT_CAP_BYTES * ADMIN_ACTIONS_INDEX_ALARM_SHARE,
+    ),
+  },
+});
+
+const usage = (bytes: number, ceiling: number) =>
+  `${bytes} | ${ceiling} | ${Math.round((bytes / ceiling) * 100)}% | ${ceiling - bytes}`;
+
+const budgetSection = () => {
+  const { toolsList, index } = adminMcpBudgets();
+  const rows = [
+    ...toolsList.profiles.map(
+      ({ profile, bytes }) =>
+        `| tools/list, profile \`${profile}\` | ${usage(bytes, toolsList.ceiling)} |`,
+    ),
+    `| \`admin_actions\` index | ${usage(index.bytes, index.cap)} |`,
+  ];
+  const tools = toolsList.tools.map(
+    ({ name, bytes }) => `| \`${name}\` | ${bytes} |`,
+  );
+  return `## Budgets\n\nBytes of JSON. A tools/list figure is the JSON of the \`tools\` array alone, without the JSON-RPC frame, which adds ${toolsList.frame} bytes on the wire; it counts against \`ADMIN_MCP_TOKEN_BUDGET\` at 3 bytes a token. The \`admin_actions\` index is the text of its tool result, against the ${index.cap}-byte text cap, measured on every op tool with every switch open and no AI token placed, its largest form. Only the index has an alarm: the registry test fails past ${index.alarm} bytes, ${ADMIN_ACTIONS_INDEX_ALARM_SHARE * 100}% of the cap.\n\n| Measure | Bytes | Ceiling | Used | Left |\n| --- | --- | --- | --- | --- |\n${rows.join("\n")}\n\n| Tool | Bytes listed |\n| --- | --- |\n${tools.join("\n")}\n`;
 };
 
 const familyOf = (name: AdminOpName) => name.slice(0, name.indexOf("."));
@@ -86,6 +162,7 @@ export const renderAdminMcpCapabilities = (): string => {
   );
   return [
     DESCRIPTION,
+    budgetSection(),
     `## Ops (${ADMIN_OP_NAMES.length})\n`,
     ...ops,
     `## Reports on \`admin_analytics\` (${ADMIN_ANALYTICS_REPORTS.length})\n\nEvery report reads on the \`base\` credential and takes the same range, time zone and filter arguments. One that is not built reports \`NOT_AVAILABLE\`.\n\n| Report | Source | Built |\n| --- | --- | --- |\n${ADMIN_ANALYTICS_REPORTS.map((report) => `| \`${report}\` | ${ANALYTICS_REPORT_FACTS[report].source} | ${ANALYTICS_REPORT_FACTS[report].built ? "yes" : "no"} |`).join("\n")}\n`,

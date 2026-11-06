@@ -10,6 +10,7 @@ import type { PayloadRequest } from "payload";
 import { z } from "zod";
 
 import { CommunityOperatorError } from "../../community/backend";
+import { BACKEND_CONTRACT_MISMATCH } from "../backend-answer";
 import { EXECUTE_BUDGET_MS } from "../budget";
 import { failedEnvelope, okEnvelope } from "../envelope";
 import { envelopeCodeOf } from "../refusal";
@@ -31,6 +32,7 @@ const REFUSED: ReadonlySet<string> = new Set([
   "SELF_ONLY_OWNER_REVIEW",
   "AI_CREDENTIAL_NOT_CONFIGURED",
   "AI_ROUTE_FORBIDDEN",
+  BACKEND_CONTRACT_MISMATCH,
 ]);
 
 interface Read {

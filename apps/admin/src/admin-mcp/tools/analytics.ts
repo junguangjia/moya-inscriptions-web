@@ -1,7 +1,4 @@
-import {
-  ADMIN_ANALYTICS_REPORTS,
-  analyticsInsightQuerySchema,
-} from "@moya/contracts/internal/admin-mcp";
+import { analyticsInsightQuerySchema } from "@moya/contracts/internal/admin-mcp";
 import { z } from "zod";
 
 export { ANALYTICS_TOOL_NAME } from "../analytics/service";
@@ -11,11 +8,12 @@ export const ANALYTICS_DESCRIPTION = `Site statistics from the real stores in on
 const text = z.string().optional();
 
 /**
- * What tools/list shows: each name, and the choices short enough to list. The contract's
- * patterns and limits are checked inside the handler, and a refusal names them.
+ * What tools/list shows: each name, and the choices short enough to list. The report
+ * grows with the registry, so it is a string. The contract's choices, patterns and limits
+ * are checked inside the handler, and a refusal names them.
  */
 export const analyticsListedInput = z.strictObject({
-  report: z.enum(ADMIN_ANALYTICS_REPORTS),
+  report: z.string(),
   range: analyticsInsightQuerySchema.shape.range,
   from: text,
   to: text,

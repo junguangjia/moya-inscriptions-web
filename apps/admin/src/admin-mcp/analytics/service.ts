@@ -34,6 +34,10 @@ import {
   CommunityOperatorError,
   operatorBaseUrl,
 } from "../../community/backend";
+import {
+  BACKEND_CONTRACT_MISMATCH,
+  readBackendAnswer,
+} from "../backend-answer";
 import { failedEnvelope, inputInvalidEnvelope, okEnvelope } from "../envelope";
 import {
   ANALYTICS_SETTLED_AFTER_MS,
@@ -174,16 +178,26 @@ const fetchInsight = async <Report extends AnalyticsInsightReport>(
       ? new AnalyticsReadFailure(failedEnvelope("READ_TIMED_OUT"))
       : unavailable("backend_unreachable");
   }
-  const body: unknown = await response.json().catch(() => null);
+  let body: unknown = null;
+  let unread = false;
+  try {
+    body = await response.json();
+  } catch {
+    unread = true;
+  }
   if (!response.ok)
     throw failureOfStatus(
       response.status,
       (body as { error?: { code?: unknown; issues?: unknown } } | null)
         ?.error ?? {},
     );
-  const parsed = analyticsInsightResultSchemas[report].safeParse(body);
-  if (!parsed.success) throw unavailable("reply_invalid");
-  return parsed.data as AnalyticsInsightResults[Report];
+  // A body that is not JSON, or never came, is a read that failed, as it always was.
+  if (unread) throw unavailable("reply_invalid");
+  // A field the Backend adds first is dropped; JSON that breaks its contract is named.
+  const read = readBackendAnswer(analyticsInsightResultSchemas[report], body);
+  if (read === undefined)
+    throw new AnalyticsReadFailure(failedEnvelope(BACKEND_CONTRACT_MISMATCH));
+  return read.data as AnalyticsInsightResults[Report];
 };
 
 interface CanonicalLimits {

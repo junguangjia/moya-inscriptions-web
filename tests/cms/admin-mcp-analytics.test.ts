@@ -51,7 +51,12 @@ import {
 import { analyticsCache, toolListingFor } from "admin/admin-mcp";
 
 import { InMemoryCommunityIdentityPort } from "../unit/backend/community-identity-fixture.js";
-import { connectClient, serveRoutes } from "./admin-mcp-wire.js";
+import {
+  connectClient,
+  relayRewriting,
+  serveRoutes,
+  withFieldAdded,
+} from "./admin-mcp-wire.js";
 
 if (process.env.CMS_ENVIRONMENT !== "synthetic")
   throw new Error("SYNTHETIC_CMS_TARGET_REQUIRED");
@@ -2648,11 +2653,64 @@ describe("the canonical path", () => {
       vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", stub.origin);
       expect(await call({ report: "status" })).toMatchObject({
         ok: false,
+        code: "BACKEND_CONTRACT_MISMATCH",
+      });
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("reads a reply that is not JSON as a failed read, which a retry may get past", async () => {
+    const stub = await startBackendStub((_path, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end("<html>synthetic proxy page</html>");
+    });
+    try {
+      vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", stub.origin);
+      expect(await call({ report: "status" })).toMatchObject({
+        ok: false,
         code: "ANALYTICS_UNAVAILABLE",
+        retryable: true,
         data: { reason: "reply_invalid" },
       });
     } finally {
       await stub.close();
+    }
+  });
+
+  it("reads a reply carrying a field it does not know, and the field goes nowhere", async () => {
+    const unknown = `unknownfield${randomUUID().replaceAll("-", "")}`;
+    const relay = await relayRewriting(backendOrigin, (body) =>
+      withFieldAdded(body, unknown),
+    );
+    try {
+      vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", relay.origin);
+      for (const args of [
+        { report: "status" },
+        { report: "overview", range: "yesterday" },
+        { report: "trend", range: "yesterday" },
+        { report: "breakdown", dimension: "surface", range: "yesterday" },
+        { report: "compare", dimension: "event", range: "yesterday" },
+        {
+          report: "funnel",
+          range: "yesterday",
+          steps: ["page_view", "content_open"],
+        },
+        { report: "realtime" },
+        { report: "sessions", range: "yesterday" },
+        { report: "session", visitorId: timeline },
+        { report: "product", range: "yesterday" },
+      ]) {
+        // The cache would answer from the Backend's first reply, not this one.
+        analyticsCache.purge();
+        const answer = await ok(args);
+        expect(JSON.stringify(answer), JSON.stringify(args)).not.toContain(
+          unknown,
+        );
+      }
+    } finally {
+      analyticsCache.purge();
+      await relay.close();
     }
   });
 

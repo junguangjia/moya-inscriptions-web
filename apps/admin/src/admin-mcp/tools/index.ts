@@ -1,4 +1,5 @@
 import {
+  ADMIN_MCP_CONTRACT_VERSION,
   ADMIN_MCP_RESULT_SCHEMA,
   ADMIN_MCP_TOOL_PROFILES,
   adminActionsInputSchema,
@@ -26,9 +27,11 @@ import { analyticsEnvelope } from "../analytics/service";
 import { controlFor } from "../control/state";
 import type { AdminMcpKey } from "../door";
 import { findEnvelope } from "../locate";
+import { textHash } from "../text-window";
 import {
   ACTIONS_DESCRIPTION,
   ACTIONS_TOOL_NAME,
+  actionsCatalogHash,
   actionsContinuation,
   actionsEnvelope,
 } from "./actions";
@@ -45,12 +48,18 @@ import {
   executeListedInput,
   executeReferences,
 } from "./execute";
-import { FIND_DESCRIPTION, FIND_TOOL_NAME, findContinuation } from "./find";
+import {
+  FIND_DESCRIPTION,
+  FIND_TOOL_NAME,
+  findContinuation,
+  findListedInput,
+} from "./find";
 import {
   GET_DESCRIPTION,
   GET_TOOL_NAME,
   getContinuation,
   getEnvelope,
+  getListedInput,
 } from "./get";
 import {
   JOB_DESCRIPTION,
@@ -145,7 +154,8 @@ export const ADMIN_MCP_TOOLS: readonly AdminMcpTool[] = [
     klass: "read",
     profiles: ADMIN_MCP_TOOL_PROFILES,
     input: whoamiInputSchema,
-    run: async (_input, { key, tools }) => whoamiEnvelope(key, tools),
+    run: async (_input, { key, tools }) =>
+      whoamiEnvelope(key, tools, contractOf(key)),
   },
   {
     name: FIND_TOOL_NAME,
@@ -154,6 +164,7 @@ export const ADMIN_MCP_TOOLS: readonly AdminMcpTool[] = [
     klass: "read",
     profiles: ADMIN_MCP_TOOL_PROFILES,
     input: adminFindInputSchema,
+    listedInput: findListedInput,
     run: async (input, { key, tools, req }) =>
       findEnvelope(req, input as AdminFindInput, {
         tools,
@@ -169,6 +180,7 @@ export const ADMIN_MCP_TOOLS: readonly AdminMcpTool[] = [
     klass: "read",
     profiles: ADMIN_MCP_TOOL_PROFILES,
     input: adminGetInputSchema,
+    listedInput: getListedInput,
     run: async (input, { key, tools, req }) =>
       getEnvelope(req, input as AdminGetInput, {
         tools,
@@ -314,6 +326,20 @@ export const toolListingFor = (
         (!paused || tool.name === WHOAMI_TOOL_NAME),
     )
     .map(({ listing }) => listing);
+
+/**
+ * What admin_whoami says of the contract: the version served, the op catalog and this
+ * key's tools/list, each as a short hash, so a client can tell a release changed them.
+ */
+export const contractOf = (
+  key: Pick<AdminMcpKey, "toolProfile" | "paused">,
+) => ({
+  version: ADMIN_MCP_CONTRACT_VERSION,
+  catalog: actionsCatalogHash(),
+  tools: textHash(
+    JSON.stringify(toolListingFor(key.toolProfile, key.paused)),
+  ).slice(0, 16),
+});
 
 /** A tool outside the key's profile does not exist for that key. */
 export const toolFor = (

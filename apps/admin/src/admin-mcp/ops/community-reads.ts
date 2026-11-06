@@ -5,6 +5,7 @@ import {
   adminReadRowsDataSchema,
   aiCountResultSchema,
   aiFindResultSchema,
+  aiOperatorRouteFor,
   aiSettlementResultSchema,
   resolveAnalyticsRange,
 } from "@moya/contracts/internal/admin-mcp";
@@ -14,11 +15,13 @@ import type {
   AdminMcpNext,
   AiCountSource,
   AiFindResult,
+  AiOperatorCredential,
   AiSettlementQuery,
   AiSettlementResult,
   AnalyticsInsightQuery,
 } from "@moya/contracts/internal/admin-mcp";
 import type { PayloadRequest } from "payload";
+import type { z } from "zod";
 
 import {
   callAiOperator,
@@ -31,7 +34,12 @@ import {
 } from "../../community/endpoints";
 import { createPoolSlots } from "../analytics/cache";
 import type { PoolSlots } from "../analytics/cache";
+import {
+  BACKEND_CONTRACT_MISMATCH,
+  readBackendAnswer,
+} from "../backend-answer";
 import { failedEnvelope, inputInvalidEnvelope, okEnvelope } from "../envelope";
+import { notBuilt, type Unbuilt } from "../not-built";
 import { INLINE_TEXT_CHARS } from "../records";
 import { codePointLength, textHash } from "../text-window";
 import { NUMBERED_PAGE_SIZE, numberedPageAfter } from "./define";
@@ -119,15 +127,42 @@ export const inPoolShare =
     }
   };
 
+/**
+ * The AI credential's call, refused before any fetch where the route table holds no row
+ * for it, as the Backend refuses it: an op that calls an unlisted route fails its test,
+ * not a live request. Only the row is asked for here; a run mark and a sensitive switch
+ * stay the Backend's to answer.
+ */
+export const routeCheckedAiCall = (
+  credential: AiOperatorCredential,
+  headers: Readonly<Record<string, string>> = {},
+): OperatorCall => {
+  const backend = callAiOperator(credential, headers);
+  return async <Result>(...call: Parameters<OperatorCall>): Promise<Result> => {
+    const [method, path] = call;
+    const { pathname, searchParams } = new URL(
+      `/internal/community/${path}`,
+      "http://route.invalid",
+    );
+    const route = aiOperatorRouteFor(method, pathname, searchParams);
+    if (route === undefined || !route.credentials.includes(credential))
+      throw new CommunityOperatorError("AI_ROUTE_FORBIDDEN", 403);
+    return backend<Result>(...call);
+  };
+};
+
 const COMMUNITY_LIMITS: CommunityReadLimits = {
   slots: createPoolSlots(COMMUNITY_READ_POOL_SHARE),
   waitMs: COMMUNITY_WAIT_MS,
   holdMs: COMMUNITY_OVERRUN_HOLD_MS,
 };
 
-const community = inPoolShare(callAiOperator("community"), COMMUNITY_LIMITS);
+const community = inPoolShare(
+  routeCheckedAiCall("community"),
+  COMMUNITY_LIMITS,
+);
 // A job's own subject needs no community state, so Catalog work never needs that token.
-const baseShare = inPoolShare(callAiOperator("base"), COMMUNITY_LIMITS);
+const baseShare = inPoolShare(routeCheckedAiCall("base"), COMMUNITY_LIMITS);
 
 /**
  * A write takes the same slots: the App pool holds 5 connections by default
@@ -139,7 +174,7 @@ const baseShare = inPoolShare(callAiOperator("base"), COMMUNITY_LIMITS);
 export const communityWriteCall = (
   headers: Readonly<Record<string, string>> = {},
 ): OperatorCall =>
-  inPoolShare(callAiOperator("community", headers), {
+  inPoolShare(routeCheckedAiCall("community", headers), {
     ...COMMUNITY_LIMITS,
     busyCode: "EXECUTE_BUSY",
   });
@@ -162,7 +197,16 @@ const SAME_CODE: ReadonlySet<AdminMcpCode> = new Set<AdminMcpCode>([
   "AI_CREDENTIAL_NOT_CONFIGURED",
   "READ_TIMED_OUT",
   "NOT_FOUND",
+  BACKEND_CONTRACT_MISMATCH,
 ]);
+
+/**
+ * Bare codes this side names otherwise. The Backend asks for a run where an input is
+ * irreversible, and what leads to a run here is a preview.
+ */
+export const COMMUNITY_CODE_HERE: Readonly<
+  Record<string, Exclude<AdminMcpCode, "OK">>
+> = { AI_RUN_REQUIRED: "PREVIEW_REQUIRED" };
 
 /** A Backend refusal, as itself. Never a value, a path or a driver message. */
 export const communityRefusal = (error: unknown): AdminMcpEnvelope => {
@@ -170,12 +214,25 @@ export const communityRefusal = (error: unknown): AdminMcpEnvelope => {
   const { code, status } = error;
   if (SAME_CODE.has(code as AdminMcpCode))
     return failedEnvelope(code as Exclude<AdminMcpCode, "OK">);
+  const here = COMMUNITY_CODE_HERE[code];
+  if (here !== undefined) return failedEnvelope(here);
   if (status === 404) return failedEnvelope("NOT_FOUND");
   if (status === 400 || status === 422)
     return inputInvalidEnvelope([{ path: ["input"], code: "refused" }]);
   if (status === 401 || status === 403)
     return failedEnvelope("AI_ROUTE_FORBIDDEN");
   return failedEnvelope("COMMUNITY_UNAVAILABLE");
+};
+
+/** What the schema reads of a Backend answer, its unknown keys dropped, or a mismatch. */
+export const backendAnswer = <Schema extends z.ZodType>(
+  schema: Schema,
+  answer: unknown,
+) => {
+  const read = readBackendAnswer(schema, answer);
+  if (read === undefined)
+    throw new CommunityOperatorError(BACKEND_CONTRACT_MISMATCH, 502);
+  return read;
 };
 
 /** One route's answer, checked against what AI may read before anything looks at it. */
@@ -188,10 +245,7 @@ export const askCommunity = async (
   const answer = await definition.run(parsed, community, req);
   const schema = definition.output.ai ?? definition.output.owner;
   if (schema === undefined) return answer;
-  const checked = schema.safeParse(answer);
-  if (!checked.success)
-    throw new CommunityOperatorError("OPERATOR_RESPONSE_INVALID", 502);
-  return checked.data;
+  return backendAnswer(schema, answer).data;
 };
 
 /**
@@ -211,12 +265,10 @@ export const askFind = async (
   const params = new URLSearchParams(
     Object.entries(query).map(([name, value]) => [name, String(value)]),
   );
-  const checked = aiFindResultSchema.safeParse(
+  return backendAnswer(
+    aiFindResultSchema,
     await community("GET", `ai/find?${params.toString()}`),
-  );
-  if (!checked.success)
-    throw new CommunityOperatorError("OPERATOR_RESPONSE_INVALID", 502);
-  return checked.data;
+  ).data;
 };
 
 const naming = (
@@ -240,15 +292,13 @@ export const askSettlement = async (
   query: AiSettlementQuery,
 ): Promise<AiSettlementResult> => {
   const call = query.type === "item" ? baseShare : community;
-  const checked = aiSettlementResultSchema.safeParse(
+  return backendAnswer(
+    aiSettlementResultSchema,
     await call(
       "GET",
       `ai/settlement?${new URLSearchParams({ ...query }).toString()}`,
     ),
-  );
-  if (!checked.success)
-    throw new CommunityOperatorError("OPERATOR_RESPONSE_INVALID", 502);
-  return checked.data;
+  ).data;
 };
 
 /** State, length and hash: what a row says of long text. */
@@ -667,12 +717,10 @@ const countEnvelope = async (
   for (const [name, value] of Object.entries(without(filter, ["order"])))
     if (value !== undefined) params.set(name, String(value));
   if (read.groupBy !== undefined) params.set("groupBy", read.groupBy);
-  const checked = aiCountResultSchema.safeParse(
+  const { leavesOutOwnerOnly, ...counted } = backendAnswer(
+    aiCountResultSchema,
     await community("GET", `ai/count?${params.toString()}`),
-  );
-  if (!checked.success)
-    throw new CommunityOperatorError("OPERATOR_RESPONSE_INVALID", 502);
-  const { leavesOutOwnerOnly, ...counted } = checked.data;
+  ).data;
   return toldOfRange(
     toldOfOwnerOnly(
       okEnvelope(
@@ -886,9 +934,18 @@ const one = (record: OneRecord): Partial<AdminOpEntry> => ({
   untrusted: ["/data"],
 });
 
-/** What each built read adds to its row. A route with none is not built yet. */
+/**
+ * A route that only reads, by its name. The totality test holds each one's op to class
+ * read, so a read named otherwise fails there.
+ */
+export type CommunityReadRoute = Extract<
+  CommunityOperationName,
+  `read-${string}` | `lookup-${string}`
+>;
+
+/** What each built read adds to its row, or which slice brings it. */
 export const COMMUNITY_READ_FACTS: Readonly<
-  Partial<Record<CommunityOperationName, Partial<AdminOpEntry>>>
+  Record<CommunityReadRoute, Partial<AdminOpEntry> | Unbuilt>
 > = {
   "read-reports": source(REPORTS),
   "read-comments": source(COMMENTS),
@@ -930,6 +987,9 @@ export const COMMUNITY_READ_FACTS: Readonly<
     route: "read-work-publishing-settings",
   }),
   "read-account-capacity": one({ route: "read-account-capacity" }),
+  // Behind the dm switch, on admin_sensitive_read.
+  "read-dm-conversation": notBuilt("S13"),
+  "lookup-dm-conversation": notBuilt("S13"),
 };
 
 /** The appeal queue is the report queue, already filtered. */

@@ -14,14 +14,20 @@ import {
   communityOperationDefinitions,
   type CommunityOperationName,
 } from "../../community/endpoints";
+import { BACKEND_CONTRACT_MISMATCH } from "../backend-answer";
 import { okEnvelope } from "../envelope";
+import { notBuilt, type Unbuilt } from "../not-built";
 import { settledBy } from "../settlement";
+import type { CommunityOpRoute } from "./community";
 import {
   askCommunity,
+  backendAnswer,
+  COMMUNITY_CODE_HERE,
   communityWriteCall,
   isOwnerOnly,
   shortOrFacts,
   type CommunityItem,
+  type CommunityReadRoute,
 } from "./community-reads";
 import { onField, requestKeyOf } from "./define";
 import type { AdminOpContext, AdminOpEntry } from "./define";
@@ -43,13 +49,17 @@ const NOTHING_RAN: ReadonlySet<string> = new Set([
 
 /**
  * What a Backend refusal says about one target. Past a 5xx or a lost answer the write
- * may have committed, so it reads as unknown and never as a refusal. Anything else
- * keeps its bare code, so a bad input answers a named refusal.
+ * may have committed, so it reads as unknown and never as a refusal. An answer that
+ * cannot be read says so by name, because a repeat reads the same answer. Anything else
+ * keeps its bare code, or the one it has here, so a bad input answers a named refusal.
  */
 const writeFailure = (error: unknown): unknown => {
   if (!(error instanceof CommunityOperatorError)) return error;
   const { code, status } = error;
-  if (NOTHING_RAN.has(code)) return new Error(code);
+  if (NOTHING_RAN.has(code) || code === BACKEND_CONTRACT_MISMATCH)
+    return new Error(code);
+  const here = COMMUNITY_CODE_HERE[code];
+  if (here !== undefined) return new Error(here);
   if (status >= 500) return new Error("OUTCOME_UNKNOWN");
   if (status === 404) return new Error("NOT_FOUND");
   if (status === 401) return new Error("AI_ROUTE_FORBIDDEN");
@@ -90,10 +100,13 @@ const sendWrite = async (
     ),
     context.req,
   )) as CommunityItem;
-  const { replayed, alreadyInPlace, ...answer } = answered;
+  const { replayed, alreadyInPlace, ...sent } = answered;
   const schema = definition.output.ai ?? definition.output.owner;
-  if (schema !== undefined && !schema.safeParse(answer).success)
-    throw new CommunityOperatorError("OPERATOR_RESPONSE_INVALID", 502);
+  // As sent, less any key the schema does not name.
+  const answer =
+    schema === undefined
+      ? sent
+      : (backendAnswer(schema, sent).kept as CommunityItem);
   // The effect was there already, so this call changed nothing and opened no case.
   if (alreadyInPlace === true) throw new Error("ALREADY_SET");
   return { answer, replayed: replayed === true };
@@ -227,8 +240,12 @@ const reportWrite =
           { id: command.id },
           context.req,
         )) as CommunityItem;
-      } catch {
-        throw readBackFailed();
+      } catch (failure) {
+        // A replay would read the same unreadable answer, so that one is named.
+        throw failure instanceof CommunityOperatorError &&
+          failure.code === BACKEND_CONTRACT_MISMATCH
+          ? new Error(BACKEND_CONTRACT_MISMATCH)
+          : readBackFailed();
       }
       if (isOwnerOnly(report) || !shows(report, command))
         throw writeFailure(error);
@@ -381,9 +398,12 @@ const onJob = settledBy(({ id }: { id: string }): AdminJobRef => ({
   id,
 }));
 
-/** What each built write adds to its row. A route with none is not built yet. */
+/** Every route of an op that is not a read. */
+export type CommunityWriteRoute = Exclude<CommunityOpRoute, CommunityReadRoute>;
+
+/** What each built write adds to its row, or which slice brings it. */
 export const COMMUNITY_WRITE_FACTS: Readonly<
-  Partial<Record<CommunityOperationName, Partial<AdminOpEntry>>>
+  Record<CommunityWriteRoute, Partial<AdminOpEntry> | Unbuilt>
 > = {
   "decide-report": {
     ...write(
@@ -557,4 +577,12 @@ export const COMMUNITY_WRITE_FACTS: Readonly<
     ),
     completion: onJob,
   },
+  // Irreversible: preview, then admin_execute_irreversible, with the run engine. Their
+  // routes have no AI row until then.
+  "forward-report": notBuilt("S8"),
+  "delete-body": notBuilt("S8"),
+  "remove-thread": notBuilt("S8"),
+  "abandon-publishing-job": notBuilt("S8"),
+  // Behind the dm switch.
+  "remove-dm-message": notBuilt("S13"),
 };

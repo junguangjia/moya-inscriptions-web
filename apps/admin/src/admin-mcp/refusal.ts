@@ -2,6 +2,7 @@ import { adminMcpCodeSchema } from "@moya/contracts/internal/admin-mcp";
 import type { AdminMcpCode } from "@moya/contracts/internal/admin-mcp";
 
 import { isMissingRecord, isMissingReference } from "../editorial/transaction";
+import { BACKEND_CONTRACT_MISMATCH } from "./backend-answer";
 
 /** What an op's failure says about its one target (admin-mcp-completion-v1 section 7). */
 export type TargetFailureState =
@@ -86,13 +87,16 @@ const namedCodeOf = (error: unknown): string | undefined => {
 /**
  * No value and no sentence ever leaves here. A failure with no known code may have
  * come after the write, so it reads as unknown and never as a refusal, and the same
- * request can be retried either way.
+ * request can be retried either way. An answer the Admin cannot read is unknown too,
+ * under its own name, because a repeat reads the same answer.
  */
 export const targetFailureOf = (error: unknown): TargetFailure => {
   if (isMissingRecord(error)) return { state: "failed", code: "NOT_FOUND" };
   const named = namedCodeOf(error);
   if (named === undefined || named === "OUTCOME_UNKNOWN")
     return { state: "unknown", code: "OUTCOME_UNKNOWN" };
+  if (named === BACKEND_CONTRACT_MISMATCH)
+    return { state: "unknown", code: named };
   const code = MISSES.has(named) ? "NOT_FOUND" : named;
   const fields = fieldsOf(error as object);
   return {

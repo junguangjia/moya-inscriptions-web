@@ -67,7 +67,12 @@ import {
 
 import { adminOpMeta } from "admin/admin-mcp";
 
-import { connectClient, serveRoutes } from "./admin-mcp-wire.js";
+import {
+  connectClient,
+  relayRewriting,
+  serveRoutes,
+  withFieldAdded,
+} from "./admin-mcp-wire.js";
 
 if (process.env.CMS_ENVIRONMENT !== "synthetic")
   throw new Error("SYNTHETIC_CMS_TARGET_REQUIRED");
@@ -3261,5 +3266,198 @@ describe("a write's share of the App pool", () => {
       retryable: true,
     });
     expect(reached).toBe(2);
+  });
+});
+
+describe("a Backend released first, with a field this Admin does not know", () => {
+  const UNKNOWN = `unknownfield${run}`;
+  const WRITES = ADMIN_OP_NAMES.filter(
+    (name) =>
+      name.startsWith("community.") &&
+      adminOpMeta[name].tool === "admin_execute",
+  );
+
+  /** The Admin speaks to the real Backend through a relay that rewrites each answer. */
+  const relayed = async <T>(
+    rewrite: (body: unknown) => unknown,
+    attempt: () => Promise<T>,
+  ): Promise<T> => {
+    const relay = await relayRewriting(backendOrigin, rewrite);
+    try {
+      vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", relay.origin);
+      return await attempt();
+    } finally {
+      vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", backendOrigin);
+      await relay.close();
+    }
+  };
+
+  it.each(WRITES)(
+    "%s still answers what it did, and the field reaches no answer",
+    async (op) => {
+      const { answer } = await relayed(
+        (body) => withFieldAdded(body, UNKNOWN),
+        () => LABEL_CASES[op]!(),
+      );
+      expect(
+        committedIds(answer),
+        JSON.stringify(answer).slice(0, 400),
+      ).toHaveLength(1);
+      expect(JSON.stringify(answer)).not.toContain(UNKNOWN);
+    },
+  );
+
+  it("replays a receipt carrying the field as what committed", async () => {
+    const accountId = await newUser();
+    const input = { accountId, capacityClass: "owner", expectedVersion: 0 };
+    const requestId = randomUUID();
+    const added = (body: unknown) => withFieldAdded(body, UNKNOWN);
+    const first = await relayed(added, () =>
+      execute("community.set-account-capacity", input, requestId),
+    );
+    expect(first, JSON.stringify(first).slice(0, 400)).toMatchObject({
+      ok: true,
+    });
+    const again = await relayed(added, () =>
+      execute("community.set-account-capacity", input, requestId),
+    );
+    expect(again.meta.replayed).toBe(true);
+    expect(committedIds(again)).toEqual([accountId]);
+    expect(JSON.stringify(again)).not.toContain(UNKNOWN);
+  });
+
+  it("names a write answer that breaks its contract, never as done, failed or worth retrying", async () => {
+    const accountId = await newUser();
+    const broken = (body: unknown) =>
+      typeof (body as Json).capacityClass === "string"
+        ? { ...(body as Json), capacityBytes: "many" }
+        : body;
+    const answer = await relayed(broken, () =>
+      execute("community.set-account-capacity", {
+        accountId,
+        capacityClass: "owner",
+        expectedVersion: 0,
+      }),
+    );
+    expect(answer).toMatchObject({
+      ok: false,
+      code: "BACKEND_CONTRACT_MISMATCH",
+      data: { unknown: [{ code: "BACKEND_CONTRACT_MISMATCH" }] },
+    });
+    expect(answer).not.toHaveProperty("retryable");
+    expect(answer).not.toHaveProperty("next");
+    expect(answer.data).not.toHaveProperty("failed");
+    // It did commit: the answer says nothing either way, and its hint says so.
+    expect(
+      await countOf("community.content_operator_events", "content_id=$1", [
+        accountId,
+      ]),
+    ).toBe(1);
+  });
+
+  it("names a read-back it cannot read after a conflict, with no replay to offer", async () => {
+    const report = await newStandardReport(
+      await newWork(await newUser()),
+      await newUser(),
+    );
+    const answer = await withStubBackend(
+      (request, response) => {
+        const conflict = request.method === "POST";
+        response.writeHead(conflict ? 409 : 200, {
+          "content-type": "application/json",
+        });
+        response.end(
+          JSON.stringify(
+            conflict
+              ? { error: { status: 409, code: "STATE_CONFLICT" } }
+              : { id: report, version: "many" },
+          ),
+        );
+      },
+      () =>
+        execute("community.decide-report", {
+          id: report,
+          expectedVersion: 1,
+          action: "retain",
+          reason: REASON,
+        }),
+    );
+    expect(answer).toMatchObject({
+      ok: false,
+      code: "BACKEND_CONTRACT_MISMATCH",
+      data: { unknown: [{ code: "BACKEND_CONTRACT_MISMATCH" }] },
+    });
+    expect(answer).not.toHaveProperty("retryable");
+    expect(answer).not.toHaveProperty("next");
+  });
+
+  it("names a settlement it cannot read once the write committed, never as queued", async () => {
+    const user = await newUser();
+    const garbled = (body: unknown) =>
+      body !== null && typeof body === "object" && "failedJobs" in body
+        ? { ...(body as Json), open: "none" }
+        : body;
+    const answer = await relayed(garbled, () =>
+      execute("community.moderate-user", {
+        id: user,
+        action: "suspend",
+        reason: REASON,
+      }),
+    );
+    expect(answer).toMatchObject({
+      ok: false,
+      code: "BACKEND_CONTRACT_MISMATCH",
+      data: { failed: [{ code: "BACKEND_CONTRACT_MISMATCH" }] },
+    });
+    expect(answer).not.toHaveProperty("retryable");
+    expect(answer).not.toHaveProperty("next");
+    expect(answer.data).not.toHaveProperty("queued");
+    // The write did commit, and the answer's hint says it may have.
+    expect(
+      (
+        await one("SELECT status FROM community.public_users WHERE id=$1", [
+          user,
+        ])
+      ).status,
+    ).toBe("suspended");
+  });
+
+  it("names the Backend's call for a run as a preview, and nothing ran", async () => {
+    const stub = createServer((_request, response) => {
+      response.writeHead(403, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({ error: { status: 403, code: "AI_RUN_REQUIRED" } }),
+      );
+    });
+    await new Promise<void>((resolve) =>
+      stub.listen(0, "127.0.0.1", () => resolve()),
+    );
+    const accountId = await newUser();
+    try {
+      vi.stubEnv(
+        "COMMUNITY_OPERATOR_BASE_URL",
+        `http://127.0.0.1:${(stub.address() as AddressInfo).port}/`,
+      );
+      expect(
+        await execute("community.set-account-capacity", {
+          accountId,
+          capacityClass: "owner",
+          expectedVersion: 0,
+        }),
+      ).toMatchObject({
+        ok: false,
+        code: "PREVIEW_REQUIRED",
+        data: { failed: [{ code: "PREVIEW_REQUIRED" }] },
+      });
+    } finally {
+      vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", backendOrigin);
+      stub.closeAllConnections();
+      await new Promise((resolve) => stub.close(resolve));
+    }
+    expect(
+      await countOf("community.content_operator_events", "content_id=$1", [
+        accountId,
+      ]),
+    ).toBe(0);
   });
 });

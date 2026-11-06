@@ -62,6 +62,18 @@ export const adminWhoamiDataSchema = z.strictObject({
       unavailable: z.array(z.enum(ADMIN_MCP_BYTE_WORK)),
     })
     .optional(),
+  /**
+   * On the native path: the contract served, a hash of the op catalog (names, tools,
+   * classes, inputs) and one of this credential's tools/list. A changed catalog means
+   * admin_actions is worth reading again; a changed tools hash, tools/list.
+   */
+  contract: z
+    .strictObject({
+      version: z.string().min(1),
+      catalog: z.string().regex(/^[0-9a-f]{16}$/u),
+      tools: z.string().regex(/^[0-9a-f]{16}$/u),
+    })
+    .optional(),
 });
 
 export type AdminMcpDoorRefusal = (typeof ADMIN_MCP_DOOR_REFUSALS)[number];

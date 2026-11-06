@@ -5,13 +5,22 @@ import path from "node:path";
 
 import {
   ADMIN_ACTIONS_MAX_OPS,
+  ADMIN_ANALYTICS_REPORTS,
+  ADMIN_CMS_RECORD_TYPES,
+  ADMIN_COMMUNITY_RECORD_TYPES,
   ADMIN_MCP_NATIVE_TOOLS,
   ADMIN_MCP_RESULT_SCHEMA,
   ADMIN_MCP_TEXT_CAP_BYTES,
   ADMIN_MCP_TOKEN_BUDGET,
   ADMIN_MCP_TOOL_PROFILES,
+  ADMIN_OP_ALIASES,
   ADMIN_OP_NAMES,
   ADMIN_OP_TOOLS,
+  AI_FIND_SOURCES,
+  AI_LOOKUP_TYPES,
+  AI_SETTLEMENT_TYPES,
+  ANALYTICS_CANONICAL_DIMENSIONS,
+  ANALYTICS_UMAMI_DIMENSIONS,
   adminActionDetailSchema,
   adminCommunityWriteEchoSchema,
   adminMcpEnvelopeSchema,
@@ -22,14 +31,18 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   ACTIONS_TOOL_NAME,
+  ADMIN_ACTIONS_INDEX_ALARM_SHARE,
   ADMIN_MCP_TOOLS,
   ADMIN_SURFACES,
   actionDetail,
+  adminMcpBudgets,
   actionsContinuation,
   actionsEnvelope,
   actionsIndex,
   adminOpMeta,
   classToolViolations,
+  isAdminOpName,
+  lookupOp,
   okEnvelope,
   nearestOps,
   opUnavailable,
@@ -219,6 +232,52 @@ describe("op names", () => {
         route === "save-draft" || route === "save-article-draft",
       );
     }
+  });
+});
+
+describe("earlier op names", () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  it("point each at a current op, never shadow one, and stay at least 30 days", () => {
+    for (const [name, { use, since, until }] of Object.entries(
+      ADMIN_OP_ALIASES,
+    )) {
+      expect(isAdminOpName(name), name).toBe(false);
+      expect(isAdminOpName(use), name).toBe(true);
+      for (const day of [since, until])
+        expect(day, name).toMatch(/^\d{4}-\d{2}-\d{2}$/u);
+      expect(
+        Date.parse(until) - Date.parse(since),
+        name,
+      ).toBeGreaterThanOrEqual(30 * DAY_MS);
+    }
+  });
+
+  it("run the op that replaced them through their last day, then answer as retired", () => {
+    const aliases = {
+      "list.catalog_rows": {
+        use: "list.catalogs",
+        since: "2026-11-06",
+        until: "2026-12-31",
+      },
+    } as const;
+    const on = (day: string, name = "list.catalog_rows") =>
+      lookupOp(name, new Date(`${day}T23:59:59Z`), aliases);
+    expect(on("2026-12-31")).toEqual({
+      op: "list.catalogs",
+      deprecated: {
+        op: "list.catalog_rows",
+        use: "list.catalogs",
+        until: "2026-12-31",
+      },
+    });
+    expect(on("2027-01-01")).toEqual({
+      retired: { op: "list.catalog_rows", use: "list.catalogs" },
+    });
+    // The registry's own name, and a typo, are as they always were.
+    expect(on("2027-01-01", "list.catalogs")).toEqual({ op: "list.catalogs" });
+    expect(on("2027-01-01", "list.catalog")).toEqual({ unknown: true });
+    expect(lookupOp("list.catalog_rows")).toEqual({ unknown: true });
   });
 });
 
@@ -1004,6 +1063,76 @@ describe("size gates", () => {
     },
   );
 
+  // What grows with the registry: op and tool names, record types, reports and
+  // dimensions, and what find, lookup and settlement read.
+  const GROWING: ReadonlySet<unknown> = new Set([
+    ...ADMIN_OP_NAMES,
+    ...ADMIN_OP_TOOLS,
+    ...ADMIN_MCP_NATIVE_TOOLS,
+    ...ADMIN_CMS_RECORD_TYPES,
+    ...ADMIN_COMMUNITY_RECORD_TYPES,
+    ...ADMIN_ANALYTICS_REPORTS,
+    ...ANALYTICS_CANONICAL_DIMENSIONS,
+    ...ANALYTICS_UMAMI_DIMENSIONS,
+    ...AI_FIND_SOURCES,
+    ...AI_LOOKUP_TYPES,
+    ...AI_SETTLEMENT_TYPES,
+  ]);
+  const ENUM_MAX_VALUES = 8;
+
+  /**
+   * Every closed choice in a listed input, wherever it sits, by where: an enum, or a
+   * union of constants, which is one by another name.
+   */
+  const enumsOf = (
+    schema: unknown,
+    at: string,
+  ): { at: string; values: readonly unknown[] }[] => {
+    if (schema === null || typeof schema !== "object") return [];
+    const { anyOf, oneOf } = schema as { anyOf?: unknown; oneOf?: unknown };
+    // Every const option of a union is a listed choice, even beside options
+    // that are not: number | "a" | "b" still lists "a" and "b".
+    const constants = [anyOf, oneOf].flatMap((options) => {
+      const values = Array.isArray(options)
+        ? options
+            .filter(
+              (option) =>
+                option !== null &&
+                typeof option === "object" &&
+                "const" in option,
+            )
+            .map((option: { const: unknown }) => option.const)
+        : [];
+      return values.length > 0 ? [{ at, values }] : [];
+    });
+    return [
+      ...constants,
+      ...Object.entries(schema).flatMap(([key, value]) =>
+        key === "enum" && Array.isArray(value)
+          ? [{ at, values: value as readonly unknown[] }]
+          : enumsOf(value, `${at}/${key}`),
+      ),
+    ];
+  };
+
+  // Extending guide rule 3: the runtime check holds such a choice, not tools/list.
+  it.each(ADMIN_MCP_TOOL_PROFILES)(
+    "lists no enum that grows with the registry, nor one past eight values, for the %s profile",
+    (profile) => {
+      const found = toolListingFor(profile, false).flatMap((listing) =>
+        enumsOf(listing.inputSchema, listing.name),
+      );
+      expect(found.length).toBeGreaterThan(0);
+      for (const { at, values } of found) {
+        expect(values.length, at).toBeLessThanOrEqual(ENUM_MAX_VALUES);
+        expect(
+          values.filter((value) => GROWING.has(value)),
+          at,
+        ).toEqual([]);
+      }
+    },
+  );
+
   it("would still fit every tool the design lists, at the size each has now", () => {
     // Each later tool brings a description of about this size; the one result schema
     // per tool must not be what breaks the budget.
@@ -1058,6 +1187,31 @@ describe("admin_actions", () => {
     expect(estimatedTokens(envelope)).toBeLessThanOrEqual(
       ADMIN_MCP_TOKEN_BUDGET,
     );
+  });
+
+  it("raises its alarm at 80% of the text cap, measured in its largest form", () => {
+    const { index } = adminMcpBudgets();
+    expect(index.alarm).toBe(
+      Math.floor(ADMIN_MCP_TEXT_CAP_BYTES * ADMIN_ACTIONS_INDEX_ALARM_SHARE),
+    );
+    expect(ADMIN_ACTIONS_INDEX_ALARM_SHARE).toBe(0.8);
+    // Before it reaches the cap: past this, page the index by family first.
+    expect(index.bytes).toBeLessThanOrEqual(index.alarm);
+    // The figure is what a client receives with no AI token placed, and the most it gets.
+    const answered = () =>
+      Buffer.byteLength(
+        toolResult(scope, actionsEnvelope({}, allTools, open)).content[0]!.text,
+      );
+    vi.stubEnv("COMMUNITY_OPERATOR_AI_TOKEN", "");
+    vi.stubEnv("OPERATOR_AI_BASE_TOKEN", "");
+    try {
+      expect(answered()).toBe(index.bytes);
+      vi.stubEnv("COMMUNITY_OPERATOR_AI_TOKEN", "synthetic-placed");
+      vi.stubEnv("OPERATOR_AI_BASE_TOKEN", "synthetic-placed");
+      expect(answered()).toBeLessThanOrEqual(index.bytes);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("lists every op once, with the fields it requires", () => {

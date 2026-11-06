@@ -4,7 +4,9 @@ export {
   adminActionDetailsSchema,
   adminActionsIndexSchema,
   adminActionsInputSchema,
+  adminRetiredOpDataSchema,
   adminUnknownOpDataSchema,
+  adminWrongToolDataSchema,
 } from "./actions.js";
 export type {
   AdminActionDetail,
@@ -132,6 +134,7 @@ export type {
 } from "./ai-routes.js";
 export {
   ADMIN_MCP_CODES,
+  ADMIN_MCP_CONTRACT_VERSION,
   ADMIN_MCP_RESULT_SCHEMA,
   ADMIN_MCP_TEXT_CAP_BYTES,
   ADMIN_MCP_TOKEN_BUDGET,
@@ -287,11 +290,13 @@ export type {
 export {
   ADMIN_MCP_COMPANION_TOOLS,
   ADMIN_MCP_NATIVE_TOOLS,
+  ADMIN_OP_ALIASES,
   ADMIN_OP_NAMES,
 } from "./op-names.js";
 export type {
   AdminMcpCompanionTool,
   AdminMcpNativeTool,
+  AdminOpAlias,
   AdminOpName,
 } from "./op-names.js";
 export {

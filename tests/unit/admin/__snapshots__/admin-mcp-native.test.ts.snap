@@ -64,22 +64,6 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
           "type": "integer",
         },
         "type": {
-          "enum": [
-            "catalog",
-            "article",
-            "collection",
-            "media",
-            "user",
-            "work",
-            "comment",
-            "thread",
-            "report",
-            "feedback",
-            "publishing_job",
-            "work_revision",
-            "media_item",
-            "invitation",
-          ],
           "type": "string",
         },
       },
@@ -132,51 +116,19 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
         },
         "fields": {
           "items": {
-            "maxLength": 64,
-            "minLength": 1,
             "type": "string",
           },
-          "maxItems": 40,
-          "minItems": 1,
           "type": "array",
         },
         "find": {
-          "additionalProperties": false,
-          "properties": {
-            "context": {
-              "maximum": 200,
-              "minimum": 0,
-              "type": "integer",
-            },
-            "mode": {
-              "enum": [
-                "raw",
-                "normalized",
-              ],
-              "type": "string",
-            },
-            "text": {
-              "maxLength": 2000,
-              "minLength": 1,
-              "type": "string",
-            },
-          },
-          "required": [
-            "text",
-          ],
           "type": "object",
         },
         "from": {
           "anyOf": [
             {
-              "exclusiveMinimum": 0,
               "type": "integer",
             },
             {
-              "enum": [
-                "draft",
-                "published",
-              ],
               "type": "string",
             },
           ],
@@ -205,35 +157,14 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
         "to": {
           "anyOf": [
             {
-              "exclusiveMinimum": 0,
               "type": "integer",
             },
             {
-              "enum": [
-                "draft",
-                "published",
-              ],
               "type": "string",
             },
           ],
         },
         "type": {
-          "enum": [
-            "catalog",
-            "article",
-            "collection",
-            "media",
-            "user",
-            "work",
-            "comment",
-            "thread",
-            "report",
-            "feedback",
-            "publishing_job",
-            "work_revision",
-            "media_item",
-            "invitation",
-          ],
           "type": "string",
         },
         "view": {
@@ -440,21 +371,6 @@ exports[`tool table > matches the checked-in tools/list for the full profile 1`]
           "type": "string",
         },
         "report": {
-          "enum": [
-            "status",
-            "overview",
-            "trend",
-            "breakdown",
-            "compare",
-            "funnel",
-            "realtime",
-            "sessions",
-            "session",
-            "product",
-            "native",
-            "reconcile",
-            "traffic",
-          ],
           "type": "string",
         },
         "sameTarget": {
@@ -818,22 +734,6 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
           "type": "integer",
         },
         "type": {
-          "enum": [
-            "catalog",
-            "article",
-            "collection",
-            "media",
-            "user",
-            "work",
-            "comment",
-            "thread",
-            "report",
-            "feedback",
-            "publishing_job",
-            "work_revision",
-            "media_item",
-            "invitation",
-          ],
           "type": "string",
         },
       },
@@ -886,51 +786,19 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
         },
         "fields": {
           "items": {
-            "maxLength": 64,
-            "minLength": 1,
             "type": "string",
           },
-          "maxItems": 40,
-          "minItems": 1,
           "type": "array",
         },
         "find": {
-          "additionalProperties": false,
-          "properties": {
-            "context": {
-              "maximum": 200,
-              "minimum": 0,
-              "type": "integer",
-            },
-            "mode": {
-              "enum": [
-                "raw",
-                "normalized",
-              ],
-              "type": "string",
-            },
-            "text": {
-              "maxLength": 2000,
-              "minLength": 1,
-              "type": "string",
-            },
-          },
-          "required": [
-            "text",
-          ],
           "type": "object",
         },
         "from": {
           "anyOf": [
             {
-              "exclusiveMinimum": 0,
               "type": "integer",
             },
             {
-              "enum": [
-                "draft",
-                "published",
-              ],
               "type": "string",
             },
           ],
@@ -959,35 +827,14 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
         "to": {
           "anyOf": [
             {
-              "exclusiveMinimum": 0,
               "type": "integer",
             },
             {
-              "enum": [
-                "draft",
-                "published",
-              ],
               "type": "string",
             },
           ],
         },
         "type": {
-          "enum": [
-            "catalog",
-            "article",
-            "collection",
-            "media",
-            "user",
-            "work",
-            "comment",
-            "thread",
-            "report",
-            "feedback",
-            "publishing_job",
-            "work_revision",
-            "media_item",
-            "invitation",
-          ],
           "type": "string",
         },
         "view": {
@@ -1194,21 +1041,6 @@ exports[`tool table > matches the checked-in tools/list for the operate profile 
           "type": "string",
         },
         "report": {
-          "enum": [
-            "status",
-            "overview",
-            "trend",
-            "breakdown",
-            "compare",
-            "funnel",
-            "realtime",
-            "sessions",
-            "session",
-            "product",
-            "native",
-            "reconcile",
-            "traffic",
-          ],
           "type": "string",
         },
         "sameTarget": {
@@ -1572,22 +1404,6 @@ exports[`tool table > matches the checked-in tools/list for the read profile 1`]
           "type": "integer",
         },
         "type": {
-          "enum": [
-            "catalog",
-            "article",
-            "collection",
-            "media",
-            "user",
-            "work",
-            "comment",
-            "thread",
-            "report",
-            "feedback",
-            "publishing_job",
-            "work_revision",
-            "media_item",
-            "invitation",
-          ],
           "type": "string",
         },
       },
@@ -1640,51 +1456,19 @@ exports[`tool table > matches the checked-in tools/list for the read profile 1`]
         },
         "fields": {
           "items": {
-            "maxLength": 64,
-            "minLength": 1,
             "type": "string",
           },
-          "maxItems": 40,
-          "minItems": 1,
           "type": "array",
         },
         "find": {
-          "additionalProperties": false,
-          "properties": {
-            "context": {
-              "maximum": 200,
-              "minimum": 0,
-              "type": "integer",
-            },
-            "mode": {
-              "enum": [
-                "raw",
-                "normalized",
-              ],
-              "type": "string",
-            },
-            "text": {
-              "maxLength": 2000,
-              "minLength": 1,
-              "type": "string",
-            },
-          },
-          "required": [
-            "text",
-          ],
           "type": "object",
         },
         "from": {
           "anyOf": [
             {
-              "exclusiveMinimum": 0,
               "type": "integer",
             },
             {
-              "enum": [
-                "draft",
-                "published",
-              ],
               "type": "string",
             },
           ],
@@ -1713,35 +1497,14 @@ exports[`tool table > matches the checked-in tools/list for the read profile 1`]
         "to": {
           "anyOf": [
             {
-              "exclusiveMinimum": 0,
               "type": "integer",
             },
             {
-              "enum": [
-                "draft",
-                "published",
-              ],
               "type": "string",
             },
           ],
         },
         "type": {
-          "enum": [
-            "catalog",
-            "article",
-            "collection",
-            "media",
-            "user",
-            "work",
-            "comment",
-            "thread",
-            "report",
-            "feedback",
-            "publishing_job",
-            "work_revision",
-            "media_item",
-            "invitation",
-          ],
           "type": "string",
         },
         "view": {
@@ -1948,21 +1711,6 @@ exports[`tool table > matches the checked-in tools/list for the read profile 1`]
           "type": "string",
         },
         "report": {
-          "enum": [
-            "status",
-            "overview",
-            "trend",
-            "breakdown",
-            "compare",
-            "funnel",
-            "realtime",
-            "sessions",
-            "session",
-            "product",
-            "native",
-            "reconcile",
-            "traffic",
-          ],
           "type": "string",
         },
         "sameTarget": {
