@@ -283,6 +283,17 @@ describe("task routing follows the complete changed-path set", () => {
       ],
       {},
     ],
+    [
+      [
+        "scripts/release/release.py",
+        "scripts/release/release_host.py",
+        "scripts/release/README.md",
+        "scripts/release/tests/test_host.py",
+        "scripts/release/tests/fixtures/profile.example.json",
+        "scripts/release-tool.test.mjs",
+      ],
+      {},
+    ],
     [["turbo.json"], { web: true, cms: true, scope: "smoke" }],
     [["scripts/confidentiality-scan.mjs"], { web: true, scope: "smoke" }],
     [
