@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { env as processEnv } from "node:process";
 import { fileURLToPath, URL } from "node:url";
 import test from "node:test";
@@ -47,4 +49,19 @@ test("the release tool routes through the script tests without product jobs", ()
       () => classifyTask([path], "local"),
       /Unmapped changed paths/,
     );
+});
+
+test("release files never name the App role key the composition root owns", () => {
+  // community-v1-freeze test 5 scans these extensions under scripts/, but a
+  // scripts-only change runs only the script tests, so the same rule is here.
+  const root = fileURLToPath(new URL("./release/", import.meta.url));
+  const scanned = /\.(?:[cm]?[jt]sx?|json|sql|md|ya?ml|sh|example)$/u;
+  // Joined so this file does not name the key itself.
+  const key = ["APP", "DATABASE", "URL"].join("_");
+  const offenders = readdirSync(root, { recursive: true })
+    .filter((name) => scanned.test(name))
+    .filter((name) =>
+      readFileSync(path.join(root, name), "utf8").includes(key),
+    );
+  assert.deepEqual(offenders, []);
 });

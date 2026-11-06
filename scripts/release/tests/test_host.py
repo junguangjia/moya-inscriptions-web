@@ -637,9 +637,9 @@ class Refusals(HostCase):
 class HostBehaviours(HostCase):
     """Six host behaviours the tool must handle, each reproduced on the fake host and its handling pinned."""
 
-    def test_app_role_is_read_from_app_database_url(self):
+    def test_app_role_is_read_from_the_profiles_app_role_key(self):
         rc, value = self.call('baseline')
-        self.assertEqual(value['appRole'], {'key': 'APP_DATABASE_URL', 'role': fakehost.APP_ROLE})
+        self.assertEqual(value['appRole'], {'key': self.h['database']['appRole']['key'], 'role': fakehost.APP_ROLE})
         self.assertIn('DATABASE_URL', value['envFiles']['backend']['live']['keys'])       # the decoy is there
 
     def test_cms_ledger_uses_the_app_migration_ca(self):
