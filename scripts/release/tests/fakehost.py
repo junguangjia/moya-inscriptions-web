@@ -455,6 +455,11 @@ class FakeHost:
         for path, raw in sorted(files.items()):
             rows.append({'path': path, 'type': 'file', 'sha256': sha(raw), 'mode': 0o444, 'bytes': len(raw)})
         rows.append({'path': pre + 'lib/link.js', 'type': 'symlink', 'target': 'deep/one.js'})
+        # The packager writes the entry wrapper itself: a `generated` row that names its generator.
+        server = ('// runtime server for %s\n' % artifact).encode()
+        files[pre + 'runtime-server.cjs'] = server
+        rows.append({'path': pre + 'runtime-server.cjs', 'type': 'generated', 'generator': artifact, 'sha256': sha(server),
+                     'mode': 0o444, 'bytes': len(server)})
         return rows, files
 
     def manifest(self, artifact, label, service, source):
@@ -636,7 +641,7 @@ class FakeHost:
             live = {r['path']: r for r in json.loads(self.manifests[service])['files']}
             value = json.loads(raw)
             for row in value['files']:
-                if row['type'] != 'file':
+                if row['type'] not in ('file', 'generated'):
                     continue
                 old = live.get(row['path'])
                 if old and old.get('sha256') == row['sha256'] and old.get('mode') == row['mode']:

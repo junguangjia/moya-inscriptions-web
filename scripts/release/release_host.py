@@ -1397,7 +1397,7 @@ def facts_cmd():
     return 0
 
 
-MANIFEST_KEYS = {'path', 'type', 'sha256', 'mode', 'bytes', 'target', 'src'}
+MANIFEST_KEYS = {'path', 'type', 'sha256', 'mode', 'bytes', 'target', 'src', 'generator'}
 
 
 def manifest_cmd(service):
