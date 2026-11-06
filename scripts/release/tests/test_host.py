@@ -693,6 +693,8 @@ class HostBehaviours(HostCase):
         before = H.nginx_write(new, {H.sha_bytes(self.fake.read(site))})
         self.assertEqual(H.curl('https://%s/r1-settle-check' % apex, resolve='%s:443:127.0.0.1' % apex, insecure=True)['code'],
                          '200')
+        # Stale for far longer than any probe takes, however loaded the machine: the old worker is still there.
+        self.fake.set(staleSeconds=60)
         H.PROFILE['settleSeconds'] = 0
         H.nginx_write(before, {H.sha_bytes(new)})
         self.assertEqual(H.curl('https://%s/r1-settle-check' % apex, resolve='%s:443:127.0.0.1' % apex, insecure=True)['code'],
