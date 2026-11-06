@@ -70,6 +70,7 @@ const CLAUDE = "https://claude.ai/oauth/mcp-oauth-client-metadata";
 const CLAUDE_CODE = "https://claude.ai/oauth/claude-code-client-metadata";
 const CODEX = "https://chatgpt.com/oauth/codex/client.json";
 const CHATGPT = "https://chatgpt.com/oauth/client.json";
+const CURSOR = "https://cursor.com/oauth/mcp-client.json";
 const CLAUDE_CALLBACK = "https://claude.ai/api/mcp/auth_callback";
 const CHATGPT_CALLBACK =
   "https://chatgpt.com/connector_platform_oauth_redirect";
@@ -109,6 +110,16 @@ const CLIENTS = [
     label: "ChatGPT",
     callbackPolicy: "hosted-https",
     redirectUris: [CHATGPT_CALLBACK],
+  },
+  {
+    clientId: CURSOR,
+    family: "cursor",
+    label: "Cursor",
+    callbackPolicy: "loopback-host",
+    redirectUris: [
+      "http://localhost:8787/callback",
+      "http://127.0.0.1:8787/callback",
+    ],
   },
 ] as const;
 
@@ -698,6 +709,11 @@ export const registerAgentOperatorFlowTests = (
         ],
         ["Codex on an address", CODEX, "http://127.0.0.1:53113/callback"],
         ["Codex on localhost", CODEX, "http://localhost:53114/callback"],
+        ["Cursor on localhost", CURSOR, "http://localhost:8787/callback"],
+        ["Cursor on an address", CURSOR, "http://127.0.0.1:8787/callback"],
+        // As the loopback policy states: the provider does not pin a loopback port
+        // (RFC 8252 §7.3), so the 8787 in the list is a readability rule.
+        ["Cursor on another port", CURSOR, "http://127.0.0.1:53115/callback"],
       ])(
         "%s connects, and the code lands on its exact callback",
         async (_name, clientId, redirect) => {
@@ -776,6 +792,18 @@ export const registerAgentOperatorFlowTests = (
           CODEX,
           "http://attacker.invalid:53120/callback",
         ],
+        // Cursor's old flow, and its web and cloud callback, which stay off the list.
+        [
+          "Cursor's custom scheme",
+          CURSOR,
+          "cursor://anysphere.cursor-mcp/oauth/callback",
+        ],
+        [
+          "Cursor's hosted callback",
+          CURSOR,
+          "https://www.cursor.com/agents/mcp/oauth/callback",
+        ],
+        ["another path on Cursor", CURSOR, "http://localhost:8787/other"],
       ])(
         "refuses %s before anything is written",
         async (_name, clientId, redirect) => {
@@ -983,49 +1011,60 @@ export const registerAgentOperatorFlowTests = (
         expect(response.status).toBe(404);
       });
 
-      it("connects the official MCP SDK client from that metadata alone", async () => {
-        const human = person();
-        const metadata = await discoverAuthorizationServerMetadata(issuer);
-        expect(metadata?.client_id_metadata_document_supported).toBe(true);
-        const redirect = "http://127.0.0.1:53130/callback";
-        const clientInformation = { client_id: CODEX };
-        const { authorizationUrl, codeVerifier } = await startAuthorization(
-          issuer,
-          {
+      it.each([
+        ["Codex", CODEX, "http://127.0.0.1:53130/callback", "artvenn:admin"],
+        // As Cursor's install link sets it up: told its own id, and no scopes, so it
+        // asks for every scope the metadata lists.
+        ["Cursor", CURSOR, "http://localhost:8787/callback", null],
+      ])(
+        "connects the official MCP SDK client as %s from that metadata alone",
+        async (_name, clientId, redirect, scope) => {
+          const human = person();
+          const metadata = await discoverAuthorizationServerMetadata(issuer);
+          expect(metadata?.client_id_metadata_document_supported).toBe(true);
+          const clientInformation = { client_id: clientId };
+          const { authorizationUrl, codeVerifier } = await startAuthorization(
+            issuer,
+            {
+              ...(metadata === undefined ? {} : { metadata }),
+              clientInformation,
+              redirectUrl: redirect,
+              scope: scope ?? metadata?.scopes_supported?.join(" ") ?? "",
+              state: "sdk-state",
+              resource: new URL(RESOURCE),
+            },
+          );
+          const jar = newJar();
+          const opened = await fetch(authorizationUrl, { redirect: "manual" });
+          jar.remember(opened);
+          const uid = new URL(opened.headers.get("location") ?? "").pathname
+            .split("/")
+            .pop();
+          const { secret } = await approve(uid ?? "", human);
+          const back = await follow(jar, resumeUrl(uid ?? "", secret));
+          expect(`${back.arrived?.origin}${back.arrived?.pathname}`).toBe(
+            redirect,
+          );
+          expect(back.arrived?.searchParams.get("iss")).toBe(issuer);
+          const tokens = await exchangeAuthorization(issuer, {
             ...(metadata === undefined ? {} : { metadata }),
             clientInformation,
-            redirectUrl: redirect,
-            scope: "artvenn:admin",
-            state: "sdk-state",
+            authorizationCode: back.arrived?.searchParams.get("code") ?? "",
+            codeVerifier,
+            redirectUri: redirect,
             resource: new URL(RESOURCE),
-          },
-        );
-        const jar = newJar();
-        const opened = await fetch(authorizationUrl, { redirect: "manual" });
-        jar.remember(opened);
-        const uid = new URL(opened.headers.get("location") ?? "").pathname
-          .split("/")
-          .pop();
-        const { secret } = await approve(uid ?? "", human);
-        const back = await follow(jar, resumeUrl(uid ?? "", secret));
-        const tokens = await exchangeAuthorization(issuer, {
-          ...(metadata === undefined ? {} : { metadata }),
-          clientInformation,
-          authorizationCode: back.arrived?.searchParams.get("code") ?? "",
-          codeVerifier,
-          redirectUri: redirect,
-          resource: new URL(RESOURCE),
-        });
-        expect(tokens.access_token).toMatch(/^artvenn_ct_/u);
-        const renewed = await refreshAuthorization(issuer, {
-          ...(metadata === undefined ? {} : { metadata }),
-          clientInformation,
-          refreshToken: tokens.refresh_token ?? "",
-          resource: new URL(RESOURCE),
-        });
-        expect(renewed.access_token).toMatch(/^artvenn_ct_/u);
-        expect(renewed.refresh_token).not.toBe(tokens.refresh_token);
-      });
+          });
+          expect(tokens.access_token).toMatch(/^artvenn_ct_/u);
+          const renewed = await refreshAuthorization(issuer, {
+            ...(metadata === undefined ? {} : { metadata }),
+            clientInformation,
+            refreshToken: tokens.refresh_token ?? "",
+            resource: new URL(RESOURCE),
+          });
+          expect(renewed.access_token).toMatch(/^artvenn_ct_/u);
+          expect(renewed.refresh_token).not.toBe(tokens.refresh_token);
+        },
+      );
     });
 
     describe("what a client asks for", () => {
@@ -2002,6 +2041,9 @@ export const registerAgentOperatorFlowTests = (
         expect(answer.arrived?.origin).toBe("https://claude.ai");
         expect(answer.arrived?.searchParams.get("error")).toBe("access_denied");
         expect(answer.arrived?.searchParams.get("code")).toBeNull();
+        // On an error too: ChatGPT and Codex keep their listed client ids only while
+        // every answer names the issuer.
+        expect(answer.arrived?.searchParams.get("iss")).toBe(issuer);
       });
 
       it("refuses before any decision, whatever the browser holds", async () => {
@@ -2166,6 +2208,16 @@ export const registerAgentOperatorFlowTests = (
               label: "Codex",
               vendor: "OpenAI",
               callbackHosts: ["127.0.0.1", "localhost"],
+              local: true,
+            },
+          ],
+          [
+            CURSOR,
+            "http://localhost:8787/callback",
+            {
+              label: "Cursor",
+              vendor: "Anysphere，以及你在 Cursor 里选用的模型的提供方",
+              callbackHosts: ["localhost", "127.0.0.1"],
               local: true,
             },
           ],

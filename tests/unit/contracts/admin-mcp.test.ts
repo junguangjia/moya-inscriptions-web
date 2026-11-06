@@ -21,6 +21,7 @@ import {
   type AdminMcpCodeGuide,
   type AdminOpMeta,
 } from "@moya/contracts/internal/admin-mcp";
+import { TOOL_VENDOR_LEGAL_NAMES } from "admin/agent-connections-consent";
 
 import { repositoryRoot } from "../architecture/workspace-scanner.js";
 
@@ -248,6 +249,11 @@ describe("Admin MCP control constants", () => {
     expect({
       disclosure: AI_POLICY_DISCLOSURE,
       policyText: createHash("sha256").update(content).digest("hex"),
+      // Every vendor on the consent page's map, read from the map itself, so a family
+      // added there with no policy change fails here (#355 O5).
+      vendorsMissingFromPolicy: [
+        ...new Set(TOOL_VENDOR_LEGAL_NAMES.values()),
+      ].filter((vendor) => !content.includes(vendor)),
       selfOnlyPromise: visibility
         .split("\n")
         .find((line) => line.includes('value: "self"'))
@@ -255,7 +261,8 @@ describe("Admin MCP control constants", () => {
     }).toEqual({
       disclosure: { dm: false, evidence: false, rawIp: false, selfOnly: false },
       policyText:
-        "334c9f8bbc2882ece2c47ad58ef2914ddf462bba63ee8e1eba5ba94a680a4c6c",
+        "2a91398b3432d7460a77196deab1fefece619e9828065e53670ac859cfc00795",
+      vendorsMissingFromPolicy: [],
       selfOnlyPromise:
         '{ value: "self", label: "仅自己可见", description: "只有你能看到" },',
     });

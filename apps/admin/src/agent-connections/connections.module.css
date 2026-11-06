@@ -609,15 +609,25 @@
   text-decoration: underline;
 }
 
-.connectClaude {
+/* One button per tool, its own steps under it: stacked on a phone, side by side from
+   a tablet up, each button as wide as its column. */
+.connectGrid {
   display: grid;
+  gap: var(--yoyi-space-6);
+}
+
+.connectTool {
+  display: grid;
+  align-content: start;
   justify-items: start;
   gap: var(--yoyi-space-3);
+  min-width: 0;
 }
 
 .connectButton {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   min-height: 44px;
   border-radius: var(--yoyi-radius-md);
   padding: 0 var(--yoyi-space-6);
@@ -627,8 +637,37 @@
   text-decoration: none;
 }
 
+.connectTool > .connectButton {
+  justify-self: stretch;
+}
+
 .connectButton:hover {
   background: var(--yoyi-color-seal-red-hover);
+}
+
+/* A tool's own short steps, read straight after its button, so never folded. */
+.connectSteps {
+  display: grid;
+  gap: var(--yoyi-space-2);
+  margin: 0;
+  padding-inline-start: var(--yoyi-space-6);
+  font-size: var(--yoyi-type-label-size);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+/* Codex inside the ChatGPT card: a second way in, set off from the first. */
+.connectCodex {
+  display: grid;
+  justify-self: stretch;
+  justify-items: start;
+  gap: var(--yoyi-space-3);
+  border-top: 1px solid var(--yoyi-color-border-subtle);
+  padding-top: var(--yoyi-space-3);
+}
+
+.connectCodex > details {
+  justify-self: stretch;
 }
 
 .address {
@@ -670,12 +709,6 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--yoyi-space-2) var(--yoyi-space-3);
-}
-
-/* Names a second way through one tool's steps, such as its terminal. */
-.stepLabel {
-  margin: var(--yoyi-space-4) 0 0;
-  font-weight: 600;
 }
 
 /* One card per connection on a phone, one row each from a tablet up. */
@@ -757,6 +790,16 @@
 
   .stepGrid {
     grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+    align-items: start;
+  }
+
+  /* At most three across, filling the row; auto-fill, so one listed tool keeps a
+     column's width rather than the page's. */
+  .connectGrid {
+    grid-template-columns: repeat(
+      auto-fill,
+      minmax(max(15rem, calc((100% - 2 * var(--yoyi-space-6)) / 3)), 1fr)
+    );
     align-items: start;
   }
 

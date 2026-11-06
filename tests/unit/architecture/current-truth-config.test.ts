@@ -700,7 +700,7 @@ describe("current repository truth and local configuration", () => {
       article.ARTICLE_AUTHORIZATION_SIGNING_JWKS_FILE,
     );
 
-    // The closed list: the four tools, by the vendors' own ids and callbacks.
+    // The closed list: the five tools, by the vendors' own ids and callbacks.
     const clients = JSON.parse(issuer.AGENT_AUTHORIZATION_CLIENTS!) as {
       clientId: string;
       family: string;
@@ -726,6 +726,8 @@ describe("current repository truth and local configuration", () => {
       ],
       ["codex", "https://chatgpt.com/oauth/codex/client.json", "loopback-host"],
       ["chatgpt", "https://chatgpt.com/oauth/client.json", "hosted-https"],
+      // Cursor's own published client id, desktop only: its web callback is not here.
+      ["cursor", "https://cursor.com/oauth/mcp-client.json", "loopback-host"],
     ]);
     expect(clients[0]!.redirectUris).toEqual([
       "https://claude.ai/api/mcp/auth_callback",
@@ -733,7 +735,11 @@ describe("current repository truth and local configuration", () => {
     expect(clients[3]!.redirectUris).toEqual([
       "https://chatgpt.com/connector_platform_oauth_redirect",
     ]);
-    for (const { redirectUris } of clients.slice(1, 3))
+    expect(clients[4]!.redirectUris).toEqual([
+      "http://localhost:8787/callback",
+      "http://127.0.0.1:8787/callback",
+    ]);
+    for (const { redirectUris } of [...clients.slice(1, 3), clients[4]!])
       for (const uri of redirectUris) {
         expect(["localhost", "127.0.0.1"]).toContain(new URL(uri).hostname);
         expect(new URL(uri).pathname).toBe("/callback");

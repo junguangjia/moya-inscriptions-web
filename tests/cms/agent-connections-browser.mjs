@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
 import { createHash, randomBytes } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import process from "node:process";
@@ -1431,6 +1432,80 @@ async function operatorAcceptance() {
           1,
           family,
         );
+      // Three one-click buttons, one under another and equally wide on a phone.
+      const boxes = [];
+      for (const tool of ["claude", "chatgpt", "cursor"]) {
+        const button = owner.page.locator(`[data-agent-connections-${tool}]`);
+        assert.equal(await button.count(), 1, tool);
+        boxes.push(await button.boundingBox());
+      }
+      for (const [index, box] of boxes.entries()) {
+        assert.ok(Math.abs(box.width - boxes[0].width) < 1, "one width");
+        if (index > 0)
+          assert.ok(box.y >= boxes[index - 1].y + boxes[index - 1].height);
+      }
+      // Cursor's link carries exactly the server entry, with Cursor's listed id.
+      const install = new URL(
+        await owner.page
+          .locator("[data-agent-connections-cursor]")
+          .getAttribute("href"),
+      );
+      assert.equal(
+        `${install.origin}${install.pathname}`,
+        "https://cursor.com/install-mcp",
+      );
+      assert.deepEqual(
+        JSON.parse(
+          Buffer.from(install.searchParams.get("config"), "base64").toString(
+            "utf8",
+          ),
+        ),
+        {
+          type: "http",
+          url: resource,
+          auth: { CLIENT_ID: client("cursor").clientId },
+        },
+      );
+      assert.equal(
+        await owner.page
+          .locator("[data-agent-connections-codex]")
+          .getAttribute("href"),
+        "codex://settings",
+      );
+      // The ChatGPT click copies the address and opens ChatGPT's page in a tab of its
+      // own, which is stopped here before it reaches the vendor.
+      const vendorRequests = [];
+      await owner.context.route("https://chatgpt.com/**", (route) => {
+        vendorRequests.push(route.request().url());
+        return route.abort();
+      });
+      // Only Chromium grants the clipboard to a test; WebKit shows either answer.
+      if (name === "chromium")
+        await owner.context.grantPermissions(
+          ["clipboard-read", "clipboard-write"],
+          { origin },
+        );
+      const [vendorTab] = await Promise.all([
+        owner.context.waitForEvent("page"),
+        owner.page.locator("[data-agent-connections-chatgpt]").click(),
+      ]);
+      await vendorTab.waitForLoadState().catch(() => undefined);
+      await vendorTab.close();
+      assert.equal(vendorRequests[0], "https://chatgpt.com/plugins");
+      await owner.page.bringToFront();
+      const copied = owner.page.getByText("地址已复制。");
+      if (name === "chromium") {
+        await copied.waitFor({ state: "visible" });
+        assert.equal(
+          await owner.page.evaluate(() =>
+            globalThis.navigator.clipboard.readText(),
+          ),
+          resource,
+        );
+      } else
+        await copied
+          .or(owner.page.locator("[data-agent-connections-copy-refused]"))
+          .waitFor({ state: "visible" });
       assert.ok(
         await owner.page
           .locator(

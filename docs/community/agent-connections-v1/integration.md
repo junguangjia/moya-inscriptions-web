@@ -181,25 +181,38 @@ these differences.
 | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Scope `artvenn:read`                              | Scope `artvenn:admin`, named by the `401`'s `scope` parameter and by `scopes_supported`. What a client asks for changes nothing: the consent is opened at this scope |
 | Four read tools on the plugin path                | The native `admin_*` tools at profile full, the same list as an `ai_operator` key at full, on the same `/api/mcp`                                                    |
-| `AGENT_AUTHORIZATION_CLIENTS` loopback entries    | A closed list of four, with a hosted `https` callback allowed by the policy `hosted-https`                                                                           |
+| `AGENT_AUTHORIZATION_CLIENTS` loopback entries    | A closed list of five, with a hosted `https` callback allowed by the policy `hosted-https`                                                                           |
 | Access token 300 s, refresh token library default | Access token 1 hour, refresh token 30 days from last use and rotated on each use, connection 180 days from consent                                                   |
 | Disconnect is enforced at the door                | Also at the token endpoint: a refresh after a disconnect answers `invalid_grant`                                                                                     |
 | Only the person who connected disconnects         | Any owner sees and disconnects any connection                                                                                                                        |
 
 The list:
 
-| Tool        | `family`      | `clientId`                                          | Callback                                              |
-| ----------- | ------------- | --------------------------------------------------- | ----------------------------------------------------- |
-| Claude      | `claude`      | https://claude.ai/oauth/mcp-oauth-client-metadata   | https://claude.ai/api/mcp/auth_callback               |
-| Claude Code | `claude-code` | https://claude.ai/oauth/claude-code-client-metadata | localhost and 127.0.0.1, any port, /callback          |
-| Codex       | `codex`       | https://chatgpt.com/oauth/codex/client.json         | 127.0.0.1 and localhost, any port, /callback          |
-| ChatGPT     | `chatgpt`     | https://chatgpt.com/oauth/client.json               | https://chatgpt.com/connector_platform_oauth_redirect |
+| Tool        | `family`      | `clientId`                                          | Callback                                                        |
+| ----------- | ------------- | --------------------------------------------------- | --------------------------------------------------------------- |
+| Claude      | `claude`      | https://claude.ai/oauth/mcp-oauth-client-metadata   | https://claude.ai/api/mcp/auth_callback                         |
+| Claude Code | `claude-code` | https://claude.ai/oauth/claude-code-client-metadata | localhost and 127.0.0.1, any port, /callback                    |
+| Codex       | `codex`       | https://chatgpt.com/oauth/codex/client.json         | 127.0.0.1 and localhost, any port, /callback                    |
+| ChatGPT     | `chatgpt`     | https://chatgpt.com/oauth/client.json               | https://chatgpt.com/connector_platform_oauth_redirect           |
+| Cursor      | `cursor`      | https://cursor.com/oauth/mcp-client.json            | localhost and 127.0.0.1, any port (Cursor uses 8787), /callback |
 
-As read from the vendors' own documents at design time. Discovery says
+As read from the vendors' own documents at design time; Cursor's entry was added
+in slice O5 (2026-11-06). Discovery says
 `client_id_metadata_document_supported`, so a client that offers its client id
 as a URL can start from the MCP address alone. The URL is matched against the
 list and **never fetched**, and a URL off the list answers `invalid_client`.
 There is no `registration_endpoint`. `openid` is not advertised.
+
+Only Cursor's desktop app is listed. It registers a client of its own unless it
+is told a client id, and there is no registration endpoint, so the Admin's
+button hands it an install link whose settings name its own published client id
+in `auth.CLIENT_ID`. Its web and cloud agents return to a callback on its own
+site under the same id, which one loopback entry cannot also hold, and its old
+`cursor://` callback is refused. ChatGPT and Codex have no link that fills in
+the address, so ChatGPT's button and Codex's settings link copy it and open
+ChatGPT's plugins page or Codex's settings. What this says about Cursor and
+ChatGPT comes from their documents, and Cursor's client and labels from reading
+its 3.22.7 app, until a real one connects.
 
 What a client should expect:
 
