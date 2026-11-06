@@ -1,7 +1,10 @@
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseEnv } from "node:util";
 
 import {
   ConsentRuntimeError,
@@ -14,6 +17,7 @@ import {
   resetConsentRuntime,
   wwwAuthenticate,
 } from "admin/agent-connections";
+import { createResourceRuntime } from "admin/agent-connections-resource";
 import {
   afterAll,
   afterEach,
@@ -344,6 +348,63 @@ describe("the consent runtime", () => {
       "agent-connections composition refused: CONSENT_DATABASE_TLS_REQUIRED\n",
     ]);
     expect(pools.configs).toEqual([]);
+  });
+});
+
+/**
+ * Slice O4: `admin.env.example` read as the Admin would, with only the host's CA
+ * path and the placeholder keys stood in for, so a misspelt or missing door
+ * setting fails here rather than on the first request after the release.
+ */
+describe("the Production template", () => {
+  const repository = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../..",
+  );
+  const template = (name: string) =>
+    parseEnv(readFileSync(path.join(repository, name), "utf8"));
+
+  it("composes both sides of the door from admin.env, aimed at the issuer its own file names", async () => {
+    const admin = template("infra/production/env/admin.env.example");
+    const issuer = template(
+      "infra/production/env/admin-authorization.env.example",
+    );
+    expect(admin.AGENT_DATABASE_SSL_CA_FILE).toMatch(/^\/etc\/yoyi\//u);
+    const env = asEnvironment({
+      ...admin,
+      AGENT_DATABASE_SSL_CA_FILE: authority,
+      AGENT_CONNECTION_WRAPPER_INDEX_KEY: randomBytes(32).toString("base64"),
+      AGENT_CONNECTION_WRAPPER_SEAL_KEY: randomBytes(32).toString("base64"),
+    });
+    const listed = (
+      JSON.parse(issuer.AGENT_AUTHORIZATION_CLIENTS!) as { clientId: string }[]
+    ).map(({ clientId }) => clientId);
+
+    const consent = createConsentRuntime(env);
+    expect(consent).toMatchObject({
+      preset: "operator",
+      issuer: issuer.AGENT_AUTHORIZATION_ISSUER,
+      resource: issuer.AGENT_AUTHORIZATION_RESOURCE,
+      environment: "production",
+    });
+    expect([...(consent?.clients.keys() ?? [])]).toEqual(listed);
+    const resource = createResourceRuntime(env);
+    try {
+      expect([...(resource?.clients.keys() ?? [])]).toEqual(listed);
+    } finally {
+      await resource?.close();
+      await consent?.close();
+    }
+    // Both pools on verified TLS with the CA, and query limits of their own.
+    expect(pools.configs).toHaveLength(2);
+    for (const config of pools.configs)
+      expect(config).toMatchObject({
+        ssl: { rejectUnauthorized: true, ca: readFileSync(authority, "utf8") },
+      });
+    expect(protectedResourceMetadata(env)).toMatchObject({
+      resource: issuer.AGENT_AUTHORIZATION_RESOURCE,
+      authorization_servers: [issuer.AGENT_AUTHORIZATION_ISSUER],
+    });
   });
 });
 

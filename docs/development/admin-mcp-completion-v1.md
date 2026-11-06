@@ -3974,7 +3974,7 @@ Sections 1 to 21 describe the key door, which stays for automation and the
 companion. Nothing here is built until its slice merges: O1 issuer, stores and
 migration; O2 door and audit; O3 consent, page and hooks; O4 Production
 templates and the real-client record. The end of this section says what has been
-proved and what O4 still owes.
+proved, what O4 delivered and what stays for the release.
 
 An administrator adds one address or clicks one button in their tool, signs in
 with their usual Admin account and clicks allow. No key is issued to a person.
@@ -4307,20 +4307,153 @@ service on its own database role.
   through Payload's own REST route, a failed revoke included. Its stores are
   synthetic.
 
-O4 still owes: the Nginx block for the issuer host and its limits, with a log
-format that does not carry the query string; `frame-ancestors 'none'` for all of
-`/admin` at the Nginx layer, because the Admin's own refusal holds only for a
-document load and a tab change inside a framed Admin page is not one; the
-issuer's systemd unit; the environment templates, in which the address on the AI
-connections page, `CMS_PUBLIC_URL` plus `/api/mcp`, and
-`AGENT_AUTHORIZATION_RESOURCE` must be equal, because a tool connects only then;
-release checks that the origin of `AGENT_AUTHORIZATION_CONSENT_URL` equals the
-origin of `CMS_PUBLIC_URL`, because the Admin checks every allow, deny and
-disconnect against that origin and would refuse them all otherwise, and that the
-Admin's and the issuer's copies of `AGENT_AUTHORIZATION_CLIENTS` are identical;
-the documents section 7 of the amendment names; the private release toolkit; and
-the real-client record, per task and client, failures included, in which
-Claude's link and the step lists on the AI connections page meet a real client
-for the first time, and which says whether each hosted tool's own state check
-refuses a link started in an administrator's own browser. Everything above ran
-under `next dev`, so a Production build with the door on first runs in O4.
+O4, delivered in the repository. These are templates; Production changes only at
+the release.
+
+- The issuer's unit,
+  `infra/production/systemd/yoyi-admin-authorization.service`: a copy of the
+  Article issuer's with its own user, its own environment file, loopback 3004
+  and the same `main.js`. It runs from a runtime root of its own, never the
+  shared one, so no other release can start it on code that is not live yet, and
+  it unsets `ARTICLE_AUTHORING_ENABLED`, so it runs only this listener.
+- The settings: `infra/production/env/admin-authorization.env.example` and a
+  block in `admin.env.example`, naming every setting the issuer and the Admin
+  read for the door, with the closed list of the four tools above. The Admin
+  carries `AGENT_DATABASE_SSL_CA_FILE` and no `AGENT_AUTHORIZATION_ENVIRONMENT`.
+  The Article file keeps `AGENT_AUTHORIZATION_ENABLED=false`.
+- Nginx, in `infra/production/nginx/yoyi.conf.template`: the issuer's own server
+  block, naming a certificate of its own (renewed on its own, so no other host's
+  renewal depends on this name), the Article issuer's forwarding headers, a
+  per-address limit and a cap on the whole host, both answering 429, and an
+  access log format that names each step by a fixed class and never a URI or
+  query, with the error log off, because the resume route's query holds the
+  one-time secret. For the same reason the host stays off the edge, whose
+  request logs keep the whole URL. On the apex, exact locations for the three
+  discovery documents, the consent landing and the review page, and
+  `frame-ancestors 'none'` with `Referrer-Policy: no-referrer` on every `/admin`
+  location, because the Admin's own refusal holds only for a document load and a
+  tab change inside a framed Admin page is not one. `/api/mcp` keeps its own
+  limit, which now carries every person's tools together. The new paths take
+  route classes that already exist, because the archive and the traffic summary
+  refuse a log row with any other, and the issuer's status log rotates with the
+  other logs that carry addresses.
+- `infra/production/README.md`: the sentence that kept all Admin OAuth
+  Development-only now names the login door as the Admin's one Production OAuth
+  surface; an issuer section; and the checks a release makes before the Admin
+  restarts with the door on. `AGENT_AUTHORIZATION_RESOURCE` is the same in both
+  files and equals `CMS_PUBLIC_URL` plus `/api/mcp`, because a tool connects
+  only then. The origin of `AGENT_AUTHORIZATION_CONSENT_URL` equals the origin
+  of `CMS_PUBLIC_URL`, because the Admin checks every allow, deny and disconnect
+  against that origin and would refuse them all otherwise. The client list, the
+  issuer, the switch and the two wrapper keys are byte-identical in both files.
+  A later release that changes the issuer, the agent-connection stores or the
+  Admin's consent and wrapper formats moves the issuer's root with it. The two
+  root discovery documents on the apex now answer for the Admin, which an
+  Article client reaches only if it ignores its own 401. Closing the door stops
+  and disables the issuer, so a reboot does not start it again.
+- Pins. `tests/unit/architecture/current-truth-config.test.ts` holds the unit,
+  both files and the template to each other, and fails when any of those lines
+  goes. `tests/unit/backend/admin-operator-issuer.test.ts` hands the issuer's
+  file and unit, as systemd would, to the issuer's own startup checks, and the
+  Article pair to its gate.
+  `tests/unit/backend/agent-connections-operator-surface.test.ts` builds the
+  Admin's consent and resource sides from `admin.env.example`.
+
+These pins read files. The template and the release's own renders of the live
+site passed `nginx -t` in a local nginx 1.28 (the host runs 1.24);
+`systemd-analyze verify` and a Production build first run at the release.
+
+Stays for the release, R0 to R8, as the private release toolkit runs them. The
+steps that change running services or the certificate (R3's certificate, R4, R5)
+undo what they started when a check fails, except that a certificate R3 has
+already issued stays and a re-run uses it again; R2's migrations and roles are
+forward-only and resume on a re-run; a cloud write (R3's record and edge rule)
+keeps a receipt, and one whose answer is lost is reported as unknown, never as
+unchanged. Nothing is printed that holds a secret.
+
+- R0. O1 to O4 merged after independent review, and one exact commit of main
+  pinned; the toolkit is built from it. Its tests run on a fake host, and its
+  own role and grant statements were rehearsed on a local PostgreSQL 16 against
+  the repository's community migrations, with `has_table_privilege` read back
+  for each role. The CMS migration's SQL and the backup were not part of that
+  rehearsal. Everything above ran under `next dev`, so that build is the first
+  Production build with the door on.
+- R1. Read-only on the host: both migration ledgers, that the three new roles
+  and the issuer unit do not exist yet, how the shared certificate is issued and
+  renewed, the App-role preflight, and whether any role on the host may create
+  roles. If none may, the Owner is asked in one sentence to grant that for the
+  release. One anonymous POST to `/api/mcp` from outside mainland China shows
+  whether the edge challenges a tool.
+- R2. The new runtime roots, then a free-space check and a backup, the community
+  and CMS migrations, the three roles with new passwords (an existing one of
+  this release is reused only with its stored password and given a new one only
+  on request), the grants file, the privileges read back, and a login as each
+  role that reads back CONNECT and its own privileges. This comes before any DNS
+  or certificate change, so a release that cannot create its roles stops here
+  with nothing else changed. Which role's create-role privilege was used is
+  recorded, and from then on every check and the close reminds the Owner to take
+  it back for as long as that role still holds it, whoever granted it.
+- R3. A public DNS name for the issuer host, on direct DNS to the origin and
+  never behind the edge, whose request logs would keep the resume secret. The
+  host gets a certificate of its own, by the same certbot and challenge method
+  the shared certificate uses, once the name is shown to resolve to the origin
+  and its challenge path to reach it, and a renewal timer of its own, a copy of
+  the shared certificate's with the certificate's name changed and its schedule
+  an hour later, so the two renewals never run together. The shared certificate,
+  its renewal settings and its timer are checked byte for byte before and after
+  and never change. If the host cannot reach its own public address, the
+  challenge path is checked from outside instead: the probe stays in place, the
+  toolkit fetches it over the internet, and the host goes on only when handed
+  back that exact value; nothing is skipped. No certificate is issued or renewed
+  within 15 minutes of a renewal timer's run, and the issuer host's is not
+  deleted within 15 minutes of the shared timer's run. Then the edge's
+  whole-request skip for `/api/mcp` and the three discovery paths.
+- R4. Keys and the signing file generated on the host, the issuer's file at mode
+  0600 with its staged copy, its runtime root at the pinned commit, the unit and
+  the issuer block, `nginx -t`, a reload, and the start with `reset-failed` and
+  no restarts counted. Health and discovery are read here through the local
+  Nginx with the real certificate, and from outside at the verify that follows
+  R5. From here the issuer host answers publicly, before the Admin has its door;
+  if R5 then rolls back, the issuer stays up until it is taken back on its own,
+  which is safe because the door is closed.
+- R5. Before any restart: the checks above, a login as the consent and the
+  resource role with exactly the URLs and CA file `admin.env` will hold, a file
+  the Admin's own user must be able to read, and the App-role preflight, which
+  must pass in full before the community AI token is placed. Then the apex
+  locations and the `/admin` frame header, and the Backend and the Admin at the
+  pinned commit with `admin.env`, `backend.env` and their staged copies. This
+  ships the merged S6 and S7 code to both and places the community AI token. One
+  request, then the journal is read for `agent-connections composition refused`,
+  and a request with an unknown connection token shows that the Admin reads
+  through the resource role's own pool. The media worker stays on its runtime
+  root without a restart: its startup check accepts a newer ledger, since it
+  looks only for the migrations it knows.
+- R6. Live acceptance, read-only. The Owner connects Claude with their own
+  account: consent, `admin_whoami`, one read, the audit row naming them,
+  disconnect, reconnect and pause; then Claude Code or Codex. The real-client
+  record starts here, per task and client, failures included. It is where
+  Claude's link and the step lists on the AI connections page meet a real client
+  for the first time, and it says whether each hosted tool's own state check
+  refuses a link started in an administrator's own browser.
+- R7. The Owner tells the other administrators.
+- R8. An hour and a day later: a refresh with no person involved, the count of
+  outcomes left unknown, timing per tool, the issuer's recorded failure
+  categories and refresh errors, and the refused answers on the issuer host's
+  token route, which is where a storm of `invalid_grant` shows (the issuer's
+  journal does not record that answer). Counted from the audit table, the
+  issuer's own store, its journal and its host's status log into private notes
+  only.
+
+Rollback, fastest first: pause; disconnect one connection; close the door with
+`ADMIN_MCP_OAUTH_ENABLED=false` in `admin.env` and its staged copies, an Admin
+restart and the issuer stopped and disabled, after which the discovery paths
+answer 404 and connection tokens are refused; then the previous Backend and
+Admin, with their files back to their earlier bytes. A rollback that fails part
+way leaves a state the next rollback picks up. The issuer and the Nginx changes
+are taken back only once the door is closed. The issuer host's certificate goes
+after the Nginx block that names it: its timer, the certificate itself and the
+challenge site's edit, each on its own and in any order, since nothing else
+depends on it; only then its DNS record. Migrations and roles stay. Afterwards
+the stored role passwords and file copies are removed: as accepted only when no
+rollback ran after the last passing verify, otherwise as abandoned after a full
+rollback. The database backups stay until the Owner decides.
