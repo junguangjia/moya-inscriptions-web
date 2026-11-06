@@ -121,6 +121,7 @@ runtime option; it does not establish storage provisioning or live cutover.
 | Backend        | `yoyi-backend`               | `127.0.0.1:3001` | `/etc/yoyi/backend.env`               |
 | Admin          | `yoyi-admin`                 | `127.0.0.1:3002` | `/etc/yoyi/admin.env`                 |
 | Article issuer | `yoyi-article-authorization` | `127.0.0.1:3003` | `/etc/yoyi/article-authorization.env` |
+| Admin issuer   | `yoyi-admin-authorization`   | `127.0.0.1:3004` | `/etc/yoyi/admin-authorization.env`   |
 
 All names, paths, hostnames and provider identifiers in these templates are
 fictional examples. Replace them in private deployment input after actual
@@ -551,8 +552,9 @@ The additional Article issuer uses `yoyi-article-authorization.service`,
 loopback3003 and the separate HTTPS cookie host `article-auth.example.invalid`.
 Nginx overwrites Host and trusted HTTPS forwarding headers and clears Forwarded.
 Backend exposes only exact `/mcp/article-authoring` and its protected-resource
-metadata, plus the existing authenticated human consent/approval routes. Generic
-Admin Agent/OAuth remains Development-only; the Admin's key-only `/api/mcp` is
+metadata, plus the existing authenticated human consent/approval routes. The
+Admin's own agent tools and its plugin connection path remain Development-only;
+the Admin's one Production OAuth surface is the login door on `/api/mcp`,
 described below. The issuer does not share its private signing JWKS or SQL
 credential with Backend/Web. Backend has App and separate Article-control
 credentials; issuer has only its own SQL credential. Role-only
@@ -566,8 +568,9 @@ The Admin's MCP key path is `/api/mcp`
 answering 429, and a 4 MiB body limit. These are starting values to confirm in
 the isolated environment. A key bound to `ai_operator` reaches the native
 handler, POST only and stateless JSON; a present `Origin` must equal the origin
-of `CMS_PUBLIC_URL`. Automation keys reach the MCP plugin as before. The door
-adds no server setting.
+of `CMS_PUBLIC_URL`. Automation keys reach the MCP plugin as before. The key
+door adds no server setting; the login door's are in
+[Admin MCP login door](#admin-mcp-login-door) below.
 
 The key migration gives every existing key an expiry 30 days after it runs, so
 renew an automation key in the Admin before that date. A key bound to the Owner
@@ -616,6 +619,119 @@ test endpoint. Code-only low-level dependency injection exists solely for
 isolated acceptance; main selects real transports. Real providers, approved
 legal copy, external client and real COS verification remain separately recorded
 gates.
+
+### Admin MCP login door
+
+An administrator connects an AI tool by adding the `/api/mcp` address or
+clicking a button in that tool, signing in with their usual Admin account and
+clicking 允许 ([amendment](../../docs/governance/amendments/2026-11-05-admin-mcp-oauth-door.md),
+[record](../../docs/development/admin-mcp-completion-v1.md) section 22). No key
+is issued to a person. Three parts carry it.
+
+- The issuer, `yoyi-admin-authorization.service`: its own user, loopback 3004,
+  `/etc/yoyi/admin-authorization.env`, and the same
+  `services/agent-authorization/dist/main.js` the Article issuer runs. It runs
+  from its own runtime root (`/srv/yoyi/admin-authorization/current` in the
+  template), never `/srv/yoyi/current`: the release prepares that root at its
+  pinned commit before the first start, so the issuer never starts on code that
+  is not live yet, and no Web, Backend or Admin release moves it by accident. A
+  later release that changes `services/agent-authorization`, the community
+  agent-connection stores or the Admin's consent and wrapper formats moves the
+  issuer's root to that same commit in that same release, before the Admin
+  restarts: the two share the wrapper seal and its label, the consent rows and
+  the resume parameter, and the migration ledger check does not catch a
+  mismatch. The unit unsets `ARTICLE_AUTHORING_ENABLED` and the file holds no
+  Article setting, so the process runs only the Admin listener. It reads the
+  community migration ledger before it listens and refuses with
+  `ADMIN_SCHEMA_NOT_READY` until the login door migrations have run. Create its
+  user, its runtime root and its signing file (nonsymlink, single-link, mode
+  0600, owned by that user) before the first start.
+- The issuer host (`admin-auth.example.invalid` in the template): a server block
+  of its own, the Article issuer's forwarding headers under its own Host, a
+  per-address limit (`yoyi_admin_auth`, 5 r/s, burst 30) and a total for the
+  whole host (`yoyi_admin_auth_total`, 20 r/s, burst 60), both answering 429.
+  These are starting values. It has a certificate of its own, issued by the same
+  method as the other hosts' certificate and renewed by a timer of its own, so
+  no other host's renewal depends on this name; the release checks that the
+  shared certificate, its renewal settings and its timer are byte-identical
+  before and after. Taking the name away later means removing its certificate
+  and timer first and its DNS record after. The host stays on direct DNS to the
+  origin, off EdgeOne: the resume route's query carries a one-time secret, and
+  EdgeOne's own request logs keep the whole URL with its query, so the secret
+  would reach a third party's logs. Direct, the peer is the client, which the
+  per-address limit relies on. The same secret is why the host's status log uses
+  `yoyi_admin_auth`, which names each step by a fixed class (`token`, `resume`
+  and so on) and never a URI or query, the security log keeps `yoyi_status`, and
+  the error log, which would print the request line, is off. Both logs carry the
+  client address; the status log rotates with the other IP-bearing logs in
+  `logrotate/yoyi-traffic`.
+- The Admin, on the apex: exact locations for
+  `/.well-known/oauth-protected-resource`,
+  `/.well-known/oauth-protected-resource/api/mcp` and
+  `/.well-known/oauth-authorization-server` (everything else under
+  `/.well-known/` stays with Web), for the consent landing
+  `/agent-connections/consent/<uid>` and for the review page
+  `/admin/agent-connections/consent`. Those two pages and every `/admin`
+  location send `Content-Security-Policy: frame-ancestors 'none'` and
+  `Referrer-Policy: no-referrer`: the Admin's own frame refusal holds only for a
+  document load, and a tab change inside a framed Admin page is not one.
+  `/api/mcp` keeps its own limit, which now carries every person's tools
+  together. The route-class map gives the new paths existing classes only
+  (`machine-api`, `admin`), because the archive and the traffic summary refuse
+  any other. The two root documents, `/.well-known/oauth-protected-resource` and
+  `/.well-known/oauth-authorization-server`, now belong to the Admin: an Article
+  client follows the `resource_metadata` in Backend's 401 to its path-suffixed
+  document, which still reaches Backend, and one that falls back to a root
+  document reaches the Admin issuer, which refuses the Article resource.
+
+`admin.env` gains `ADMIN_MCP_OAUTH_ENABLED=true`, the issuer, the resource, the
+client list, database URLs for the Admin's consent and resource roles,
+`AGENT_DATABASE_SSL_CA_FILE` and the two wrapper keys. It carries no
+`AGENT_AUTHORIZATION_ENVIRONMENT`: in Production the issuer is held to
+`production`, and `CMS_ENVIRONMENT=production` names the Admin's side, so the
+two cannot disagree. `AGENT_CONNECTIONS_ENABLED` and
+`AGENT_AUTHORIZATION_ENABLED` stay unset or false in Production, and
+`article-authorization.env` keeps `AGENT_AUTHORIZATION_ENABLED=false`. A bad
+Admin setting refuses by a bare code on the first request that loads the
+configuration, not at start, so a release check makes one request before it
+reads the journal for `agent-connections composition refused`.
+
+Before the Admin restarts with the door on, the release checks these, printing
+no value:
+
+1. `AGENT_AUTHORIZATION_RESOURCE` is the same in both files and equals
+   `CMS_PUBLIC_URL` plus `/api/mcp`, byte for byte. Discovery names the
+   resource, so a tool connects only then.
+2. The origin of `AGENT_AUTHORIZATION_CONSENT_URL` equals the origin of
+   `CMS_PUBLIC_URL`. The Admin checks every allow, deny and disconnect against
+   that origin and would refuse them all otherwise.
+3. `AGENT_AUTHORIZATION_CLIENTS` is byte-identical in both files, and so are
+   `ADMIN_MCP_OAUTH_ENABLED`, `AGENT_AUTHORIZATION_ISSUER` and the two
+   `AGENT_CONNECTION_WRAPPER_*` keys.
+4. The issuer host is neither the Article issuer's host nor the host of
+   `CMS_PUBLIC_URL`, and it is the issuer block's `server_name`. Port 3004 is
+   the same in the unit, the file and the upstream.
+5. The issuer, consent, resource, CMS runtime and public-read roles are five
+   distinct roles on one database, each remote URL with verified TLS, the
+   Admin's two ending in exactly `?sslmode=verify-full`. The three new roles
+   hold only what `sql/admin-mcp-oauth-grants.sql` grants.
+6. No new key equals another one or any Article key, and the signing file is not
+   the Article issuer's. The issuer refuses what it can see; each process sees
+   only its own file, so the release also compares hashes on the host.
+7. Before `COMMUNITY_OPERATOR_AI_TOKEN` is placed, the App role holds every
+   grant of the record's App-role preflight (section 2), the work draft tables
+   included; otherwise the release stops and names each missing grant.
+
+Staged copies of both files get the same change. To close the door, set
+`ADMIN_MCP_OAUTH_ENABLED=false` in `admin.env` and its staged copies, restart
+the Admin and stop and disable the issuer
+(`systemctl disable --now yoyi-admin-authorization`): the discovery paths then
+answer 404 and connection tokens are refused. A stop alone is not enough, since
+the unit is enabled and its own file still says true, so a reboot would start it
+again; reopening the door is `systemctl enable --now` after the Admin's file
+says true again. Migrations and roles stay. Tools reach the apex through
+EdgeOne, so a whole-request skip exception covers `/api/mcp` and the three
+discovery paths; the issuer host stays on direct DNS to the origin, as above.
 
 ## Profile image switches (increment 3a)
 

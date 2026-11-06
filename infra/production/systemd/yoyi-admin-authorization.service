@@ -1,0 +1,36 @@
+[Unit]
+Description=Yoyi Admin MCP login door issuer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yoyi-admin-authorization
+Group=yoyi-admin-authorization
+# Its own runtime root, never /srv/yoyi/current: a release points it at the
+# prepared tree of its pinned commit before this unit first starts, so it cannot
+# start on code that is not live yet, and no other release moves it.
+WorkingDirectory=/srv/yoyi/admin-authorization/current
+EnvironmentFile=/etc/yoyi/admin-authorization.env
+# The Article listener never starts in this process, whatever the file holds.
+UnsetEnvironment=ARTICLE_AUTHORING_ENABLED
+ExecStart=/usr/bin/env NODE_ENV=production AGENT_AUTHORIZATION_PORT=3004 node services/agent-authorization/dist/main.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+KillMode=mixed
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

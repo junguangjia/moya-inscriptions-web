@@ -5,6 +5,11 @@ limit_req_zone $binary_remote_addr zone=yoyi_analytics:1m rate=30r/m;
 # Whole-path total for /api/mcp: peers may be edge nodes, so never per address.
 # Starting values; confirm them in the isolated environment.
 limit_req_zone $server_name zone=yoyi_mcp:1m rate=10r/s;
+# Admin login door issuer host: reached directly, never through EdgeOne, so the
+# peer is the client. A limit per address, and a total for the whole host so many
+# addresses together cannot exhaust it. Starting values, confirmed at the release.
+limit_req_zone $binary_remote_addr zone=yoyi_admin_auth:1m rate=5r/s;
+limit_req_zone $server_name zone=yoyi_admin_auth_total:1m rate=20r/s;
 # Analytics alone may use EdgeOne's overwritten connection address. This private
 # include contains only the verified current origin ACL for this site's host.
 # An empty file trusts no peers; a missing file rejects configuration validation.
@@ -29,6 +34,13 @@ map $uri $yoyi_route_class {
     / page;
     ~^/admin/analytics-workspace(?:/|$) analytics-workspace;
     ~^/admin(?:/|$) admin;
+    # Login door: tools read the discovery documents; the consent landing is an
+    # Admin page. Existing class names only: the archive and the traffic summary
+    # refuse any other.
+    /.well-known/oauth-protected-resource machine-api;
+    /.well-known/oauth-protected-resource/api/mcp machine-api;
+    /.well-known/oauth-authorization-server machine-api;
+    "~^/agent-connections/consent/[A-Za-z0-9_-]{1,256}$" admin;
     ~^/api/community/analytics$ analytics-collection;
     ~^/api/community/notifications/stream$ notification-stream;
     ~^/api/community/notifications(?:/|$) notifications;
@@ -60,11 +72,28 @@ log_format yoyi_status escape=json '{"at":"$time_iso8601","status":$status,"dura
 # Upload timing (upload-timing-instrumentation-v1): end time, outcome, sizes
 # and durations only; never a URI, host, address, header or cookie.
 log_format yoyi_upload '$time_iso8601 $msec $status $request_completion $request_length $bytes_sent $request_time $upstream_status $upstream_connect_time $upstream_header_time $upstream_response_time';
+# Admin login door issuer: which step a request was, by fixed name. The resume
+# route carries the one-time secret in its query, so this format, like
+# yoyi_status, never names a URI, query, header or cookie.
+map $uri $yoyi_admin_auth_route {
+    default other;
+    /healthz health;
+    /auth authorize;
+    ~^/auth/ authorize;
+    /token token;
+    /token/revocation revocation;
+    /jwks jwks;
+    ~^/\.well-known/ discovery;
+    ~^/session/end(?:/|$) logout;
+    "~^/agent-connections/consent/[A-Za-z0-9_-]{1,256}/resume$" resume;
+}
+log_format yoyi_admin_auth escape=json '{"at":"$time_iso8601","status":$status,"duration":$request_time,"bytes":$body_bytes_sent,"method":"$request_method","route":"$yoyi_admin_auth_route","client":"$yoyi_client_class","ip":"$remote_addr"}';
 
 upstream yoyi_web { server 127.0.0.1:3000; }
 upstream yoyi_backend { server 127.0.0.1:3001; }
 upstream yoyi_admin { server 127.0.0.1:3002; }
 upstream yoyi_article_authorization { server 127.0.0.1:3003; }
+upstream yoyi_admin_authorization { server 127.0.0.1:3004; }
 
 server {
     listen 80 default_server;
@@ -110,8 +139,9 @@ server {
     client_max_body_size 1m;
 
     # Only the configured Article audience reaches Backend; internal/operator
-    # paths remain unexposed. The Admin's key-only MCP path is /api/mcp below; its
-    # Development-only agent tools answer NOT_FOUND here.
+    # paths remain unexposed. The Admin's MCP path is /api/mcp below, for an MCP
+    # key or a login door connection token; its Development-only agent tools
+    # answer NOT_FOUND here.
     location = /mcp/article-authoring {
         proxy_buffering off;
         proxy_cache off;
@@ -123,10 +153,45 @@ server {
         proxy_cache off;
         proxy_pass http://yoyi_backend;
     }
+    # Admin login door (amendment 2026-11-05): a tool that has only the /api/mcp
+    # address learns the issuer from these three documents, which the Admin
+    # answers. Everything else under /.well-known/ stays with Web. The two root
+    # documents now name the Admin's issuer: an Article client follows its own
+    # 401 to the path-suffixed document above, and one that falls back to a root
+    # document reaches the Admin issuer, which refuses the Article resource.
+    location = /.well-known/oauth-protected-resource/api/mcp {
+        proxy_cache off;
+        proxy_pass http://yoyi_admin;
+    }
+    location = /.well-known/oauth-protected-resource {
+        proxy_cache off;
+        proxy_pass http://yoyi_admin;
+    }
+    location = /.well-known/oauth-authorization-server {
+        proxy_cache off;
+        proxy_pass http://yoyi_admin;
+    }
+    # The consent landing the issuer redirects to, outside /admin, and the review
+    # page it continues to. Neither may be framed or leak its address onward.
+    location ~ "^/agent-connections/consent/[A-Za-z0-9_-]{1,256}$" {
+        add_header Content-Security-Policy "frame-ancestors 'none'" always;
+        add_header Referrer-Policy no-referrer always;
+        proxy_pass http://yoyi_admin;
+    }
+    location = /admin/agent-connections/consent {
+        add_header Content-Security-Policy "frame-ancestors 'none'" always;
+        add_header Referrer-Policy no-referrer always;
+        proxy_pass http://yoyi_admin;
+    }
+    # No /admin page may be framed. The Admin's own refusal holds only for a
+    # document load, and a tab change inside a framed Admin page is not one. A
+    # location add_header replaces the server's, so each repeats Referrer-Policy.
     # Shared hostname preserves the existing host-only Payload preview cookie.
     # Preserve native RSC/hash inputs before Payload's separate Next server
     # normalizes them; the Owner-gated proxy restores this fixed header set.
     location ^~ /admin/analytics-workspace {
+        add_header Content-Security-Policy "frame-ancestors 'none'" always;
+        add_header Referrer-Policy no-referrer always;
         # Fetch decodes upstream compression; include native assets alongside HTML.
         gzip on;
         gzip_types application/javascript text/javascript text/css image/svg+xml;
@@ -151,8 +216,16 @@ server {
         proxy_set_header Forwarded "";
         proxy_pass http://yoyi_admin;
     }
-    location = /admin { proxy_pass http://yoyi_admin; }
-    location ^~ /admin/ { proxy_pass http://yoyi_admin; }
+    location = /admin {
+        add_header Content-Security-Policy "frame-ancestors 'none'" always;
+        add_header Referrer-Policy no-referrer always;
+        proxy_pass http://yoyi_admin;
+    }
+    location ^~ /admin/ {
+        add_header Content-Security-Policy "frame-ancestors 'none'" always;
+        add_header Referrer-Policy no-referrer always;
+        proxy_pass http://yoyi_admin;
+    }
     # The Admin build uses assetPrefix=/admin-assets; preserve Web's /_next assets.
     location ^~ /admin-assets/_next/static/ {
         proxy_pass http://yoyi_admin/_next/static/;
@@ -162,8 +235,9 @@ server {
         client_max_body_size 50m;
         proxy_pass http://yoyi_admin;
     }
-    # MCP keys only, at the Admin's door. No session or anonymous access reaches a
-    # tool, and the limit is this path's total, so nothing else consumes it.
+    # An MCP key or a login door connection token, at the Admin's door. No session
+    # or anonymous access reaches a tool. The limit is this path's total, every
+    # person's tools together, so nothing else consumes it.
     location = /api/mcp {
         limit_req zone=yoyi_mcp burst=40;
         limit_req_status 429;
@@ -313,5 +387,55 @@ server {
         proxy_cache off;
         proxy_next_upstream off;
         proxy_pass http://yoyi_article_authorization;
+    }
+}
+
+# Separate cookie host for the Admin login door issuer (amendment 2026-11-05).
+# It has a certificate of its own, renewed on its own, so no other host's
+# renewal depends on this name. Forwarding headers are overwritten exactly as
+# for the Article issuer; the loopback issuer refuses missing/mismatched values.
+# The resume route's query holds a one-time secret, so both access logs here use
+# a format with no URI or query, the error log, which would print the request
+# line, is off, and the host stays off EdgeOne, whose request logs keep the
+# whole URL.
+server {
+    listen 443 ssl;
+    server_name admin-auth.example.invalid;
+    ssl_certificate /etc/yoyi/tls/admin-auth-fullchain.pem;
+    ssl_certificate_key /etc/yoyi/tls/admin-auth-privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    server_tokens off;
+    if ($host != admin-auth.example.invalid) { return 421; }
+    access_log /var/log/nginx/yoyi-admin-auth-status.log yoyi_admin_auth;
+    access_log /var/log/nginx/yoyi-security.log yoyi_status;
+    error_log /dev/null;
+    add_header Referrer-Policy no-referrer always;
+    client_max_body_size 64k;
+    limit_req zone=yoyi_admin_auth burst=30;
+    limit_req zone=yoyi_admin_auth_total burst=60;
+    limit_req_status 429;
+    location / {
+        proxy_http_version 1.1;
+        proxy_set_header Host admin-auth.example.invalid;
+        proxy_set_header X-Forwarded-Host admin-auth.example.invalid;
+        proxy_set_header X-Forwarded-Port 443;
+        proxy_set_header X-Moya-Auth-Ingress "";
+        proxy_set_header X-Moya-Client-Ip "";
+        proxy_set_header X-Moya-Auth-Relay "";
+        proxy_set_header X-Moya-Auth-Source "";
+        proxy_set_header X-Moya-Analytics-Ingress "";
+        proxy_set_header X-Moya-Analytics-Relay "";
+        proxy_set_header X-Moya-Analytics-Source "";
+        proxy_set_header X-Moya-Analytics-Excluded "";
+        proxy_set_header Forwarded "";
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header Connection "";
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 60s;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_next_upstream off;
+        proxy_pass http://yoyi_admin_authorization;
     }
 }

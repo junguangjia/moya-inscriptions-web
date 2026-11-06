@@ -20,6 +20,7 @@ import { dirname, join, resolve } from "node:path";
 import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { parseEnv } from "node:util";
 import http from "node:http";
 import https from "node:https";
 import type { JsonWebKey } from "node:crypto";
@@ -771,6 +772,109 @@ describe("Issuer database identity and verified TLS", () => {
     env.AGENT_AUTHORIZATION_DATABASE_URL =
       "postgres://admin_issuer@db.example.invalid/fixture?sslmode=require";
     expect(() => postgres(env)).toThrow("ADMIN_DATABASE_ROLE_REFUSED");
+  });
+});
+
+/**
+ * Slice O4: the tracked Production templates, read as systemd would hand them to
+ * this process and judged by the issuer's own startup checks, so a misspelt or
+ * missing setting fails here rather than at the release.
+ */
+describe("the Production templates", () => {
+  const repository = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../..",
+  );
+  const read = (name: string) => readFileSync(join(repository, name), "utf8");
+  const adminUnit = read(
+    "infra/production/systemd/yoyi-admin-authorization.service",
+  );
+  const adminFile = "infra/production/env/admin-authorization.env.example";
+  const articleFile = "infra/production/env/article-authorization.env.example";
+  /** The file, less the unit's unsets, plus what its ExecStart assigns. */
+  const launched = (
+    file: string,
+    unit: string,
+    extra: Record<string, string> = {},
+  ): NodeJS.ProcessEnv => {
+    const env = { ...parseEnv(read(file)), ...extra } as NodeJS.ProcessEnv;
+    for (const name of /^UnsetEnvironment=(.+)$/mu
+      .exec(unit)?.[1]
+      ?.split(" ") ?? [])
+      delete env[name];
+    const assigned =
+      /^ExecStart=\/usr\/bin\/env ((?:[A-Z_]+=\S+ )+)node /mu.exec(unit)?.[1];
+    expect(assigned).toBeDefined();
+    for (const assignment of assigned!.trim().split(" ")) {
+      const [name, value] = assignment.split("=");
+      env[name!] = value;
+    }
+    return env;
+  };
+
+  it("makes a configuration this issuer accepts, with every secret where it reads it", () => {
+    const env = launched(adminFile, adminUnit);
+    expect(authorizationEnabled(env)).toBe(true);
+    expect(articleAuthorizationConfigFrom(env)).toBeNull();
+    const config = authorizationConfigFrom({
+      ...env,
+      // Refused if the two issuers shared a host.
+      ARTICLE_AUTHORING_ISSUER: parseEnv(read(articleFile))
+        .ARTICLE_AUTHORING_ISSUER,
+    });
+    expect(config).toMatchObject({
+      profile: "operator",
+      host: "127.0.0.1",
+      port: 3004,
+      environment: "production",
+      issuer: env.AGENT_AUTHORIZATION_ISSUER,
+      resource: env.AGENT_AUTHORIZATION_RESOURCE,
+      consentBaseUrl: env.AGENT_AUTHORIZATION_CONSENT_URL,
+    });
+    expect([...config.clients.values()].map(({ family }) => family)).toEqual([
+      "claude",
+      "claude-code",
+      "codex",
+      "chatgpt",
+    ]);
+    // Five distinct roles on one database; the CA file exists only on the host.
+    const { AGENT_AUTHORIZATION_DATABASE_SSL_CA_FILE: ca, ...hostless } = env;
+    expect(ca).toMatch(/^\/etc\/yoyi\//u);
+    expect(adminAuthorizationPostgresFrom(config, hostless).ssl).toEqual({
+      rejectUnauthorized: true,
+    });
+    // Synthetic secrets in the places the file names: a name the issuer does not
+    // read leaves its own setting missing, and the start is refused.
+    const secrets: NodeJS.ProcessEnv = { ...env };
+    for (const name of Object.keys(secrets))
+      if (name.endsWith("_KEY"))
+        secrets[name] = name.endsWith("COOKIE_KEY")
+          ? randomBytes(32).toString("base64url")
+          : key32();
+    expect(
+      Object.keys(secrets).filter((name) => name.endsWith("_KEY")),
+    ).toHaveLength(5);
+    secrets.AGENT_AUTHORIZATION_SIGNING_JWKS_FILE = keyFile();
+    expect(() => prepareAdminAuthorizationKeys(config, secrets)).not.toThrow();
+  });
+
+  it("starts only the Admin listener, even if the file gained Article's switch", () => {
+    const env = launched(adminFile, adminUnit, {
+      ARTICLE_AUTHORING_ENABLED: "true",
+    });
+    expect(env.ARTICLE_AUTHORING_ENABLED).toBeUndefined();
+    expect(articleAuthorizationConfigFrom(env)).toBeNull();
+    expect(authorizationEnabled(env)).toBe(true);
+  });
+
+  it("leaves the Article issuer's unit and file unable to open this door", () => {
+    const env = launched(
+      articleFile,
+      read("infra/production/systemd/yoyi-article-authorization.service"),
+    );
+    expect(env.AGENT_AUTHORIZATION_ENABLED).toBe("false");
+    expect(env.ADMIN_MCP_OAUTH_ENABLED).toBeUndefined();
+    expect(authorizationEnabled(env)).toBe(false);
   });
 });
 
