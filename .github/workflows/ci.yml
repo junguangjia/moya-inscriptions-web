@@ -78,6 +78,11 @@ jobs:
         run: >-
           node scripts/verify-task.mjs --mode lightweight --output
           "$RUNNER_TEMP/workflow-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+      - name: Diagnose failing script tests (temporary, names and assertions only)
+        if: ${{ failure() }}
+        run: >-
+          grep -E -A12 "^(not ok|✖ )" "$RUNNER_TEMP/workflow-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/validation.private.log"
+          | grep -E "^(not ok|✖ )|AssertionError|Error:|expected|actual|  at .*test\.mjs" | head -80 || true
       - name: Preserve lightweight validation evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
