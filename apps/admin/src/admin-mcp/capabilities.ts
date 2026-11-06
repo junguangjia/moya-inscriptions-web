@@ -65,6 +65,13 @@ const bytesOf = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 const TOOLS_LIST_CEILING_BYTES = ADMIN_MCP_TOKEN_BUDGET * 3;
 
 /**
+ * What JSON-RPC wraps the tools array in on the wire, for the official client's first
+ * request after initialize. The measures here leave it out.
+ */
+const TOOLS_LIST_FRAME_BYTES =
+  bytesOf({ result: { tools: [] }, jsonrpc: "2.0", id: 1 }) - bytesOf([]);
+
+/**
  * The share of the text cap past which the registry test fails, so the index is paged
  * by family before it is cut (extensibility plan 2.11), not after.
  */
@@ -81,6 +88,7 @@ const EVERY_SWITCH = { dm: true, evidence: true, rawIp: true, selfOnly: true };
 export const adminMcpBudgets = () => ({
   toolsList: {
     ceiling: TOOLS_LIST_CEILING_BYTES,
+    frame: TOOLS_LIST_FRAME_BYTES,
     profiles: ADMIN_MCP_TOOL_PROFILES.map((profile) => ({
       profile,
       bytes: bytesOf(toolListingFor(profile, false)),
@@ -116,7 +124,7 @@ const budgetSection = () => {
   const tools = toolsList.tools.map(
     ({ name, bytes }) => `| \`${name}\` | ${bytes} |`,
   );
-  return `## Budgets\n\nBytes of JSON as a client receives it. tools/list counts against \`ADMIN_MCP_TOKEN_BUDGET\` at 3 bytes a token. The \`admin_actions\` index counts against the ${index.cap}-byte text cap, measured on every op tool with every switch open and no AI token placed, its largest form; the registry test fails past ${index.alarm} bytes, ${ADMIN_ACTIONS_INDEX_ALARM_SHARE * 100}% of the cap.\n\n| Measure | Bytes | Ceiling | Used | Left |\n| --- | --- | --- | --- | --- |\n${rows.join("\n")}\n\n| Tool | Bytes listed |\n| --- | --- |\n${tools.join("\n")}\n`;
+  return `## Budgets\n\nBytes of JSON. A tools/list figure is the JSON of the \`tools\` array alone, without the JSON-RPC frame, which adds ${toolsList.frame} bytes on the wire; it counts against \`ADMIN_MCP_TOKEN_BUDGET\` at 3 bytes a token. The \`admin_actions\` index is the text of its tool result, against the ${index.cap}-byte text cap, measured on every op tool with every switch open and no AI token placed, its largest form. Only the index has an alarm: the registry test fails past ${index.alarm} bytes, ${ADMIN_ACTIONS_INDEX_ALARM_SHARE * 100}% of the cap.\n\n| Measure | Bytes | Ceiling | Used | Left |\n| --- | --- | --- | --- | --- |\n${rows.join("\n")}\n\n| Tool | Bytes listed |\n| --- | --- |\n${tools.join("\n")}\n`;
 };
 
 const familyOf = (name: AdminOpName) => name.slice(0, name.indexOf("."));

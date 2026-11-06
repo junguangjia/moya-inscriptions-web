@@ -3,7 +3,7 @@ import type { z } from "zod";
 /**
  * A Backend answer on the AI path, read tolerantly (extensibility plan 2.4). The Admin
  * and the Backend ship apart, so a field the Backend adds first must change nothing
- * here: a key the strict schema does not name is dropped, never passed on, and the same
+ * here: a key the strict schema names nowhere is dropped, never passed on, and the same
  * strict schema then reads the rest. A field AI may not read therefore never reaches it.
  * Anything else wrong is a real mismatch, and the caller answers it by name. The
  * Backend's own tests keep producing these answers against the strict schema.
@@ -20,10 +20,45 @@ interface UnknownKeys {
 const droppedCount = (found: readonly UnknownKeys[]) =>
   found.reduce((sum, { keys }) => sum + keys.length, 0);
 
+const startsWith = (
+  path: readonly PropertyKey[],
+  prefix: readonly PropertyKey[],
+) =>
+  prefix.length <= path.length &&
+  prefix.every((part, index) => part === path[index]);
+
+/**
+ * Whether a branch's issues show it does not name `key` at `at`: it found that key, or
+ * one on the way there, unknown, or it holds no object there at all. A branch whose
+ * issues show neither is taken to name it.
+ */
+const leaves = (
+  issues: readonly z.core.$ZodIssue[],
+  base: readonly PropertyKey[],
+  at: readonly PropertyKey[],
+  key: string,
+): boolean =>
+  issues.some((issue) => {
+    const path = [...base, ...issue.path];
+    if (!startsWith(at, path)) return false;
+    if (issue.code === "unrecognized_keys")
+      return issue.keys.includes(
+        path.length === at.length ? key : String(at[path.length]),
+      );
+    if (issue.code === "invalid_type") return true;
+    return (
+      issue.code === "invalid_union" &&
+      issue.errors.length > 0 &&
+      issue.errors.every((branch) => leaves(branch, path, at, key))
+    );
+  });
+
 /**
  * Where the unknown keys sit, when they are all that is wrong. In a union no branch
- * passed, so the branch read is the one that passes with the fewest keys dropped, the
- * first on a tie: a smaller branch is never read into a larger answer.
+ * passed, and only a key that no branch names may go: one that a branch names, such
+ * as a withheld mark, is never dropped to read another branch. Of the branches that
+ * pass that way, the one read drops the fewest keys, the first on a tie, so a smaller
+ * branch is never read into a larger answer.
  */
 const unknownKeysOf = (
   issues: readonly z.core.$ZodIssue[],
@@ -35,9 +70,16 @@ const unknownKeysOf = (
     if (issue.code === "unrecognized_keys")
       found.push({ path, keys: issue.keys });
     else if (issue.code === "invalid_union") {
+      const namedByNone = ({ path: at, keys }: UnknownKeys) =>
+        keys.every((key) =>
+          issue.errors.every((branch) => leaves(branch, path, at, key)),
+        );
       const branches = issue.errors
         .map((branch) => unknownKeysOf(branch, path))
-        .filter((branch) => branch !== undefined);
+        .filter(
+          (branch): branch is readonly UnknownKeys[] =>
+            branch !== undefined && branch.every(namedByNone),
+        );
       const fewest = branches.reduce<readonly UnknownKeys[] | undefined>(
         (best, branch) =>
           best === undefined || droppedCount(branch) < droppedCount(best)

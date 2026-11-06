@@ -240,8 +240,12 @@ const reportWrite =
           { id: command.id },
           context.req,
         )) as CommunityItem;
-      } catch {
-        throw readBackFailed();
+      } catch (failure) {
+        // A replay would read the same unreadable answer, so that one is named.
+        throw failure instanceof CommunityOperatorError &&
+          failure.code === BACKEND_CONTRACT_MISMATCH
+          ? new Error(BACKEND_CONTRACT_MISMATCH)
+          : readBackFailed();
       }
       if (isOwnerOnly(report) || !shows(report, command))
         throw writeFailure(error);

@@ -5,6 +5,9 @@ import path from "node:path";
 
 import {
   ADMIN_ACTIONS_MAX_OPS,
+  ADMIN_ANALYTICS_REPORTS,
+  ADMIN_CMS_RECORD_TYPES,
+  ADMIN_COMMUNITY_RECORD_TYPES,
   ADMIN_MCP_NATIVE_TOOLS,
   ADMIN_MCP_RESULT_SCHEMA,
   ADMIN_MCP_TEXT_CAP_BYTES,
@@ -13,6 +16,11 @@ import {
   ADMIN_OP_ALIASES,
   ADMIN_OP_NAMES,
   ADMIN_OP_TOOLS,
+  AI_FIND_SOURCES,
+  AI_LOOKUP_TYPES,
+  AI_SETTLEMENT_TYPES,
+  ANALYTICS_CANONICAL_DIMENSIONS,
+  ANALYTICS_UMAMI_DIMENSIONS,
   adminActionDetailSchema,
   adminCommunityWriteEchoSchema,
   adminMcpEnvelopeSchema,
@@ -1052,6 +1060,76 @@ describe("size gates", () => {
       expect(estimatedTokens(listing)).toBeLessThanOrEqual(
         ADMIN_MCP_TOKEN_BUDGET,
       );
+    },
+  );
+
+  // What grows with the registry: op and tool names, record types, reports and
+  // dimensions, and what find, lookup and settlement read.
+  const GROWING: ReadonlySet<unknown> = new Set([
+    ...ADMIN_OP_NAMES,
+    ...ADMIN_OP_TOOLS,
+    ...ADMIN_MCP_NATIVE_TOOLS,
+    ...ADMIN_CMS_RECORD_TYPES,
+    ...ADMIN_COMMUNITY_RECORD_TYPES,
+    ...ADMIN_ANALYTICS_REPORTS,
+    ...ANALYTICS_CANONICAL_DIMENSIONS,
+    ...ANALYTICS_UMAMI_DIMENSIONS,
+    ...AI_FIND_SOURCES,
+    ...AI_LOOKUP_TYPES,
+    ...AI_SETTLEMENT_TYPES,
+  ]);
+  const ENUM_MAX_VALUES = 8;
+
+  /**
+   * Every closed choice in a listed input, wherever it sits, by where: an enum, or a
+   * union of constants, which is one by another name.
+   */
+  const enumsOf = (
+    schema: unknown,
+    at: string,
+  ): { at: string; values: readonly unknown[] }[] => {
+    if (schema === null || typeof schema !== "object") return [];
+    const { anyOf, oneOf } = schema as { anyOf?: unknown; oneOf?: unknown };
+    // Every const option of a union is a listed choice, even beside options
+    // that are not: number | "a" | "b" still lists "a" and "b".
+    const constants = [anyOf, oneOf].flatMap((options) => {
+      const values = Array.isArray(options)
+        ? options
+            .filter(
+              (option) =>
+                option !== null &&
+                typeof option === "object" &&
+                "const" in option,
+            )
+            .map((option: { const: unknown }) => option.const)
+        : [];
+      return values.length > 0 ? [{ at, values }] : [];
+    });
+    return [
+      ...constants,
+      ...Object.entries(schema).flatMap(([key, value]) =>
+        key === "enum" && Array.isArray(value)
+          ? [{ at, values: value as readonly unknown[] }]
+          : enumsOf(value, `${at}/${key}`),
+      ),
+    ];
+  };
+
+  // Extending guide rule 3: the runtime check holds such a choice, not tools/list.
+  it.each(ADMIN_MCP_TOOL_PROFILES)(
+    "lists no enum that grows with the registry, nor one past eight values, for the %s profile",
+    (profile) => {
+      const found = toolListingFor(profile, false).flatMap((listing) =>
+        enumsOf(listing.inputSchema, listing.name),
+      );
+      expect(found.length).toBeGreaterThan(0);
+      for (const { at, values } of found) {
+        expect(values.length, at).toBeLessThanOrEqual(ENUM_MAX_VALUES);
+        expect(
+          values.filter((value) => GROWING.has(value)),
+          at,
+        ).toEqual([]);
+      }
     },
   );
 

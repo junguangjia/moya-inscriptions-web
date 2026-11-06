@@ -396,27 +396,53 @@ const allowedKeysAt = (
     : undefined;
 };
 
-/** The schema's own choices for a closed value, which tools/list may show as a string. */
+/** A closed value's choices, and in a union those of each branch that has them. */
+const choicesOf = (issue: z.core.$ZodIssue): readonly unknown[] =>
+  issue.code === "invalid_value"
+    ? issue.values
+    : issue.code === "invalid_union"
+      ? issue.errors.flatMap((branch) =>
+          branch.filter(({ path }) => path.length === 0).flatMap(choicesOf),
+        )
+      : [];
+
+/**
+ * The schema's own choices for a closed value, which tools/list may show as a string.
+ * Named once per path and choices in one answer, so a slip in a shared input that
+ * every target repeats does not repeat them.
+ */
 const allowedValuesOf = (
   issue: z.core.$ZodIssue,
-): readonly string[] | undefined =>
-  issue.code === "invalid_value" &&
-  issue.values.every((value) => typeof value === "string")
-    ? (issue.values as readonly string[])
-    : undefined;
+  named: Set<string>,
+): readonly string[] | undefined => {
+  const choices = [...new Set(choicesOf(issue))];
+  if (
+    choices.length === 0 ||
+    !choices.every((value): value is string => typeof value === "string")
+  )
+    return undefined;
+  const once = JSON.stringify([issue.path.map(String), choices]);
+  if (named.has(once)) return undefined;
+  named.add(once);
+  return choices;
+};
 
-/** Names the failing input by path and by what the schema allows, never by value. */
+/**
+ * Names the failing input by path and by what the schema allows, never by value. The
+ * calls behind one answer share `named`.
+ */
 export const issuesOfError = (
   error: z.ZodError,
   schema: unknown,
   prefix: readonly string[] = [],
+  named = new Set<string>(),
 ): readonly AdminMcpIssue[] =>
   error.issues.map((issue) => {
     const allowedKeys =
       issue.code === "unrecognized_keys"
         ? allowedKeysAt(schema, issue.path)
         : undefined;
-    const allowedValues = allowedValuesOf(issue);
+    const allowedValues = allowedValuesOf(issue, named);
     return {
       path: [
         ...prefix,

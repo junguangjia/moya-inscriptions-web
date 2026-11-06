@@ -3355,6 +3355,73 @@ describe("a Backend released first, with a field this Admin does not know", () =
     ).toBe(1);
   });
 
+  it("names a read-back it cannot read after a conflict, with no replay to offer", async () => {
+    const report = await newStandardReport(
+      await newWork(await newUser()),
+      await newUser(),
+    );
+    const answer = await withStubBackend(
+      (request, response) => {
+        const conflict = request.method === "POST";
+        response.writeHead(conflict ? 409 : 200, {
+          "content-type": "application/json",
+        });
+        response.end(
+          JSON.stringify(
+            conflict
+              ? { error: { status: 409, code: "STATE_CONFLICT" } }
+              : { id: report, version: "many" },
+          ),
+        );
+      },
+      () =>
+        execute("community.decide-report", {
+          id: report,
+          expectedVersion: 1,
+          action: "retain",
+          reason: REASON,
+        }),
+    );
+    expect(answer).toMatchObject({
+      ok: false,
+      code: "BACKEND_CONTRACT_MISMATCH",
+      data: { unknown: [{ code: "BACKEND_CONTRACT_MISMATCH" }] },
+    });
+    expect(answer).not.toHaveProperty("retryable");
+    expect(answer).not.toHaveProperty("next");
+  });
+
+  it("names a settlement it cannot read once the write committed, never as queued", async () => {
+    const user = await newUser();
+    const garbled = (body: unknown) =>
+      body !== null && typeof body === "object" && "failedJobs" in body
+        ? { ...(body as Json), open: "none" }
+        : body;
+    const answer = await relayed(garbled, () =>
+      execute("community.moderate-user", {
+        id: user,
+        action: "suspend",
+        reason: REASON,
+      }),
+    );
+    expect(answer).toMatchObject({
+      ok: false,
+      code: "BACKEND_CONTRACT_MISMATCH",
+      data: { failed: [{ code: "BACKEND_CONTRACT_MISMATCH" }] },
+    });
+    expect(answer).not.toHaveProperty("retryable");
+    expect(answer).not.toHaveProperty("next");
+    expect(answer.data).not.toHaveProperty("queued");
+    // The write did commit, and the answer's hint says it may have.
+    expect(
+      (
+        await one("SELECT status FROM community.public_users WHERE id=$1", [
+          user,
+        ])
+      ).status,
+    ).toBe("suspended");
+  });
+
   it("names the Backend's call for a run as a preview, and nothing ran", async () => {
     const stub = createServer((_request, response) => {
       response.writeHead(403, { "content-type": "application/json" });

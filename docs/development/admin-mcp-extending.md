@@ -4,8 +4,8 @@ What a new feature touches in the AI layer of the Admin, and what stops a touch
 point from being forgotten. Scope and behaviour stay in
 [`docs/development/admin-mcp-completion-v1.md`](admin-mcp-completion-v1.md);
 this page only lists the places.
-`tests/unit/architecture/admin-mcp-extending.test.ts` fails when a file or table
-named here no longer exists.
+`tests/unit/architecture/admin-mcp-extending.test.ts` fails when a file named
+here no longer exists, or its file no longer declares a table named here.
 
 - **forced**: typecheck fails until it is done.
 - **guarded**: the named test fails until it is done.
@@ -19,7 +19,8 @@ Rules for every feature:
    planned.
 2. Shared types live only in `packages/contracts`.
 3. No enum that grows with the registry goes on tools/list; the runtime check
-   holds it.
+   holds it. `tests/unit/backend/admin-mcp-registry.test.ts` refuses one taken
+   from a registry list, and any past eight values.
 4. New behaviour is a new Behavior Matrix row by amendment. A frozen row does
    not change.
 5. A migration only adds, and its id sorts after main's.

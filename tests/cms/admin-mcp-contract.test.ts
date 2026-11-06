@@ -5,7 +5,9 @@ import {
   ADMIN_ANALYTICS_REPORTS,
   ADMIN_CMS_RECORD_TYPES,
   ADMIN_COMMUNITY_RECORD_TYPES,
+  ADMIN_EXECUTE_MAX_TARGETS,
   ADMIN_MCP_CONTRACT_VERSION,
+  ADMIN_MCP_TEXT_CAP_BYTES,
   ADMIN_MCP_TOKEN_BUDGET,
   ADMIN_MCP_TOOL_PROFILES,
   adminMcpEnvelopeSchema,
@@ -22,6 +24,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   actionsCatalogHash,
+  adminMcpBudgets,
+  CODE_GUIDE,
   contractOf,
   toolListingFor,
 } from "admin/admin-mcp";
@@ -188,6 +192,11 @@ describe("tools/list as the official client receives it", () => {
         toolListingFor(profile, false).map(({ name }) => name),
       );
       expect(bytes).toBeLessThanOrEqual(CEILING_BYTES);
+      // The capability document counts the tools array alone, the frame apart.
+      const { toolsList } = adminMcpBudgets();
+      expect(bytes - toolsList.frame).toBe(
+        toolsList.profiles.find((row) => row.profile === profile)!.bytes,
+      );
     },
   );
 
@@ -221,7 +230,85 @@ describe("tools/list as the official client receives it", () => {
             { path: [...path], code: "invalid_value", allowedValues: allowed },
           ],
         });
+      // A version is a number or one of two words, and tools/list shows a string.
+      for (const name of ["from", "to"])
+        expect(
+          await callOn(client, "admin_get", {
+            type: "catalog",
+            id: 1,
+            view: "diff",
+            [name]: "latest",
+          }),
+          name,
+        ).toMatchObject({
+          ok: false,
+          code: "INPUT_INVALID",
+          issues: [
+            {
+              path: [name],
+              code: "invalid_union",
+              allowedValues: ["draft", "published"],
+            },
+          ],
+        });
     });
+  });
+
+  it("names a shared input's choices once, so a whole batch's refusal fits uncut", async () => {
+    // Nothing reaches the Backend: the input is refused before any effect.
+    vi.stubEnv("COMMUNITY_OPERATOR_AI_TOKEN", "synthetic-unused");
+    try {
+      await withClient("full", async (client) => {
+        for (const [op, prefix] of [
+          ["community.moderate-user", "user"],
+          ["community.moderate-comment", "comment"],
+        ] as const) {
+          const result = await client.callTool({
+            name: "admin_execute",
+            arguments: {
+              requestId: randomUUID(),
+              op,
+              targets: Array.from(
+                { length: ADMIN_EXECUTE_MAX_TARGETS },
+                (_, index) => ({
+                  id: `${prefix}-${index.toString(16).padStart(32, "0")}`,
+                }),
+              ),
+              input: { action: "ban", reason: "Synthetic reason" },
+            },
+          });
+          const { text } = (result.content as { text: string }[])[0]!;
+          const answer = JSON.parse(text) as Json;
+          expect(Buffer.byteLength(text), op).toBeLessThanOrEqual(
+            ADMIN_MCP_TEXT_CAP_BYTES,
+          );
+          expect(answer, op).toMatchObject({
+            ok: false,
+            code: "INPUT_INVALID",
+            hint: CODE_GUIDE.INPUT_INVALID.hint,
+          });
+          expect(answer.meta, op).not.toHaveProperty("truncated");
+          expect(answer, op).not.toHaveProperty("remaining");
+          const issues = answer.issues as Json[];
+          expect(issues, op).toHaveLength(ADMIN_EXECUTE_MAX_TARGETS);
+          expect(
+            issues.every(
+              ({ path, code }, index) =>
+                code === "invalid_value" &&
+                JSON.stringify(path) ===
+                  JSON.stringify(["targets", String(index), "action"]),
+            ),
+            op,
+          ).toBe(true);
+          expect(
+            issues.filter((issue) => "allowedValues" in issue),
+            op,
+          ).toEqual([expect.objectContaining({ path: issues[0]!.path })]);
+        }
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

@@ -1084,19 +1084,26 @@ tests/unit/architecture/admin-mcp-extending.test.ts:
   fails typecheck until it says which. `NOT_BUILT`, in the tests, files every op
   with no body under its slice, and a test holds the two to each other. Nothing
   answers differently.
-- Every built op on an AI credential runs its example over a recording call, and
-  each route it calls has a row of its class, on its credential, naming the
-  self-only subject of its target where it has one. The four irreversible
-  community routes wait in `AI_ROUTE_PENDING` for S8. The AI's JSON call now
-  asks the route table before any fetch and refuses an unlisted route with the
-  Backend's own `AI_ROUTE_FORBIDDEN`, 403.
+- Every built op on an AI credential runs its example over a call that records
+  and answers as an unreachable Backend, so only its first call is checked,
+  never a later one such as a write's read-back. That route has a row of its
+  class, on its credential, naming the self-only subject of a write's target
+  where it has one, and for a read the subject a table in the test gives it, a
+  comment or a work revision, or none. The four irreversible community routes
+  wait in `AI_ROUTE_PENDING` for S8. The AI's JSON call now asks the route table
+  before any fetch and refuses an unlisted route with the Backend's own
+  `AI_ROUTE_FORBIDDEN`, 403.
 - The capability document carries a budget table, tools/list per profile and per
   tool and the `admin_actions` index, and the registry test fails once the index
-  passes 80% of the text cap. The index is measured in its largest form, with no
-  AI token placed, so the document does not depend on the process.
+  passes 80% of the text cap; tools/list has no such alarm. The index is
+  measured in its largest form, with no AI token placed, so the document does
+  not depend on the process. A tools/list figure there is the tools array alone;
+  the JSON-RPC frame adds 44 bytes on the wire, which the contract suite checks.
+  The registry test also refuses an enum on tools/list taken from a registry
+  list, and any past eight values.
 - docs/development/admin-mcp-extending.md lists the touch points of four kinds
   of change, each marked forced, guarded or review, and its test fails when it
-  names a file or table that is gone.
+  names a file that is gone or a table its file no longer declares.
 
 Recorded when built in E1, room and compatibility, tests in
 tests/cms/admin-mcp-contract.test.ts, the added blocks of
@@ -1114,21 +1121,32 @@ and an op named on the wrong tool.
   object, `from` and `to` as an integer or a string and `fields` as strings.
   Each keeps its JSON type, because a client may read a missing one as a string.
   Descriptions are unchanged. The runtime check is as strict as it was, and
-  `INPUT_INVALID` now names a closed value's choices in `allowedValues`. As the
-  official client receives it, full and operate went from 11,939 to 11,090 bytes
-  and read from 10,471 to 9,622, 849 bytes each; the ceiling stays 12,000. The
-  reservation test, the listing plus 1,000 bytes for each tool still to come, is
-  not in: three tools need the listing at 9,000 bytes or less, and it is 2,046
-  over. That room comes from the descriptions, which S8 plans to cut.
-- On the AI path a Backend answer loses any key its schema does not name, and
+  `INPUT_INVALID` now names a closed value's choices in `allowedValues`, a
+  union's from its branches, so `from` and `to` name `draft` and `published`. An
+  answer names them once per path, so a slip in a batch's shared input names
+  them once and not once a target. As the official client receives it, with its
+  JSON-RPC frame, full and operate went from 11,939 to 11,090 bytes and read
+  from 10,471 to 9,622, 849 bytes each; the ceiling stays 12,000. The capability
+  document counts the tools array alone, 44 bytes fewer. The reservation test,
+  the listing plus 1,000 bytes for each tool still to come, is not in: three
+  tools need the listing at 9,000 bytes or less, and it is 2,090 over. That room
+  comes from the descriptions, which S8 plans to cut.
+- On the AI path a Backend answer loses any key its schema names nowhere, and
   the same strict schema reads the rest, so either side may be released first
-  with a new answer field and no unknown field reaches a tool. A union is read
-  by the branch that matches with the fewest keys dropped. Anything else wrong
-  answers `BACKEND_CONTRACT_MISMATCH`, which retrying cannot change. On a write
-  it is an unknown target and never a failed one, with no `next`, because the
-  write may have committed and a replay reads the same answer; `admin_job` files
-  it as refused. The Backend's `AI_RUN_REQUIRED` answers `PREVIEW_REQUIRED`, as
-  the Admin does for the same input.
+  with a new answer field and no unknown field reaches a tool. In a union only a
+  key that no branch names is dropped, so a branch's own field, such as an
+  owner-only mark, is never dropped to read another branch; of the branches that
+  then match, the one read drops the fewest keys. Anything else wrong answers
+  `BACKEND_CONTRACT_MISMATCH`, which retrying cannot change. A write whose own
+  answer cannot be read is an unknown target and never a failed one, with no
+  `next`, because the write may have committed and a replay reads the same
+  answer; so is a guarded write's read-back after a conflict. A settlement read
+  it cannot read, once the write committed, files the target as failed under
+  that code, as `MEDIA_JOB_FAILED` does for a state that did commit, with no
+  `next`, and `admin_job` files it refused. A body that is not JSON, or never
+  arrives, is a failed read as before: analytics answers
+  `ANALYTICS_UNAVAILABLE`, `reply_invalid`. The Backend's `AI_RUN_REQUIRED`
+  answers `PREVIEW_REQUIRED`, as the Admin does for the same input.
 - `ADMIN_MCP_CONTRACT_VERSION` is serverInfo's version, and `admin_whoami` on
   the native path gives `contract`: that version, a hash of the op catalog
   (names, tools, classes, inputs) and a hash of this credential's tools/list.

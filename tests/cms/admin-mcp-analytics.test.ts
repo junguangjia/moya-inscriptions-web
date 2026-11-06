@@ -2660,6 +2660,24 @@ describe("the canonical path", () => {
     }
   });
 
+  it("reads a reply that is not JSON as a failed read, which a retry may get past", async () => {
+    const stub = await startBackendStub((_path, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end("<html>synthetic proxy page</html>");
+    });
+    try {
+      vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", stub.origin);
+      expect(await call({ report: "status" })).toMatchObject({
+        ok: false,
+        code: "ANALYTICS_UNAVAILABLE",
+        retryable: true,
+        data: { reason: "reply_invalid" },
+      });
+    } finally {
+      await stub.close();
+    }
+  });
+
   it("reads a reply carrying a field it does not know, and the field goes nowhere", async () => {
     const unknown = `unknownfield${randomUUID().replaceAll("-", "")}`;
     const relay = await relayRewriting(backendOrigin, (body) =>

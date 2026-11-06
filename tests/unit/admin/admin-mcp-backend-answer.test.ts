@@ -1,7 +1,12 @@
 import {
   adminJobRefSchema,
   aiCountResultSchema,
+  SELF_ONLY_OWNER_REVIEW,
 } from "@moya/contracts/internal/admin-mcp";
+import {
+  operatorReportAiAnswerSchema,
+  operatorReportAiPageSchema,
+} from "@moya/contracts/internal/community-operator";
 import { describe, expect, it } from "vitest";
 
 import { readBackendAnswer } from "admin/admin-mcp";
@@ -55,6 +60,63 @@ describe("a Backend answer on the AI path", () => {
     expect(
       readBackendAnswer(adminJobRefSchema, { ...subject, [UNKNOWN]: 1 })?.data,
     ).toEqual(subject);
+  });
+
+  it("never drops a key another branch of the union names, so a withheld mark is not lost", () => {
+    const at = "2026-11-01T00:00:00.000Z";
+    const report = {
+      id: "report-1",
+      target: { type: "work", id: "work-1" },
+      canonicalPath: "/w/1",
+      kind: "standard",
+      reason: null,
+      description: "Synthetic description",
+      status: "open",
+      urgent: false,
+      version: 1,
+      createdAt: at,
+      updatedAt: at,
+      decision: null,
+      appeal: null,
+      messages: [],
+      allowedActions: [],
+      reporterId: null,
+      affectedUserId: null,
+      legalHold: false,
+      snapshot: { title: "Synthetic title" },
+      materials: [],
+      history: [],
+      notificationFailures: 0,
+      claimant: null,
+      evidence: [],
+      redacted: [],
+    };
+    const page = (item: object) => ({
+      items: [item],
+      total: 1,
+      page: 1,
+      pageSize: 20,
+    });
+    // The whole report reads, and so does one with a key no branch names.
+    expect(
+      readBackendAnswer(operatorReportAiAnswerSchema, report)?.data,
+    ).toEqual(report);
+    expect(
+      readBackendAnswer(
+        operatorReportAiPageSchema,
+        page({ ...report, [UNKNOWN]: 1 }),
+      )?.data,
+    ).toEqual(page(report));
+    // The owner-only branch names these, so the report branch may not drop them.
+    const marked = { ...report, ownerOnly: true, code: SELF_ONLY_OWNER_REVIEW };
+    for (const sent of [marked, { ...report, ownerOnly: true }]) {
+      expect(
+        readBackendAnswer(operatorReportAiAnswerSchema, sent),
+      ).toBeUndefined();
+      expect(
+        readBackendAnswer(operatorReportAiPageSchema, page(sent)),
+      ).toBeUndefined();
+    }
   });
 
   it("refuses a real mismatch, with or without a key it does not know", () => {

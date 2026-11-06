@@ -2,6 +2,7 @@ import {
   ADMIN_OP_NAMES,
   aiOperatorRouteFor,
   type AdminMcpSensitiveCategory,
+  type AdminOpName,
   type AiOperatorRoute,
   type AiOperatorRouteClass,
 } from "@moya/contracts/internal/admin-mcp";
@@ -19,8 +20,10 @@ import { AI_ROUTE_PENDING, NOT_BUILT } from "./admin-mcp-not-built.js";
 // Every op that calls the Backend on an AI credential has its row in AI_OPERATOR_ROUTES,
 // of its own class and on its own credential, so a built op is never one the Backend
 // always refuses. Each op runs its own example over a call that records and answers as
-// an unreachable Backend, so the first call it makes is the one checked. An op not built
-// yet runs its route's definition, and its route has a row or is pending for its slice.
+// an unreachable Backend, so the first call it makes is the one checked, and a later
+// one, such as a write's read-back, is not. That row withholds a self-only record: a
+// write's by its target, a read's by READ_SELF_ONLY. An op not built yet runs its
+// route's definition, and its route has a row or is pending for its slice.
 
 const recorded = vi.hoisted(
   () => [] as { credential: string; method: string; path: string }[],
@@ -65,6 +68,18 @@ const SELF_ONLY_SUBJECTS: readonly string[] = [
   "report",
   "publishing_job",
 ] satisfies readonly NonNullable<AiOperatorRoute["selfOnly"]>[];
+
+/**
+ * A read has no target, so this names what its route withholds while self-only, and a
+ * read not here calls a route that withholds nothing by its path. A report is withheld
+ * inside its answer, as an owner-only entry, so its route names none.
+ */
+const READ_SELF_ONLY: Readonly<
+  Partial<Record<AdminOpName, NonNullable<AiOperatorRoute["selfOnly"]>>>
+> = {
+  "community.read-comment": "comment",
+  "community.read-work-submission": "work_revision",
+};
 
 /** As callAiOperator sends it: under internal/community, query and all. */
 const rowOf = ({ method, path }: { method: string; path: string }) => {
@@ -134,7 +149,9 @@ describe("a built op on an AI credential", () => {
         expect(row!.credentials, at).toContain(call.credential);
         expect(call.credential, at).toBe(entry.credential);
         expect(row!.klass, at).toBe(routeClassOf(entry));
-        if (subject !== undefined && SELF_ONLY_SUBJECTS.includes(subject))
+        if (entry.klass === "read")
+          expect(row!.selfOnly, at).toBe(READ_SELF_ONLY[op]);
+        else if (subject !== undefined && SELF_ONLY_SUBJECTS.includes(subject))
           expect(row!.selfOnly, at).toBe(subject);
       }
     },

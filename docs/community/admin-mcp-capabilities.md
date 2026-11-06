@@ -13,11 +13,12 @@ reports `not_available`.
 
 ## Budgets
 
-Bytes of JSON as a client receives it. tools/list counts against
-`ADMIN_MCP_TOKEN_BUDGET` at 3 bytes a token. The `admin_actions` index counts
-against the 9000-byte text cap, measured on every op tool with every switch open
-and no AI token placed, its largest form; the registry test fails past 7200
-bytes, 80% of the cap.
+Bytes of JSON. A tools/list figure is the JSON of the `tools` array alone,
+without the JSON-RPC frame, which adds 44 bytes on the wire; it counts against
+`ADMIN_MCP_TOKEN_BUDGET` at 3 bytes a token. The `admin_actions` index is the
+text of its tool result, against the 9000-byte text cap, measured on every op
+tool with every switch open and no AI token placed, its largest form. Only the
+index has an alarm: the registry test fails past 7200 bytes, 80% of the cap.
 
 | Measure                       | Bytes | Ceiling | Used | Left |
 | ----------------------------- | ----- | ------- | ---- | ---- |

@@ -14,10 +14,12 @@ import type {
   AdminCmsRecordType,
   AdminMcpNext,
   AdminOpName,
+  AdminOpSettlement,
 } from "@moya/contracts/internal/admin-mcp";
 import type { PayloadRequest } from "payload";
 import { z } from "zod";
 
+import { CommunityOperatorError } from "../../community/backend";
 import { writeAuditEvent } from "../audit";
 import { BACKEND_CONTRACT_MISMATCH } from "../backend-answer";
 import { EXECUTE_BUDGET_MS } from "../budget";
@@ -225,14 +227,21 @@ const settlementOf = async (
   raw: unknown,
   result: unknown,
   context: AdminOpContext,
-) => {
+): Promise<AdminOpSettlement | undefined> => {
   if (entry.completion.kind !== "async") return undefined;
   if (entry.completion.settle === undefined)
     return { ok: false, code: "QUEUED" as const, state: "accepted" };
   try {
     return await entry.completion.settle(raw, result, context);
-  } catch {
-    // The state committed, and a read that failed shows nothing about the work left.
+  } catch (error) {
+    // The state committed. An answer it cannot read reads the same on a repeat, so it
+    // is refused by name, as admin_job files it; any other failed read shows nothing
+    // about the work left.
+    if (
+      error instanceof CommunityOperatorError &&
+      error.code === BACKEND_CONTRACT_MISMATCH
+    )
+      return { ok: false, code: BACKEND_CONTRACT_MISMATCH };
     return { ok: false, code: "QUEUED" as const, state: "settlement_unread" };
   }
 };
@@ -737,7 +746,9 @@ const runOp = async (
   }));
   // Before any effect, so a slip in one target cannot leave the batch half done. The
   // operation gets what was sent and not this parse: a save reads which keys were
-  // sent, and the schema's defaults would read as clearing the rest.
+  // sent, and the schema's defaults would read as clearing the rest. A slip in the
+  // shared input names its choices once, not once a target.
+  const named = new Set<string>();
   const issues = merged.flatMap((command, index) => {
     const parsed = entry.input?.safeParse(command);
     return parsed === undefined || parsed.success
@@ -746,6 +757,7 @@ const runOp = async (
           parsed.error,
           entry.input,
           call.targets === undefined ? ["input"] : ["targets", String(index)],
+          named,
         );
   });
   if (issues.length > 0) return inputInvalidEnvelope(issues);

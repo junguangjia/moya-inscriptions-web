@@ -7,8 +7,8 @@ import { repositoryRoot } from "./workspace-scanner.js";
 
 // docs/development/admin-mcp-extending.md lists where a new feature touches the AI
 // layer. It is only worth reading while it is true: every file it names exists, every
-// table it names is still in the file beside it, and every touch point says what
-// catches it.
+// table it names is still declared in the file beside it, not merely a word there, and
+// every touch point says what catches it.
 
 const GUIDE = "docs/development/admin-mcp-extending.md";
 const guide = readFileSync(path.join(repositoryRoot, GUIDE), "utf8");
@@ -23,8 +23,15 @@ const exists = (relative: string) =>
   existsSync(path.join(repositoryRoot, relative));
 const source = (relative: string) =>
   readFileSync(path.join(repositoryRoot, relative), "utf8");
-const holdsWord = (text: string, word: string) =>
-  new RegExp(`\\b${word}\\b`, "u").test(text);
+/**
+ * Declared in the text, and not only a word in it: a binding, a function, a type or a
+ * class of that name, or a member at the start of its line, as a field is.
+ */
+const declares = (text: string, name: string) =>
+  new RegExp(
+    `\\b(?:const|let|function|type|interface|class)\\s+${name}\\b|^\\s*(?:readonly\\s+)?${name}\\??:`,
+    "mu",
+  ).test(text);
 
 /** The rows of every table with the touch-point header, as cells. */
 const touchPoints = (text: string): string[][] => {
@@ -66,28 +73,27 @@ describe("the guide to extending Admin MCP", () => {
     for (const file of named) expect(exists(file), file).toBe(true);
   });
 
-  it("finds each table in the file beside it", () => {
+  it("finds each table declared in the file beside it", () => {
     for (const [point, fileCell, tableCell] of rows) {
       const files = ticked(fileCell!).filter(isPath);
       expect(files, point).toHaveLength(1);
       const text = source(files[0]!);
       for (const table of ticked(tableCell!)) {
         expect(isIdentifier(table), `${point}: ${table}`).toBe(true);
-        expect(
-          holdsWord(text, table),
-          `${point}: ${table} in ${files[0]}`,
-        ).toBe(true);
+        expect(declares(text, table), `${point}: ${table} in ${files[0]}`).toBe(
+          true,
+        );
       }
     }
   });
 
-  it("names constants that still exist in the files it names", () => {
+  it("names constants still declared in the files it names", () => {
     const texts = named.filter((file) => /\.tsx?$/u.test(file)).map(source);
     for (const constant of ticked(guide).filter((value) =>
       /^[A-Z][A-Z0-9_]+$/u.test(value),
     ))
       expect(
-        texts.some((text) => holdsWord(text, constant)),
+        texts.some((text) => declares(text, constant)),
         constant,
       ).toBe(true);
   });
