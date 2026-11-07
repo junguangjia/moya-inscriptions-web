@@ -58,6 +58,7 @@ export const DraftsCard = ({
   accountId,
   active,
   onSettled,
+  presentation = "card",
 }: {
   /** The confirmed viewer who owns this profile. */
   readonly accountId: string;
@@ -65,6 +66,8 @@ export const DraftsCard = ({
   readonly active: boolean;
   /** Lets the masonry measure again after the card's content changed. */
   readonly onSettled?: () => void;
+  /** The calligraphy profile keeps private drafts out of the work grid. */
+  readonly presentation?: "card" | "tool";
 }) => {
   const author = useAuthors();
   const entry = usePublishingEntry();
@@ -240,55 +243,78 @@ export const DraftsCard = ({
 
   return (
     <div
-      className={styles.stack}
-      data-drafts-card-stack=""
+      className={presentation === "tool" ? styles.toolHost : styles.stack}
+      data-drafts-card-stack={presentation === "card" ? "" : undefined}
       data-desktop-drafts={desktopSlot ? "" : undefined}
     >
-      <span
-        aria-hidden="true"
-        className={styles.stackLayer}
-        data-layer="back"
-      />
-      <span
-        aria-hidden="true"
-        className={styles.stackLayer}
-        data-layer="middle"
-      />
-      <article
-        className={`${homeStyles.card} ${homeStyles.feedCard}`}
-        data-drafts-card=""
-        data-drafts-count={state.status === "ready" ? state.total : undefined}
-        role="listitem"
-      >
-        {state.status !== "ready" ? (
-          <div aria-hidden="true" className={styles.cardCover} />
-        ) : (
-          <CoverThumb
-            className={styles.cardCover}
-            maximum={120}
-            onSettled={onSettled}
-            src={newest?.coverSrc ?? null}
-            text={newest === null ? "" : newest.excerpt || newest.title}
-            textClassName={styles.coverText}
-          />
-        )}
-        <div className={homeStyles.cardBody}>
-          <h3 className={homeStyles.cardTitle}>{label}</h3>
-          <p className={`${homeStyles.cardMetadata} ${styles.cardMeta}`}>
-            {detail}
-          </p>
-        </div>
+      {presentation === "tool" ? (
         <button
           ref={openerRef}
-          aria-haspopup="dialog"
-          aria-label={`${label}，${detail}`}
-          className={homeStyles.cardAction}
-          onClick={() => {
-            setPicker(true);
-          }}
           type="button"
-        />
-      </article>
+          className={styles.tool}
+          data-drafts-tool=""
+          data-drafts-count={state.status === "ready" ? state.total : undefined}
+          aria-haspopup="dialog"
+          aria-label={`${label}，${text}`}
+          title={text}
+          onClick={() => setPicker(true)}
+        >
+          <span>{label}</span>
+          {state.status === "ready" && state.total > 0 ? (
+            <span>{state.total}</span>
+          ) : null}
+        </button>
+      ) : (
+        <>
+          <span
+            aria-hidden="true"
+            className={styles.stackLayer}
+            data-layer="back"
+          />
+          <span
+            aria-hidden="true"
+            className={styles.stackLayer}
+            data-layer="middle"
+          />
+          <article
+            className={`${homeStyles.card} ${homeStyles.feedCard}`}
+            data-drafts-card=""
+            data-drafts-count={
+              state.status === "ready" ? state.total : undefined
+            }
+            role="listitem"
+          >
+            {state.status !== "ready" ? (
+              <div aria-hidden="true" className={styles.cardCover} />
+            ) : (
+              <CoverThumb
+                className={styles.cardCover}
+                maximum={120}
+                onSettled={onSettled}
+                src={newest?.coverSrc ?? null}
+                text={newest === null ? "" : newest.excerpt || newest.title}
+                textClassName={styles.coverText}
+              />
+            )}
+            <div className={homeStyles.cardBody}>
+              <h3 className={homeStyles.cardTitle}>{label}</h3>
+              <p className={`${homeStyles.cardMetadata} ${styles.cardMeta}`}>
+                {detail}
+              </p>
+            </div>
+            <button
+              ref={openerRef}
+              aria-haspopup="dialog"
+              aria-label={`${label}，${detail}`}
+              className={homeStyles.cardAction}
+              onClick={() => {
+                setPicker(true);
+              }}
+              type="button"
+            />
+          </article>
+        </>
+      )}
       {picker
         ? // Outside the tab pager's DOM, so its swipe engine never sees the
           // picker's gestures; wheel events stop here for the same reason.

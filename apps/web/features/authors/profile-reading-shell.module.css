@@ -1,0 +1,608 @@
+/*
+ * #356 reading-shell draft. Not applied to the worktree.
+ *
+ * Scope: the real AuthorProfile root carries data-profile-reading and
+ * data-reading-platform="phone" | "tablet" | "pc".
+ * The existing profileCover + .background is a DIRECT child of that root.
+ * The normal-mode classes/rules are intentionally not changed here.
+ * Outer scroll ownership stays with the existing page/overlay/shell.
+ */
+
+.root[data-profile-reading] {
+  --profile-reading-header-height: calc(44px + env(safe-area-inset-top));
+  --profile-header-height: var(--profile-reading-header-height);
+  --profile-reading-author-width: 224px;
+  isolation: isolate;
+  min-width: 0;
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-page);
+}
+
+/* No root overflow rule: an overlay must keep its existing vertical scroller. */
+.root[data-profile-reading] > .header {
+  --profile-header-height: var(--profile-reading-header-height);
+  position: sticky;
+  z-index: 5;
+  top: 0;
+  box-sizing: border-box;
+  display: grid;
+  width: 100%;
+  max-width: none;
+  height: var(--profile-reading-header-height);
+  min-height: var(--profile-reading-header-height);
+  margin: 0;
+  padding: env(safe-area-inset-top)
+    max(var(--yoyi-space-4), env(safe-area-inset-right)) 0
+    max(var(--yoyi-space-4), env(safe-area-inset-left));
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--yoyi-space-2);
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-page);
+}
+
+.root[data-profile-reading] > .background {
+  position: absolute;
+  z-index: -1;
+  inset: 0 0 auto;
+  width: 100%;
+  height: 200px;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+  isolation: isolate;
+  pointer-events: none;
+  background: var(--yoyi-color-background-page);
+}
+
+.root[data-profile-reading] > .background .coverPhoto {
+  position: relative;
+  inset: auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+.root[data-profile-reading] > .background .coverPhoto img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 0;
+  opacity: 0.14;
+}
+
+.root[data-profile-reading] > .background::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in srgb, var(--yoyi-color-background-page) 40%, transparent) 64%,
+    var(--yoyi-color-background-page)
+  );
+}
+
+.root[data-profile-reading] > .identity {
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  text-align: start;
+  background: transparent;
+}
+
+/* Overrides the retained .profileIdentity.coverIdentity padding/shading. */
+.root[data-profile-reading] .identityPanel {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--yoyi-space-2)
+    max(var(--yoyi-space-4), env(safe-area-inset-right)) var(--yoyi-space-2)
+    max(var(--yoyi-space-4), env(safe-area-inset-left));
+  justify-items: stretch;
+  gap: var(--yoyi-space-1);
+  color: var(--yoyi-color-text-primary);
+  background: none;
+  background-size: auto;
+}
+
+.root[data-profile-reading] .identityHead {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--yoyi-space-3);
+  writing-mode: horizontal-tb;
+}
+
+.root[data-profile-reading] .identityHead > :first-child {
+  flex: 0 0 48px;
+  width: 48px;
+  height: 48px;
+}
+
+.root[data-profile-reading] .identityNames {
+  display: grid;
+  width: auto;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: var(--yoyi-space-1);
+  writing-mode: horizontal-tb;
+}
+
+.root[data-profile-reading] .identityNames h1 {
+  max-width: 100%;
+  margin: 0;
+  font-family: var(--yoyi-font-editorial);
+  font-size: clamp(
+    var(--yoyi-type-body-size),
+    4.8vw,
+    var(--yoyi-type-section-title-size)
+  );
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.root[data-profile-reading] .identityNames > p {
+  display: flex;
+  min-width: 0;
+  margin: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--yoyi-space-1) var(--yoyi-space-2);
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.45;
+  writing-mode: horizontal-tb;
+  overflow-wrap: anywhere;
+}
+
+.root[data-profile-reading] .bar {
+  display: flex;
+  min-width: 0;
+  margin: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--yoyi-space-1) var(--yoyi-space-2);
+  writing-mode: horizontal-tb;
+}
+
+.root[data-profile-reading] .bar > div {
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: var(--yoyi-space-2);
+}
+
+.root[data-profile-reading] .bar > div > button {
+  position: relative;
+  min-height: 32px;
+}
+
+/* Compact visible counts retain a 44px vertical pointer target. */
+.root[data-profile-reading] .bar > div > button::after {
+  position: absolute;
+  inset: -6px 0;
+  content: "";
+}
+
+.root[data-profile-reading] .detailsToggle {
+  display: inline-flex;
+  min-height: 44px;
+  padding: var(--yoyi-space-1) var(--yoyi-space-2);
+  align-items: center;
+  justify-content: center;
+  gap: var(--yoyi-space-1);
+  color: var(--yoyi-color-text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--yoyi-radius-md);
+  font: inherit;
+  font-size: var(--yoyi-type-label-size);
+  line-height: 1.4;
+  writing-mode: horizontal-tb;
+  cursor: pointer;
+}
+
+.root[data-profile-reading] .details {
+  min-width: 0;
+  margin: 0;
+  padding-top: var(--yoyi-space-2);
+  border-top: 1px solid var(--yoyi-color-border-subtle);
+}
+
+.root[data-profile-reading] .details > p {
+  max-width: 100%;
+  margin: 0 0 var(--yoyi-space-2);
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.infoDialog {
+  max-width: min(28rem, calc(100% - 2 * var(--yoyi-space-4)));
+}
+
+.infoBody {
+  display: grid;
+  gap: var(--yoyi-space-4);
+  padding: var(--yoyi-space-4);
+  overflow-wrap: anywhere;
+}
+
+.infoBody h3 {
+  margin: 0;
+  font-family: var(--yoyi-font-editorial);
+  font-size: var(--yoyi-type-section-title-size);
+  line-height: 1.4;
+}
+
+.infoBody > p {
+  margin: 0;
+}
+.infoMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--yoyi-space-2);
+  align-items: center;
+}
+
+.root[data-profile-reading] > .content {
+  position: relative;
+  z-index: 2;
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  background: var(--yoyi-color-background-page);
+}
+
+.root[data-profile-reading] .tabs {
+  position: sticky;
+  z-index: 4;
+  top: var(--profile-reading-header-height);
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0 var(--yoyi-space-4);
+  overflow: visible;
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-page);
+  border-bottom: 1px solid var(--yoyi-color-border-subtle);
+  box-shadow: none;
+  clip-path: none;
+}
+
+.root[data-profile-reading] .tabList {
+  position: relative;
+  z-index: auto;
+  top: auto;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  margin: 0;
+  padding: 0;
+  align-items: center;
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  clip-path: none;
+}
+
+.root[data-profile-reading] .tabList > button {
+  min-width: 0;
+  min-height: 44px;
+  padding: var(--yoyi-space-2) var(--yoyi-space-3);
+  flex: 1 1 0;
+  color: var(--yoyi-color-text-secondary);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.root[data-profile-reading] .tabList > button[aria-selected="true"] {
+  color: var(--yoyi-color-text-primary);
+  font-weight: 700;
+}
+
+.root[data-profile-reading] .toolbar {
+  display: flex;
+  min-width: 0;
+  min-height: 40px;
+  margin: 0;
+  padding: var(--yoyi-space-1) 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--yoyi-space-2);
+  writing-mode: horizontal-tb;
+}
+
+.root[data-profile-reading] .toolbar :is(button, a) {
+  min-height: 44px;
+  font-size: var(--yoyi-type-label-size);
+  line-height: 1.4;
+  white-space: normal;
+}
+
+.root[data-profile-reading] .heading {
+  min-width: 0;
+  min-height: 44px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  font-family: var(--yoyi-font-editorial);
+  font-size: var(--yoyi-type-section-title-size);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.root[data-profile-reading] :is(.details, .tabList, .toolbar)[hidden] {
+  display: none;
+}
+
+.root[data-profile-reading]
+  :is(
+    .detailsToggle,
+    .tabList > button,
+    .toolbar button,
+    .toolbar a
+  ):focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* Desktop: the author is a reading-side column, not another navigation rail. */
+.root[data-profile-reading][data-reading-platform="pc"] {
+  --profile-reading-header-height: 52px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--profile-reading-author-width);
+  grid-template-rows: auto auto;
+  grid-template-areas:
+    "header header"
+    "content identity";
+  align-items: start;
+  column-gap: var(--yoyi-space-5);
+}
+
+.root[data-profile-reading][data-reading-platform="pc"] > .header {
+  grid-area: header;
+}
+
+/* Beats the existing html[desktop][pc] .page .header padding selector. */
+:global(html[data-device-class="desktop"][data-platform="pc"])
+  .root[data-profile-reading][data-reading-platform="pc"]
+  > .header {
+  --profile-header-height: var(--profile-reading-header-height);
+  height: var(--profile-reading-header-height);
+  min-height: var(--profile-reading-header-height);
+  max-width: none;
+  margin: 0;
+  padding: 0 var(--yoyi-space-4);
+  gap: var(--yoyi-space-2);
+}
+
+.root[data-profile-reading][data-reading-platform="pc"] > .background {
+  grid-column: 2;
+  grid-row: 2;
+  inset: 0;
+  width: auto;
+  height: min(100%, 28rem);
+  margin: 0;
+}
+
+.root[data-profile-reading][data-reading-platform="pc"] > .identity {
+  grid-area: identity;
+  align-self: start;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  position: sticky;
+  top: calc(var(--profile-reading-header-height) + var(--yoyi-space-3));
+  max-height: calc(
+    100svh - var(--profile-reading-header-height) - var(--yoyi-space-5)
+  );
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.root[data-profile-reading][data-reading-platform="pc"] .identityPanel {
+  padding: var(--yoyi-space-4) var(--yoyi-space-4) var(--yoyi-space-5);
+  gap: var(--yoyi-space-3);
+  background: none;
+}
+
+.root[data-profile-reading][data-reading-platform="pc"] .identityHead {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  align-items: start;
+  gap: var(--yoyi-space-3);
+}
+
+.root[data-profile-reading][data-reading-platform="pc"]
+  .identityHead
+  > :first-child {
+  width: 56px;
+  height: 56px;
+}
+
+.root[data-profile-reading][data-reading-platform="pc"] .identityNames h1 {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: none;
+  justify-self: end;
+  font-size: var(--yoyi-type-section-title-size);
+  line-height: 1.45;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
+}
+
+.root[data-profile-reading][data-reading-platform="pc"] .identityNames > p {
+  width: 100%;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+}
+
+.root[data-profile-reading][data-reading-platform="pc"]
+  .details
+  > p:not([data-profile-ip-location]) {
+  width: 100%;
+  height: auto;
+  max-height: min(48svh, 26rem);
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  overflow: auto;
+}
+
+.root[data-profile-reading][data-reading-platform="pc"]
+  .details
+  [data-profile-ip-location] {
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+}
+
+.root[data-profile-reading][data-reading-platform="pc"] > .content {
+  grid-area: content;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0 0 var(--yoyi-space-8) var(--yoyi-space-4);
+  overflow: visible;
+}
+
+.root[data-profile-reading][data-reading-platform="pc"] .tabs {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--yoyi-space-4);
+  padding: 0;
+}
+
+.root[data-profile-reading][data-reading-platform="pc"] .tabList {
+  width: auto;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.root[data-profile-reading][data-reading-platform="pc"] .toolbar {
+  flex: 0 1 auto;
+  justify-content: flex-end;
+}
+
+.root[data-profile-reading][data-reading-platform="pc"] .heading {
+  flex: 1 1 auto;
+}
+
+/* Keep native hidden effective after the more specific desktop display rules. */
+.root[data-profile-reading] .toolbar > .heading {
+  margin-inline-end: auto;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  font-weight: 400;
+}
+
+.root[data-profile-reading] .toolbar > button {
+  padding: 0 var(--yoyi-space-3);
+  color: var(--yoyi-color-text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--yoyi-radius-full);
+  font: inherit;
+  cursor: pointer;
+}
+
+.root[data-profile-reading]
+  .toolbar
+  > button:is(:hover, [aria-pressed="true"]) {
+  color: var(--yoyi-color-seal-red);
+  background: var(--yoyi-color-background-muted);
+}
+
+.root[data-profile-reading] .identityHead [aria-label="更换头像"] {
+  overflow: visible;
+}
+
+.root[data-profile-reading] .identityHead [aria-label="更换头像"] > img {
+  border-radius: inherit;
+}
+.root[data-profile-reading]
+  .identityHead
+  [aria-label="更换头像"]
+  > span:last-child {
+  display: none;
+}
+.root[data-profile-reading] .identityHead .avatarEditHint {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  color: var(--yoyi-color-text-secondary);
+  background: var(--yoyi-color-background-elevated);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-full);
+  line-height: 1;
+}
+.root[data-profile-reading] .avatarEditHint :global(.yoyi-icon) {
+  width: 12px;
+  height: 12px;
+}
+
+/* This leading slot uses the shared search owner as a 44px icon, without
+   allowing its desktop field to overflow the left edge of the profile. */
+.root[data-profile-reading][data-reading-platform]
+  > .header
+  > [data-search-trigger-placement="header"] {
+  width: 44px;
+  max-width: 44px;
+  height: 44px;
+  justify-self: start;
+  justify-content: center;
+  padding: 0;
+  border-radius: var(--yoyi-radius-full);
+}
+.root[data-profile-reading]
+  > .header
+  > [data-search-trigger-placement="header"]
+  > span[aria-hidden]:not(:global(.yoyi-icon)) {
+  display: none;
+}
+
+.root[data-profile-reading][data-reading-platform]
+  :is(.details, .tabList, .toolbar)[hidden] {
+  display: none;
+}
