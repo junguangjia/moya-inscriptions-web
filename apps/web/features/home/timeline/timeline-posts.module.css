@@ -197,6 +197,26 @@
   font-size: var(--yoyi-type-input-size);
 }
 
+/*
+ * 关联词条 in the timeline's sheet: the list takes the room the sheet has
+ * and scrolls; the search stays above it and the actions below it.
+ */
+.sheetPicker {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.sheetPicker .picker {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.sheetPicker .options {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
 /* The native clear control is off the palette; deleting the words clears. */
 .search::-webkit-search-cancel-button {
   display: none;

@@ -201,7 +201,7 @@ export const TimelineAttachPicker = ({
       return;
     }
     if (current !== null) {
-      setStep({ kind: "move", from: current.title });
+      setStep({ kind: "move", from: current.fullTitle });
       return;
     }
     await save({ workId, requestId: requestIdentity() });

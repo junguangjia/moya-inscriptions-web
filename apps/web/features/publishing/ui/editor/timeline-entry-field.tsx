@@ -74,7 +74,7 @@ export const TimelineEntryField = ({
           selectedId={chosen}
         />
       ) : (
-        <div className={styles.fieldHead}>
+        <div className={styles.fieldActions}>
           <button
             className={styles.textButton}
             data-editor-timeline-entry-open=""

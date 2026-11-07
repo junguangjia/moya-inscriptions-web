@@ -45,7 +45,7 @@ export const TimelineEntryCard = ({
           actions={actions}
           browseOnly={browseOnly}
           entryId={entry.id}
-          entryTitle={entry.title}
+          entryTitle={entry.fullTitle}
         />
       )}
     </div>

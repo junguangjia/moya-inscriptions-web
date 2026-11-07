@@ -128,7 +128,7 @@
 /* timeline-posts-v1: sections too tall for the actions slot (DetailBand). */
 .band {
   min-width: 0;
-  padding-block: var(--yoyi-space-6) 0;
+  padding-block: var(--yoyi-space-6);
 }
 .band:empty {
   display: none;

@@ -69,7 +69,7 @@ const render = (browseOnly = false) =>
         actions={actions as unknown as TimelineEntryPostsActions}
         browseOnly={browseOnly}
         entryId="row-yongping"
-        entryTitle="永平碑"
+        entryTitle="北魏虚构永平碑"
       />,
     ),
   );
@@ -369,7 +369,7 @@ describe("「关联我发过的帖子」", () => {
     await flush();
     expect(data.setWorkTimelineEntry).not.toHaveBeenCalled();
     expect(query("[data-timeline-attach-move]")?.textContent).toContain(
-      "已在：虚构东碑。改为关联到「永平碑」？",
+      "已在：唐虚构东碑。改为关联到「北魏虚构永平碑」？",
     );
     data.setWorkTimelineEntry.mockResolvedValue({
       workId: workId(1),

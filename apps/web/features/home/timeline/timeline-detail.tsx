@@ -144,7 +144,7 @@ export const CatalogTimelinePosts = ({
           actions={actions}
           browseOnly={browseOnly}
           entryId={entry.id}
-          entryTitle={entry.title}
+          entryTitle={entry.fullTitle}
           heading="帖子"
         />
       </div>
@@ -267,7 +267,10 @@ export const TimelineEntryPickerSheet = ({
 }) => (
   <TimelineSheetHost onClose={onClose} title="关联词条">
     {(closeThen) => (
-      <div className={timelineStyles.card} data-timeline-entry-picker-sheet="">
+      <div
+        className={`${timelineStyles.card} ${styles.sheetPicker}`}
+        data-timeline-entry-picker-sheet=""
+      >
         <h2 className={timelineStyles.cardTitle}>关联词条</h2>
         <TimelineEntryPicker
           onCancel={() => closeThen(() => undefined)}
