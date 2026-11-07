@@ -30,6 +30,8 @@ export { PostgresAuthorCommunityAdapter } from "./author-adapter.js";
 export { PostgresCommunityDiscoveryAdapter } from "./discovery-adapter.js";
 export { PostgresCommunityContentOperatorAdapter } from "./content-operator-adapter.js";
 export { PostgresAiOperatorReader } from "./ai-operator-queries.js";
+export { OPERATOR_SOURCES } from "./operator-filters.js";
+export type { SourceQuery, SourceSpec } from "./operator-filters.js";
 export { PostgresWorkPublishingAdapter } from "./work-publishing-adapter.js";
 export {
   synchronizeCatalogDeliveryIntents,

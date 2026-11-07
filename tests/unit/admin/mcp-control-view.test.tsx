@@ -65,6 +65,10 @@ const props = (
 
 const owner = { collection: "users", role: "owner", _strategy: "local-jwt" };
 
+const AWAITING = "8c3f1e2a-1234-4abc-8def-0123456789ab";
+const STALLED = "9d4f2e3b-2345-4bcd-9ef0-123456789abc";
+const SEAL = "a".repeat(64);
+
 const PAGE: AdminMcpControlPage = {
   pause: false,
   threshold: 20,
@@ -94,8 +98,47 @@ const PAGE: AdminMcpControlPage = {
       lastUsedAt: null,
     },
   ],
+  runs: {
+    awaiting: [
+      {
+        runId: AWAITING,
+        op: "editorial.save-draft",
+        credential: "key:7",
+        credentialLabel: "synthetic key",
+        reason: "<b>合成</b> reason",
+        count: 25,
+        conflicts: 1,
+        impact: { affectedReplies: 4 },
+        sample: [
+          { index: 0, ref: 11 },
+          { index: 1, ref: null },
+        ],
+        consequences: ["identity_bound_permanently", "subject_notified"],
+        userNotifications: 3,
+        newIdentities: {
+          count: 25,
+          first: [{ index: 0, field: "catalogId", value: "synthetic-1" }],
+        },
+        expiresAt: "2026-11-07T00:00:00.000Z",
+        sealHash: SEAL,
+      },
+    ],
+    stalled: [
+      {
+        runId: STALLED,
+        op: "community.moderate-comment",
+        credential: "conn:synthetic",
+        credentialLabel: null,
+        state: "running",
+        count: 3,
+        done: 1,
+        updatedAt: "2026-11-06T00:00:00.000Z",
+      },
+    ],
+  },
   figures: {
     irreversibleTargets: 3,
+    irreversibleByCredential: [{ credential: "key:7", targets: 3 }],
     outcomeUnknown: 2,
     timings: [
       { tool: "admin_whoami", calls: 200, p95Ms: 40, budgetMs: 100 },
@@ -230,6 +273,9 @@ describe("the control page", () => {
     expect(html).toContain("续期 30 天");
     expect(html).toContain('data-mcp-timing="admin_whoami"');
     expect(html).toContain("<td>100</td>");
+    // The 24-hour irreversible figure, and the same by credential.
+    expect(html).toContain("24 小时内不可逆操作对象数");
+    expect(html).toContain("其中 key:7");
     expect(html).toContain('href="/admin/collections/mcp-audit-events"');
     expect(html).toContain('href="/admin/collections/payload-mcp-api-keys"');
   });
@@ -238,6 +284,38 @@ describe("the control page", () => {
     const html = page({ figures: null });
     expect(html).toContain("操作记录暂时无法读取");
     expect(html).not.toContain("24 小时内不可逆操作对象数");
+  });
+
+  // S8-11: a run past the threshold, as its preview froze it, and one left stalled.
+  it("lists a run waiting for the Owner by what its preview froze, the caller's words as text", () => {
+    const html = page();
+    expect(html).toContain(`data-mcp-run="${AWAITING}"`);
+    expect(html).toContain("editorial.save-draft");
+    expect(html).toContain("25 个对象");
+    expect(html).toContain("另有 1 个预览时已冲突，不会执行");
+    expect(html).toContain("synthetic key（key:7）");
+    expect(html).toContain('data-mcp-consequence="identity_bound_permanently"');
+    expect(html).toContain("每个新身份会永久绑定到它的记录");
+    expect(html).toContain("每位当事人都会收到一条关于此操作的消息");
+    expect(html).toContain("3 位当事人会收到消息");
+    expect(html).toContain("永久绑定 25 个新身份，例如：catalogId synthetic-1");
+    expect(html).toContain("#0 11、#1");
+    // What the caller wrote is text: escaped, never markup.
+    expect(html).toContain("&lt;b&gt;合成&lt;/b&gt; reason");
+    expect(html).not.toContain("<b>合成</b>");
+    expect(html).toContain(`data-mcp-run-confirm="${AWAITING}"`);
+    expect(html).toContain(`data-mcp-stalled-run="${STALLED}"`);
+    expect(html).toContain("已完成 1 / 3");
+    expect(html).toContain("来自 conn:synthetic");
+  });
+
+  it("says when nothing waits, and when the runs cannot be read, rather than showing none", () => {
+    const empty = page({ runs: { awaiting: [], stalled: [] } });
+    expect(empty).toContain("没有等待确认的操作。");
+    expect(empty).not.toContain("data-mcp-stalled-runs");
+    const unread = page({ runs: null });
+    expect(unread).toContain("操作列表暂时无法读取。");
+    expect(unread).not.toContain("没有等待确认的操作");
   });
 });
 
@@ -376,5 +454,61 @@ describe("the control page's writes", () => {
       method: "POST",
       credentials: "same-origin",
     });
+  });
+
+  const runRow = (attribute: string, id: string) =>
+    document.querySelector(`[${attribute}="${id}"]`) as HTMLElement;
+
+  it("confirms a run by its own route, bound to the seal the page showed", async () => {
+    fireEvent.click(
+      runRow("data-mcp-run", AWAITING).querySelector(
+        "[data-mcp-run-confirm]",
+      ) as HTMLButtonElement,
+    );
+    await waitFor(() => expect(runtime.refresh).toHaveBeenCalledOnce());
+    expect(lastCall()).toEqual({
+      url: `/api/mcp-control/runs/${AWAITING}/confirm`,
+      method: "POST",
+      credentials: "same-origin",
+      body: { expectedSealHash: SEAL },
+    });
+    expect(screen.getByRole("status").textContent).toContain("已确认");
+  });
+
+  it("cancels a waiting run and a stalled one by its own route", async () => {
+    for (const [attribute, id] of [
+      ["data-mcp-run", AWAITING],
+      ["data-mcp-stalled-run", STALLED],
+    ] as const) {
+      runtime.refresh.mockReset();
+      fireEvent.click(
+        runRow(attribute, id).querySelector(
+          "[data-mcp-run-cancel]",
+        ) as HTMLButtonElement,
+      );
+      await waitFor(() => expect(runtime.refresh).toHaveBeenCalledOnce());
+      expect(lastCall()).toMatchObject({
+        url: `/api/mcp-control/runs/${id}/cancel`,
+        method: "POST",
+        credentials: "same-origin",
+      });
+    }
+  });
+
+  it("names a run's refusal and does not re-read", async () => {
+    fetchMock.mockResolvedValue(
+      Response.json({ error: "SEAL_HASH_MISMATCH" }, { status: 409 }),
+    );
+    fireEvent.click(
+      runRow("data-mcp-run", AWAITING).querySelector(
+        "[data-mcp-run-confirm]",
+      ) as HTMLButtonElement,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain(
+        "和页面显示的不一致",
+      ),
+    );
+    expect(runtime.refresh).not.toHaveBeenCalled();
   });
 });

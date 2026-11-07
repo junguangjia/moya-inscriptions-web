@@ -109,6 +109,7 @@ const reader = (
     excluded: ["self_only"],
   })),
   count: vi.fn(async () => ({ total: 0, oldestAt: null })),
+  select: vi.fn(async () => ({ items: [], excluded: ["self_only"] })),
   settlement: vi.fn(async () => ({ open: 0, failed: 0, failedJobs: [] })),
   isSelfOnly: vi.fn(async () => selfOnly),
   isPersonalInfoRequest: vi.fn(async () => personal),
@@ -266,6 +267,7 @@ describe("the two AI credentials", () => {
     "comments",
     "ai/find?text=a",
     "ai/count?source=reports",
+    `ai/select?source=comments&ids=${comment}`,
     "publishing/jobs",
     "feedback",
     "threads",
@@ -413,9 +415,54 @@ describe("the two AI credentials", () => {
       status: 404,
       code: "NOT_FOUND",
     });
+    expect(
+      await backend.send(
+        "GET",
+        `ai/select?source=comments&ids=${comment}`,
+        ownerToken,
+      ),
+    ).toEqual({ status: 404, code: "NOT_FOUND" });
     await backend.send("GET", `comments/${comment}`, ownerToken);
     expect(answers.find).not.toHaveBeenCalled();
+    expect(answers.select).not.toHaveBeenCalled();
     expect(answers.isSelfOnly).not.toHaveBeenCalled();
+  });
+
+  // S8-08: a preview's stamps. A filter and `movable` are the selector's (S8-14), so
+  // they are refused by name, never answered as if by ids.
+  it("reads ai/select by ids alone, up to 100 distinct ones", async () => {
+    const answers = reader(false);
+    const backend = await startBackend({ aiOperatorReader: answers });
+    const ids = (count: number) =>
+      Array.from(
+        { length: count },
+        (_, index) => `comment-${String(index).padStart(32, "0")}`,
+      ).join(",");
+    expect(
+      await backend.send(
+        "GET",
+        `ai/select?source=comments&ids=${ids(100)}`,
+        communityToken,
+      ),
+    ).toEqual({ status: 200, code: undefined });
+    expect(answers.select).toHaveBeenCalledWith({
+      source: "comments",
+      ids: ids(100).split(","),
+    });
+    for (const route of [
+      `ai/select?source=comments&ids=${ids(101)}`,
+      `ai/select?source=comments&ids=${comment},${comment}`,
+      `ai/select?source=comments&ids=${comment}&movable=visible`,
+      "ai/select?source=comments&moderation=pending",
+      `ai/select?source=reports&ids=${id}&movable=open`,
+      `ai/select?source=threads&ids=${id}`,
+      `ai/select?source=comments&ids=${comment}&ids=${comment}`,
+    ])
+      expect(await backend.send("GET", route, communityToken), route).toEqual({
+        status: 400,
+        code: "INVALID_QUERY",
+      });
+    expect(answers.select).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the base token off every community write", async () => {
@@ -537,6 +584,36 @@ describe("the two AI credentials", () => {
       }),
     ).toEqual({ status: 403, code: "URGENT_OWNER_ONLY" });
     expect(metadata).not.toHaveBeenCalled();
+  });
+
+  it("releases a legal hold on the AI credential only under a run id", async () => {
+    const metadata = vi.fn();
+    const backend = await startBackend({
+      aiOperatorReader: reader(false),
+      reportingPort: { metadata } as never,
+    });
+    const release = { expectedVersion: 1, legalHold: false };
+    for (const header of [{}, { "x-admin-mcp-run": "synthetic" }])
+      expect(
+        await backend.send(
+          "POST",
+          `reports/${id}/metadata`,
+          communityToken,
+          release,
+          header,
+        ),
+        JSON.stringify(header),
+      ).toEqual({ status: 403, code: "AI_RUN_REQUIRED" });
+    expect(metadata).not.toHaveBeenCalled();
+    // Past the check it reaches the service, which has no store here.
+    const past = await backend.send(
+      "POST",
+      `reports/${id}/metadata`,
+      communityToken,
+      release,
+      { "x-admin-mcp-run": randomUUID() },
+    );
+    expect(past.code).not.toBe("AI_RUN_REQUIRED");
   });
 
   it("passes a self-only check only for a comment write whose own key has a receipt", async () => {

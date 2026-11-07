@@ -5,7 +5,9 @@ import {
   ADMIN_OP_TOOLS,
   adminActionDetailsSchema,
   adminActionsIndexSchema,
+  adminActionsInputSchema,
   adminReadRowsDataSchema,
+  adminToolDetailSchema,
   adminUnknownOpDataSchema,
 } from "@moya/contracts/internal/admin-mcp";
 import type {
@@ -13,13 +15,16 @@ import type {
   AdminActionsIndex,
   AdminActionsInput,
   AdminMcpEnvelope,
+  AdminMcpNativeTool,
   AdminMcpNext,
   AdminMcpSensitiveCategory,
   AdminOpName,
+  AdminToolDetail,
 } from "@moya/contracts/internal/admin-mcp";
 import { z } from "zod";
 
 import { failedEnvelope, inputInvalidEnvelope, okEnvelope } from "../envelope";
+import { built } from "../not-built";
 import {
   adminOpMeta,
   currentOpName,
@@ -29,11 +34,17 @@ import {
 } from "../registry";
 import type { AdminOpDeprecation, AdminOpEntry } from "../registry";
 import { textHash } from "../text-window";
+import { ADMIN_TOOL_EXAMPLES } from "./examples";
 import { retiredOpEnvelope, withDeprecation } from "./read";
 
 export const ACTIONS_TOOL_NAME = "admin_actions";
 
-export const ACTIONS_DESCRIPTION = `Op catalog for admin_read and the execute tools. No arguments: an index by tool, rows as name(required,fields). {ops:[up to ${ADMIN_ACTIONS_MAX_OPS} names]}: each op's JSON Schema, class, recovery, completion and an example. Inputs refuse unknown fields.`;
+export const ACTIONS_DESCRIPTION = `Op catalog. No arguments: an index by tool, rows as name(required,fields). {ops:[up to ${ADMIN_ACTIONS_MAX_OPS}]}: each op's JSON Schema, class, recovery, completion and example. {tool}: that tool's worked examples. Inputs refuse unknown fields.`;
+
+/** What tools/list shows: the tool names grow with the design, so `tool` is a string. */
+export const actionsListedInput = adminActionsInputSchema.extend({
+  tool: z.string().optional(),
+});
 
 export type ActionSwitches = Readonly<
   Partial<Record<AdminMcpSensitiveCategory, boolean>>
@@ -215,6 +226,19 @@ export const actionDetail = (
     : { ...detail, outputOmitted: true };
 };
 
+/** A tool's worked examples, where this credential can call it, as an op detail says. */
+export const toolDetail = (
+  tool: AdminMcpNativeTool,
+  tools: readonly string[],
+): AdminToolDetail => {
+  const examples = built(ADMIN_TOOL_EXAMPLES[tool]);
+  return adminToolDetailSchema.parse(
+    tools.includes(tool) && examples !== undefined
+      ? { tool, available: true, examples: structuredClone(examples) }
+      : { tool, available: false, unavailable: "tool_not_listed" },
+  );
+};
+
 const askedNames = (rawInput: unknown): readonly string[] => {
   const { op, ops } = rawInput as AdminActionsInput;
   return [...new Set([...(op === undefined ? [] : [op]), ...(ops ?? [])])];
@@ -226,6 +250,11 @@ export const actionsEnvelope = (
   switches: ActionSwitches,
 ): AdminMcpEnvelope => {
   const names = askedNames(rawInput);
+  const { tool } = rawInput as AdminActionsInput;
+  if (tool !== undefined)
+    return names.length === 0
+      ? okEnvelope(toolDetail(tool, tools))
+      : inputInvalidEnvelope([{ path: ["tool"], code: "not_with_ops" }]);
   if (names.length === 0) return okEnvelope(actionsIndex(tools, switches));
   if (names.length > ADMIN_ACTIONS_MAX_OPS)
     return inputInvalidEnvelope([{ path: ["ops"], code: "too_big" }]);

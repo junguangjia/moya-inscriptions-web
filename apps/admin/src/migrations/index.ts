@@ -18,6 +18,7 @@ import * as migration_20261103_153057_mcp_audit_events from "./20261103_153057_m
 import * as migration_20261103_184050_editorial_receipts_document_refs from "./20261103_184050_editorial_receipts_document_refs";
 import * as migration_20261104_114731_editorial_receipt_operations from "./20261104_114731_editorial_receipt_operations";
 import * as migration_20261105_131739_mcp_connection_identity from "./20261105_131739_mcp_connection_identity";
+import * as migration_20261106_103000_mcp_runs from "./20261106_103000_mcp_runs";
 
 export const migrations = [
   {
@@ -119,5 +120,10 @@ export const migrations = [
     up: migration_20261105_131739_mcp_connection_identity.up,
     down: migration_20261105_131739_mcp_connection_identity.down,
     name: "20261105_131739_mcp_connection_identity",
+  },
+  {
+    up: migration_20261106_103000_mcp_runs.up,
+    down: migration_20261106_103000_mcp_runs.down,
+    name: "20261106_103000_mcp_runs",
   },
 ];

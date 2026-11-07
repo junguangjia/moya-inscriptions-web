@@ -172,8 +172,9 @@ describe
         ),
       ).resolves.toMatchObject({ rowCount: 0 });
       const expected = await acl(roles[0]!);
-      // The two new tables, exactly: the ledger is append-only by this grant, and
-      // the sequences give USAGE alone, so a role cannot move them with setval.
+      // The MCP tables, exactly: the audit ledger is append-only by this grant, the
+      // run ledger moves rows and never deletes one, and the sequences give USAGE
+      // alone, so a role cannot move them with setval.
       expect(
         expected.filter(({ table_name }) => table_name.startsWith("mcp_")),
       ).toEqual([
@@ -182,7 +183,41 @@ describe
         { table_name: "mcp_control", privilege_type: "INSERT" },
         { table_name: "mcp_control", privilege_type: "SELECT" },
         { table_name: "mcp_control", privilege_type: "UPDATE" },
+        { table_name: "mcp_run_targets", privilege_type: "INSERT" },
+        { table_name: "mcp_run_targets", privilege_type: "SELECT" },
+        { table_name: "mcp_run_targets", privilege_type: "UPDATE" },
+        { table_name: "mcp_runs", privilege_type: "INSERT" },
+        { table_name: "mcp_runs", privilege_type: "SELECT" },
+        { table_name: "mcp_runs", privilege_type: "UPDATE" },
       ]);
+      // Both ways, as a release's verify reads them (admin-mcp-completion-v1 S8).
+      for (const table of ["mcp_runs", "mcp_run_targets"]) {
+        const held: Record<string, unknown> = {};
+        for (const privilege of [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE",
+          "TRUNCATE",
+          "REFERENCES",
+          "TRIGGER",
+        ])
+          held[privilege] = (
+            await setupPool().query(
+              "SELECT has_table_privilege($1, $2, $3) AS held",
+              [roles[0]!, `public.${table}`, privilege],
+            )
+          ).rows[0].held;
+        expect(held, table).toEqual({
+          SELECT: true,
+          INSERT: true,
+          UPDATE: true,
+          DELETE: false,
+          TRUNCATE: false,
+          REFERENCES: false,
+          TRIGGER: false,
+        });
+      }
       for (const sequence of ["mcp_audit_events_id_seq", "mcp_control_id_seq"])
         expect(
           (
@@ -456,6 +491,65 @@ describe
             )
           ).rows[0].count,
         ).not.toBe("0");
+        // A run's whole life, as this role: its triggers read the run row FOR SHARE,
+        // which takes UPDATE, and an Owner's row in users, which takes SELECT.
+        const run = randomUUID();
+        const hash = "a".repeat(64);
+        try {
+          await pool.query(
+            `INSERT INTO public.mcp_runs (run_id, format_version, contract_version, op_schema_hash,
+               credential, key_id, user_id, op, class, request_id, fingerprint, selection, state, expires_at)
+             VALUES ($1, 1, '2026-11-06', $2, 'key:1', 1, $3, 'community.delete-body', 'irreversible',
+               'synthetic-run', $2, '{"kind":"targets"}', 'planning', now() + interval '15 minutes')`,
+            [run, hash, owner.id],
+          );
+          await pool.query(
+            `INSERT INTO public.mcp_run_targets (run_id, idx, ref, ref_key, frozen_input)
+             VALUES ($1, 0, '{"id":"comment-1"}', 'comment-1', '{"id":"comment-1"}')`,
+            [run],
+          );
+          await pool.query(
+            "UPDATE public.mcp_run_targets SET stamp = 'r1' WHERE run_id = $1",
+            [run],
+          );
+          for (const [step, values] of [
+            [
+              "state = 'previewed', sealed_at = now(), seal_hash = $2, target_count = 1",
+              [hash],
+            ],
+            ["state = 'awaiting_owner'", []],
+            [
+              "state = 'confirmed', confirmed_by = $2, confirmed_at = now(), confirmed_seal_hash = $3",
+              [owner.id, hash],
+            ],
+            ["state = 'running'", []],
+          ] as const)
+            await pool.query(
+              `UPDATE public.mcp_runs SET ${step} WHERE run_id = $1`,
+              [run, ...values],
+            );
+          await pool.query(
+            "UPDATE public.mcp_run_targets SET state = 'applied', attempted_at = now(), frozen_input = NULL WHERE run_id = $1",
+            [run],
+          );
+          expect(
+            (
+              await pool.query(
+                "SELECT state, confirmed_by FROM public.mcp_runs WHERE run_id = $1",
+                [run],
+              )
+            ).rows,
+          ).toEqual([{ state: "running", confirmed_by: owner.id }]);
+        } finally {
+          await setupPool().query(
+            "DELETE FROM public.mcp_run_targets WHERE run_id = $1",
+            [run],
+          );
+          await setupPool().query(
+            "DELETE FROM public.mcp_runs WHERE run_id = $1",
+            [run],
+          );
+        }
         const content = {
           catalogId,
           sourceId: `source-${role}`,
@@ -615,6 +709,11 @@ describe
           "DELETE FROM public.mcp_control WHERE false",
           "SELECT setval('public.mcp_audit_events_id_seq',1)",
           "SELECT setval('public.mcp_control_id_seq',1)",
+          "DELETE FROM public.mcp_runs WHERE false",
+          "TRUNCATE public.mcp_runs",
+          "DELETE FROM public.mcp_run_targets WHERE false",
+          "TRUNCATE public.mcp_run_targets",
+          "ALTER TABLE public.mcp_runs DISABLE TRIGGER mcp_runs_guard",
           "DELETE FROM public.catalog_delivery_intents WHERE false",
           "DELETE FROM public.catalog_delivery_receipts WHERE false",
           "UPDATE public.catalog_delivery_receipts SET operation=operation WHERE false",

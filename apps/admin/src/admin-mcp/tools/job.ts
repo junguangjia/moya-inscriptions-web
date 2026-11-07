@@ -18,7 +18,7 @@ import { JOB_TOOL_NAME, readSettlement, settlementNext } from "../settlement";
 
 export { JOB_TOOL_NAME };
 
-export const JOB_DESCRIPTION = `How far the media work an op queued has got, without repeating the op. Copy {kind:"settlement",refs} from a QUEUED answer's next. ok:true once no job is open or failed; else QUEUED or MEDIA_JOB_FAILED.`;
+export const JOB_DESCRIPTION = `How far media work an op queued has got. Copy {kind:"settlement",refs} from a QUEUED answer's next. ok:true once no job is open or failed; else QUEUED or MEDIA_JOB_FAILED.`;
 
 // tools/list carries the shape and the runtime check the rest, as on admin_execute.
 export const jobListedInput = z.strictObject({

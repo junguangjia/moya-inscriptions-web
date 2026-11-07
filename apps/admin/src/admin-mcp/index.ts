@@ -36,6 +36,77 @@ export { findEnvelope } from "./locate";
 export { findContinuation } from "./tools/find";
 export { readContinuation } from "./tools/read";
 export {
+  ADMIN_CURSOR_LEGACY_UNTIL,
+  ADMIN_CURSOR_PREFIXES,
+  decodeCursor,
+  encodeCursor,
+  indexCursor,
+  indexOfCursor,
+  offsetCursor,
+  offsetOfCursor,
+  ROW_ID_MAX,
+  rowCursor,
+  rowIdOfCursor,
+  runCursor,
+  runKeysetOfCursor,
+} from "./cursor";
+export { LIST_SOURCES } from "./ops/list-sources";
+export { isIssuedTicket, issueRunTicket, requireAdmission } from "./ops/define";
+export type { RunTicket } from "./ops/define";
+export { runTarget } from "./ops/target";
+export type { TargetAllowance, TargetOutcome } from "./ops/target";
+export {
+  fingerprintOf,
+  opFactsHashOf,
+  opSchemaHash,
+  sealHasher,
+  sha256Hex,
+} from "./runs/hash";
+export {
+  RUN_CREDENTIAL,
+  runCredentialOf,
+  runTargetKey,
+  uuidOfDigest,
+} from "./runs/keys";
+export type { RunCredential } from "./runs/keys";
+export {
+  acquireLease,
+  appendChunk,
+  cancelRun,
+  confirmRun,
+  createRun,
+  listRuns,
+  markAttempted,
+  moveRun,
+  readOwnerRuns,
+  readRun,
+  readTargets,
+  readTargetStates,
+  recordOutcome,
+  recordStamps,
+  releaseLease,
+  renewLease,
+} from "./runs/ledger";
+export type {
+  LedgerRefusal,
+  LedgerRun,
+  LedgerTarget,
+  NewRun,
+  NewTarget,
+  Planned,
+} from "./runs/ledger";
+export {
+  canTransition,
+  deadlineOnEntering,
+  executeEntryState,
+  finalStateOf,
+  isStale,
+  isStalled,
+  isTerminal,
+  pastDeadline,
+  RUN_TRANSITIONS,
+} from "./runs/state";
+export {
   EXECUTE_TOOL_NAME,
   executeEnvelope,
   requestKeyFor,
@@ -47,7 +118,9 @@ export {
   actionsContinuation,
   actionsEnvelope,
   actionsIndex,
+  toolDetail,
 } from "./tools/actions";
+export { ADMIN_TOOL_EXAMPLES } from "./tools/examples";
 export {
   adminOpMeta,
   classToolViolations,
@@ -70,6 +143,7 @@ export { ADMIN_SURFACES } from "./surfaces";
 export type { AdminSurface, AdminSurfaceExclusion } from "./surfaces";
 export {
   ADMIN_ACTIONS_INDEX_ALARM_SHARE,
+  ADMIN_MCP_TOOL_RESERVE_BYTES,
   adminMcpBudgets,
   renderAdminMcpCapabilities,
 } from "./capabilities";

@@ -2,7 +2,10 @@ import { z } from "zod";
 
 import { operatorWorksQuerySchema } from "../community-operator/content-schemas.js";
 import { operatorCommentQuerySchema } from "../community-operator/schemas.js";
-import { isWellFormedEditorialText } from "../editorial/schemas.js";
+import {
+  EDITORIAL_STATEFUL_FIELDS,
+  isWellFormedEditorialText,
+} from "../editorial/schemas.js";
 import { ANALYTICS_RANGE_PRESETS } from "./analytics.js";
 
 /**
@@ -259,7 +262,8 @@ export const ADMIN_READ_PAGE_SIZE_MAX = 100;
 export const adminReadInputSchema = z.strictObject({
   op: z.string().min(1).max(64),
   input: z.record(z.string(), z.unknown()).optional(),
-  cursor: z.string().min(1).max(64).optional(),
+  // A run's keyset holds a microsecond time and a uuid: about 110 characters.
+  cursor: z.string().min(1).max(128).optional(),
   pageSize: z.number().int().min(1).max(ADMIN_READ_PAGE_SIZE_MAX).optional(),
   view: z.enum(ADMIN_READ_VIEWS).optional(),
   fields: z.array(z.string().min(1).max(64)).min(1).max(40).optional(),
@@ -271,18 +275,7 @@ const statusFilter = z.enum(["draft", "published", "all"]);
 
 /** Fields `missing` accepts: every stateful text, and the plain optional ones. */
 export const ADMIN_CATALOG_MISSING_FIELDS = [
-  "dynasty",
-  "dateText",
-  "province",
-  "prefecture",
-  "county",
-  "currentLocation",
-  "currentCustodian",
-  "description",
-  "scriptStyle",
-  "transcription",
-  "historicalContext",
-  "scholarlyResearch",
+  ...EDITORIAL_STATEFUL_FIELDS,
   "title",
   "summary",
   "periodLabel",
@@ -461,6 +454,9 @@ export type AdminGetInput = z.infer<typeof adminGetInputSchema>;
 export type AdminFieldFacts = z.infer<typeof adminFieldFactsSchema>;
 export type AdminRender = z.infer<typeof adminRenderSchema>;
 export type AdminReadInput = z.infer<typeof adminReadInputSchema>;
+/** The filter a CMS list source's input holds, by key. */
+export type AdminListFilterOf<Input extends z.ZodType<{ filter?: unknown }>> =
+  NonNullable<z.output<Input>["filter"]>;
 export type AdminReadView = (typeof ADMIN_READ_VIEWS)[number];
 export type AdminMediaRegion = z.infer<typeof adminMediaRegionSchema>;
 export type AdminViewMediaInput = z.infer<typeof adminViewMediaInputSchema>;

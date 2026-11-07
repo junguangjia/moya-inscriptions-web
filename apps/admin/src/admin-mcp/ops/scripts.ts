@@ -1,8 +1,15 @@
+import {
+  adminRunCancelEchoSchema,
+  adminRunCancelInputSchema,
+} from "@moya/contracts/internal/admin-mcp";
 import type { AdminOpName } from "@moya/contracts/internal/admin-mcp";
 
+import { cancelRunRun } from "../runs/ops";
 import {
   asynchronous,
+  example,
   irreversibleOp,
+  onField,
   readOp,
   reversibleOp,
   type AdminOpEntry,
@@ -110,5 +117,12 @@ export const otherOps: Readonly<Record<OtherOpName, AdminOpEntry>> = {
   "run.cancel": reversibleOp(
     "Cancel a run with no live lease.",
     "state_idempotent",
+    {
+      input: adminRunCancelInputSchema,
+      output: { ai: adminRunCancelEchoSchema },
+      run: cancelRunRun,
+      target: onField("run", "runId"),
+      example: { runId: example.run },
+    },
   ),
 };

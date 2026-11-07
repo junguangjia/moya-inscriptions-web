@@ -1293,10 +1293,13 @@ export const isAuthorizedCmsServerFile = (
     /^src\/admin-mcp\/(?:actions-for|audit|budget|capabilities|dispatch|door|envelope|guard|index|locate|locate-reference|native|record-views|records|refusal|registry|settlement|surfaces|text-window)\.ts$/.test(
       relative,
     ) ||
-    /^src\/admin-mcp\/ops\/(?:cms|cms-writes|community|community-reads|community-writes|define|editorial|list|list-sources|locks|patch-text|saves|scripts)\.ts$/.test(
+    /^src\/admin-mcp\/ops\/(?:cms|cms-writes|community|community-reads|community-writes|define|editorial|list|list-sources|locks|patch-text|saves|scripts|target)\.ts$/.test(
       relative,
     ) ||
-    /^src\/admin-mcp\/tools\/(?:actions|analytics|execute|find|get|get-community|get-window|index|job|read|view-media|whoami)\.ts$/.test(
+    /^src\/admin-mcp\/runs\/(?:answer|executor|hash|keys|ledger|ops|preview|sources|state)\.ts$/.test(
+      relative,
+    ) ||
+    /^src\/admin-mcp\/tools\/(?:actions|analytics|examples|execute|execute-irreversible|find|get|get-community|get-window|index|job|preview|read|view-media|whoami)\.ts$/.test(
       relative,
     ) ||
     /^src\/admin-mcp\/analytics\/(?:cache|service|umami-guard)\.ts$/.test(

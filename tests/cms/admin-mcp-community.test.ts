@@ -1037,7 +1037,6 @@ const inputsOf = (op: string): readonly Json[] => {
 const NOT_BUILT_HERE: ReadonlySet<string> = new Set([
   "list.invitations",
   "list.masters",
-  "list.runs",
   "ops.invitation.status",
   "ops.master.candidates",
   "ops.master.status",

@@ -59,7 +59,7 @@ import { nextOf, windowOfField } from "./get-window";
 
 export { GET_TOOL_NAME } from "./get-window";
 
-export const GET_DESCRIPTION = `Read one record, and always say which version was read. Default outline: per-field state, length, hash, no long text. {type:"catalog",id:7}, {type:"report",id:"report-..."}. Long text in windows, offsets in code points: {type,id,field:"transcription",offset}. Inside one field: {type,id,field:"transcription",find:{text:"..."}}. view also full, published, preview, history, diff; a community record has outline, full and field only.`;
+export const GET_DESCRIPTION = `Read one record and the version read. Default outline: per-field state, length, hash. {type:"catalog",id:7}. Long text: field and offset in code points, or find:{text}. view also full, published, preview, history, diff.`;
 
 /**
  * What tools/list shows: the record type, which grows with the registry, as a string,

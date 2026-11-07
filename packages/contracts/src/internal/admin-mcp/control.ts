@@ -1,4 +1,5 @@
 import type { AdminMcpSensitiveCategory } from "./op-meta.js";
+import type { AdminPreviewConsequence, AdminRunState } from "./runs.js";
 
 /**
  * The Owner's control page (admin-mcp-completion-v1 section 13). No key reads or
@@ -61,15 +62,70 @@ export interface AdminMcpToolTiming {
   readonly budgetMs: number | null;
 }
 
+/**
+ * A run past the threshold, as the Owner confirms it: what its preview froze, never a
+ * target's content. `reason` is the caller's own words, shown as plain text.
+ */
+export interface AdminMcpAwaitingRun {
+  readonly runId: string;
+  readonly op: string;
+  /** `key:<id>` or `conn:<id>`, and the key's label where it has one. */
+  readonly credential: string;
+  readonly credentialLabel: string | null;
+  readonly reason: string | null;
+  /** Targets that will run; conflicts found at preview never run. */
+  readonly count: number;
+  readonly conflicts: number;
+  readonly impact: Readonly<Record<string, number>> | null;
+  readonly sample: readonly {
+    readonly index: number;
+    readonly ref: string | number | null;
+  }[];
+  readonly consequences: readonly AdminPreviewConsequence[];
+  readonly userNotifications: number;
+  readonly newIdentities: {
+    readonly count: number;
+    readonly first: readonly {
+      readonly index: number;
+      readonly field: string;
+      readonly value: string;
+    }[];
+  } | null;
+  readonly expiresAt: string;
+  /** What the confirmation binds to: the run the page showed, and no other. */
+  readonly sealHash: string;
+}
+
+/** A run left with no live lease for a while: its credential resumes it, or a cancel ends it. */
+export interface AdminMcpStalledRun {
+  readonly runId: string;
+  readonly op: string;
+  readonly credential: string;
+  readonly credentialLabel: string | null;
+  readonly state: AdminRunState;
+  readonly count: number;
+  readonly done: number;
+  readonly updatedAt: string;
+}
+
 /** What the control view hands its browser half; null reads as unavailable. */
 export interface AdminMcpControlPage {
   readonly pause: boolean;
   readonly threshold: number;
   readonly switches: readonly AdminMcpSwitchRow[];
   readonly expiringKeys: readonly AdminMcpExpiringKey[];
+  readonly runs: {
+    readonly awaiting: readonly AdminMcpAwaitingRun[];
+    readonly stalled: readonly AdminMcpStalledRun[];
+  } | null;
   readonly figures: {
-    /** Irreversible targets executed in the last 24 hours. */
+    /** Irreversible targets executed in the last 24 hours, each once. */
     readonly irreversibleTargets: number;
+    /** The same, by credential: `key:<id>` or `conn:<id>`, most first. */
+    readonly irreversibleByCredential: readonly {
+      readonly credential: string;
+      readonly targets: number;
+    }[];
     /** Audit starts older than five minutes with no finish. */
     readonly outcomeUnknown: number;
     readonly timings: readonly AdminMcpToolTiming[];

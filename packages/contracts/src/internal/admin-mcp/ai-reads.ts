@@ -173,6 +173,137 @@ export const aiCountResultSchema = z.strictObject({
 export type AiCountResult = z.infer<typeof aiCountResultSchema>;
 
 /**
+ * Sources a selector freezes by filter, through `ai/select` (admin-mcp-completion-v1
+ * section 8). No op selects reports, so they are read by id alone.
+ */
+export const AI_SELECT_SOURCES = [
+  "comments",
+  "works",
+  "users",
+  "jobs",
+] as const satisfies readonly AiCountSource[];
+export type AiSelectSource = (typeof AI_SELECT_SOURCES)[number];
+
+/** Sources a preview reads the state of by id, to freeze it beside the input. */
+export const AI_STAMP_SOURCES = [
+  ...AI_SELECT_SOURCES,
+  "reports",
+] as const satisfies readonly AiCountSource[];
+export type AiStampSource = (typeof AI_STAMP_SOURCES)[number];
+
+/** Ids one read by id takes: one statement. */
+export const AI_SELECT_IDS_MAX = 100;
+/** Rows one block of a selector freezes: one statement, in one snapshot. */
+export const AI_SELECT_FREEZE_MAX = 5_000;
+
+/**
+ * What a selected row must still allow, so a row its op would refuse is never counted
+ * (section 8). The op picks one from its common input; the model never names one.
+ * comments: `pending` to approve or reject, `visible` to hide, `hidden` to unhide,
+ * `body_present` for a body not yet deleted, `thread_present` for a top-level comment
+ * whose thread stands. works: not already in the state asked. users: `active` to
+ * suspend, `suspended` to reinstate. jobs: `retryable` stopped, `abandonable` queued
+ * or failed, neither a Catalog block job.
+ */
+export const AI_SELECT_MOVABLE = {
+  comments: ["pending", "visible", "hidden", "body_present", "thread_present"],
+  works: ["not_visible", "not_hidden", "not_removed"],
+  users: ["active", "suspended"],
+  jobs: ["retryable", "abandonable"],
+} as const satisfies { readonly [Source in AiSelectSource]: readonly string[] };
+export type AiSelectMovable =
+  (typeof AI_SELECT_MOVABLE)[AiSelectSource][number];
+
+// Comma-separated, so one id and many read alike: a repeated key arrives as a string
+// or an array by count. No platform id holds a comma.
+const selectIds = z
+  .string()
+  .max(AI_SELECT_IDS_MAX * 129)
+  .transform((value) => value.split(","))
+  .pipe(z.array(operatorExactIdSchema).min(1).max(AI_SELECT_IDS_MAX))
+  .refine((ids) => new Set(ids).size === ids.length);
+
+/** Where a block ended, as the Backend issued it: opaque to the Admin. */
+const selectCursor = z.string().regex(/^k1:[A-Za-z0-9_-]{1,512}$/u);
+
+const movableOf = <Source extends AiSelectSource>(source: Source) =>
+  z.enum(AI_SELECT_MOVABLE[source]).optional();
+const byIds = <Source extends AiSelectSource>(source: Source) =>
+  z.strictObject({
+    source: z.literal(source),
+    ids: selectIds,
+    movable: movableOf(source),
+  });
+const byFilter = <Source extends AiSelectSource>(source: Source) => ({
+  source: z.literal(source),
+  movable: movableOf(source),
+  after: selectCursor.optional(),
+});
+
+/**
+ * By ids: the state of up to 100 named rows, a withheld one marked and never left out
+ * unnamed. By filter: the next block of the rows a list filter of the source matches,
+ * in one order, past `after`. A filter never selects a withheld row.
+ */
+export const aiSelectQuerySchema = z.union([
+  z.discriminatedUnion("source", [
+    byIds("comments"),
+    byIds("works"),
+    byIds("users"),
+    byIds("jobs"),
+    z.strictObject({ source: z.literal("reports"), ids: selectIds }),
+  ]),
+  z
+    .discriminatedUnion("source", [
+      operatorCommentFilterSchema.extend(byFilter("comments")),
+      operatorWorksFilterSchema.omit(noPage).extend(byFilter("works")),
+      operatorUsersQuerySchema.omit(noPage).extend(byFilter("users")),
+      operatorPublishingJobQuerySchema.omit(noPage).extend(byFilter("jobs")),
+    ])
+    .refine((query) =>
+      rangeInOrder(
+        query as { from?: string | undefined; to?: string | undefined },
+      ),
+    ),
+]);
+export type AiSelectQuery = z.infer<typeof aiSelectQuerySchema>;
+/** By ids: what a preview stamps its targets with. */
+export type AiSelectIdsQuery = Extract<
+  AiSelectQuery,
+  { readonly ids: readonly string[] }
+>;
+
+const fixedWord = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/u);
+
+export const aiSelectItemSchema = z.strictObject({
+  id: z.string(),
+  /** Content-free and opaque: the same at execution as at the preview, it has not moved. */
+  stamp: z.string().min(1).max(128),
+  /** What the row's write compares, where it takes one: a work's or a case's version. */
+  version: z.number().int().nonnegative().optional(),
+  /** Its state column now: a comment's moderation, a job's state, a user's status. */
+  state: fixedWord.optional(),
+  /** A comment's or a job's kind. */
+  kind: fixedWord.optional(),
+  /** The items a thread removal takes, its top-level comment included. */
+  affected: z.number().int().positive().optional(),
+  /** By ids alone: why this credential cannot act on the row. */
+  withheld: z.enum(["self_only", "personal_info"]).optional(),
+  /** By ids, with `movable`: the row is past what the op moves, so the op would refuse it. */
+  immovable: z.literal(true).optional(),
+});
+export type AiSelectItem = z.infer<typeof aiSelectItemSchema>;
+
+export const aiSelectResultSchema = z.strictObject({
+  items: z.array(aiSelectItemSchema).max(AI_SELECT_FREEZE_MAX),
+  /** By filter: where the next block starts, null once this one reached the end. */
+  next: selectCursor.nullable().optional(),
+  /** Named whatever the answer holds, with no count: withheld never reads as empty. */
+  excluded: z.array(z.string()),
+});
+export type AiSelectResult = z.infer<typeof aiSelectResultSchema>;
+
+/**
  * What a settlement names (admin-mcp-completion-v1 section 9). `item` is a job's own
  * subject, a media item or a Catalog asset, so it needs no community state and passes
  * on the base credential. The others name the record whose items an operation moved.
@@ -214,6 +345,11 @@ export interface AiOperatorReader {
   find(query: AiFindQuery): Promise<AiFindResult>;
   /** `timed_out`: no number, and the same call is worth repeating. */
   count(query: AiCountQuery): Promise<AiCountResult | "timed_out">;
+  /**
+   * The state of up to 100 named rows in one statement, a withheld one marked and never
+   * left out unnamed. A row that is not there is absent. `timed_out` is no answer.
+   */
+  select(query: AiSelectIdsQuery): Promise<AiSelectResult | "timed_out">;
   /** A subject that did not answer is `timed_out` or a throw, and never a settled one. */
   settlement(
     query: AiSettlementQuery,

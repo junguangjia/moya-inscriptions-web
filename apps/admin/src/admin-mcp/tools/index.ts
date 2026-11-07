@@ -4,11 +4,13 @@ import {
   ADMIN_MCP_TOOL_PROFILES,
   adminActionsInputSchema,
   adminAnalyticsInputSchema,
-  adminExecuteInputSchema,
+  adminExecuteCallSchema,
   adminFindInputSchema,
   adminGetInputSchema,
   adminJobInputSchema,
+  adminPreviewInputSchema,
   adminReadInputSchema,
+  adminRunInputSchema,
   adminViewMediaInputSchema,
 } from "@moya/contracts/internal/admin-mcp";
 import type {
@@ -34,6 +36,7 @@ import {
   actionsCatalogHash,
   actionsContinuation,
   actionsEnvelope,
+  actionsListedInput,
 } from "./actions";
 import {
   ANALYTICS_DESCRIPTION,
@@ -48,6 +51,13 @@ import {
   executeListedInput,
   executeReferences,
 } from "./execute";
+import {
+  EXECUTE_IRREVERSIBLE_DESCRIPTION,
+  EXECUTE_IRREVERSIBLE_TOOL_NAME,
+  executeIrreversibleEnvelope,
+  executeIrreversibleListedInput,
+  runReferences,
+} from "./execute-irreversible";
 import {
   FIND_DESCRIPTION,
   FIND_TOOL_NAME,
@@ -68,6 +78,13 @@ import {
   jobEnvelope,
   jobListedInput,
 } from "./job";
+import {
+  PREVIEW_DESCRIPTION,
+  PREVIEW_TOOL_NAME,
+  previewListedInput,
+  previewReferences,
+  previewToolEnvelope,
+} from "./preview";
 import {
   READ_DESCRIPTION,
   READ_TOOL_NAME,
@@ -122,6 +139,7 @@ export interface AdminMcpTool {
     readonly count?: number;
     readonly targetType?: string;
     readonly targetId?: string;
+    readonly runId?: string;
   };
   /** How a result cut at the size cap continues, from the records it kept. */
   continuation?(
@@ -141,6 +159,14 @@ const READ_ANNOTATIONS: AdminMcpAnnotations = {
 const EXECUTE_ANNOTATIONS: AdminMcpAnnotations = {
   readOnlyHint: false,
   destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+
+/** Irreversible, and the same requestId and run replay: a target never runs twice. */
+const EXECUTE_IRREVERSIBLE_ANNOTATIONS: AdminMcpAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: true,
   idempotentHint: true,
   openWorldHint: false,
 };
@@ -216,6 +242,7 @@ export const ADMIN_MCP_TOOLS: readonly AdminMcpTool[] = [
     klass: "read",
     profiles: ADMIN_MCP_TOOL_PROFILES,
     input: adminActionsInputSchema,
+    listedInput: actionsListedInput,
     run: async (input, { tools, req }) =>
       actionsEnvelope(input, tools, await controlFor(req)),
     continuation: actionsContinuation,
@@ -242,16 +269,41 @@ export const ADMIN_MCP_TOOLS: readonly AdminMcpTool[] = [
     continuation: jobContinuation,
   },
   {
+    name: PREVIEW_TOOL_NAME,
+    description: PREVIEW_DESCRIPTION,
+    // It writes only the run ledger, and the same requestId answers the same run.
+    annotations: EXECUTE_ANNOTATIONS,
+    klass: "reversible",
+    profiles: ["operate", "full"],
+    input: adminPreviewInputSchema,
+    listedInput: previewListedInput,
+    references: previewReferences,
+    run: (input, { key, req, tools }) =>
+      previewToolEnvelope(input, { key, req, tools }),
+  },
+  {
     name: EXECUTE_TOOL_NAME,
     description: EXECUTE_DESCRIPTION,
     annotations: EXECUTE_ANNOTATIONS,
     klass: "reversible",
     profiles: ["operate", "full"],
-    input: adminExecuteInputSchema,
+    input: adminExecuteCallSchema,
     listedInput: executeListedInput,
     references: executeReferences,
     run: (input, { key, req }) => executeEnvelope(input, { key, req }),
     continuation: executeContinuation,
+  },
+  {
+    name: EXECUTE_IRREVERSIBLE_TOOL_NAME,
+    description: EXECUTE_IRREVERSIBLE_DESCRIPTION,
+    annotations: EXECUTE_IRREVERSIBLE_ANNOTATIONS,
+    klass: "irreversible",
+    profiles: ["full"],
+    input: adminRunInputSchema,
+    listedInput: executeIrreversibleListedInput,
+    references: runReferences,
+    run: (input, { key, req }) =>
+      executeIrreversibleEnvelope(input, { key, req }),
   },
 ];
 
@@ -261,9 +313,21 @@ const isEmptyObject = (value: unknown) =>
   Object.keys(value).length === 0;
 
 /**
+ * Held by the runtime check alone, which names the path when one fails: a model writes
+ * no other call for a length or a pattern, and admin_actions shows them per op.
+ */
+const LISTED_WITHOUT: ReadonlySet<string> = new Set([
+  "minLength",
+  "maxLength",
+  "minItems",
+  "pattern",
+]);
+
+/**
  * What changes no call, and keeps tools/list inside its budget: Zod's safe-integer
- * bounds and the empty keys of an open object. A closed object stays closed, because a
- * model reads that.
+ * bounds, string lengths, patterns and least item counts, and the empty keys of an open
+ * object. A closed object stays closed, and maxItems, bounds and choices stay, because a
+ * model reads those.
  */
 const withoutNoise = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(withoutNoise);
@@ -275,6 +339,7 @@ const withoutNoise = (value: unknown): unknown => {
       .filter(
         ([key, item]) =>
           !(
+            LISTED_WITHOUT.has(key) ||
             ((key === "maximum" || key === "minimum") &&
               Math.abs(item as number) === Number.MAX_SAFE_INTEGER) ||
             (open &&
@@ -283,9 +348,23 @@ const withoutNoise = (value: unknown): unknown => {
                 (key === "properties" && isEmptyObject(item))))
           ),
       )
-      .map(([key, item]) => [key, withoutNoise(item)]),
+      .map(([key, item]) => [
+        key,
+        key === "properties"
+          ? propertiesWithoutNoise(item)
+          : withoutNoise(item),
+      ]),
   );
 };
+
+/** Field names are never schema keywords: a field called `pattern` stays listed. */
+const propertiesWithoutNoise = (value: unknown): unknown =>
+  Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([name, schema]) => [
+      name,
+      withoutNoise(schema),
+    ]),
+  );
 
 /** 2020-12 is the default dialect when a schema names none: 52 bytes a tool saved. */
 const inputSchemaOf = (input: z.ZodObject) => {

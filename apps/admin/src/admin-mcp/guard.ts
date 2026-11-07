@@ -25,6 +25,8 @@ export interface GuardCall {
   readonly targetType?: string;
   readonly targetId?: string;
   readonly requestId?: string;
+  /** A run's execute call: the run it went on, by its id. */
+  readonly runId?: string;
 }
 
 export interface GuardOutcome {

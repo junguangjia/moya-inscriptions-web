@@ -1,5 +1,6 @@
 import {
   ADMIN_ANALYTICS_REPORTS,
+  ADMIN_MCP_NATIVE_TOOLS,
   ADMIN_MCP_TEXT_CAP_BYTES,
   ADMIN_MCP_TOKEN_BUDGET,
   ADMIN_MCP_TOOL_PROFILES,
@@ -72,12 +73,34 @@ const TOOLS_LIST_FRAME_BYTES =
   bytesOf({ result: { tools: [] }, jsonrpc: "2.0", id: 1 }) - bytesOf([]);
 
 /**
+ * Held on tools/list for each native tool not listed yet, so the slice that adds one
+ * finds the room (section 5). The registry test fails once the full profile on the
+ * wire and this much for each tool to come pass the ceiling.
+ */
+export const ADMIN_MCP_TOOL_RESERVE_BYTES = 1_000;
+
+/**
  * The share of the text cap past which the registry test fails, so the index is paged
  * by family before it is cut (extensibility plan 2.11), not after.
  */
 export const ADMIN_ACTIONS_INDEX_ALARM_SHARE = 0.8;
 
 const EVERY_SWITCH = { dm: true, evidence: true, rawIp: true, selfOnly: true };
+
+/** The full profile lists every tool built, so what it lacks is still to come. */
+const reservedOnToolsList = () => {
+  const full = toolListingFor("full", false);
+  const toCome = ADMIN_MCP_NATIVE_TOOLS.filter(
+    (name) => !full.some((listing) => listing.name === name),
+  );
+  return {
+    toCome,
+    bytes:
+      bytesOf(full) +
+      TOOLS_LIST_FRAME_BYTES +
+      ADMIN_MCP_TOOL_RESERVE_BYTES * toCome.length,
+  };
+};
 
 /**
  * What each budget holds now, from the registry and the tool list. The index is the
@@ -97,6 +120,7 @@ export const adminMcpBudgets = () => ({
       name: listing.name,
       bytes: bytesOf(listing),
     })),
+    reserved: reservedOnToolsList(),
   },
   index: {
     bytes: bytesOf(
@@ -114,17 +138,20 @@ const usage = (bytes: number, ceiling: number) =>
 
 const budgetSection = () => {
   const { toolsList, index } = adminMcpBudgets();
+  const { reserved } = toolsList;
   const rows = [
     ...toolsList.profiles.map(
       ({ profile, bytes }) =>
         `| tools/list, profile \`${profile}\` | ${usage(bytes, toolsList.ceiling)} |`,
     ),
+    `| tools/list, profile \`full\` on the wire, with room for ${reserved.toCome.length} tools to come | ${usage(reserved.bytes, toolsList.ceiling)} |`,
     `| \`admin_actions\` index | ${usage(index.bytes, index.cap)} |`,
   ];
   const tools = toolsList.tools.map(
     ({ name, bytes }) => `| \`${name}\` | ${bytes} |`,
   );
-  return `## Budgets\n\nBytes of JSON. A tools/list figure is the JSON of the \`tools\` array alone, without the JSON-RPC frame, which adds ${toolsList.frame} bytes on the wire; it counts against \`ADMIN_MCP_TOKEN_BUDGET\` at 3 bytes a token. The \`admin_actions\` index is the text of its tool result, against the ${index.cap}-byte text cap, measured on every op tool with every switch open and no AI token placed, its largest form. Only the index has an alarm: the registry test fails past ${index.alarm} bytes, ${ADMIN_ACTIONS_INDEX_ALARM_SHARE * 100}% of the cap.\n\n| Measure | Bytes | Ceiling | Used | Left |\n| --- | --- | --- | --- | --- |\n${rows.join("\n")}\n\n| Tool | Bytes listed |\n| --- | --- |\n${tools.join("\n")}\n`;
+  const toCome = reserved.toCome.map((name) => `\`${name}\``).join(", ");
+  return `## Budgets\n\nBytes of JSON. A tools/list figure is the JSON of the \`tools\` array alone, without the JSON-RPC frame, which adds ${toolsList.frame} bytes on the wire; it counts against \`ADMIN_MCP_TOKEN_BUDGET\` at 3 bytes a token. The row with room for tools to come is the \`full\` profile with its frame, plus ${ADMIN_MCP_TOOL_RESERVE_BYTES} bytes held for each native tool not listed yet (${toCome || "none"}); the registry test fails past the ceiling. The \`admin_actions\` index is the text of its tool result, against the ${index.cap}-byte text cap, measured on every op tool with every switch open and no AI token placed, its largest form. The index also has an alarm: the registry test fails past ${index.alarm} bytes, ${ADMIN_ACTIONS_INDEX_ALARM_SHARE * 100}% of the cap.\n\n| Measure | Bytes | Ceiling | Used | Left |\n| --- | --- | --- | --- | --- |\n${rows.join("\n")}\n\n| Tool | Bytes listed |\n| --- | --- |\n${tools.join("\n")}\n`;
 };
 
 const familyOf = (name: AdminOpName) => name.slice(0, name.indexOf("."));
