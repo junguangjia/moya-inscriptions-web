@@ -841,6 +841,7 @@ for (const width of [320, 390]) {
         const slot = button.querySelector<HTMLElement>('[aria-hidden="true"]')!;
         const glyph = button.querySelector<HTMLElement>("[data-icon]")!;
         const samples: {
+          at: number;
           opacity: number;
           activation: number;
           sameNode: boolean;
@@ -854,46 +855,90 @@ for (const width of [320, 390]) {
         const pager = element.querySelector<HTMLElement>(
           "[data-horizontal-pager]",
         )!;
+        const publications: {
+          at: number;
+          previous: number;
+          progress: number;
+        }[] = [];
+        let overflow = false;
+        const record = (records: MutationRecord[]) => {
+          const at = performance.now();
+          for (const [index, entry] of records.entries()) {
+            if (publications.length >= 4096) {
+              overflow = true;
+              return;
+            }
+            publications.push({
+              at,
+              previous: Number(entry.oldValue),
+              progress: Number(
+                records[index + 1]?.oldValue ??
+                  pager.dataset.horizontalPagerProgress,
+              ),
+            });
+          }
+        };
+        const observer = new MutationObserver(record);
+        observer.observe(pager, {
+          attributes: true,
+          attributeFilter: ["data-horizontal-pager-progress"],
+          attributeOldValue: true,
+        });
         let previousProgress = Number(pager.dataset.horizontalPagerProgress);
         // A fixed frame count can stop before the click and spring settle.
         // Capture through actual completion under a bounded wall-clock deadline.
         const deadline = performance.now() + 5000;
-        while (performance.now() < deadline) {
-          await new Promise<void>((resolve) =>
-            requestAnimationFrame(() => resolve()),
-          );
-          samples.push({
-            opacity: Number(getComputedStyle(slot).opacity),
-            activation: Number(
-              button.style.getPropertyValue("--top-tab-activation"),
-            ),
-            sameNode: button.querySelector("[data-icon]") === glyph,
-            labelGap:
-              button.lastElementChild!.getBoundingClientRect().left -
-              glyph.getBoundingClientRect().right,
-            mask: getComputedStyle(glyph).maskImage,
-            scale: new DOMMatrixReadOnly(
-              getComputedStyle(slot.firstElementChild!).transform,
-            ).a,
-            progress: Number(
-              element.querySelector<HTMLElement>("[data-horizontal-pager]")!
-                .dataset.horizontalPagerProgress,
-            ),
-            previousProgress,
-            transitions: getComputedStyle(slot).transitionDuration,
-          });
-          previousProgress = Number(pager.dataset.horizontalPagerProgress);
-          if (
-            button.getAttribute("aria-selected") === "true" &&
-            pager.dataset.horizontalPagerScrolling === "false" &&
-            Math.abs(samples.at(-1)!.opacity - 1) < 0.000005
-          )
-            break;
+        try {
+          while (performance.now() < deadline) {
+            await new Promise<void>((resolve) =>
+              requestAnimationFrame(() => resolve()),
+            );
+            samples.push({
+              at: performance.now(),
+              opacity: Number(getComputedStyle(slot).opacity),
+              activation: Number(
+                button.style.getPropertyValue("--top-tab-activation"),
+              ),
+              sameNode: button.querySelector("[data-icon]") === glyph,
+              labelGap:
+                button.lastElementChild!.getBoundingClientRect().left -
+                glyph.getBoundingClientRect().right,
+              mask: getComputedStyle(glyph).maskImage,
+              scale: new DOMMatrixReadOnly(
+                getComputedStyle(slot.firstElementChild!).transform,
+              ).a,
+              progress: Number(
+                element.querySelector<HTMLElement>("[data-horizontal-pager]")!
+                  .dataset.horizontalPagerProgress,
+              ),
+              previousProgress,
+              transitions: getComputedStyle(slot).transitionDuration,
+            });
+            previousProgress = Number(pager.dataset.horizontalPagerProgress);
+            if (
+              button.getAttribute("aria-selected") === "true" &&
+              pager.dataset.horizontalPagerScrolling === "false" &&
+              Math.abs(samples.at(-1)!.opacity - 1) < 0.000005
+            )
+              break;
+          }
+        } finally {
+          record(observer.takeRecords());
+          observer.disconnect();
         }
-        return samples;
+        return { samples, publications, overflow };
       }, key);
       await home.getByRole("tab", { name: label, exact: true }).click();
-      const samples = await capture;
+      const diagnostic = await capture;
+      const { samples } = diagnostic;
+      await test.info().attach(`home-motion-${width}-${key}`, {
+        body: JSON.stringify({ key, index, ...diagnostic }),
+        contentType: "application/json",
+      });
+      expect(
+        diagnostic.overflow,
+        "motion publication diagnostic exceeded its bound",
+      ).toBe(false);
       expect(samples.at(-1)?.opacity).toBeCloseTo(1, 5);
       expect(
         samples.some(
@@ -965,7 +1010,7 @@ for (const width of [320, 390]) {
       await page.locator("html").evaluate((node) => {
         delete node.dataset.theme;
       });
-      for (const sample of samples) {
+      for (const [frame, sample] of samples.entries()) {
         const expected = [sample.progress, sample.previousProgress].map(
           (progress) => Math.max(0, 1 - Math.abs(index - progress)),
         );
@@ -975,6 +1020,13 @@ for (const width of [320, 390]) {
               Math.abs(sample.activation - activation),
             ),
           ),
+          JSON.stringify({
+            key,
+            index,
+            frame,
+            sample,
+            preceding: samples.slice(Math.max(0, frame - 3), frame),
+          }),
         ).toBeLessThan(0.00005);
         expect(sample.opacity).toBeCloseTo(sample.activation, 4);
         expect(sample.scale).toBeCloseTo(sample.activation, 4);
