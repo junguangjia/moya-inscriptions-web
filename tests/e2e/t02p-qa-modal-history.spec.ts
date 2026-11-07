@@ -123,8 +123,27 @@ for (const query of ["", "?qaChrome=hidden"] as const) {
       const image = detail.locator(
         '[data-detail-main-image][tabindex="0"], [data-feed-slide-image][tabindex="0"]',
       );
+      // #260: the desktop reader keeps its three position controls between Back
+      // and the image, so Tab reaches the image through them, inside Detail.
+      // Plain Tab on macOS WebKit skips them natively; Option-Tab below does
+      // not. Phone and tablet Detail has none.
+      const readerStops = detail
+        .getByRole("navigation", { name: "书法阅读定位" })
+        .getByRole("button");
+      const readerStopCount = await readerStops.count();
+      if (testInfo.project.name.startsWith("desktop-"))
+        expect(readerStopCount).toBe(3);
+      const plainTabStops = macWebKit ? 0 : readerStopCount;
+      for (let stop = 0; stop < plainTabStops; stop += 1) {
+        await expect(readerStops.nth(stop)).toBeFocused();
+        await page.keyboard.press("Tab");
+      }
       await expect(image).toBeFocused();
       await page.keyboard.press("Shift+Tab");
+      for (let stop = plainTabStops - 1; stop >= 0; stop -= 1) {
+        await expect(readerStops.nth(stop)).toBeFocused();
+        await page.keyboard.press("Shift+Tab");
+      }
       if (macWebKit) {
         // Native macOS WebKit skips implicit-tabindex buttons, also
         // without Search underneath: Shift+Tab from the explicit image target
@@ -141,6 +160,10 @@ for (const query of ["", "?qaChrome=hidden"] as const) {
         await page.keyboard.press("Tab");
         await expect(image).toBeFocused();
         await page.keyboard.press("Alt+Shift+Tab");
+        for (let stop = readerStopCount - 1; stop >= 0; stop -= 1) {
+          await expect(readerStops.nth(stop)).toBeFocused();
+          await page.keyboard.press("Alt+Shift+Tab");
+        }
       }
       await expect(back).toBeFocused();
       // Detail itself does not close on Escape. The isolated Search must not
@@ -149,16 +172,16 @@ for (const query of ["", "?qaChrome=hidden"] as const) {
       await expect(detail).toBeVisible();
       await expect(search).toHaveCount(1);
       await expect(back).toBeFocused();
-      await expect.poll(() => keys.length).toBe(macWebKit ? 5 : 3);
+      const tabPresses = macWebKit
+        ? 4 + readerStopCount
+        : 2 + 2 * readerStopCount;
+      await expect.poll(() => keys.length).toBe(tabPresses + 1);
       expect(keys).toEqual([
-        { key: "Tab", trusted: true, prevented: false },
-        { key: "Tab", trusted: true, prevented: false },
-        ...(macWebKit
-          ? [
-              { key: "Tab", trusted: true, prevented: false },
-              { key: "Tab", trusted: true, prevented: false },
-            ]
-          : []),
+        ...Array.from({ length: tabPresses }, () => ({
+          key: "Tab",
+          trusted: true,
+          prevented: false,
+        })),
         { key: "Escape", trusted: true, prevented: false },
       ]);
 

@@ -291,9 +291,13 @@ test("adds, switches, removes and signs out every account on one phone", async (
   await reload;
   settings = await openSettings(page);
   await expect(settings).toContainText("登录后管理账户设置");
-  await expect(settings.getByRole("button", { name: /^切换账号/ })).toHaveCount(
-    0,
-  );
+  // Unified Settings (#260, 91c56311) always offers 切换账号, so a guest can add
+  // an account from it. Signing every account out now shows in its list instead.
+  await settings.getByRole("button", { name: /^切换账号/ }).click();
+  await expect(settings.locator("[data-account-switcher]")).toBeVisible();
+  await expect(settings.locator("[data-account-current]")).toHaveCount(0);
+  await expect(settings.locator("[data-account-row]")).toHaveCount(0);
+  await expect(settings).toContainText("未登录");
   expect(fixture.operations).toEqual([
     "login:add",
     `switch:${first.handle}`,
