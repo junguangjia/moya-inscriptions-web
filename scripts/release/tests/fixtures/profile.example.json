@@ -53,7 +53,12 @@
     },
     "migrationSources": {
       "app": "database/community-migrations",
-      "cms": "apps/admin/src/migrations/index.ts"
+      "cms": "apps/admin/src/migrations/index.ts",
+      "appLauncher": "scripts/migrate-community.mjs"
+    },
+    "grantFiles": {
+      "cms": "infra/development/grant-cms-runtime.sql",
+      "app": "infra/development/work-publishing/grant-runtime.sql"
     },
     "envTemplates": {
       "web": "infra/production/env/web.env.example",
@@ -91,6 +96,9 @@
       "curl": "/usr/bin/curl",
       "nginx": "/usr/sbin/nginx",
       "psql": "/usr/bin/psql",
+      "pg_dump": "/usr/bin/pg_dump",
+      "pg_restore": "/usr/bin/pg_restore",
+      "node": "/usr/bin/node",
       "cp": "/bin/cp",
       "python": "/usr/bin/python3"
     },
@@ -258,7 +266,9 @@
         "ca": "CMS_DATABASE_SSL_CA_FILE"
       },
       "caFallback": "APP_MIGRATION_DATABASE_SSL_CA_FILE",
-      "appRole": { "envFile": "backend", "key": "APP_ROLE_DATABASE_URL" }
+      "appRole": { "envFile": "backend", "key": "APP_ROLE_DATABASE_URL" },
+      "cmsRuntimeRole": { "envFile": "admin", "key": "CMS_DATABASE_URL" },
+      "appMigrationService": "backend"
     },
     "checks": {
       "apex": "catalog.example.invalid",

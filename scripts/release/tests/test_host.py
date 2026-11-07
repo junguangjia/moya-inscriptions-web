@@ -419,6 +419,20 @@ class SwitchFailures(HostCase):
         self.fake.set(sleeping=None)
         self.assert_back_on_live(['web', 'admin'])
 
+    def test_a_start_that_hangs_ends_when_the_unit_is_touched_again(self):
+        # What the SIGTERM tests stand on: as systemd, a later job on the unit replaces the pending start job, which
+        # answers failure at once, not after the hang.
+        unit = self.h['services']['admin']['unit']
+        self.fake.set(sleepOnStart=unit)
+        began = time.monotonic()
+        starter = subprocess.Popen([str(self.fake.bin / 'systemctl'), 'start', unit])
+        while time.monotonic() < began + 30 and self.fake.state().get('sleeping') != unit:
+            time.sleep(0.05)
+        self.fake.systemctl('stop', unit)
+        self.assertEqual(starter.wait(timeout=60), 1)
+        self.assertLess(time.monotonic() - began, 20)
+        self.fake.set(sleeping=None)
+
     def test_rollback_that_fails_part_way_returns_to_the_head(self):
         self.adopt()
         plan = self.release()
@@ -1017,6 +1031,530 @@ class RollbackDrift(HostCase):
         self.assertEqual((self.cwd('web'), self.cwd('admin')), (self.live_cwd('web'), self.live_cwd('admin')))
         rc, value = self.step('verify')
         self.assertEqual(value['failures'], ['DRIFT:ENV:backend'])   # still drift, for adopt once the incident is over
+
+
+RUNS, TARGETS, RUNS_SQL, TARGETS_SQL, GRANTS = (fakehost.RUNS, fakehost.TARGETS, fakehost.RUNS_SQL,
+                                              fakehost.TARGETS_SQL, fakehost.GRANTS)
+FAMILY_ROWS = ['public.r1b_runs', 'public.r1b_run_targets']
+# What the synthetic grant file grants on objects that existed before the release: read back after it ran.
+PRESENT = 9           # schema public USAGE, users S/I/U, mcp_control S/I/U, payload_migrations.name SELECT, users_id_seq USAGE
+LAUNCHER = ('// the release\'s own launcher (synthetic)\nawait import("../services/catalog-postgres/dist/index.js");\n'
+            'await import("../services/community-postgres/dist/index.js");\n').encode()
+
+
+class MigrationCase(HostCase):
+    """migrate on the fake host: the plan's CMS migrations each with its ledger row in one transaction, the runtime
+    grants read back both ways, the backup rule, resuming after a failure, and switch held until migrate is done."""
+
+    def staged(self, commit=NEW, cms=None, grant=GRANTS, modes=None, **extra):
+        cms = cms or [(RUNS, fakehost.cms_source(RUNS_SQL)), (TARGETS, fakehost.cms_source(TARGETS_SQL))]
+        plan = self.fake.release(commit, modes or {'backend': 'root', 'admin': 'root'}, cms=cms, grant=grant, **extra)
+        rc, value = self.step('prepare', '--plan', plan)
+        self.assertEqual((rc, value['status']), (0, 'PREPARED'), value)
+        return plan
+
+    def migrate(self, plan, family='cms', pitr=True):
+        return self.step('migrate', '--plan', plan, '--family', family, *(['--pitr', 'confirmed'] if pitr else []))
+
+    def writes(self, query=None):
+        return [w for w in self.fake.state().get('writes', []) if query in (None, w['query'])]
+
+    def starts(self):
+        return {s: self.fake.unit(s).get('starts') for s in self.h['services']}
+
+    def backups(self):
+        folder = pathlib.Path(self.fake.P(self.h['paths']['state'] + '/backups'))
+        return sorted(p.name for p in folder.iterdir()) if folder.exists() else []
+
+    def acl(self, role=fakehost.CMS_RUNTIME):
+        return self.fake.state()['acl'].setdefault(role, {})
+
+
+class Migrations(MigrationCase):
+    def test_each_cms_migration_runs_with_its_ledger_row_in_one_transaction(self):
+        self.adopt()
+        plan = self.staged()
+        before = self.starts()
+        rc, value = self.migrate(plan)
+        self.assertEqual((rc, value['status'], value['applied'], value['already']), (0, 'MIGRATED', [RUNS, TARGETS], []),
+                         value)
+        import release as R
+        for write, (name, sql) in zip(self.writes('cms_migrate'), ((RUNS, RUNS_SQL), (TARGETS, TARGETS_SQL))):
+            self.assertTrue(write['single'], 'one psql --single-transaction call')
+            self.assertEqual(write['user'], 'r1_cms')                          # the CMS migration role
+            self.assertIn('-c lock_timeout=5000', write['options'])            # never queued behind the live services
+            self.assertIn('-c statement_timeout=', write['options'])
+            statement = write['statement']
+            self.assertIn(R.cms_sql(name, fakehost.cms_source(sql)), statement)
+            self.assertIn("INSERT INTO payload_migrations (name, batch, updated_at, created_at) SELECT '%s'" % name, statement)
+            self.assertLess(statement.index("payload_migrations WHERE name = '%s'" % name), statement.index('CREATE TABLE'))
+        self.assertEqual(len(self.writes('cms_migrate')), 2)
+        grants = self.writes('cms_grants')
+        self.assertEqual([(g['single'], g['variables'], g['user']) for g in grants],
+                         [(True, {'ON_ERROR_STOP': '1', 'VERBOSITY': 'sqlstate', 'cms_role': fakehost.CMS_RUNTIME}, 'r1_cms')])
+        # The grant file was rehearsed first, rolled back, without the statements that name the new tables.
+        rehearsal = self.fake.state()['rehearsals'][-1]
+        self.assertEqual((rehearsal['single'], rehearsal['variables']['cms_role']), (False, fakehost.CMS_RUNTIME))
+        self.assertIn('-c lock_timeout=5000', rehearsal['options'])
+        self.assertIn('RAISE EXCEPTION', rehearsal['statement'])
+        self.assertNotIn('r1b_runs', rehearsal['statement'])
+        self.assertEqual(self.fake.state()['ledgers']['cms'][-2:], [RUNS, TARGETS])
+        tables = value['privileges']['tables']
+        self.assertEqual([t['table'] for t in tables], FAMILY_ROWS)
+        for table in tables:
+            self.assertEqual(table['granted'], ['SELECT', 'INSERT', 'UPDATE'])
+            self.assertTrue({'DELETE', 'TRUNCATE'} <= set(table['absent']), table)
+        self.assertEqual(len(value['privileges']['present']), PRESENT)
+        self.assertEqual((value['privileges']['checked'], value['privileges']['mismatches']), (14 + PRESENT, []))
+        self.assertEqual(value['ledgers'], {'cms': {'count': 3}})
+        self.assertEqual(value['runtimeRole'], fakehost.CMS_RUNTIME)
+        self.assertEqual([e['op'] for e in self.ledger()], ['adopt'])           # migrate writes no ledger entry
+        self.assertEqual(self.starts(), before)                                 # and touches no service
+
+    def test_a_failed_migration_stops_before_any_switch_and_migrate_again_resumes(self):
+        self.adopt()
+        plan = self.staged()
+        self.fake.set(failSql='r1b_targets_guard')
+        rc, value = self.migrate(plan)
+        self.assertEqual((rc, value['status'], value['code'], value['applied']),
+                         (2, 'REFUSED', 'SQL_FAILED:cms_migrate:42P07', [RUNS]), value)
+        self.assertTrue(value['hint'].startswith('forward only'), value)
+        self.assertIn('do not run rollback', value['hint'])
+        ledger = self.fake.state()['ledgers']['cms']
+        self.assertIn(RUNS, ledger)
+        self.assertNotIn(TARGETS, ledger)
+        self.assertNotIn('r1b_run_targets', self.fake.state()['tables']['cms'])
+        self.assertEqual(self.writes('cms_grants'), [])
+        before = self.starts()
+        rc, value = self.step('switch', '--services', 'backend,admin', '--plan', plan)
+        self.assertEqual((rc, value.get('code')), (2, 'MIGRATIONS_NOT_DONE:cms:run migrate --family cms first'), value)
+        self.assertEqual(self.starts(), before)
+        self.assertEqual((self.cwd('admin'), self.cwd('backend')), (self.live_cwd('admin'), self.live_cwd('backend')))
+        self.fake.set(failSql=None)
+        rc, value = self.migrate(plan)
+        self.assertEqual((rc, value['status'], value['already'], value['applied']), (0, 'MIGRATED', [RUNS], [TARGETS]),
+                         value)
+        self.assertTrue(value['backup']['dump']['reused'], value)                # the dump taken before anything changed
+        self.assertEqual(len(self.fake.state()['dumps']), 1)
+        self.assertEqual(self.fake.state()['ledgers']['cms'].count(RUNS), 1)
+        rc, value = self.step('switch', '--services', 'backend,admin', '--plan', plan)
+        self.assertEqual((rc, value['status']), (0, 'SWITCHED'), value)
+        rc, value = self.migrate(plan)                                          # again after success: nothing to do
+        self.assertEqual((value['status'], value['applied'], value['backup']['dump'][:10]), ('MIGRATED', [], 'NOT_NEEDED'))
+
+    def test_a_failed_grant_or_privilege_check_stops_and_the_latest_run_decides(self):
+        self.adopt()
+        plan = self.staged()
+        self.fake.set(aclExtra={'public.r1b_runs': ['DELETE']})                # e.g. default privileges on new tables
+        rc, value = self.migrate(plan)
+        self.assertEqual((rc, value['status']), (2, 'REFUSED'), value)
+        self.assertEqual(value['code'], 'PRIVILEGES_NOT_AS_EXPECTED:public.r1b_runs:DELETE:EXTRA')
+        self.assertIn('default privileges', value['hint'])
+        self.assertEqual(value['applied'], [RUNS, TARGETS])
+        self.assertEqual(self.step('switch', '--services', 'admin', '--plan', plan)[1]['code'],
+                         'MIGRATIONS_NOT_DONE:cms:run migrate --family cms first')
+        self.fake.set(aclExtra={}, acl={}, grantFail=True)
+        rc, value = self.migrate(plan)
+        self.assertEqual((value['status'], value['code'], value['already'], value['applied']),
+                         ('REFUSED', 'SQL_FAILED:cms_grants:42501', [RUNS, TARGETS], []), value)
+        self.fake.set(grantFail=False)
+        rc, value = self.migrate(plan)
+        self.assertEqual((rc, value['status'], value['privileges']['mismatches']), (0, 'MIGRATED', []), value)
+        self.assertEqual(self.step('switch', '--services', 'backend', '--plan', plan)[1]['status'], 'SWITCHED')
+        # A later run of the same plan that stops holds it back again: the latest finished run decides, not any.
+        self.fake.set(aclExtra={'public.r1b_run_targets': ['TRUNCATE']})
+        self.assertEqual(self.migrate(plan)[1]['code'], 'PRIVILEGES_NOT_AS_EXPECTED:public.r1b_run_targets:TRUNCATE:EXTRA')
+        self.assertEqual(self.step('switch', '--services', 'admin', '--plan', plan)[1]['code'],
+                         'MIGRATIONS_NOT_DONE:cms:run migrate --family cms first')
+        rc, value = self.step('verify')
+        self.assertIn('MIGRATIONS_NOT_DONE:cms:' + plan, value['failures'])
+        acl = self.acl()
+        acl['public.r1b_run_targets'].remove('TRUNCATE')
+        self.fake.set(aclExtra={}, acl={fakehost.CMS_RUNTIME: acl})
+        self.assertEqual(self.migrate(plan)[1]['status'], 'MIGRATED')
+        self.assertEqual(self.step('switch', '--services', 'admin', '--plan', plan)[1]['status'], 'SWITCHED')
+        self.assertEqual(self.step('verify')[1]['status'], 'PASS')
+
+    def test_the_backup_rule(self):
+        self.adopt()
+        plan = self.staged()
+        rc, value = self.migrate(plan, pitr=False)
+        self.assertTrue(value['code'].startswith('PITR_NOT_CONFIRMED:'), value)
+        self.fake.set(relationBytes=1 << 60)
+        rc, value = self.migrate(plan)
+        self.assertTrue(value['code'].startswith('DISK_FREE:'), value)
+        self.fake.set(relationBytes=65536, dumpFail=True)
+        rc, value = self.migrate(plan)
+        self.assertEqual(value['code'], 'BACKUP_FAILED:cms:1', value)
+        self.assertEqual(self.backups(), [])                                    # a failed dump never stays
+        self.fake.set(dumpFail=False, restoreDrops=['public.users'])
+        rc, value = self.migrate(plan)
+        self.assertEqual(value['code'], 'BACKUP_UNREADABLE:cms', value)         # every relation must read back
+        self.assertEqual(self.backups(), [])
+        self.assertEqual((self.writes(), self.fake.state()['ledgers']['cms'][-1]),
+                         ([], '20261105_131739_mcp_connection_identity'))       # nothing applied before a dump
+        # Nothing committed yet: a run again takes a new dump, and the one it replaces goes.
+        self.fake.set(restoreDrops=[], failSql='r1b_runs_state')
+        first = self.migrate(plan)[1]
+        self.assertEqual((first['code'], first['applied']), ('SQL_FAILED:cms_migrate:42P07', []))
+        again = self.migrate(plan)[1]
+        self.assertFalse(again['backup']['dump']['reused'])
+        self.assertEqual(again['backup']['dump']['removed'], [first['backup']['dump']['file']])
+        # A dump cut off by SIGKILL, one whose sidecar no longer matches and an orphan sidecar are never counted.
+        folder = self.h['paths']['state'] + '/backups'
+        for name, raw in (('%s-cms-%d.dump.partial' % ('e' * 16, time.time_ns()), b'PGDMP partial'),
+                          ('%s-cms-%d.dump' % ('f' * 16, time.time_ns()), b'PGDMP["public.users"]'),
+                          ('%s-cms-%d.dump.sha256' % ('d' * 16, time.time_ns()), b'0' * 64)):
+            self.fake.write(folder + '/' + name, raw, 0o600)
+        self.fake.write(folder + '/%s-cms-%d.dump.sha256' % ('f' * 16, time.time_ns() - 1), b'0' * 64, 0o600)
+        self.fake.set(failSql=None)
+        rc, value = self.migrate(plan)
+        self.assertEqual(value['status'], 'MIGRATED', value)
+        dump = value['backup']['dump']
+        self.assertEqual(self.backups(), sorted([os.path.basename(dump['file']), os.path.basename(dump['file']) + '.sha256']))
+        # Only what the migrations touch: the existing table they name (users) and the ledger, not every CMS table.
+        self.assertEqual((dump['tables'], self.fake.state()['dumps'][-1]['tables']),
+                         (['public.payload_migrations', 'public.users'],) * 2)
+        self.assertEqual(self.fake.state()['dumps'][-1]['user'], 'r1_cms')
+        self.assertEqual(value['backup']['primary'], H.PITR_NOTE)
+        path = self.fake.P(dump['file'])
+        self.assertEqual(oct(os.stat(path).st_mode & 0o777), '0o600')
+        self.assertEqual(pathlib.Path(path + '.sha256').read_text().split()[0], H.sha_real(path))
+        kept = []
+        for commit, name in ((NEWER, '20261106_130000_r1b_marks'), ('eeee5555' + NEW[8:], '20261106_140000_r1b_flags')):
+            table = name.split('_', 2)[2]
+            later = self.staged(commit, cms=[(name, fakehost.cms_source(
+                'CREATE TABLE "%s" ("id" uuid PRIMARY KEY, "user_id" integer REFERENCES "users"("id"));' % table))],
+                grant=GRANTS + ('GRANT SELECT ON TABLE public.%s TO :"cms_role";\n' % table).encode())
+            rc, value = self.migrate(later)
+            self.assertEqual(value['status'], 'MIGRATED', value)
+            kept.append(value['backup']['dump']['file'])
+        self.assertEqual([n for n in self.backups() if n.endswith('.dump')],
+                         sorted(os.path.basename(k) for k in kept))             # at most two dumps stay
+        self.assertEqual(value['backup']['dump']['removed'], [dump['file']])
+
+
+class MigrationReads(MigrationCase):
+    """The App family, and what reads the migrations afterwards: verify, rollback, migrate --check."""
+
+    def test_app_family_runs_the_releases_own_launcher_resumes_and_reads_the_app_roles_grants(self):
+        self.adopt()
+        files = {'20261105010000_a.sql': b'select 1;\n', '20261105030000_b.sql': b'select 1;\n',
+                 '20261107010000_c.sql': b'CREATE TABLE community.r1b_c (id integer PRIMARY KEY);\n',
+                 '20261107020000_d.sql': b'ALTER TABLE community.works ADD COLUMN r1b_note text;\n'}
+        app = {'pending': ['20261107010000', '20261107020000'], 'files': files, 'launcher': LAUNCHER}
+        plan = self.fake.release(NEW, {'backend': 'root', 'issuer': 'restart'}, app=app)
+        rc, value = self.migrate(plan, 'app')
+        self.assertEqual(value['code'], 'PREPARE_NOT_DONE:' + plan)             # it runs from the new root
+        self.assertEqual(self.step('prepare', '--plan', plan)[1]['status'], 'PREPARED')
+        rc, check = self.call('migrate-check', '--plan', plan, '--family', 'app')
+        self.assertEqual((check['status'], check['ready'], check['modulesMissing'], check['appRole']),
+                         ('MIGRATE_CHECKED', True, [], fakehost.APP_ROLE), check)
+        self.fake.set(appFailAt='20261107020000')
+        rc, value = self.migrate(plan, 'app')
+        self.assertEqual((rc, value['code'], value['applied']), (2, 'APP_MIGRATION_FAILED', ['20261107010000']), value)
+        self.assertIn('names no cause', value['hint'])
+        self.assertEqual(value['ledgers']['app'], {'count': 3, 'before': 2})
+        run = self.fake.state()['nodeRuns'][-1]
+        self.assertEqual(run['launcher'], 'scripts/migrate-community.mjs')
+        self.assertEqual(run['services'], self.fake.P(self.new_cwd('backend') + '/services'))
+        self.assertEqual(self.step('switch', '--services', 'backend', '--plan', plan)[1]['code'],
+                         'MIGRATIONS_NOT_DONE:app:run migrate --family app first')
+        self.fake.set(appFailAt=None)
+        rc, value = self.migrate(plan, 'app')
+        # Applied, but the App role has nothing on the new table yet: the operator runs the App grant file.
+        self.assertEqual((rc, value['status'], value['already'], value['applied']),
+                         (2, 'REFUSED', ['20261107010000'], ['20261107020000']), value)
+        self.assertEqual(value['code'], 'APP_GRANTS_MISSING:community.r1b_c:SELECT:MISSING,community.r1b_c:INSERT:MISSING')
+        self.assertIn('does not run the App grant file', value['hint'])
+        self.assertTrue(value['backup']['dump']['reused'])
+        self.assertEqual(self.fake.state()['dumps'][0]['tables'], ['community.schema_migrations', 'community.works'])
+        self.assertEqual(self.step('switch', '--services', 'backend', '--plan', plan)[1]['code'],
+                         'MIGRATIONS_NOT_DONE:app:run migrate --family app first')
+        self.fake.set(acl={fakehost.APP_ROLE: {'community.r1b_c': ['SELECT', 'INSERT']}})
+        rc, value = self.migrate(plan, 'app')
+        self.assertEqual((rc, value['status'], value['applied'], value['privileges']['mismatches'], value['appRole']),
+                         (0, 'MIGRATED', [], [], fakehost.APP_ROLE), value)
+        self.assertEqual(self.step('switch', '--services', 'backend,issuer', '--plan', plan)[1]['status'], 'SWITCHED')
+        self.assertEqual(self.step('verify')[1]['privileges']['app']['mismatches'], [])
+        self.fake.set(acl={fakehost.APP_ROLE: {'community.r1b_c': ['SELECT', 'INSERT', 'DELETE']}})
+        self.assertEqual(self.step('verify')[1]['failures'], ['PRIVILEGES:app:community.r1b_c:DELETE:EXTRA'])
+
+    def test_an_app_grant_a_do_block_makes_counts_for_the_new_table(self):
+        # home-timeline-v1's shape (#389): the App file grants its new table in a DO block under a to_regclass guard.
+        self.adopt()
+        files = {'20261105010000_a.sql': b'select 1;\n', '20261105030000_b.sql': b'select 1;\n',
+                 '20261107030000_t.sql': b'CREATE TABLE community.r1b_timeline (entry_id text PRIMARY KEY, title text);\n'}
+        plan = self.fake.release(NEW, {'backend': 'root'}, app={'pending': ['20261107030000'], 'files': files,
+                                                                 'launcher': LAUNCHER, 'grant': fakehost.APP_DO_GRANTS})
+        self.assertEqual(self.step('prepare', '--plan', plan)[1]['status'], 'PREPARED')
+        rc, value = self.migrate(plan, 'app')
+        self.assertEqual((rc, value['code']), (2, 'APP_GRANTS_MISSING:community.r1b_timeline:SELECT:MISSING'), value)
+        self.fake.set(acl={fakehost.APP_ROLE: {'community.r1b_timeline': ['SELECT']}})       # the operator ran the file
+        rc, value = self.migrate(plan, 'app')
+        self.assertEqual((rc, value['status'], value['privileges']['checked'], value['privileges']['mismatches']),
+                         (0, 'MIGRATED', 7, []), value)
+        self.assertEqual(value['privileges']['tables'], [{'table': 'community.r1b_timeline', 'granted': ['SELECT'], 'absent': [
+            'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'], 'columns': {}}])
+
+    def test_the_app_launchers_modules_must_be_in_the_new_root(self):
+        self.adopt()
+        files = {'20261107010000_c.sql': b'ALTER TABLE community.works ADD COLUMN r1b_note text;\n'}
+        launcher = LAUNCHER + b'await import("../services/elsewhere/dist/index.js");\n'
+        plan = self.fake.release(NEW, {'backend': 'root'}, app={'pending': ['20261107010000'], 'files': files,
+                                                                 'launcher': launcher})
+        self.assertEqual(self.step('prepare', '--plan', plan)[1]['status'], 'PREPARED')
+        rc, check = self.call('migrate-check', '--plan', plan, '--family', 'app')
+        self.assertEqual((check['ready'], check['modulesMissing']), (False, ['services/elsewhere/dist/index.js']))
+        self.assertNotIn('appRole', check)                                      # no new table: no App grants to read
+        rc, value = self.migrate(plan, 'app')
+        self.assertEqual((value['code'], value['applied']), ('APP_RUNNER_MODULE_MISSING:services/elsewhere/dist/index.js', []))
+        self.assertEqual((self.fake.state().get('nodeRuns'), self.fake.state()['dumps']), (None, []))
+
+    def test_verify_reads_the_ledger_counts_and_the_privileges(self):
+        self.adopt()
+        plan = self.staged()
+        self.assertEqual(self.migrate(plan)[1]['status'], 'MIGRATED')
+        self.assertEqual(self.step('switch', '--services', 'backend,admin', '--plan', plan)[1]['status'], 'SWITCHED')
+        rc, value = self.step('verify')
+        self.assertEqual((rc, value['status']), (0, 'PASS'), value)
+        self.assertEqual(value['ledgers'], {'app': {'count': 2}, 'cms': {'count': 3}})
+        self.assertEqual(value['privileges'], {'cms': {'checked': 14 + PRESENT, 'mismatches': []}})
+        acl = self.acl()
+        acl['public.r1b_runs'].append('TRUNCATE')
+        acl['schema:public'].remove('USAGE')
+        self.fake.set(acl={fakehost.CMS_RUNTIME: acl})
+        rc, value = self.step('verify')
+        self.assertEqual((value['status'], value['failures']),
+                         ('FAIL', ['PRIVILEGES:cms:public.r1b_runs:TRUNCATE:EXTRA', 'PRIVILEGES:cms:schema:public:USAGE:MISSING']))
+        acl['public.r1b_runs'].remove('TRUNCATE')
+        acl['schema:public'].append('USAGE')
+        acl['public.r1b_run_targets'].remove('UPDATE')
+        ledgers = self.fake.state()['ledgers']
+        ledgers['cms'].append('20261106_150000_outside')
+        self.fake.set(acl={fakehost.CMS_RUNTIME: acl}, ledgers=ledgers)
+        rc, value = self.step('verify')
+        self.assertEqual(value['failures'], ['LEDGER_COUNT:cms:4:3', 'PRIVILEGES:cms:public.r1b_run_targets:UPDATE:MISSING'])
+        ledgers['cms'] = [n for n in ledgers['cms'] if n != TARGETS]            # the count is right, a row is gone
+        acl['public.r1b_run_targets'].append('UPDATE')
+        self.fake.set(acl={fakehost.CMS_RUNTIME: acl}, ledgers=ledgers)
+        self.assertEqual(self.step('verify')[1]['failures'], ['LEDGER_MISSING:cms:' + TARGETS])
+
+    def test_rollback_never_touches_a_migration(self):
+        self.adopt()
+        plan = self.staged()
+        self.migrate(plan)
+        self.step('switch', '--services', 'backend,admin', '--plan', plan)
+        writes = len(self.writes())
+        rc, value = self.step('rollback', '--to', 'previous')
+        self.assertEqual((rc, value['status']), (0, 'ROLLED_BACK'), value)
+        self.assertTrue(value['migrations'].startswith('untouched: rollback never runs a down migration'), value)
+        self.assertEqual(self.cwd('admin'), self.live_cwd('admin'))
+        self.assertEqual(self.fake.state()['ledgers']['cms'][-2:], [RUNS, TARGETS])
+        self.assertEqual(len(self.writes()), writes)
+        self.assertEqual(self.step('verify')[1]['status'], 'PASS')
+
+    def test_migrate_check_changes_nothing_and_migrate_refuses_before_any_change(self):
+        self.adopt()
+        plan = self.staged()
+        rc, value = self.call('migrate-check', '--plan', plan, '--family', 'cms')
+        self.assertEqual((value['status'], value['pending'], value['already'], value['ready'], value['grantRehearsal']),
+                         ('MIGRATE_CHECKED', [RUNS, TARGETS], [], True, 'ROLLED_BACK_OK'), value)
+        self.assertEqual((value['objects'], value['runtimeRole'], value['missing'], value['notOwned'], value['conflicts']),
+                         (['public.payload_migrations', 'public.users'], fakehost.CMS_RUNTIME, [], [], []))
+        self.assertEqual((self.writes(), self.fake.state()['dumps']), ([], []))
+        self.assertFalse(pathlib.Path(self.fake.P(self.h['paths']['state'] + '/runs/migrate')).exists())
+        self.fake.set(notOwned=['public.users'])
+        self.assertFalse(self.call('migrate-check', '--plan', plan, '--family', 'cms')[1]['ready'])
+        rc, value = self.migrate(plan)
+        self.assertEqual(value['code'], 'GRANT_OBJECTS_NOT_OWNED:public.users')
+        self.fake.set(notOwned=[])
+        elsewhere = self.staged(NEWER, grant=GRANTS + b'GRANT SELECT ON TABLE public.nowhere TO :"cms_role";\n')
+        rc, value = self.migrate(elsewhere)
+        self.assertEqual(value['code'], 'GRANT_OBJECTS_MISSING:public.nowhere')
+        ledgers = self.fake.state()['ledgers']
+        ledgers['cms'].append('20261106_110000_outside')
+        self.fake.set(ledgers=ledgers)
+        rc, value = self.migrate(plan)
+        self.assertEqual(value['code'], 'LEDGER_MOVED_SINCE_PLAN:cms')
+        self.assertEqual((self.writes(), self.fake.state()['dumps']), ([], []))
+        rc, value = self.call('migrate-check', '--plan', plan, '--family', 'app')
+        self.assertEqual(value['code'], 'NO_MIGRATIONS_IN_PLAN:app')
+
+
+class MigrationGuards(MigrationCase):
+    """What stops migrate before anything changes, the objects a release creates beside its tables, rollback while a
+    release switched nothing, the baseline verify reads, and the guards no other test reached."""
+
+    def test_the_grant_files_own_guard_and_default_privileges_stop_before_anything_changes(self):
+        self.adopt()
+        plan = self.staged()
+        self.fake.set(guardFail=True)                                           # e.g. the runtime role owns a table
+        rc, check = self.call('migrate-check', '--plan', plan, '--family', 'cms')
+        self.assertEqual((check['grantRehearsal'], check['ready']), ('SQL_FAILED:cms_grant_rehearsal:P0001', False))
+        rc, value = self.migrate(plan)
+        self.assertEqual((rc, value['code'], value['applied']), (2, 'GRANT_REHEARSAL:SQL_FAILED:cms_grant_rehearsal:P0001', []))
+        self.fake.set(guardFail=False, defaultAcl={'cms': ['r:DELETE', 'r:SELECT']})
+        rc, check = self.call('migrate-check', '--plan', plan, '--family', 'cms')
+        self.assertEqual((check['defaultPrivileges'], check['conflicts'], check['ready']),
+                         (['r:DELETE', 'r:SELECT'], ['public.r1b_runs:DELETE', 'public.r1b_run_targets:DELETE'], False))
+        rc, value = self.migrate(plan)
+        self.assertEqual(value['code'], 'DEFAULT_PRIVILEGES:public.r1b_runs:DELETE,public.r1b_run_targets:DELETE')
+        self.assertIn('nothing was changed', value['hint'])
+        self.assertEqual((self.writes(), self.fake.state()['dumps'], self.backups()), ([], [], []))
+        self.fake.set(defaultAcl={'cms': ['r:SELECT']})                          # what the file grants anyway
+        self.assertEqual(self.migrate(plan)[1]['status'], 'MIGRATED')
+
+    def test_a_serial_tables_sequence_and_a_column_grant_are_the_releases_own(self):
+        self.adopt()
+        plan = self.staged(cms=[(RUNS, fakehost.cms_source(RUNS_SQL)), (fakehost.NOTES, fakehost.cms_source(fakehost.NOTES_SQL))],
+                           grant=fakehost.NOTES_GRANTS)
+        rc, check = self.call('migrate-check', '--plan', plan, '--family', 'cms')
+        self.assertEqual((check['ready'], check['missing']), (True, []), check)  # its sequence is not a missing object
+        rc, value = self.migrate(plan)
+        self.assertEqual(value['status'], 'MIGRATED', value)
+        notes = [t for t in value['privileges']['tables'] if t['table'] == 'public.r1b_notes'][0]
+        self.assertEqual((notes['granted'], notes['columns']), (['SELECT', 'INSERT'], {'UPDATE': ['note']}))
+        self.assertEqual(value['privileges']['sequences'], [{'sequence': 'public.r1b_notes_id_seq', 'granted': ['USAGE'],
+                                                             'absent': ['SELECT', 'UPDATE']}])
+        self.assertEqual(value['privileges']['checked'], 14 + 1 + 3 + PRESENT)
+        self.assertEqual(self.step('switch', '--services', 'backend,admin', '--plan', plan)[1]['status'], 'SWITCHED')
+        acl = self.acl()
+        acl.pop('public.r1b_notes.note')
+        acl['public.r1b_notes_id_seq'].append('UPDATE')                        # setval for the runtime: not granted
+        self.fake.set(acl={fakehost.CMS_RUNTIME: acl})
+        self.assertEqual(self.step('verify')[1]['failures'], ['PRIVILEGES:cms:public.r1b_notes.note:UPDATE:MISSING',
+                                                              'PRIVILEGES:cms:public.r1b_notes_id_seq:UPDATE:EXTRA'])
+
+    def test_rollback_while_a_release_switched_nothing_refuses(self):
+        self.adopt()
+        earlier = self.staged(NEWER, cms=[('20261106_110000_r1b_old', fakehost.cms_source(
+            'CREATE TABLE "r1b_old" ("id" integer PRIMARY KEY);'))],
+            grant=fakehost.EXISTING_GRANTS + b'GRANT SELECT ON TABLE public.r1b_old TO :"cms_role";\n')
+        self.assertEqual(self.migrate(earlier)[1]['status'], 'MIGRATED')
+        self.assertEqual(self.step('switch', '--services', 'backend,admin', '--plan', earlier)[1]['status'], 'SWITCHED')
+        plan = self.staged()
+        self.fake.set(failSql='r1b_runs_state')
+        self.assertEqual(self.migrate(plan)[1]['status'], 'REFUSED')
+        before = (self.cwd('admin'), self.cwd('backend'))
+        rc, value = self.step('rollback', '--to', 'previous')
+        self.assertEqual((rc, value['code'].split(':')[:2]), (2, ['UNSWITCHED_PLAN', plan]), value)
+        self.assertIn('would undo the release before it', value['code'])
+        self.assertEqual((self.cwd('admin'), self.cwd('backend')), before)
+        rc, value = self.step('rollback', '--to', 'previous', '--unswitched-ok')
+        self.assertEqual((rc, value['status']), (0, 'ROLLED_BACK'), value)
+        self.assertEqual((self.cwd('admin'), self.cwd('backend')), (self.live_cwd('admin'), self.live_cwd('backend')))
+
+    def test_rebaseline_after_a_change_made_outside_the_tool(self):
+        self.adopt()
+        plan = self.staged()
+        self.assertEqual(self.migrate(plan)[1]['status'], 'MIGRATED')
+        self.assertEqual(self.step('switch', '--services', 'backend,admin', '--plan', plan)[1]['status'], 'SWITCHED')
+        rc, value = self.step('migrate', '--family', 'app', '--rebaseline')
+        self.assertEqual(value['code'], 'NOTHING_TO_REBASELINE:app:no migrate of this family finished')
+        ledgers, acl = self.fake.state()['ledgers'], self.acl()
+        ledgers['cms'].append('20261106_150000_outside')
+        acl['public.r1b_runs'].append('DELETE')
+        self.fake.set(ledgers=ledgers, acl={fakehost.CMS_RUNTIME: acl})
+        self.assertEqual(self.step('verify')[1]['failures'], ['LEDGER_COUNT:cms:4:3', 'PRIVILEGES:cms:public.r1b_runs:DELETE:EXTRA'])
+        self.assertEqual(self.step('close-out', '--as', 'accepted')[1]['code'], 'NO_PASS_AFTER_HEAD')
+        rc, value = self.step('migrate', '--family', 'cms', '--rebaseline')
+        self.assertEqual((rc, value['status'], value['changes']), (0, 'BASELINED', {
+            'count': [3, 4], 'gone': [], 'privileges': ['public.r1b_runs:DELETE:GAINED']}), value)
+        self.assertEqual(value['ledgers'], {'cms': {'count': 4}})
+        self.assertEqual(self.step('verify')[1]['status'], 'PASS')
+        self.assertEqual(self.step('close-out', '--as', 'accepted')[1]['status'], 'CLOSED_OUT')
+        acl['public.r1b_runs'].remove('DELETE')
+        self.fake.set(acl={fakehost.CMS_RUNTIME: acl})
+        self.assertEqual(self.step('verify')[1]['failures'], ['PRIVILEGES:cms:public.r1b_runs:DELETE:MISSING'])
+
+    def test_the_grant_rehearsal_leaves_out_every_object_the_release_creates(self):
+        self.adopt()
+        sql = ('  CREATE TABLE "r1b_rows" ("id" uuid PRIMARY KEY);\n'
+               '  CREATE FUNCTION r1b_rows_count() RETURNS bigint LANGUAGE sql AS $$ SELECT count(*) FROM r1b_rows $$;')
+        grant = fakehost.EXISTING_GRANTS + (b'GRANT SELECT ON TABLE public.r1b_rows TO :"cms_role";\n'
+                                            b'GRANT EXECUTE ON FUNCTION public.r1b_rows_count() TO :"cms_role";\n')
+        plan = self.staged(cms=[('20261106_150000_r1b_rows', fakehost.cms_source(sql))], grant=grant)
+        rc, check = self.call('migrate-check', '--plan', plan, '--family', 'cms')
+        self.assertEqual((check['grantRehearsal'], check['ready']), ('ROLLED_BACK_OK', True), check)
+        rehearsal = self.fake.state()['rehearsals'][-1]['statement']
+        self.assertNotIn('r1b_rows', rehearsal)                                # neither the new table nor the function
+        self.assertIn('RAISE EXCEPTION', rehearsal)                             # the file's own guard still speaks first
+        self.assertEqual(self.migrate(plan)[1]['status'], 'MIGRATED')
+
+    def test_an_object_gone_outside_the_tool_reads_as_gone_until_rebaseline(self):
+        self.adopt()
+        plan = self.staged()
+        self.assertEqual(self.migrate(plan)[1]['status'], 'MIGRATED')
+        self.assertEqual(self.step('switch', '--services', 'backend,admin', '--plan', plan)[1]['status'], 'SWITCHED')
+        tables = self.fake.state()['tables']
+        tables['cms'] = [t for t in tables['cms'] if t not in ('r1b_run_targets', 'mcp_control')]  # dropped or renamed
+        self.fake.set(tables=tables, droppedColumns=['public.payload_migrations.name'])
+        rc, value = self.step('verify')
+        self.assertEqual((value['status'], value['failures']), ('FAIL', [
+            'PRIVILEGE_OBJECT_GONE:public.mcp_control', 'PRIVILEGE_OBJECT_GONE:public.payload_migrations.name',
+            'PRIVILEGE_OBJECT_GONE:public.r1b_run_targets']), value)
+        self.assertIn('migrate --family cms --rebaseline', value['hint'])
+        rc, value = self.step('migrate', '--family', 'cms', '--rebaseline')
+        self.assertEqual((rc, value['status'], value['changes']), (0, 'BASELINED', {'count': [3, 3], 'privileges': [], 'gone': [
+            'public.mcp_control', 'public.payload_migrations.name', 'public.r1b_run_targets']}), value)
+        self.assertEqual([t['table'] for t in value['privileges']['tables']], ['public.r1b_runs'])
+        self.assertEqual([i for i in value['privileges']['present'] if i['name'] in ('public.mcp_control',
+                                                                                    'public.payload_migrations')], [])
+        self.assertEqual(self.step('verify')[1]['status'], 'PASS')
+        tables['cms'].append('mcp_control')
+        self.fake.set(tables=tables, droppedColumns=[])
+        rc, value = self.migrate(plan)                                          # the plan's own read meets it too
+        self.assertEqual((rc, value['code']), (2, 'PRIVILEGE_OBJECT_GONE:public.r1b_run_targets'), value)
+        self.assertIn('migrate --family cms --rebaseline', value['hint'])
+
+    def test_a_changed_grant_file_alone_runs_and_is_read_back_before_the_switch(self):
+        self.adopt()
+        grant = fakehost.EXISTING_GRANTS + b'GRANT SELECT ON TABLE public.catalogs TO :"cms_role";\n'
+        plan = self.fake.release(NEW, {'admin': 'root'}, grants_only=True, grant=grant)
+        self.assertEqual(self.step('prepare', '--plan', plan)[1]['status'], 'PREPARED')
+        self.assertEqual(self.step('switch', '--services', 'admin', '--plan', plan)[1]['code'],
+                         'MIGRATIONS_NOT_DONE:cms:run migrate --family cms first')
+        rc, value = self.migrate(plan)
+        self.assertEqual((rc, value['status'], value['applied'], value['backup']['dump'][:10]),
+                         (0, 'MIGRATED', [], 'NOT_NEEDED'), value)
+        self.assertEqual(len(self.writes('cms_grants')), 1)
+        self.assertIn({'kind': 'table', 'name': 'public.catalogs', 'privilege': 'SELECT'}, value['privileges']['present'])
+        self.assertEqual((value['privileges']['checked'], value['privileges']['tables']), (PRESENT + 1, []))
+        self.assertEqual(self.step('switch', '--services', 'admin', '--plan', plan)[1]['status'], 'SWITCHED')
+
+    def test_guards_no_other_test_reaches(self):
+        self.adopt()
+        plan = self.staged()
+        # The runtime login must not be the migration role.
+        spec = self.h['database']['cmsRuntimeRole']
+        path = self.h['envFiles'][spec['envFile']]['path']
+        original = self.fake.read(path)
+        self.fake.write(path, original.replace(fakehost.CMS_RUNTIME.encode(), b'r1_cms'), 0o600)
+        self.assertEqual(self.migrate(plan)[1]['code'], 'CMS_RUNTIME_IS_MIGRATION_ROLE')
+        self.fake.write(path, original, 0o600)
+        # A ledger that holds a later planned migration without the earlier one cannot be resumed.
+        ledgers = self.fake.state()['ledgers']
+        self.fake.set(ledgers=dict(ledgers, cms=ledgers['cms'] + [TARGETS]))
+        self.assertEqual(self.migrate(plan)[1]['code'], 'MIGRATION_ORDER:cms')
+        self.fake.set(ledgers=ledgers)
+        # psql variables are role names only.
+        H.configure(self.fake.env())
+        with self.assertRaises(H.Refusal) as caught:
+            H.database('cms').write('cms_grants', 'SELECT 1', variables={'cms_role': 'Bad-Role'})
+        self.assertEqual(str(caught.exception), 'PSQL_VARIABLE')
+        # The host checks the SQL against the sha256 the plan pins, whatever wrote the plan.
+        for tamper, code in ((lambda p: p['migrations']['cms']['items'][0].update(sql='DROP TABLE "users";\n'), 'CMS_SQL_SHA:' + RUNS),
+                             (lambda p: p['grants']['cms'].update(rehearsal='SELECT 2;'), 'GRANT_SQL_SHA')):
+            bad = self.fake.release('ffff6666' + NEW[8:], {'admin': 'root'}, cms=[(RUNS, fakehost.cms_source(RUNS_SQL))],
+                                    grant=GRANTS.replace(b',\n  public.r1b_run_targets', b''), tamper=tamper)
+            self.assertEqual(self.migrate(bad)[1]['code'], code)
+        self.assertEqual((self.writes(), self.fake.state()['dumps']), ([], []))
+        # Another writer adds a ledger row while migrate runs: nothing else may change.
+        self.fake.set(ledgerExtra=['20261106_115959_elsewhere'])
+        rc, value = self.migrate(plan)
+        self.assertEqual((value['code'], value['applied']), ('LEDGER_AFTER:cms', [RUNS, TARGETS]), value)
+        self.assertEqual(self.writes('cms_grants'), [])
 
 
 if __name__ == '__main__':

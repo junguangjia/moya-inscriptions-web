@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""Standing release tool, host side (phase A). Runs as root, Python standard library only.
+"""Standing release tool, host side (phase A, plus phase B's migrate). Runs as root, Python standard library only.
 
 Installed once per version next to the private host profile it was built for (release.py install); a release payload
 never carries it. Every answer passes a field allowlist and a secret-shape filter: no password, key, token, env value
@@ -11,14 +11,18 @@ or certificate key is printed or stored outside the files that already hold it.
   release_host.py status                                   read-only: lock, release units, ledger head
   release_host.py adopt --run-id ID [--rebaseline]         records the live state as the ledger's next entry
   release_host.py prepare --run-id ID --plan P             new roots, static unions, caches, rendered pins
+  release_host.py migrate --run-id ID --plan P --family cms|app --pitr confirmed   the plan's migrations, forward only
+  release_host.py migrate-check --plan P --family cms|app  what migrate would do, and whether it can; nothing changed
+  release_host.py migrate --run-id ID --family cms|app --rebaseline   verify's migration baseline as it is now
   release_host.py env-set --run-id ID --files A,B --key K (--value-inbox F | --generate token64) [--add] [--plan P]
   release_host.py switch --run-id ID --services A,B [--plan P]     without a plan: a restart on the same roots
   release_host.py verify --run-id ID                       read-only checks
-  release_host.py rollback --run-id ID --to previous
+  release_host.py rollback --run-id ID --to previous [--unswitched-ok]   never a migration
   release_host.py close-out --run-id ID --as accepted
 
 State lives under the profile's state directory: an append-only ledger (ledger.jsonl), a content-addressed store of
-every pin and env file version the tool wrote or replaced (store/), one journal per run (runs/), plans, payloads.
+every pin and env file version the tool wrote or replaced (store/), one journal per run (runs/), plans, payloads,
+and at most two dumps of the objects a migrate touched (backups/).
 Each service has one tool-owned drop-in: the pin the ledger names (adopted once, then only this tool writes it).
 Tests set RELEASE_TEST_ROOT (a fake /), RELEASE_TEST_BIN (stub tools), RELEASE_TIME_SCALE and RELEASE_HOST_PROFILE.
 """
@@ -40,7 +44,7 @@ import tempfile
 import time
 import urllib.parse
 
-VERSION = 'r1-phase-a-2'
+VERSION = 'r1-phase-b-1'
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEST_ROOT = ''
 TEST_BIN = {}
@@ -105,7 +109,10 @@ healthz metadata issuerMatches registrationEndpoint reportQueue withToken withou
 removed kept removable accepted drift nginxTest artifact labels reason already prepared rendered order mods untouched
 manifest bytes files count kind payload payloadId restarted entry missing renders tokenCount utc hostEpoch probes
 expect got buildId empty added minutesAway ok renderedSha256 originalSha256 outcome changed staleAnswers waited
-rootMoved notAdopted hint rebaselined
+rootMoved notAdopted hint rebaselined family applied already pending backup primary dump reused privileges table
+granted absent mismatches checked runtimeRole migrationRole objects notOwned freeBytes neededBytes relationBytes
+backups ready migrations tables sequences sequence columns column present privilege name defaultPrivileges conflicts
+grantRehearsal modulesMissing changes gone before
 '''.split())
 REBASELINE = 'run adopt --rebaseline'
 LIVE_HINT = 'set profile.live (root, label, commit, pinFile, pinCount) to what runs, install, then adopt --rebaseline'
@@ -930,20 +937,22 @@ def operator_json():
 
 
 class Database:
-    """psql with the credential only in the child environment, statements on stdin, errors as a SQLSTATE only."""
+    """psql with the credential only in the child environment, statements on stdin, errors as a SQLSTATE only. Reads
+    run read-only; a write is one transaction."""
 
     def __init__(self, url, ca, label):
         parts = url_parts(url)
         need(parts.password and parts.username and parts.hostname, 'DB_URL_SHAPE:' + label)
         query = urllib.parse.parse_qs(parts.query)
+        self.role = urllib.parse.unquote(parts.username)
         self.env = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'HOME': '/nonexistent', 'PGHOST': parts.hostname,
                     'PGPORT': str(parts.port or 5432), 'PGDATABASE': parts.path.lstrip('/'),
-                    'PGUSER': urllib.parse.unquote(parts.username), 'PGPASSWORD': urllib.parse.unquote(parts.password),
+                    'PGUSER': self.role, 'PGPASSWORD': urllib.parse.unquote(parts.password),
                     'PGSSLMODE': (query.get('sslmode') or ['verify-full'])[0], 'PGCONNECT_TIMEOUT': '10',
                     'PGAPPNAME': 'artvenn-release', 'PGOPTIONS': '-c default_transaction_read_only=on -c statement_timeout=30000'}
         if ca:
             self.env['PGSSLROOTCERT'] = ca
-        self.label = label
+        self.url, self.ca, self.label = url, ca, label
 
     def json(self, name, statement):
         args = [tool('psql'), '--no-psqlrc', '-X', '-q', '-At', '-v', 'ON_ERROR_STOP=1', '-v', 'VERBOSITY=sqlstate', '-f', '-']
@@ -953,6 +962,29 @@ class Database:
         lines = [l for l in out.decode('utf-8', 'replace').splitlines() if l.strip()]
         need(len(lines) == 1, 'SQL_SHAPE:' + name)
         return json.loads(lines[0])
+
+    def write(self, name, statement, seconds=120, variables=None):
+        """Every statement in one transaction (--single-transaction, ON_ERROR_STOP): all of them or none. A lock wait
+        longer than 5 s fails rather than holding the live services' queries behind it. `variables` are psql
+        variables (role names only)."""
+        self.session(name, statement, seconds, variables, ['--single-transaction'])
+
+    def rehearse(self, name, statement, seconds=60, variables=None):
+        """The statements in a transaction that is always rolled back (BEGIN ... ROLLBACK, ON_ERROR_STOP): what they
+        would meet, nothing kept. The same lock and statement timeouts as a write."""
+        self.session(name, 'BEGIN;\n%s\nROLLBACK;' % statement, seconds, variables, [])
+
+    def session(self, name, statement, seconds, variables, extra):
+        args = [tool('psql'), '--no-psqlrc', '-X', '-q', '-At', '-v', 'ON_ERROR_STOP=1', '-v', 'VERBOSITY=sqlstate']
+        for key, value in sorted((variables or {}).items()):
+            need(re.fullmatch(r'[a-z_]{1,40}', key) is not None and IDENTIFIER.fullmatch(value or '') is not None,
+                 'PSQL_VARIABLE')
+            args += ['-v', '%s=%s' % (key, value)]
+        env = dict(self.env, PGOPTIONS='-c statement_timeout=%d -c lock_timeout=5000' % int(seconds * 1000))
+        rc, _, err = run(args + extra + ['-f', '-'], seconds + 30, env=env,
+                         data=('/* q:%s */\n%s\n' % (name, statement)).encode())
+        state = re.search(rb'ERROR:\s+([0-9A-Z]{5})', err)
+        need(rc == 0, 'SQL_FAILED:%s:%s' % (name, state.group(1).decode() if state else rc))
 
 
 def database(which):
@@ -968,18 +1000,24 @@ def database(which):
     return Database(url, P(ca) if TESTING else ca, which)
 
 
+LEDGER_SQL = {
+    'app': "SELECT json_build_object('names',(SELECT coalesce(json_agg(migration_id ORDER BY migration_id),'[]'::json) "
+           "FROM community.schema_migrations))",
+    'cms': "SELECT json_build_object('names',(SELECT coalesce(json_agg(name ORDER BY name),'[]'::json) "
+           "FROM payload_migrations))"}
+
+
+def ledger_names(family):
+    return database(family).json(family + '_ledger', LEDGER_SQL[family])['names']
+
+
 def db_ledgers():
     out = {}
-    try:
-        out['app'] = database('app').json('app_ledger', "SELECT json_build_object('names',(SELECT coalesce(json_agg("
-                                          "migration_id ORDER BY migration_id),'[]'::json) FROM community.schema_migrations))")
-    except Refusal as error:
-        out['app'] = {'status': 'REFUSED', 'code': str(error)}
-    try:
-        out['cms'] = database('cms').json('cms_ledger', "SELECT json_build_object('names',(SELECT coalesce(json_agg(name "
-                                          "ORDER BY name),'[]'::json) FROM payload_migrations))")
-    except Refusal as error:
-        out['cms'] = {'status': 'REFUSED', 'code': str(error)}
+    for family in ('app', 'cms'):
+        try:
+            out[family] = {'names': ledger_names(family)}
+        except Refusal as error:
+            out[family] = {'status': 'REFUSED', 'code': str(error)}
     return out
 
 
@@ -1546,6 +1584,579 @@ def prepare(run_id, plan_id):
     return 0
 
 
+# ------------------------------------------------------------------------------------------------ migrate
+
+FAMILIES = ('app', 'cms')
+TABLE_PRIVILEGES = ('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER')
+SEQUENCE_PRIVILEGES = ('USAGE', 'SELECT', 'UPDATE')
+PRIVILEGES_OF = {'table': TABLE_PRIVILEGES, 'column': ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES'),
+                 'sequence': SEQUENCE_PRIVILEGES, 'schema': ('USAGE', 'CREATE')}
+SCHEMA_OF = {'app': 'community', 'cms': 'public'}
+LEDGER_TABLE = {'app': 'community.schema_migrations', 'cms': 'public.payload_migrations'}
+IDENTIFIER = re.compile(r'[a-z_][a-z0-9_]{0,62}')
+RELATION = re.compile(r'[a-z_][a-z0-9_]{0,62}\.[a-z_][a-z0-9_]{0,62}')
+CMS_NAME = re.compile(r'20[0-9]{6}_[0-9]{6}_[a-z0-9_]{1,80}')
+SOURCE_PATH = re.compile(r'[a-z0-9_-]+(?:/[a-z0-9_-]+)*')
+BACKUP_NAME = re.compile(r'([0-9a-f]{16})-(app|cms)-([0-9]{19})\.dump')        # plan, family, time in ns
+GiB = 1 << 30
+# The Owner's backup rule: TencentDB's automatic backup and point-in-time recovery are the backup, confirmed on by the
+# operator; before migrating, only the objects the migrations touch are dumped, and at most two such dumps stay.
+PITR_NOTE = 'TencentDB automatic backup and point-in-time recovery, confirmed on by the operator'
+BACKUP_FACTOR, BACKUP_FLOOR, BACKUPS_KEPT = 3, 4 * GiB, 2
+TABLES_SQL = ("SELECT coalesce(json_agg(c.relname ORDER BY c.relname),'[]'::json) FROM pg_class c JOIN pg_namespace n "
+              "ON n.oid = c.relnamespace WHERE n.nspname = '%s' AND c.relkind IN ('r','p','v','m')")
+SIZE_SQL = "SELECT coalesce(sum(pg_total_relation_size(to_regclass(t))),0)::bigint FROM (VALUES %s) AS x(t)"
+OBJECTS_SQL = ("SELECT json_build_object('missing',(SELECT coalesce(json_agg(n ORDER BY n),'[]'::json) FROM (VALUES %s) "
+               "AS o(n) WHERE to_regclass(n) IS NULL),'notOwned',(SELECT coalesce(json_agg(n ORDER BY n),'[]'::json) "
+               "FROM (VALUES %s) AS o(n) JOIN pg_class c ON c.oid = to_regclass(n) WHERE NOT pg_has_role(current_user, "
+               "c.relowner, 'USAGE')))")
+# What the migrating role's default privileges give the runtime role (directly, through a role it inherits, or as
+# PUBLIC) on the tables ('r') and sequences ('S') it creates in these schemas, globally or per schema.
+DEFAULT_ACL_SQL = ("SELECT coalesce(json_agg(DISTINCT d.defaclobjtype::text || ':' || a.privilege_type),'[]'::json) "
+                   "FROM pg_default_acl d LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace CROSS JOIN LATERAL "
+                   "aclexplode(d.defaclacl) a WHERE d.defaclrole = (SELECT oid FROM pg_roles WHERE rolname = current_user) "
+                   "AND d.defaclobjtype IN ('r','S') AND (d.defaclnamespace = 0 OR n.nspname IN (%s)) AND CASE WHEN "
+                   "a.grantee = 0 THEN true ELSE pg_has_role('%s', a.grantee, 'USAGE') END")
+# The App family's launcher is the release's own (scripts/migrate-community.mjs): these are the names it reads.
+APP_LAUNCHER_URL, APP_LAUNCHER_CA = 'APP_MIGRATION_DATABASE_URL', 'APP_MIGRATION_DATABASE_SSL_CA_FILE'
+FORWARD_ONLY = ('forward only: fix the cause and run migrate again, it resumes after the last applied migration; no '
+                'service was switched, so do not run rollback (it would undo the release before this one)')
+GONE_HINT = ('an object whose privileges are checked is gone (dropped or renamed outside this tool): if that was meant, '
+             'run migrate --family %s --rebaseline to record the privileges as they are now')
+
+
+def names_sha(names):
+    """As release.py's names_sha: sorted, compact JSON, sha256."""
+    return sha_bytes(json.dumps(sorted(names), separators=(',', ':')).encode())
+
+
+def values_list(names):
+    need(names and all(RELATION.fullmatch(n) for n in names), 'RELATION_NAME')
+    return ','.join("('%s')" % n for n in names)
+
+
+def sql_words(text):
+    """Identifiers in SQL text (unquoted ones lower-cased), comments and string contents left out."""
+    words = set()
+    for match in re.finditer(r"--[^\n]*|/\*.*?\*/|'(?:[^']|'')*'|\"((?:[^\"]|\"\")+)\"|([A-Za-z_][A-Za-z0-9_$]*)", text,
+                             re.S):
+        if match.group(1):
+            words.add(match.group(1).replace('""', '"'))
+        elif match.group(2):
+            words.add(match.group(2).lower())
+    return words
+
+
+def planned(item):
+    """A plan's section for a family holds work: migrations, or (cms) a changed grant file to run."""
+    return isinstance(item, dict) and bool(item.get('names') or item.get('grantsOnly'))
+
+
+def plan_family(plan, family):
+    need(family in FAMILIES, 'FAMILY')
+    item = (plan.get('migrations') or {}).get(family)
+    need(planned(item), 'NO_MIGRATIONS_IN_PLAN:' + family)
+    return item
+
+
+def migrations_not_done(plan_id, plan):
+    """The families of a plan's migrations whose latest finished migrate run of this plan is not MIGRATED: a later run
+    that stopped (a privilege check, say) holds the plan back again."""
+    latest = {}
+    for result in results_of('migrate'):
+        if result.get('plan') == plan_id and result.get('family') in FAMILIES:
+            latest[result['family']] = result.get('status')
+    return [f for f in FAMILIES if planned((plan.get('migrations') or {}).get(f)) and latest.get(f) != 'MIGRATED']
+
+
+def baseline_of(family):
+    """The result verify reads a family against: the latest MIGRATED run, or a later BASELINED one."""
+    found = None
+    for result in results_of('migrate'):
+        if result.get('family') == family and result.get('status') in ('MIGRATED', 'BASELINED'):
+            found = result
+    return found
+
+
+def cms_runtime_role():
+    """The CMS runtime login: the user of the URL the Admin service reads (the profile names the env file and key)."""
+    spec = PROFILE['database'].get('cmsRuntimeRole')
+    need(isinstance(spec, dict), 'PROFILE_DATABASE_KEY:cmsRuntimeRole')
+    url = (env_values(spec['envFile']) or {}).get(spec['key'])
+    role = urllib.parse.unquote(url_parts(url).username or '') if url else ''
+    need(IDENTIFIER.fullmatch(role) is not None, 'CMS_RUNTIME_ROLE_UNKNOWN')
+    return role
+
+
+def runtime_role(family):
+    """Whose privileges a family's grants are about: the CMS runtime login, or the App role the Backend logs in as."""
+    if family == 'cms':
+        return cms_runtime_role()
+    role = app_role()['role']
+    need(role, 'APP_ROLE_UNKNOWN')
+    return role
+
+
+def app_blobs(build, item):
+    """The App migration files and the release's launcher from the staged payload, each checked by the plan's sha256."""
+    folder = payload_dir(build.get('payloadId') or 'none')
+    need(build.get('payloadId') and exists(folder + '/assembled.json'), 'PAYLOAD_NOT_STAGED')
+    need(json.loads(read(folder + '/assembled.json')).get('payloadSha256') == build['payloadSha256'], 'PAYLOAD_SHA')
+    out = {}
+    for name, digest in [(f['name'], f['sha256']) for f in item['files']] + [(item['launcher']['path'], item['launcher']['sha256'])]:
+        path = folder + '/blobs/' + digest
+        need(re.fullmatch(r'[0-9a-f]{64}', digest) is not None and exists(path), 'MIGRATION_BLOB_MISSING:' + name)
+        raw = read(path)
+        need(sha_bytes(raw) == digest, 'MIGRATION_BLOB_SHA:' + name)
+        out[name] = raw
+    return out
+
+
+def migration_sql(build, family, item):
+    """{name: SQL} for the family's planned migrations: the CMS SQL the plan pinned, or the App files from the payload."""
+    if family == 'cms':
+        out = {}
+        for entry in item.get('items') or []:
+            need(CMS_NAME.fullmatch(entry['name']) is not None, 'CMS_NAME')
+            need(sha_bytes(entry['sql'].encode()) == entry['sha256'] and '\\' not in entry['sql'], 'CMS_SQL_SHA:' + entry['name'])
+            out[entry['name']] = entry['sql']
+        need(sorted(out) == sorted(item.get('names') or []), 'CMS_SQL_MISSING')
+        return out, None
+    blobs = app_blobs(build, item)
+    out = {}
+    for migration_id in item['names']:
+        hits = [f['name'] for f in item['files'] if f['name'].startswith(migration_id + '_')]
+        need(len(hits) == 1, 'MIGRATION_SOURCE:app:' + migration_id)
+        out[migration_id] = blobs[hits[0]].decode('utf-8')
+    return out, blobs
+
+
+def free_bytes():
+    path = state_dir('backups')
+    while path not in ('', '/') and not exists(path):
+        path = os.path.dirname(path)
+    return shutil.disk_usage(P(path or '/')).free
+
+
+def checked_grants(grants):
+    """A plan's grants section, its SQL checked against the sha256 the plan pins (and, being psql input, free of
+    backslashes)."""
+    for key, pin in (('sql', 'sha256'), ('rehearsal', 'rehearsalSha256')):
+        if key in grants:
+            need(sha_bytes(grants[key].encode()) == grants.get(pin) and '\\' not in grants[key], 'GRANT_SQL_SHA')
+    return grants
+
+
+def section_of(grants):
+    """What a privilege check reads: the new tables and sequences both ways, and what the file grants on objects that
+    existed already (only for a grant file this tool runs)."""
+    return {'tables': grants.get('tables') or [], 'sequences': grants.get('sequences') or [],
+            'present': grants.get('present') or []}
+
+
+def default_privileges(db, family, role, grants, creating):
+    """What the migrating role's default privileges would give `role` on the tables and sequences the remaining
+    migrations create, against what must stay absent there: (the default grants read, the conflicts)."""
+    tables = [t for t in grants.get('tables') or [] if t['table'] in creating]
+    sequences = [s for s in grants.get('sequences') or [] if s['sequence'] in creating]
+    if not tables and not sequences:
+        return [], []
+    schemas = sorted({n.split('.')[0] for n in [t['table'] for t in tables] + [s['sequence'] for s in sequences]})
+    need(IDENTIFIER.fullmatch(role) is not None and all(IDENTIFIER.fullmatch(s) for s in schemas), 'PRIVILEGE_NAMES')
+    found = db.json(family + '_default_acl', DEFAULT_ACL_SQL % (','.join("'%s'" % s for s in schemas), role))
+    defaults = sorted(found if isinstance(found, list) else [])
+    conflicts = ['%s:%s' % (t['table'], p) for t in tables for p in t['absent'] if 'r:' + p in defaults]
+    conflicts += ['%s:%s' % (s['sequence'], p) for s in sequences for p in s['absent'] if 'S:' + p in defaults]
+    return defaults, conflicts
+
+
+def migration_facts(plan_id, plan, build, family):
+    """Before anything is written, and keeping nothing (the grant file's rehearsal is rolled back): the ledger is the
+    one the plan saw (besides the plan's own migrations, of which a done prefix is resumed after), each migration is
+    the SQL the plan pinned, the objects the remaining ones touch and the room to dump them. For the family's grants:
+    whose privileges they are; what the migrating role's default privileges would add on the new objects
+    (conflicts); and for cms every relation the grant file names exists and is the migration role's, and the file
+    itself, rehearsed in a transaction that is rolled back, passes its own guards. For app the launcher's modules are
+    in the new root. So nothing that can be seen beforehand stops the grants half way after the migrations."""
+    item = plan_family(plan, family)
+    db = database(family)
+    names = ledger_names(family)
+    planned_names = list(item.get('names') or [])
+    seen = ((plan.get('ledgers') or {}).get(family) or {}).get('namesSha256')
+    need(names_sha([n for n in names if n not in planned_names]) == seen, 'LEDGER_MOVED_SINCE_PLAN:' + family)
+    done = [n for n in planned_names if n in names]
+    need(planned_names[:len(done)] == done and all(names.count(n) == 1 for n in done), 'MIGRATION_ORDER:' + family)
+    todo = planned_names[len(done):]
+    sources, blobs = migration_sql(build, family, item)
+    facts = {'plan': plan_id, 'family': family, 'pending': todo, 'already': done, 'objects': [], 'relationBytes': 0,
+             'neededBytes': 0, 'freeBytes': free_bytes(), 'migrationRole': db.role}
+    if todo:
+        # What a dump must hold: every existing relation of the family's schema the remaining SQL names, and the ledger.
+        words = set().union(*[sql_words(sources[n]) for n in todo])
+        tables = db.json(family + '_tables', TABLES_SQL % SCHEMA_OF[family])
+        touched = sorted({'%s.%s' % (SCHEMA_OF[family], t) for t in tables if t in words} | {LEDGER_TABLE[family]})
+        need(all(RELATION.fullmatch(t) for t in touched), 'RELATION_NAME')
+        facts['objects'] = touched
+        facts['relationBytes'] = int(db.json(family + '_sizes', SIZE_SQL % values_list(touched)) or 0)
+        facts['neededBytes'] = BACKUP_FACTOR * facts['relationBytes'] + BACKUP_FLOOR
+    grants = (plan.get('grants') or {}).get(family)
+    if family == 'cms':
+        need(isinstance(grants, dict), 'GRANTS_NOT_IN_PLAN:cms')
+        checked_grants(grants)
+        facts['runtimeRole'] = cms_runtime_role()
+        need(facts['runtimeRole'] != db.role, 'CMS_RUNTIME_IS_MIGRATION_ROLE')
+        named = [o['name'] for o in grants['objects']]
+        found = db.json('cms_objects', OBJECTS_SQL % (values_list(named), values_list(named))) if named else {}
+        facts['missing'], facts['notOwned'] = found.get('missing') or [], found.get('notOwned') or []
+    else:
+        service = item['service']
+        root = ((prepared_for(plan_id).get('roots') or {}).get(service) or {}).get('root')
+        need(root and os.path.isdir(P(root + '/services')), 'APP_RUNNER_ROOT:%s' % service)
+        facts['runner'] = root
+        modules = item.get('modules') or []
+        need(all(re.fullmatch(r'services/[A-Za-z0-9_./-]+\.m?js', m) and '..' not in m.split('/') for m in modules),
+             'MIGRATION_SOURCE_PATHS')
+        facts['modulesMissing'] = [m for m in modules if not os.path.isfile(P(root + '/' + m))]
+        if isinstance(grants, dict):
+            facts['appRole'] = runtime_role('app')
+    if isinstance(grants, dict):
+        role = facts.get('runtimeRole') or facts.get('appRole')
+        creating = {c['name'] for i in item.get('items') or [] if i['name'] in todo for c in i.get('creates') or []}
+        facts['defaultPrivileges'], facts['conflicts'] = default_privileges(db, family, role, grants, creating)
+    if family == 'cms' and not facts['missing'] and not facts['notOwned']:
+        try:
+            db.rehearse('cms_grant_rehearsal', grants['rehearsal'], variables={grants['variable']: facts['runtimeRole']})
+            facts['grantRehearsal'] = 'ROLLED_BACK_OK'
+        except Refusal as error:
+            if str(error) == 'SIGTERM':
+                raise
+            facts['grantRehearsal'] = str(error)
+    facts['ready'] = (not facts.get('missing') and not facts.get('notOwned') and not facts.get('conflicts') and
+                      not facts.get('modulesMissing') and facts.get('grantRehearsal') in (None, 'ROLLED_BACK_OK') and
+                      facts['freeBytes'] >= facts['neededBytes'])
+    return facts, db, sources, blobs, item
+
+
+def backups():
+    folder = state_dir('backups')
+    rows = []
+    if os.path.isdir(P(folder)):
+        for name in os.listdir(P(folder)):
+            hit = BACKUP_NAME.fullmatch(name)
+            if hit:
+                rows.append({'file': folder + '/' + name, 'plan': hit.group(1), 'family': hit.group(2), 'at': hit.group(3),
+                             'bytes': os.path.getsize(P(folder + '/' + name))})
+    return sorted(rows, key=lambda r: (r['at'], r['file']))
+
+
+def dump_digest(path):
+    """The dump's sha256 when its sidecar names it and the bytes still match, else None."""
+    try:
+        digest = read(path + '.sha256').decode().split()[0]
+        return digest if sha_file(path) == digest else None
+    except (OSError, IndexError, Refusal):
+        return None
+
+
+def remove_dump(path):
+    for item in (path, path + '.sha256'):
+        if exists(item):
+            os.unlink(P(item))
+
+
+def dump(db, plan_id, family, tables, resumed):
+    """Only the relations the remaining migrations touch (and the ledger), custom format, listed back by pg_restore with
+    every relation in it. A migrate resumed after one of this plan's migrations committed keeps the dump taken before
+    anything changed; with nothing committed yet a new one is taken and the earlier ones of this plan and family go.
+    pg_dump writes <name>.partial, renamed once read back and its sha256 sidecar written, so a dump cut off (SIGKILL,
+    power) never passes for one: partial files, dumps without a valid sidecar and orphan sidecars are removed and never
+    counted. Then older dumps go so that at most BACKUPS_KEPT stay."""
+    if resumed:
+        for row in reversed(backups()):
+            if row['plan'] == plan_id and row['family'] == family and dump_digest(row['file']):
+                return {'file': row['file'], 'sha256': dump_digest(row['file']), 'bytes': row['bytes'], 'reused': True}
+    folder = ensure_dir(state_dir('backups'))
+    removed = []
+    for name in sorted(os.listdir(P(folder))):          # the lock is held: no other dump is being written
+        if name.endswith('.dump.partial'):
+            os.unlink(P(folder + '/' + name))
+            removed.append(folder + '/' + name)
+    final = '%s/%s-%s-%d.dump' % (folder, plan_id, family, time.time_ns())
+    partial = final + '.partial'
+    began = time.monotonic()
+    try:
+        rc, _, _ = run([tool('pg_dump'), '--format=custom', '--no-password', '--lock-wait-timeout=30s', '--file', P(partial)] +
+                       ['--table=' + t for t in tables], 900, env=dict(db.env, PGOPTIONS='-c statement_timeout=0'))
+        listing = b''
+        if rc == 0 and exists(partial):
+            os.chmod(P(partial), 0o600)
+            rc_list, listing, _ = run([tool('pg_restore'), '--list', P(partial)], 120)
+            listing = listing if rc_list == 0 else b''
+    except BaseException:
+        if exists(partial):
+            os.unlink(P(partial))       # a SIGTERM part way leaves no partial dump behind
+        raise
+    text = listing.decode('utf-8', 'replace')
+    listed = all(re.search(r'\b(?:TABLE|VIEW|MATERIALIZED VIEW) %s %s\b' % tuple(re.escape(p) for p in t.split('.')), text)
+                 for t in tables)
+    if rc != 0 or not listed:
+        if exists(partial):
+            os.unlink(P(partial))       # a failed or unreadable dump never stays
+        need(rc == 0, 'BACKUP_FAILED:%s:%d' % (family, rc))
+        raise Refusal('BACKUP_UNREADABLE:' + family)
+    digest = sha_file(partial)
+    write_atomic(final + '.sha256', ('%s  %s\n' % (digest, os.path.basename(final))).encode(), 0o600)
+    os.rename(P(partial), P(final))
+    for row in backups():
+        if row['file'] != final and ((row['plan'], row['family']) == (plan_id, family) or not dump_digest(row['file'])):
+            remove_dump(row['file'])
+            removed.append(row['file'])
+    older = [r for r in backups() if r['file'] != final]
+    for row in older[:max(0, len(older) - (BACKUPS_KEPT - 1))]:
+        remove_dump(row['file'])
+        removed.append(row['file'])
+    for name in sorted(os.listdir(P(folder))):
+        if name.endswith('.dump.sha256') and not exists(folder + '/' + name[:-len('.sha256')]):
+            os.unlink(P(folder + '/' + name))
+    return {'file': final, 'sha256': digest, 'bytes': os.path.getsize(P(final)), 'tables': tables, 'removed': removed,
+            'seconds': round(time.monotonic() - began, 1), 'reused': False}
+
+
+def cms_statement(name, sql):
+    """One migration and its payload_migrations row, for one transaction: a row already there refuses first."""
+    need(CMS_NAME.fullmatch(name) is not None, 'CMS_NAME')
+    return ("DO $release$ BEGIN IF EXISTS (SELECT 1 FROM payload_migrations WHERE name = '%s') THEN RAISE EXCEPTION "
+            "'already recorded' USING ERRCODE = 'P0001'; END IF; END $release$;\n%s\n;\nINSERT INTO payload_migrations "
+            "(name, batch, updated_at, created_at) SELECT '%s', coalesce(max(batch), 0) + 1, now(), now() FROM "
+            "payload_migrations;\n" % (name, sql, name))
+
+
+def app_launch(plan_id, item, db, blobs, runner):
+    """The release's own launcher, from a tree laid out as the repository has it: the launcher, the migration
+    directory, and `services` pointing at the new root, whose compiled runner applies each missing migration in its own
+    transaction with its ledger row, under its advisory lock. Its output names no value (and no cause); only PASS is
+    read."""
+    need(SOURCE_PATH.fullmatch(item['directory']) is not None and
+         re.fullmatch(r'[a-z0-9_-]+(?:/[a-z0-9_-]+)*\.mjs', item['launcher']['path']) is not None, 'MIGRATION_SOURCE_PATHS')
+    tree = state_dir('migrate', plan_id, 'app')
+    if exists(tree):
+        shutil.rmtree(P(tree))
+    for row in item['files']:
+        need(re.fullmatch(r'[0-9]{14}_[A-Za-z0-9_.-]{1,100}\.sql', row['name']) is not None, 'MIGRATION_FILE_NAME')
+        write_atomic('%s/%s/%s' % (tree, item['directory'], row['name']), blobs[row['name']], 0o600)
+    write_atomic('%s/%s' % (tree, item['launcher']['path']), blobs[item['launcher']['path']], 0o600)
+    os.symlink(P(runner + '/services'), P(tree + '/services'))
+    env = {'PATH': os.path.dirname(tool('node')) + ':' + BASE_PATH, 'LANG': 'C.UTF-8', 'HOME': '/nonexistent',
+           'NODE_ENV': 'production', APP_LAUNCHER_URL: db.url, 'PGAPPNAME': 'artvenn-release-migrate',
+           'PGOPTIONS': '-c statement_timeout=120000 -c lock_timeout=5000'}
+    if db.ca:
+        env[APP_LAUNCHER_CA] = db.ca
+    rc, out, _ = run([tool('node'), P('%s/%s' % (tree, item['launcher']['path']))], 900, env=env)
+    return rc == 0 and b'PASS' in out
+
+
+def privilege_rows(section):
+    """(kind, object, column, privilege, wanted) for every privilege a section names: each new table's and sequence's
+    privileges both ways, each column grant on a new table, and what the file grants on objects that existed."""
+    rows = []
+    for item in section.get('tables') or []:
+        rows += [('table', item['table'], '', p, p in item['granted']) for p in TABLE_PRIVILEGES]
+        rows += [('column', item['table'], c, p, True) for p, cols in sorted((item.get('columns') or {}).items()) for c in cols]
+    for item in section.get('sequences') or []:
+        rows += [('sequence', item['sequence'], '', p, p in item['granted']) for p in SEQUENCE_PRIVILEGES]
+    rows += [(i['kind'], i['name'], i.get('column') or '', i['privilege'], True) for i in section.get('present') or []]
+    return rows
+
+
+def privilege_read(db, family, role, section):
+    """[(row, held)] for privilege_rows(section), read with has_table_privilege, has_column_privilege,
+    has_sequence_privilege and has_schema_privilege for `role`, in one read-only query. An ARRAY[...] holds them, as
+    a function call (json_build_array) takes at most 100 arguments and a grant file names more. Each call is guarded
+    (to_regclass, to_regnamespace, the column in pg_attribute): an object dropped or renamed since reads as None
+    (gone) instead of failing the whole read (42P01)."""
+    rows = privilege_rows(section)
+    if not rows:
+        return []
+    need(IDENTIFIER.fullmatch(role or '') is not None, 'PRIVILEGE_NAMES')
+    calls = []
+    for kind, name, column, privilege, _ in rows:
+        need(kind in PRIVILEGES_OF and privilege in PRIVILEGES_OF[kind] and
+             (IDENTIFIER if kind == 'schema' else RELATION).fullmatch(name) is not None and
+             (kind != 'column' or IDENTIFIER.fullmatch(column) is not None), 'PRIVILEGE_NAMES')
+        there = ("to_regnamespace('%s') IS NULL" % name if kind == 'schema' else "to_regclass('%s') IS NULL" % name)
+        if kind == 'column':
+            there += (" OR NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('%s') AND attname = '%s' "
+                      "AND NOT attisdropped)" % (name, column))
+        calls.append('CASE WHEN %s THEN NULL ELSE %s END' % (there, (
+            "has_column_privilege('%s','%s','%s','%s')" % (role, name, column, privilege) if kind == 'column' else
+            "has_%s_privilege('%s','%s','%s')" % (kind, role, name, privilege))))
+    got = db.json(family + '_privileges', 'SELECT to_json(ARRAY[%s]::boolean[])' % ','.join(calls))
+    need(isinstance(got, list) and len(got) == len(rows), 'PRIVILEGES_SHAPE')
+    return list(zip(rows, [None if g is None else bool(g) for g in got]))
+
+
+def privilege_label(kind, name, column):
+    return {'column': '%s.%s' % (name, column), 'schema': 'schema:' + name}.get(kind, name)
+
+
+def privilege_check(db, family, role, section):
+    """Both ways for the new objects: what the grant file grants is there, every other privilege (DELETE and TRUNCATE
+    among them, unless granted) is not; and what it grants on objects that existed is there. An object that is gone
+    is named once in `gone`, never as a mismatch."""
+    pairs = privilege_read(db, family, role, section)
+    gone = sorted({privilege_label(k, n, c) for (k, n, c, _, _), held in pairs if held is None})
+    return dict({'checked': len(pairs), 'mismatches': [
+        '%s:%s:%s' % (privilege_label(k, n, c), p, 'MISSING' if want else 'EXTRA')
+        for (k, n, c, p, want), held in pairs if held is not None and held != want]}, **({'gone': gone} if gone else {}))
+
+
+def failure_hint(code, plan, family):
+    if code.startswith('DEFAULT_PRIVILEGES'):
+        return ("the migrating role's default privileges would give these on the new tables: revoke them (ALTER "
+                "DEFAULT PRIVILEGES ... REVOKE) as that role, or grant them in the grant file and plan again; nothing "
+                "was changed")
+    if code.startswith('APP_GRANTS_MISSING'):
+        return ('this tool does not run the App grant file: run %s as the App migration role, then migrate again (it '
+                'resumes); no service was switched, so do not run rollback' %
+                ((plan.get('grants') or {}).get('app') or {}).get('file', 'it'))
+    if code.startswith('APP_MIGRATION_FAILED'):
+        return ("the release's launcher names no cause (a lock timeout or a failing statement leaves that migration "
+                "unapplied); applied and ledgers show what committed. " + FORWARD_ONLY)[:300]
+    if code.startswith('PRIVILEGE_OBJECT_GONE'):
+        return GONE_HINT % family
+    if code.startswith('PRIVILEGES_NOT_AS_EXPECTED') and ':EXTRA' in code:
+        return "an EXTRA privilege on a new table most often comes from default privileges: revoke it as the migration " \
+               "role, then migrate again (it resumes)"
+    return FORWARD_ONLY
+
+
+def migrate_check(plan_id, family):
+    """What migrate would do, with nothing changed: no lock, no dump, no write (the CMS grant file is rehearsed in a
+    transaction that is rolled back)."""
+    plan, build = load_plan(plan_id)
+    facts = migration_facts(plan_id, plan, build, family)[0]
+    facts.pop('runner', None)
+    emit(dict(facts, status='MIGRATE_CHECKED', backup={'primary': PITR_NOTE}))
+    return 0
+
+
+def migrate(run_id, plan_id, family, pitr):
+    """One family of a staged plan's migrations, forward only. The operator confirms TencentDB's automatic backup and
+    point-in-time recovery are on; then, after the read-only checks, a dump of only what the remaining migrations
+    touch, each CMS migration with its payload_migrations row in one transaction (the App family through the release's
+    own launcher), and for cms the pinned runtime grant file as the migration role; the family's grants are read back
+    both ways for the role they are about (App: the App role, whose grant file the operator runs). A failure stops
+    with what was applied; migrate again resumes. No ledger entry: rollback never touches a migration."""
+    step = Run('migrate', run_id)
+    Lock()
+    signal.signal(signal.SIGTERM, stop_signal)
+    need(pitr == 'confirmed', 'PITR_NOT_CONFIRMED:confirm in the TencentDB console that automatic backup and point-in-time '
+         'recovery are on, then pass --pitr-confirmed')
+    plan, build = load_plan(plan_id)
+    head = ledger_head()
+    need(head is not None, 'LEDGER_EMPTY:run adopt first')
+    need_current(head)
+    out = {'plan': plan_id, 'family': family, 'guards': time_guard(), 'applied': [], 'backup': {'primary': PITR_NOTE}}
+    facts, db, sources, blobs, item = migration_facts(plan_id, plan, build, family)
+    out['already'] = facts['already']
+    grants = (plan.get('grants') or {}).get(family)
+    try:
+        need(not facts.get('missing'), 'GRANT_OBJECTS_MISSING:' + ','.join(facts.get('missing') or [])[:200])
+        need(not facts.get('notOwned'), 'GRANT_OBJECTS_NOT_OWNED:' + ','.join(facts.get('notOwned') or [])[:200])
+        need(not facts.get('modulesMissing'), 'APP_RUNNER_MODULE_MISSING:' + ','.join(facts.get('modulesMissing') or [])[:200])
+        need(not facts.get('conflicts'), 'DEFAULT_PRIVILEGES:' + ','.join(facts.get('conflicts') or [])[:200])
+        need(facts.get('grantRehearsal') in (None, 'ROLLED_BACK_OK'), 'GRANT_REHEARSAL:%s' % facts.get('grantRehearsal'))
+        need(facts['freeBytes'] >= facts['neededBytes'], 'DISK_FREE:%d<%d' % (facts['freeBytes'] // GiB, facts['neededBytes'] // GiB + 1))
+        if facts['pending']:
+            out['backup']['dump'] = dump(db, plan_id, family, facts['objects'], resumed=bool(facts['already']))
+            step.event('backup-done', file=out['backup']['dump']['file'])
+            time_guard()
+            if family == 'cms':
+                for name in facts['pending']:
+                    step.change()
+                    db.write('cms_migrate', cms_statement(name, sources[name]))
+                    out['applied'].append(name)
+                    step.event('migration-applied', names=[name])
+            else:
+                step.change()
+                before = ledger_names(family)
+                passed = app_launch(plan_id, item, db, blobs, facts['runner'])
+                after = ledger_names(family)
+                out['applied'] = [n for n in facts['pending'] if n in after]
+                out['ledgers'] = {family: {'count': len(after), 'before': len(before)}}
+                need(passed, 'APP_MIGRATION_FAILED')
+        else:
+            out['backup']['dump'] = 'NOT_NEEDED: every migration of this family is applied already'
+        # Every planned migration once, and nothing else changed (the App runner applies whatever its set lacks).
+        names = ledger_names(family)
+        need(all(names.count(n) == 1 for n in item.get('names') or []) and
+             names_sha([n for n in names if n not in (item.get('names') or [])]) == plan['ledgers'][family]['namesSha256'],
+             'LEDGER_AFTER:' + family)
+        out['ledgers'] = {family: {'count': len(names)}}
+        if family == 'cms':
+            step.change()
+            db.write('cms_grants', grants['sql'], 120, variables={grants['variable']: facts['runtimeRole']})
+            step.event('grants-run', file=grants['file'])
+        if isinstance(grants, dict):
+            role = facts.get('runtimeRole') or facts.get('appRole')
+            checked = privilege_check(db, family, role, section_of(grants))
+            out.update(privileges=dict(checked, **section_of(grants)),
+                       **({'runtimeRole': role} if family == 'cms' else {'appRole': role}))
+            step.event('privileges-read', checked=checked['checked'])
+            missing = any(m.endswith(':MISSING') for m in checked['mismatches'])
+            need(not checked.get('gone'), 'PRIVILEGE_OBJECT_GONE:' + ','.join(checked.get('gone') or [])[:200])
+            need(not checked['mismatches'], '%s:%s' % ('APP_GRANTS_MISSING' if family == 'app' and missing else
+                                                       'PRIVILEGES_NOT_AS_EXPECTED', ','.join(checked['mismatches'][:8])))
+    except BaseException as error:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        code = code_of(error)
+        step.event('failed', code=code)
+        step.finish('REFUSED', code=code, hint=failure_hint(code, plan, family), **out)
+        return 2
+    step.finish('MIGRATED', **out)
+    return 0
+
+
+def rebaseline_migrations(run_id, family):
+    """After a change made outside this tool (a ledger row, a grant, an object dropped or renamed): the family's ledger
+    count and the privileges of the objects the latest MIGRATED or BASELINED run checked, recorded as they are now
+    (BASELINED), with what changed; an object that is gone leaves the baseline and is named in changes.gone. verify
+    reads against it from then on. Nothing in the database is changed."""
+    step = Run('migrate', run_id)
+    Lock()
+    need(family in FAMILIES, 'FAMILY')
+    previous = baseline_of(family)
+    need(previous is not None, 'NOTHING_TO_REBASELINE:%s:no migrate of this family finished' % family)
+    names = ledger_names(family)
+    kept = [n for n in (previous.get('already') or []) + (previous.get('applied') or [])]
+    was = ((previous.get('ledgers') or {}).get(family) or {}).get('count')
+    out = {'family': family, 'applied': [], 'already': [n for n in kept if n in names],
+           'ledgers': {family: {'count': len(names)}}}
+    changes = {'count': [was, len(names)], 'gone': [n for n in kept if n not in names]}
+    section = section_of(previous.get('privileges') or {})
+    if any(section.values()):
+        role = runtime_role(family)
+        pairs = privilege_read(database(family), family, role, section)
+        held = {(k, n, c, p) for (k, n, c, p, _), have in pairs if have}
+        gone = {(k, n, c) for (k, n, c, _, _), have in pairs if have is None}
+        changes['gone'] += sorted({privilege_label(*g) for g in gone})
+        changes['privileges'] = ['%s:%s:%s' % (privilege_label(k, n, c), p, 'GAINED' if have else 'LOST')
+                                 for (k, n, c, p, want), have in pairs if have is not None and have != want]
+        now = {'tables': [dict(t, granted=[p for p in TABLE_PRIVILEGES if ('table', t['table'], '', p) in held],
+                               absent=[p for p in TABLE_PRIVILEGES if ('table', t['table'], '', p) not in held],
+                               columns={p: [c for c in cols if ('column', t['table'], c, p) in held]
+                                        for p, cols in (t.get('columns') or {}).items()})
+                          for t in section['tables'] if ('table', t['table'], '') not in gone],
+               'sequences': [dict(s, granted=[p for p in SEQUENCE_PRIVILEGES if ('sequence', s['sequence'], '', p) in held],
+                                  absent=[p for p in SEQUENCE_PRIVILEGES if ('sequence', s['sequence'], '', p) not in held])
+                             for s in section['sequences'] if ('sequence', s['sequence'], '') not in gone],
+               'present': [i for i in section['present'] if (i['kind'], i['name'], i.get('column') or '', i['privilege']) in held]}
+        out.update(privileges=dict(now, checked=len(pairs), mismatches=[]),
+                   **({'runtimeRole': role} if family == 'cms' else {'appRole': role}))
+    step.finish('BASELINED', changes=changes, **out)
+    return 0
+
+
 # ------------------------------------------------------------------------------------------------ undo
 
 class Undo:
@@ -1735,6 +2346,9 @@ def switch(run_id, services, plan_id=None):
     if plan_id:
         plan, build = load_plan(plan_id)
         need(all(s in plan['services'] for s in names), 'SERVICE_NOT_IN_PLAN')
+        # The plan's order: its migrations first, so no service starts on code that reads a schema not there yet.
+        undone = migrations_not_done(plan_id, plan)
+        need(not undone, 'MIGRATIONS_NOT_DONE:%s:run migrate --family %s first' % (','.join(undone), (undone or [''])[0]))
         if any(plan['services'][s]['mode'] == 'root' for s in names):
             prepared = prepared_for(plan_id)
     else:
@@ -1830,7 +2444,23 @@ def switch(run_id, services, plan_id=None):
 
 # ------------------------------------------------------------------------------------------------ rollback
 
-def rollback(run_id, to):
+ROLLBACK_MIGRATIONS = ('untouched: rollback never runs a down migration; the schema stays as migrate left it and the '
+                       'earlier code runs on it')
+
+
+def unswitched_plans(head):
+    """Plans prepared, or migrated with a change, after the ledger's head and not part of its release: releases under
+    way that switched no service yet. Rolling back now would undo the release before them."""
+    found = set()
+    for step, done in (('prepare', lambda r: r.get('status') == 'PREPARED'), ('migrate', lambda r: r.get('changed'))):
+        for result in results_of(step):
+            if (result.get('finishedNs') or 0) > head['ns'] and result.get('plan') and \
+                    result['plan'] != head.get('plan') and done(result):
+                found.add(result['plan'])
+    return sorted(found)
+
+
+def rollback(run_id, to, unswitched_ok=False):
     """Back to the state before the latest release: its base entry. Pins and env files from the store, CAS against
     what the ledger's head says; the services that differ restarted in the profile's order. On a failure part way, the
     head's files come back and the touched services restart on the head's roots.
@@ -1838,7 +2468,12 @@ def rollback(run_id, to):
     Drift refuses only in a file this rollback writes (a pin or env file that differs between head and target). Drift
     elsewhere is a warning: the file is left as it is and stays drift (the new entry records the target's bytes for
     it), so no later rollback writes over an outside change and adopt can still record it once the incident is over.
-    A root moved by a release outside this tool refuses: the ledger no longer describes that service."""
+    A root moved by a release outside this tool refuses: the ledger no longer describes that service. A release under
+    way that switched nothing (prepared, or migrated, after the head) refuses unless --unswitched-ok: its rollback is
+    no rollback at all, it would undo the release before it.
+
+    Migrations are never touched: no down migration runs, the schema migrate left stays and the earlier code runs on it
+    (migrations only expand). The result says so (`migrations`)."""
     step = Run('rollback', run_id)
     Lock()
     signal.signal(signal.SIGTERM, stop_signal)
@@ -1847,6 +2482,9 @@ def rollback(run_id, to):
     head = ledger_head(rows)
     need(head is not None, 'LEDGER_EMPTY')
     need(head.get('base'), 'NO_PREVIOUS:%s' % ('ADOPT_BARRIER' if head['op'] == 'adopt' else 'NONE'))
+    unswitched = unswitched_plans(head)
+    need(unswitched_ok or not unswitched, 'UNSWITCHED_PLAN:%s:no service of it was switched, so there is nothing of it '
+         'to roll back; rollback would undo the release before it (pass --unswitched-ok for that)' % (unswitched or [''])[0])
     target = ledger_entry(rows, head['base'])
     extra = sorted(set(head['services']) - set(PROFILE['services']))
     need(not extra, 'NOT_IN_PROFILE:' + ','.join(extra))
@@ -1887,11 +2525,12 @@ def rollback(run_id, to):
         entry = ledger_append('rollback', run_id, with_env(target['services'], recorded), recorded, target.get('base'),
                               target=target['id'], restarted=[], pendingRestart=sorted(target.get('pendingRestart') or []))
         step.change()
-        step.finish('ROLLED_BACK', target=short(target), entry=short(entry), restart={}, order=[], warnings=warnings)
+        step.finish('ROLLED_BACK', target=short(target), entry=short(entry), restart={}, order=[], warnings=warnings,
+                    migrations=ROLLBACK_MIGRATIONS)
         return 0
     undo = Undo(step)
     touched = []
-    out = {'target': short(target), 'restart': {}, 'order': order, 'warnings': warnings}
+    out = {'target': short(target), 'restart': {}, 'order': order, 'warnings': warnings, 'migrations': ROLLBACK_MIGRATIONS}
     try:
         step.change()
         undo.add('files', lambda: put_back([(p, now) for p, now, _ in files]))
@@ -2018,10 +2657,57 @@ def verify(run_id):
                 values = [(env_values(name, which) or {}).get(entry['key']) for which, _ in env_paths(name)]
                 if len(set(values)) != 1:
                     failures.append('STAGED_DIFFERS:%s:%s' % (name, entry['key']))
+    failures += verify_migrations(head, out)
     out['ledger'] = {'head': short(head)}
     out['failures'] = sorted(set(failures))
     step.finish('PASS' if not failures else 'FAIL', **out)
     return 0 if not failures else 2
+
+
+def verify_migrations(head, out):
+    """Each migration ledger's row count, and against the latest MIGRATED (or later BASELINED) run of each family: the
+    count it left and every migration it applied or found; the privileges it checked, for the role they are about (the
+    new objects both ways, and what the CMS grant file grants on objects that existed); and the head's plan has no
+    migrations left undone. A ledger nothing has migrated is only reported."""
+    failures = []
+    latest = {f: baseline_of(f) for f in FAMILIES if baseline_of(f) is not None}
+    out['ledgers'], out['privileges'] = {}, {}
+    for family in FAMILIES:
+        try:
+            names = ledger_names(family)
+        except Refusal as error:
+            out['ledgers'][family] = {'status': 'REFUSED', 'code': str(error)}
+            failures += ['LEDGER_UNREADABLE:' + family] if family in latest else []
+            continue
+        out['ledgers'][family] = {'count': len(names)}
+        result = latest.get(family)
+        if result is None:
+            continue
+        want = ((result.get('ledgers') or {}).get(family) or {}).get('count')
+        if len(names) != want:
+            failures.append('LEDGER_COUNT:%s:%d:%s' % (family, len(names), want))
+        missing = [n for n in (result.get('already') or []) + (result.get('applied') or []) if n not in names]
+        if missing:
+            failures.append('LEDGER_MISSING:%s:%s' % (family, ','.join(missing[:5])))
+    for family, result in sorted(latest.items()):
+        section = section_of(result.get('privileges') or {})
+        if not any(section.values()):
+            continue
+        try:
+            out['privileges'][family] = privilege_check(database(family), family, runtime_role(family), section)
+            failures += ['PRIVILEGES:%s:%s' % (family, m) for m in out['privileges'][family]['mismatches']]
+            failures += ['PRIVILEGE_OBJECT_GONE:' + g for g in out['privileges'][family].get('gone') or []]
+            if out['privileges'][family].get('gone'):
+                out['hint'] = '; '.join(([out['hint']] if out.get('hint') else []) + [GONE_HINT % family])
+        except Refusal as error:
+            failures.append('PRIVILEGES_UNREADABLE:%s:%s' % (family, error))
+    if head.get('plan') and head['op'] in ('switch', 'env-set'):
+        try:
+            plan = load_plan(head['plan'])[0]
+        except Refusal:
+            plan = {}
+        failures += ['MIGRATIONS_NOT_DONE:%s:%s' % (f, head['plan']) for f in migrations_not_done(head['plan'], plan)]
+    return failures
 
 
 # ------------------------------------------------------------------------------------------------ close-out
@@ -2120,7 +2806,9 @@ def close_out(run_id, as_):
                 path = '%s/%s/%s' % (PROFILE['paths']['runtime'], label, role)
                 if role != 'static-compat' and not any(u == path or u.startswith(path + '/') for u in used):
                     removable.append(path)
-    step.finish('CLOSED_OUT', accepted=True, removed=removed, removable=removable[:200], ledger={'head': short(head)})
+    # The migrate dumps stay (at most BACKUPS_KEPT; migrate removes older ones): listed by path and size only.
+    step.finish('CLOSED_OUT', accepted=True, removed=removed, removable=removable[:200], ledger={'head': short(head)},
+                backups=[{'file': r['file'], 'bytes': r['bytes']} for r in backups()])
     return 0
 
 
@@ -2129,7 +2817,7 @@ def close_out(run_id, as_):
 def main(argv, env=None, profile_path=None):
     configure(env, profile_path)
     command = argv[1] if len(argv) > 1 else ''
-    flags = set(a for a in argv[2:] if a in ('--add', '--rebaseline'))
+    flags = set(a for a in argv[2:] if a in ('--add', '--rebaseline', '--unswitched-ok'))
     for flag in flags:
         argv = [a for a in argv if a != flag]
     options = dict(zip(argv[2::2], argv[3::2]))
@@ -2137,16 +2825,20 @@ def main(argv, env=None, profile_path=None):
     steps = {
         'adopt': lambda: adopt(options.get('--run-id'), '--rebaseline' in flags),
         'prepare': lambda: prepare(options.get('--run-id'), options.get('--plan')),
+        'migrate': lambda: (rebaseline_migrations(options.get('--run-id'), options.get('--family')) if '--rebaseline' in flags
+                            else migrate(options.get('--run-id'), options.get('--plan'), options.get('--family'),
+                                         options.get('--pitr'))),
         'env-set': lambda: env_set(options.get('--run-id'), options.get('--files'), options.get('--key'),
                                    options.get('--value-inbox'), options.get('--generate'), '--add' in flags,
                                    options.get('--plan')),
         'switch': lambda: switch(options.get('--run-id'), options.get('--services'), options.get('--plan')),
         'verify': lambda: verify(options.get('--run-id')),
-        'rollback': lambda: rollback(options.get('--run-id'), options.get('--to')),
+        'rollback': lambda: rollback(options.get('--run-id'), options.get('--to'), '--unswitched-ok' in flags),
         'close-out': lambda: close_out(options.get('--run-id'), options.get('--as')),
     }
     reads = {'baseline': baseline, 'facts': facts_cmd, 'status': status_cmd,
-             'manifest': lambda: manifest_cmd(options.get('--service'))}
+             'manifest': lambda: manifest_cmd(options.get('--service')),
+             'migrate-check': lambda: migrate_check(options.get('--plan'), options.get('--family'))}
     CURRENT[:] = []
     try:
         need(os.geteuid() == 0 or TESTING, 'ROOT_REQUIRED')
@@ -2167,7 +2859,8 @@ def main(argv, env=None, profile_path=None):
                 entry = committed(step.run_id, command) if step is not None and command in ('adopt', 'rollback') else None
                 if entry is not None:
                     step.finish({'adopt': 'ADOPTED', 'rollback': 'ROLLED_BACK'}[command], entry=short(entry),
-                                warnings=['AFTER_COMMIT:' + code])
+                                warnings=['AFTER_COMMIT:' + code],
+                                **({'migrations': ROLLBACK_MIGRATIONS} if command == 'rollback' else {}))
                     return 0
                 if step is not None:
                     step.finish('REFUSED', code=code)
