@@ -1,6 +1,14 @@
 """A fake host generated from a release profile: a temporary root laid out as the profile's live state, synthetic env
-values, and one stub script installed as systemctl, systemd-run, curl, nginx, psql and cp. Every value here is
-synthetic. Six host behaviours the tool must handle are reproduced:
+values, and one stub module that a small launcher runs as systemctl, systemd-run, curl, nginx, psql, pg_dump, pg_restore,
+node and cp. Every value here is synthetic. psql keeps both migration ledgers, the relations and sequences of each schema
+and each role's table, column, sequence and schema privileges, applies a CMS migration with its ledger row (only as one
+--single-transaction call) and the grant file's grants, rehearses the grant file only in a transaction it rolls back
+(a GRANT on a function no migration made yet fails it, 42883), answers the migrating role's default privileges, and
+refuses a function call with more than 100 arguments as PostgreSQL does; a privilege read naming a relation, column or
+schema that is not there fails as a whole (42P01, 42703, 3F000) unless guarded, when it answers NULL. node stands in for
+the release's App migration launcher (the tables its migrations create appear). Knobs in stub.json make each failure the
+tool must stop on (a failing statement, grant, guard or dump, a dump that lacks a relation, another writer's ledger row).
+Six host behaviours the tool must handle are reproduced:
 
   appRoleKey         backend env holds the profile's appRole key (the App role) and a DATABASE_URL naming another role
   cmsCaFallback      operator.json has no CMS CA key; psql refuses a connection without an existing CA file
@@ -25,11 +33,17 @@ import time
 HERE = pathlib.Path(__file__).resolve().parent
 RELEASE = HERE.parent
 EXAMPLE_PROFILE = HERE / 'fixtures' / 'profile.example.json'
-TOOLS = ('systemctl', 'systemd-run', 'curl', 'nginx', 'psql', 'cp', 'journalctl')
-APP_ROLE, DECOY_ROLE = 'r1_app_role', 'r1_decoy_role'
+TOOLS = ('systemctl', 'systemd-run', 'curl', 'nginx', 'psql', 'pg_dump', 'pg_restore', 'node', 'cp', 'journalctl')
+APP_ROLE, DECOY_ROLE, CMS_RUNTIME = 'r1_app_role', 'r1_decoy_role', 'r1_cms_runtime'
+CMS_TABLES = ['catalogs', 'mcp_audit_events', 'mcp_control', 'payload_migrations', 'users']
+CMS_SEQUENCES = ['mcp_control_id_seq', 'payload_migrations_id_seq', 'users_id_seq']
+APP_TABLES = ['public_users', 'schema_migrations', 'works']
+# What the release's App migration launcher imports from the new backend root (scripts/migrate-community.mjs).
+APP_MODULES = ['services/catalog-postgres/dist/index.js', 'services/community-postgres/dist/index.js']
 
-STUB = r'''#!@PYTHON@ -IS
-import fcntl, hashlib, json, os, re, signal, subprocess, sys, time
+# The stubs' code, a module every tool's launcher imports: each call starts a Python, which then reads its compiled
+# form instead of compiling it again.
+STUB = r'''import fcntl, json, os, re, signal, sys, time      # hashlib and subprocess only where used
 HERE = os.path.dirname(os.path.abspath(sys.argv[0]))
 ROOT = open(os.path.join(HERE, 'ROOT')).read().strip()
 PROFILE = json.load(open(os.path.join(HERE, 'profile.json')))
@@ -46,6 +60,9 @@ def P(path):
 
 
 class State:
+    def __init__(self, write=True):
+        self.write = write                      # a read leaves the file as it is
+
     def __enter__(self):
         self.fd = os.open(STATE + '.lock', os.O_RDWR | os.O_CREAT, 0o600)
         fcntl.flock(self.fd, fcntl.LOCK_EX)
@@ -53,7 +70,7 @@ class State:
         return self.s
 
     def __exit__(self, *exc):
-        if exc[0] is None:
+        if exc[0] is None and self.write:
             tmp = STATE + '.%d' % os.getpid()
             json.dump(self.s, open(tmp, 'w'))
             os.replace(tmp, STATE)
@@ -125,7 +142,7 @@ def systemctl():
     if verb == 'show':
         unit = ARGS[1]
         props = [a.split('=', 1)[1] for a in ARGS if a.startswith('--property=')]
-        with State() as s:
+        with State(write=False) as s:
             if unit in s.get('showFails', []):
                 return 1              # a show that failed or timed out: no answer at all
             values = {}
@@ -149,7 +166,7 @@ def systemctl():
             print('%s=%s' % (p, values.get(p, '')))
         return 0
     if verb == 'list-units':
-        with State() as s:
+        with State(write=False) as s:
             for unit, pid in sorted(s.get('transient', {}).items()):
                 up = alive(pid)
                 print('%s loaded %s %s x' % (unit, 'active' if up else 'inactive', 'running' if up else 'dead'))
@@ -157,6 +174,11 @@ def systemctl():
     with State() as s:
         s.setdefault('calls', []).append([verb] + ARGS[1:])
         unit = ARGS[-1] if len(ARGS) > 1 else None
+        if verb == 'boot':           # the fake's own boot: daemon-reload, then start each unit named, in one call
+            s['calls'][-1:] = [['daemon-reload']] + [['start', u] for u in ARGS[1:]]
+            for u in UNIT_OF:
+                s['loaded'][u] = dropin_wd(u)
+            return max([start(u, s) for u in ARGS[1:]] or [0])
         if verb == 'daemon-reload':
             if s.get('daemonReloadFail'):
                 return 1
@@ -168,6 +190,7 @@ def systemctl():
                 s['units'][unit]['state'] = 'inactive'
             return 0
         if verb == 'reload':
+            import hashlib
             n = s['nginx']
             n['previous'], n['current'] = n['current'], hashlib.sha256(open(P(PROFILE['paths']['nginxSite']), 'rb').read()).hexdigest()
             n['reloadedAt'], n['reloads'] = time.time(), n.get('reloads', 0) + 1
@@ -188,18 +211,28 @@ def systemctl():
             return 0
         if verb == 'start':
             sleep = s.get('sleepOnStart') == unit
+            mark = len(s['calls'])
             if sleep:
                 s['sleepOnStart'] = None
                 s['sleeping'] = unit
     if verb == 'start':
         if sleep:
-            time.sleep(30)
+            # A start job that hangs: as systemd, it ends when its caller is gone or a later job on the unit (or the
+            # stop of the step running it) replaces it, answering failure; at most 30 s.
+            parent, deadline = os.getppid(), time.monotonic() + 30
+            while time.monotonic() < deadline:
+                time.sleep(0.05)
+                with State() as s:
+                    later = [c for c in s['calls'][mark:] if c[-1] == unit or (c[0] == 'stop' and c[-1] in s['transient'])]
+                    if later or os.getppid() != parent:
+                        return 1
         with State() as s:
             return start(unit, s)
     return 0
 
 
 def systemd_run():
+    import subprocess
     unit = next(a.split('=', 1)[1] for a in ARGS if a.startswith('--unit='))
     env = {'PATH': '/usr/bin:/bin'}
     rest = []
@@ -224,6 +257,11 @@ def alive(pid):
         return False
     except PermissionError:
         return True
+    try:                                        # Linux: the state in /proc, without starting ps
+        return open('/proc/%d/stat' % pid).read().rsplit(')', 1)[1].split()[0] != 'Z'
+    except (OSError, IndexError):
+        pass
+    import subprocess
     try:
         out = subprocess.run(['ps', '-o', 'stat=', '-p', str(pid)], capture_output=True, timeout=5).stdout.decode().strip()
     except (OSError, subprocess.TimeoutExpired):
@@ -342,19 +380,189 @@ def nginx():
     return 1 if b'BROKEN' in open(P(PROFILE['paths']['nginxSite']), 'rb').read() else 0
 
 
+def sql_error(state):
+    sys.stderr.write('psql:<stdin>:1: ERROR:  %s\n' % state)
+    return 3
+
+
+def held(s, role, kind, name, column, privilege):
+    """The fake's ACL: acl[role][object] lists privileges; a column grant is held under '<table>.<column>', a schema's
+    under 'schema:<name>'. A table-level privilege covers every column."""
+    acl = s['acl'].get(role, {})
+    if kind == 'column':
+        return privilege in acl.get(name, []) or privilege in acl.get('%s.%s' % (name, column), [])
+    return privilege in acl.get('schema:' + name if kind == 'schema' else name, [])
+
+
+def there(s, kind, name, column):
+    """Whether an object exists: a schema (public, community), or a relation of the family whose schema it is (a
+    column with its table, unless dropped)."""
+    if kind == 'schema':
+        return name in ('public', 'community')
+    schema, bare = name.split('.', 1)
+    family = {'public': 'cms', 'community': 'app'}.get(schema)
+    return family is not None and bare in s['tables'][family] + s['sequences'][family] and \
+        '%s.%s' % (name, column) not in s.get('droppedColumns', [])
+
+
+def run_grants(s, sql, role):
+    """The grant file's statements this fake understands: table, column, sequence and schema grants to :"cms_role"."""
+    acl = s['acl'].setdefault(role, {})
+
+    def add(key, privileges):
+        acl[key] = sorted(set(acl.get(key, [])) | {p.strip() for p in privileges.split(',')})
+    body = re.sub(r'--[^\n]*', '', sql)
+    for privilege, columns, table in re.findall(r'GRANT\s+([A-Z]+)\s*\(([^)]*)\)\s+ON\s+(?:TABLE\s+)?(\S+)\s+TO\s+:"cms_role"', body):
+        for column in columns.split(','):
+            add('%s.%s' % (table, column.strip()), privilege)
+    for privileges, kind, objects in re.findall(r'GRANT\s+([A-Z, ]+?)\s+ON\s+(TABLE|SEQUENCE|SCHEMA)\s+(.*?)\s+TO\s+:"cms_role"',
+                                                body, re.S):
+        for name in (o.strip() for o in objects.split(',')):
+            add('schema:' + name if kind == 'SCHEMA' else name, privileges)
+    for table, extra in s.get('aclExtra', {}).items():
+        add(table, ','.join(extra))
+
+
 def psql():
     sql = sys.stdin.read()
     ca = os.environ.get('PGSSLROOTCERT')
+    name = re.search(r'/\* q:([a-z_]+) \*/', sql).group(1)
+    single = '--single-transaction' in ARGS
+    variables = dict(ARGS[i + 1].split('=', 1) for i, a in enumerate(ARGS[:-1]) if a == '-v' and '=' in ARGS[i + 1])
+    options = os.environ.get('PGOPTIONS', '')
+    read_only = 'default_transaction_read_only=on' in options
     with open(os.path.join(ROOT, 'stub-psql.log'), 'a') as handle:
-        handle.write(json.dumps({'user': os.environ.get('PGUSER'), 'ca': ca, 'readOnly':
-                                 'default_transaction_read_only=on' in os.environ.get('PGOPTIONS', '')}) + '\n')
+        handle.write(json.dumps({'user': os.environ.get('PGUSER'), 'ca': ca, 'readOnly': read_only, 'query': name,
+                                 'single': single, 'options': options}) + '\n')
     if not ca or not os.path.isfile(ca):
         sys.stderr.write('psql: error: connection failed\nERROR:  08006\n')
         return 2
-    name = re.search(r'/\* q:([a-z_]+) \*/', sql).group(1)
+    family = name.split('_', 1)[0]
+    if re.search(r'\bjson_build_(?:array|object)\(', sql) and sql.count('has_') > 100:
+        return sql_error('54023')                      # as PostgreSQL: a function takes at most 100 arguments
     with State() as s:
-        names = s['ledgers'].get(name.replace('_ledger', ''), [])
-    print(json.dumps({'names': names}))
+        if name.endswith('_ledger'):
+            print(json.dumps({'names': s['ledgers'].get(family, [])}))
+        elif name.endswith('_tables'):
+            print(json.dumps(sorted(s['tables'][family])))
+        elif name.endswith('_sizes'):
+            print(json.dumps(s.get('relationBytes', 65536)))
+        elif name == 'cms_objects':
+            named = re.findall(r"\('([a-z0-9_.]+)'\)", sql.split('AS o(n)')[0])
+            have = set(s['tables']['cms']) | set(s['sequences']['cms'])
+            print(json.dumps({'missing': [n for n in named if n.split('.', 1)[1] not in have],
+                              'notOwned': s.get('notOwned', [])}))
+        elif name.endswith('_privileges'):
+            calls = re.findall(r"(CASE WHEN to_reg(?:class|namespace)\('[^']*'\) IS NULL.*?THEN NULL ELSE )?"
+                               r"has_(table|column|sequence|schema)_privilege\(([^)]*)\)", sql)
+            answers = []
+            for guard, kind, args in calls:
+                a = [x.strip("'") for x in args.split(',')]
+                if not there(s, kind, a[1], a[2] if kind == 'column' else ''):
+                    # As PostgreSQL: the whole read fails on an object that is not there, unless the call is guarded
+                    # (a column by pg_attribute, beside its table).
+                    if not guard or (kind == 'column' and there(s, 'table', a[1], '') and 'pg_attribute' not in guard):
+                        return sql_error({'schema': '3F000', 'column': '42703'}.get(kind, '42P01'))
+                    answers.append(None)
+                else:
+                    answers.append(held(s, a[0], kind, a[1], a[2] if kind == 'column' else '', a[-1]))
+            print(json.dumps(answers))
+        elif name.endswith('_default_acl'):
+            print(json.dumps((s.get('defaultAcl') or {}).get(family, [])))
+        elif name == 'cms_grant_rehearsal':
+            s.setdefault('rehearsals', []).append({'single': single, 'statement': sql, 'variables': variables,
+                                                   'readOnly': read_only, 'options': options})
+            if read_only or single or not sql.split('*/', 1)[1].strip().startswith('BEGIN;') or \
+                    not sql.rstrip().endswith('ROLLBACK;'):
+                return sql_error('XX000')              # this fake rehearses only in a transaction it rolls back
+            if s.get('guardFail'):
+                return sql_error('P0001')              # the grant file's own guard raised
+            for function in re.findall(r'\bON\s+FUNCTION\s+([a-z_][a-z0-9_.]*)\s*\(', sql.split('*/', 1)[1]):
+                if function.split('.')[-1] not in s.get('functions', []):
+                    return sql_error('42883')          # as PostgreSQL: a function the migrations have not made yet
+        elif name in ('cms_migrate', 'cms_grants'):
+            if read_only:
+                return sql_error('25006')
+            s.setdefault('writes', []).append({'query': name, 'single': single, 'statement': sql, 'options': options,
+                                               'user': os.environ.get('PGUSER'), 'variables': variables})
+            if name == 'cms_migrate':
+                if s.get('failSql') and s['failSql'] in sql:
+                    return sql_error('42P07')          # the whole transaction rolls back: no table, no ledger row
+                recorded = re.search(r"INSERT INTO payload_migrations \(name, batch, updated_at, created_at\) SELECT '([^']+)'", sql)
+                if not single or not recorded:
+                    return sql_error('XX000')          # this fake applies a migration only with its ledger row
+                if recorded.group(1) in s['ledgers']['cms']:
+                    return sql_error('P0001')
+                s['ledgers']['cms'].append(recorded.group(1))
+                s['ledgers']['cms'] += s.pop('ledgerExtra', [])      # e.g. another tool writing at the same time
+                for table, body in re.findall(r'CREATE TABLE (?:IF NOT EXISTS )?"?([a-z_][a-z0-9_]*)"?\s*\((.*?)\);', sql, re.S):
+                    s['tables']['cms'].append(table)
+                    s['sequences']['cms'] += ['%s_%s_seq' % (table, c) for c in re.findall(r'"([a-z_]+)" serial\b', body)]
+                s.setdefault('functions', []).extend(re.findall(
+                    r'CREATE (?:OR REPLACE )?FUNCTION (?:public\.)?"?([a-z_][a-z0-9_]*)"?\s*\(', sql))
+            else:
+                if s.get('grantFail'):
+                    return sql_error('42501')
+                if s.get('guardFail'):
+                    return sql_error('P0001')
+                run_grants(s, sql, variables.get('cms_role'))
+        else:
+            return sql_error('42601')
+    return 0
+
+
+def pg_dump():
+    path = ARGS[ARGS.index('--file') + 1]
+    tables = [a.split('=', 1)[1] for a in ARGS if a.startswith('--table=')]
+    with State() as s:
+        s.setdefault('dumps', []).append({'tables': tables, 'user': os.environ.get('PGUSER'),
+                                          'readOnly': 'default_transaction_read_only=on' in os.environ.get('PGOPTIONS', '')})
+        if s.get('dumpFail'):
+            open(path, 'wb').write(b'PGDMP partial')
+            return 1
+    open(path, 'wb').write(b'PGDMP' + json.dumps(tables).encode())
+    return 0
+
+
+def pg_restore():
+    assert ARGS[0] == '--list'
+    data = open(ARGS[-1], 'rb').read()
+    if not data.startswith(b'PGDMP['):
+        return 1
+    with State() as s:
+        drops = s.get('restoreDrops', [])                   # a dump that lacks a relation it was asked for
+    for number, table in enumerate(json.loads(data[5:])):
+        if table not in drops:
+            print('%d; 1259 %d TABLE %s %s owner' % (number + 1, 16384 + number, table.split('.')[0], table.split('.')[1]))
+    return 0
+
+
+def node():
+    """The release's App migration launcher: applies, in id order, each file of <tree>/database/community-migrations
+    the ledger lacks (one transaction each), reached through <tree>/services, the new root's."""
+    launcher = ARGS[0]
+    tree = os.path.dirname(os.path.dirname(launcher))
+    services = os.path.join(tree, 'services')
+    if not os.environ.get('APP_MIGRATION_DATABASE_URL') or not os.path.islink(services) or \
+            not os.path.isdir(os.path.join(services, 'agent-authorization')):
+        sys.stderr.write('Community migration configuration or execution failed\n')
+        return 1
+    folder = os.path.join(tree, 'database', 'community-migrations')
+    with State() as s:
+        s.setdefault('nodeRuns', []).append({'launcher': os.path.relpath(launcher, tree), 'services': os.readlink(services)})
+        applied = 0
+        for file in sorted(f for f in os.listdir(folder) if f.endswith('.sql')):
+            migration_id = file[:14]
+            if migration_id in s['ledgers']['app']:
+                continue
+            if s.get('appFailAt') == migration_id:
+                sys.stderr.write('Community migration configuration or execution failed\n')
+                return 1
+            s['ledgers']['app'].append(migration_id)
+            s['tables']['app'] += re.findall(r'CREATE TABLE (?:IF NOT EXISTS )?community\.([a-z_][a-z0-9_]*)',
+                                             open(os.path.join(folder, file)).read())
+            applied += 1
+    print('Migration community: PASS (%d applied)' % applied)
     return 0
 
 
@@ -383,8 +591,87 @@ def cp():
 
 
 sys.exit({'systemctl': systemctl, 'systemd-run': systemd_run, 'curl': curl, 'nginx': nginx, 'psql': psql, 'cp': cp,
-          'journalctl': lambda: 0}[NAME]())
+          'pg_dump': pg_dump, 'pg_restore': pg_restore, 'node': node, 'journalctl': lambda: 0}[NAME]())
 '''
+
+
+# Two synthetic CMS migrations in the shape of the release they stand in for (new tables, a trigger, no DROP), and
+# a synthetic runtime grant file in the shape of the repository's.
+RUNS, TARGETS = '20261106_120000_r1b_runs', '20261106_120100_r1b_run_targets'
+RUNS_SQL = '''  CREATE TABLE "r1b_runs" (
+    "run_id" uuid PRIMARY KEY,
+    "user_id" integer NOT NULL REFERENCES "users"("id") ON DELETE RESTRICT,
+    "state" varchar NOT NULL CHECK ("state" IN ('planning', 'done')),
+    "created_at" timestamptz NOT NULL DEFAULT now()
+  );
+  CREATE INDEX "r1b_runs_state" ON "r1b_runs" ("state");'''
+TARGETS_SQL = '''  CREATE TABLE "r1b_run_targets" (
+    "run_id" uuid NOT NULL REFERENCES "r1b_runs"("run_id"),
+    "idx" integer NOT NULL,
+    PRIMARY KEY ("run_id", "idx")
+  );
+  CREATE FUNCTION r1b_targets_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    IF NEW.idx < 0 THEN RAISE EXCEPTION 'negative index'; END IF;
+    RETURN NEW;
+  END $$;
+  CREATE TRIGGER r1b_targets_guard BEFORE INSERT ON "r1b_run_targets" FOR EACH ROW EXECUTE FUNCTION r1b_targets_guard();'''
+GRANTS = b'''-- Synthetic CMS runtime grants for the release tool's own tests.
+SELECT set_config('moya.cms_runtime_role', :'cms_role', true);
+DO $$
+BEGIN
+  IF current_setting('moya.cms_runtime_role') = '' THEN RAISE EXCEPTION 'no runtime role'; END IF;
+END $$;
+GRANT USAGE ON SCHEMA public TO :"cms_role";
+GRANT SELECT, INSERT, UPDATE ON TABLE
+  public.users,
+  public.mcp_control,
+  public.r1b_runs,
+  public.r1b_run_targets
+TO :"cms_role";
+GRANT SELECT (name) ON public.payload_migrations TO :"cms_role";
+GRANT USAGE ON SEQUENCE public.users_id_seq TO :"cms_role";
+'''
+# The same file before a release that adds r1b_runs and r1b_run_targets: grants on objects that exist only.
+EXISTING_GRANTS = GRANTS.replace(b'  public.mcp_control,\n  public.r1b_runs,\n  public.r1b_run_targets\n',
+                                 b'  public.mcp_control\n')
+# A new Payload-style collection: a serial id (its sequence created with it), a column-level UPDATE.
+NOTES, NOTES_SQL = '20261106_130000_r1b_notes', '''  CREATE TABLE "r1b_notes" (
+    "id" serial PRIMARY KEY NOT NULL,
+    "run_id" uuid REFERENCES "r1b_runs"("run_id"),
+    "note" varchar
+  );'''
+NOTES_GRANTS = GRANTS.replace(b',\n  public.r1b_run_targets', b'') + b'''GRANT SELECT, INSERT ON TABLE public.r1b_notes TO :"cms_role";
+GRANT UPDATE (note) ON public.r1b_notes TO :"cms_role";
+GRANT USAGE ON SEQUENCE public.r1b_notes_id_seq TO :"cms_role";
+'''
+# The App family's runtime grants, which the operator runs: the tool only reads what they mean for a new table.
+APP_GRANTS = b'''-- Synthetic App runtime grants for the release tool's own tests.
+GRANT USAGE ON SCHEMA community TO :"app_role";
+GRANT SELECT, INSERT ON TABLE community.r1b_c TO :"app_role";
+'''
+# The App file's way for a table an earlier migration phase may lack (home-timeline-v1 wrote its grant so): a DO
+# block granting through a setting the file binds to the role first.
+APP_DO_GRANTS = APP_GRANTS + b'''SET LOCAL moya.runtime_app_role = :"app_role";
+-- r1b timeline: read only for the App role.
+DO $$
+BEGIN
+  IF to_regclass('community.r1b_timeline') IS NOT NULL THEN
+    EXECUTE format(
+      'GRANT SELECT ON TABLE community.r1b_timeline TO %I',
+      current_setting('moya.runtime_app_role'));
+  END IF;
+END $$;
+'''
+
+
+def cms_source(up_sql, down_sql='DROP TABLE "r1b_placeholder";'):
+    """A synthetic CMS migration in the shape the tool extracts: one sql`...` in up(), raw SQL, no interpolation."""
+    return ('import {\n  sql,\n  type MigrateDownArgs,\n  type MigrateUpArgs,\n} from "@payloadcms/db-postgres";\n\n'
+            '// Synthetic, for the release tool\'s own tests.\n'
+            'export async function up({ db }: MigrateUpArgs): Promise<void> {\n  await db.execute(sql`\n%s`);\n}\n\n'
+            'export async function down({ db }: MigrateDownArgs): Promise<void> {\n  await db.execute(sql`\n  %s`);\n}\n'
+            % (up_sql, down_sql)).encode()
 
 
 def load_profile(path=None):
@@ -447,6 +734,7 @@ class FakeHost:
                  pre + 'lib/deep/one.js': ('deep %s\n' % artifact).encode()}
         if artifact == 'backend':
             files['services/agent-authorization/dist/main.js'] = b'issuer\n'
+            files.update({module: b'// compiled runner\n' for module in APP_MODULES})
         rows = []
         if spec.get('union'):
             files[pre + '.next/BUILD_ID'] = label.encode()
@@ -541,10 +829,13 @@ class FakeHost:
             assert os.path.dirname(live['pinFile']) == pin_dir, 'pin outside its unit drop-in directory'
             self.write(pin_dir + '/10-limits.conf', '[Service]\nLimitNOFILE=65536\n')
             self.write(live['pinFile'], self.pin_text(service, live['label'], live['root']))
+        runtime = h['database'].get('cmsRuntimeRole') or {}
         for name, spec in h['envFiles'].items():
             values = {}
             for key in spec['keys']:
                 role = APP_ROLE if key == h['database']['appRole']['key'] else DECOY_ROLE if key == 'DATABASE_URL' else None
+                if (name, key) == (runtime.get('envFile'), runtime.get('key')):
+                    role = CMS_RUNTIME
                 values[key] = synthetic(key, role)
             self.values[name] = values
         for rule in h.get('envEqualities', []):
@@ -575,22 +866,24 @@ class FakeHost:
         os.makedirs(self.P('/proc'), exist_ok=True)
         os.makedirs(self.P(h['paths'].get('freeSpace', '/')), exist_ok=True)
         state['ledgers'] = {'app': ['20261105010000', '20261105030000'], 'cms': ['20261105_131739_mcp_connection_identity']}
+        state.update(tables={'cms': list(CMS_TABLES), 'app': list(APP_TABLES)}, acl={}, writes=[], dumps=[],
+                     sequences={'cms': list(CMS_SEQUENCES), 'app': []})
         now = int(time.time())
         for guard in h.get('timerGuards', []):
             state['timers'][guard['timer']] = {'state': 'active', 'next': now + 6 * 3600}
             state['units'][guard['service']] = {'state': 'inactive', 'pid': 0, 'nrestarts': '0'}
         (pathlib.Path(self.root) / 'stub.json').write_text(json.dumps(state))
-        stub = STUB.replace('@PYTHON@', sys.executable)
         (self.bin / 'ROOT').write_text(self.root)
         (self.bin / 'profile.json').write_text(json.dumps(self.h))
+        (self.bin / 'fakestub.py').write_text(STUB)
         for name in TOOLS:
             path = self.bin / name
-            path.write_text(stub)
+            path.write_text('#!%s -IS\nimport sys\nsys.path.insert(0, %r)\nimport fakestub  # noqa: E402,F401\n'
+                            % (sys.executable, str(self.bin)))
             path.chmod(0o755)
-        # Boot: daemon-reload loads the drop-ins, then every managed and untouched unit starts.
-        self.systemctl('daemon-reload')
-        for spec in list(h['services'].values()) + list(h.get('untouched', {}).values()):
-            self.systemctl('start', spec['unit'])
+        # Boot, in one call: daemon-reload loads the drop-ins, then every managed and untouched unit starts.
+        self.systemctl('boot', *[spec['unit'] for spec in list(h['services'].values()) +
+                                 list(h.get('untouched', {}).values())])
 
     # -------------------------------------------------------------------------------------------- helpers
     def systemctl(self, *args):
@@ -636,14 +929,38 @@ class FakeHost:
         path = pathlib.Path(self.root) / 'stub-argv.log'
         return path.read_text() if path.exists() else ''
 
-    def release(self, commit, modes, scratch=None):
+    def release(self, commit, modes, scratch=None, cms=None, grant=None, app=None, grants_only=False, ungranted=(),
+                tamper=None):
         """A staged release the way release.py builds and stages one: new manifests (unchanged files marked base,
         changed ones as content-addressed blobs), the payload assembled under the state directory, plan.json and
-        build.json under plans/<planId>/. Returns the plan id."""
+        build.json under plans/<planId>/. With migrations, the plan's sections come from release.py's own functions:
+        cms [(name, migration source)] (or grants_only) with the grant file `grant` (bytes), app {'pending', 'files',
+        'launcher', 'grant'}, whose files and launcher go into the payload as blobs. `tamper(plan)` edits the plan
+        before it is hashed, as a tool other than release.py might. Returns the plan id."""
+        import release as R
         h = self.h
         label = commit[:8]
         artifacts = sorted({h['services'][s]['artifact'] for s, m in modes.items() if m == 'root'})
         manifests, blobs = {}, {}
+        migrations, grants = {}, {}
+        if cms or grants_only:
+            migrations['cms'] = R.cms_section(cms) if cms else {'names': [], 'items': [], 'grantsOnly': True}
+            items = migrations['cms']['items']
+            grants['cms'] = R.grant_section(grant, R.GRANT_FILES['cms'], [c for i in items for c in i['creates']],
+                                            R.GRANT_VARIABLES['cms'], [u for u in ungranted if u.startswith('public.')],
+                                            [n for i in items for n in i['made']])
+        if app:
+            migrations['app'] = R.app_section(app['pending'], app['files'], R.MIGRATION_SOURCES['app'],
+                                              R.MIGRATION_SOURCES['appLauncher'], app['launcher'],
+                                              h['database']['appMigrationService'])
+            creates = [c for i in migrations['app']['items'] for c in i['creates']]
+            if creates:
+                section = R.grant_section(app.get('grant', APP_GRANTS), R.GRANT_FILES['app'], creates,
+                                          R.GRANT_VARIABLES['app'], [u for u in ungranted if u.startswith('community.')],
+                                          [n for i in migrations['app']['items'] for n in i['made']])
+                grants['app'] = {k: section[k] for k in ('file', 'sha256', 'variable', 'ungranted', 'tables', 'sequences')}
+            for raw in list(app['files'].values()) + [app['launcher']]:
+                blobs[sha(raw)] = raw
         for artifact in artifacts:
             service = next(s for s in sorted(h['services']) if h['services'][s]['artifact'] == artifact and
                            not h['services'][s].get('cloneOf'))
@@ -671,6 +988,13 @@ class FakeHost:
         order = [s for s in h.get('restartOrder', sorted(h['services'])) if s in modes]
         plan = {'kind': 'artvenn-release-plan', 'schema': 1, 'source': commit, 'label': label, 'order': order,
                 'services': {s: {'mode': m, 'artifact': h['services'][s]['artifact']} for s, m in modes.items()}}
+        if migrations:
+            ledgers = self.state()['ledgers']
+            plan.update(migrations=migrations, grants=grants,
+                        ledgers={f: {'count': len(ledgers[f]), 'namesSha256': R.names_sha(ledgers[f])} for f in migrations},
+                        sequence=['migrate --family ' + f for f in R.FAMILIES if f in migrations] + ['switch ' + ','.join(order)])
+        if tamper:
+            tamper(plan)
         plan_raw = json.dumps(plan, sort_keys=True, indent=1).encode()
         plan_id = sha(plan_raw)[:16]
         build = {'kind': 'artvenn-release-build', 'planId': plan_id, 'source': commit, 'payloadSha256': payload_sha,
