@@ -349,7 +349,32 @@ export const DraftsCard = ({
                 onChanged={(total, first) =>
                   show({ status: "ready", total, newest: first })
                 }
-                onClose={() => setPicker(false)}
+                onClose={() => {
+                  setPicker(false);
+                  if (presentation !== "tool") return;
+                  // Let the native modal finish closing before restoring the
+                  // reading entrance. Never steal focus after an account or
+                  // visible-panel change, or while handing off to an editor.
+                  window.requestAnimationFrame(() => {
+                    window.requestAnimationFrame(() => {
+                      const opener = openerRef.current;
+                      const focused = document.activeElement;
+                      if (
+                        opener?.isConnected &&
+                        !latest.current.checking &&
+                        latest.current.ownerId === accountId &&
+                        (focused === opener ||
+                          focused === document.body ||
+                          focused === document.documentElement ||
+                          !focused?.isConnected) &&
+                        opener.closest(
+                          '[inert], [hidden], [aria-hidden="true"]',
+                        ) === null
+                      )
+                        opener.focus({ preventScroll: true });
+                    });
+                  });
+                }}
                 onOpenDraft={(draftId) => {
                   pendingTarget.current = { type: "draft", id: draftId };
                   setPicker(false);

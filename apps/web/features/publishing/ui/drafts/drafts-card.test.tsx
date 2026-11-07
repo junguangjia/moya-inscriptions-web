@@ -154,6 +154,97 @@ describe("Drafts card", () => {
       "专题测试草稿",
     );
   });
+  it("restores the reading entrance after the dialog releases keyboard focus", async () => {
+    vi.spyOn(window.history, "back").mockImplementation(() => {
+      window.history.replaceState({ kind: "profile" }, "", "/#profile");
+      window.dispatchEvent(
+        new PopStateEvent("popstate", { state: { kind: "profile" } }),
+      );
+    });
+    client.listDrafts.mockResolvedValue(page([summary(1)], 1));
+    await render(<DraftsCard accountId={ACCOUNT} active presentation="tool" />);
+    await flush();
+    const tool =
+      document.querySelector<HTMLButtonElement>("[data-drafts-tool]")!;
+    await act(async () => tool.click());
+    await flush();
+    const back = document.querySelector<HTMLButtonElement>(
+      'dialog button[aria-label="返回"]',
+    )!;
+    back.focus();
+    await act(async () => back.click());
+    await vi.waitFor(() => expect(document.activeElement).toBe(tool));
+    expect(document.querySelector("dialog")).toBeNull();
+  });
+
+  it.each(["account", "hidden"] as const)(
+    "does not steal focus when the %s changes before returning",
+    async (change) => {
+      vi.spyOn(window.history, "back").mockImplementation(() => {
+        window.history.replaceState({ kind: "profile" }, "", "/#profile");
+        window.dispatchEvent(
+          new PopStateEvent("popstate", { state: { kind: "profile" } }),
+        );
+      });
+      client.listDrafts.mockResolvedValue(page([summary(1)], 1));
+      const host = await render(
+        <DraftsCard accountId={ACCOUNT} active presentation="tool" />,
+      );
+      await flush();
+      const tool =
+        document.querySelector<HTMLButtonElement>("[data-drafts-tool]")!;
+      await act(async () => tool.click());
+      await flush();
+      const focus = vi.spyOn(tool, "focus");
+      if (change === "account")
+        author.viewer = { id: `user-${"c".repeat(32)}` };
+      else host.setAttribute("inert", "");
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>('dialog button[aria-label="返回"]')!
+          .click(),
+      );
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 100)));
+      expect(focus).not.toHaveBeenCalled();
+      expect(document.querySelector("dialog")).toBeNull();
+    },
+  );
+  it("preserves another control the reader focuses while the modal is closing", async () => {
+    vi.spyOn(window.history, "back").mockImplementation(() => {
+      window.history.replaceState({ kind: "profile" }, "", "/#profile");
+      window.dispatchEvent(
+        new PopStateEvent("popstate", { state: { kind: "profile" } }),
+      );
+    });
+    client.listDrafts.mockResolvedValue(page([summary(1)], 1));
+    await render(<DraftsCard accountId={ACCOUNT} active presentation="tool" />);
+    await flush();
+    const tool =
+      document.querySelector<HTMLButtonElement>("[data-drafts-tool]")!;
+    await act(async () => tool.click());
+    await flush();
+    const queued: FrameRequestCallback[] = [];
+    const frames = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => queued.push(callback));
+    try {
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>('dialog button[aria-label="返回"]')!
+          .click(),
+      );
+      await act(async () => queued.shift()?.(0));
+      const other = document.createElement("input");
+      document.body.append(other);
+      other.focus();
+      await act(async () => {
+        while (queued.length) queued.shift()!(0);
+      });
+      expect(document.activeElement).toBe(other);
+    } finally {
+      frames.mockRestore();
+    }
+  });
   it("shows the account's true draft count from the first page total", async () => {
     let answer: (value: unknown) => void = () => undefined;
     client.listDrafts.mockReturnValue(
