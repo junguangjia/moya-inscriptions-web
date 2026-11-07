@@ -528,7 +528,8 @@ describe("CatalogDetailExperience", () => {
     act(() => scroller.dispatchEvent(new Event("scroll", { bubbles: true })));
     contentHeight = 1970;
     // The browser clamps and reports it; that is not the reader moving.
-    scroller.scrollTop = scroller.scrollTop;
+    const before = scroller.scrollTop;
+    scroller.scrollTop = before;
     act(() => scroller.dispatchEvent(new Event("scroll", { bubbles: true })));
     expect(scroller.scrollTop).toBe(1170);
     act(() => scroll!.shift!(1000, -166));
