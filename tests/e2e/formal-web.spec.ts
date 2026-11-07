@@ -346,8 +346,8 @@ test("Formal PC feeds keep their scroll across a shorter feed", async ({
     testInfo.project.name !== "desktop-chromium",
     "The document scroller belongs to the PC presentation.",
   );
-  // Short enough that Discover scrolls and the mock timeline's rows do not fill
-  // the room: the pager's height for a shorter feed clamps the document.
+  // Short enough that Discover scrolls: the timeline panel, not yet activated
+  // and so without height, clamps the document when the pager sizes it.
   await page.setViewportSize({ width: 1280, height: 420 });
   const { shell } = await openFormalRoot(page);
   const discover = shell.locator('[data-home-feed-panel="discover"]');
@@ -360,6 +360,8 @@ test("Formal PC feeds keep their scroll across a shorter feed", async ({
   await page.evaluate((top) => window.scrollTo(0, top), room);
   await expect.poll(scrollY).toBe(room);
   await selectHomeFeed(page, "时间轴", "timeline");
+  // The case guards the save only while the switch really clamps the page.
+  await expect.poll(scrollY).toBeLessThan(room);
   await selectHomeFeed(page, "发现", "discover");
   await expect.poll(scrollY).toBe(room);
 });

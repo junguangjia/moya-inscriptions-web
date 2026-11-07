@@ -283,10 +283,10 @@ dataset never goes through MCP before the Production import.
 
 The contract change means Web, Backend and Admin ship together; a Web-only
 release cannot carry it. `main` is ahead of the last Production tag, so the
-release must account for what else that carries, the Admin MCP extensibility
-base (#355 E1) included. `ADMIN_MCP_CONTRACT_VERSION` is not changed here: E1
-set it, no release has shipped E1 yet, and the release that first ships E1 and
-the timeline sets it to that release's day (extending rule 7).
+release must account for what else that carries. #355 E1 is already live, with
+`ADMIN_MCP_CONTRACT_VERSION` at its own release day. The new ops change what a
+client sees, so the commit merged for this release raises it to this release's
+day (extending rule 7); if the release slips, a one-line change re-dates it.
 
 The migration is edited in place because it is not on `main` and has never run
 in Production. A database that applied the earlier text, a local preview for
@@ -327,9 +327,10 @@ already applied. Once merged, the migration only adds.
 4. **Restart.** Restart Backend, Web and Admin on the tagged release. A Backend
    restarted before step 1 fails closed on its community ledger check. The Owner
    routes work from here.
-5. **AI access.** The timeline ops use `COMMUNITY_OPERATOR_AI_TOKEN`, placed
-   under the #355 amendments. Until it is placed, they answer
-   `AI_CREDENTIAL_NOT_CONFIGURED`.
+5. **AI access.** The timeline ops use `COMMUNITY_OPERATOR_AI_TOKEN`, which the
+   #355 login door release already placed. AI reads and writes of the timeline
+   therefore start with the restart in step 4; there is no separate gate. Where
+   it is not placed, they answer `AI_CREDENTIAL_NOT_CONFIGURED`.
 
 App-role preflight, read-only, after step 2. It checks each grant the amendment
 states: reads; `INSERT` on exactly the columns a new row names; `UPDATE` on

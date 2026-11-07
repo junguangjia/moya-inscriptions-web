@@ -649,14 +649,20 @@ END $$;
 -- scripts/import-timeline.mjs replaces the whole set with the migration role.
 -- The App role is shared with the operator bridge and the worker, so they could
 -- write these columns too. Convergence as above (a table-level REVOKE takes the
--- column grants with it), but inside the block, because the relation is
--- optional for earlier migration phases.
+-- column grants with it), but inside guarded blocks, because the relation is
+-- optional for earlier migration phases. The revoke and the grants are two
+-- blocks, run in this order, so each block holds one kind of statement.
 DO $$
 BEGIN
   IF to_regclass('community.timeline_entries') IS NOT NULL THEN
     EXECUTE format(
       'REVOKE INSERT, UPDATE ON TABLE community.timeline_entries FROM %I',
       current_setting('moya.runtime_app_role'));
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF to_regclass('community.timeline_entries') IS NOT NULL THEN
     EXECUTE format(
       'GRANT SELECT ON TABLE community.timeline_entries TO %I',
       current_setting('moya.runtime_app_role'));

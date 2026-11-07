@@ -113,11 +113,12 @@ No other migration is approved.
 ## 6. Delivery
 
 Independent review of the exact HEAD, then a pinned merge with this signature.
-PostgreSQL 16. No dependency is added or upgraded. `ADMIN_MCP_CONTRACT_VERSION`
-is not changed in PR #389. The release that first ships #355 E1 and the timeline
-sets it to that release's day. The release carries Web, Backend and Admin
-together. Release, migration, import and placing the community AI credential
-stay separate Owner approvals.
+PostgreSQL 16. No dependency is added or upgraded. #355 E1 is already live; the
+commit merged for this release raises `ADMIN_MCP_CONTRACT_VERSION` to the
+release day, because the new ops change what a client sees. The release carries
+Web, Backend and Admin together. Release, migration and import stay separate
+Owner approvals. The community AI credential is already placed, so AI access to
+the timeline starts when the release switches.
 
 ## 7. Documents to correct with this work
 
