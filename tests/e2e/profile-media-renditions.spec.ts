@@ -356,6 +356,12 @@ async function open(page: Page, path: string) {
 }
 
 async function openOwnProfile(page: Page) {
+  // These cases audit the original cover/header, not the #356 reading shell.
+  // Seed both physical-device scopes before navigation, including PC windows.
+  await page.addInitScript(() => {
+    localStorage.setItem("yoyi.home-feed-layout.v2", "double");
+    localStorage.setItem("yoyi.desktop-feed-layout.v1", "double");
+  });
   // A signed-in browser carries its session cookie: a wide screen shows the
   // dock once /me answers instead of browse-only (pc-browse-only-v1).
   const baseURL = test.info().project.use.baseURL;

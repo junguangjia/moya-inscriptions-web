@@ -27,7 +27,9 @@ test.beforeAll(async ({ request }) => {
 /**
  * detail-entry-speed-v1 (#310): a work's Detail opens at once from the work
  * record this account already received and its own read confirms it in
- * place; body text opens Detail in the phone single-column post. Community
+ * place; Home body text opens Detail in the phone single-column post. #356
+ * explicitly replaces profile full posts with fixed reading cards; the same
+ * list-work snapshots must still seed their complete Detail. Community
  * requests are page routes with synthetic works; each work read can be held
  * to observe the seeded frame. Browser emulation, not physical-device QA.
  */
@@ -382,6 +384,12 @@ async function openPhone(
     session = await context.newCDPSession(target);
     closeContext = () => context.close();
   }
+  // Both consumers are intentional here: Home FeedPost and #356 profile reading.
+  // Keep their single/calligraphy choice independent of future default changes.
+  await target.addInitScript(() => {
+    localStorage.setItem("yoyi.home-feed-layout.v2", "single");
+    localStorage.setItem("yoyi.desktop-feed-layout.v1", "single");
+  });
   const community = await serveCommunity(target);
   const close = async () => {
     community.releaseAll();
@@ -476,7 +484,48 @@ const bringIntoView = async (page: Page, target: Locator) => {
     undefined,
     { timeout: ACTION_TIMEOUT },
   );
-  await expect(target).toBeInViewport({ ratio: 1 });
+  if (
+    await target.evaluate(
+      (node) => node.closest("[data-profile-reading-card]") !== null,
+    )
+  ) {
+    // WebKit can report a fraction below one for an inset opener clipped by
+    // a rounded, fractional-width card. Check its complete actual rectangle
+    // instead; the pointer hit-test below still rejects an occluding layer.
+    const geometry = () =>
+      target.evaluate((node) => {
+        const rect = (element: Element | null) => {
+          if (!element) return null;
+          const r = element.getBoundingClientRect();
+          return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+        };
+        const viewport = window.visualViewport;
+        const left = viewport?.offsetLeft ?? 0,
+          top = viewport?.offsetTop ?? 0;
+        const right = left + (viewport?.width ?? window.innerWidth);
+        const bottom = top + (viewport?.height ?? window.innerHeight);
+        const target = rect(node)!;
+        return {
+          target,
+          card: rect(node.closest("[data-profile-reading-card]")),
+          pager: rect(node.closest("[data-profile-tab-pager]")),
+          viewport: { left, right, top, bottom },
+          complete:
+            target.left >= left &&
+            target.right <= right &&
+            target.top >= top &&
+            target.bottom <= bottom,
+        };
+      });
+    try {
+      await expect.poll(async () => (await geometry()).complete).toBe(true);
+    } finally {
+      await test.info().attach("reading-opener-geometry", {
+        body: JSON.stringify(await geometry()),
+        contentType: "application/json",
+      });
+    }
+  } else await expect(target).toBeInViewport({ ratio: 1 });
   await expect
     .poll(() =>
       target.evaluate(
@@ -501,7 +550,7 @@ const scrollTopOf = (scroller: Locator) =>
     timeout: ACTION_TIMEOUT,
   });
 
-/** Opens 我 from the dock and waits for its Works tab posts. */
+/** Opens 我 and waits for its #356 reading cards backed by full list works. */
 async function openOwnWorks(phone: Phone) {
   const user = phone.page
     .getByRole("navigation", { name: "主要内容" })
@@ -515,15 +564,20 @@ async function openOwnWorks(phone: Phone) {
     phone.page.getByRole("tab", { name: "作品", exact: true }),
   ).toHaveAttribute("aria-selected", "true");
   for (const seed of OWN_WORKS)
-    await expect(ownPost(phone.page, seed)).toHaveCount(1);
+    await expect(ownCard(phone.page, seed)).toHaveCount(1);
   // Primary navigation restores its saved scroll in two animation frames.
   await frames(phone.page);
 }
 
-const ownPost = (page: Page, seed: Seed) =>
+const ownCard = (page: Page, seed: Seed) =>
   page.locator(
-    `[data-author-panel="works"] [data-feed-post][data-content-id="${seed.id}"]`,
+    `[data-author-panel="works"] [data-profile-reading-card][data-content-id="${seed.id}"]`,
   );
+const ownCardOpener = (page: Page, seed: Seed) =>
+  ownCard(page, seed).getByRole("button", {
+    name: `打开${seed.title || "未命名作品"}`,
+    exact: true,
+  });
 const homePost = (page: Page) =>
   page.locator(
     `[data-home-feed-panel="discover"] [data-feed-post][data-content-id="${HOME.id}"]`,
@@ -612,7 +666,7 @@ const skipUnlessTrustedTouch = (testInfo: TestInfo) =>
     "Trusted compositor touch injection uses the Chromium protocol.",
   );
 
-test("我 Works posts show each full body from the list read, with no per-post work read", async ({
+test("我 Works reading cards use the list read with no per-card work read", async ({
   browser,
   page,
 }, testInfo) => {
@@ -621,20 +675,20 @@ test("我 Works posts show each full body from the list read, with no per-post w
   try {
     await openOwnWorks(phone);
     for (const seed of OWN_WORKS) {
-      const post = ownPost(phone.page, seed);
-      const body = post.locator("[data-feed-post-body-state]");
-      await bringIntoView(phone.page, body);
-      // The full text, not the card's excerpt, from the first render.
-      await expect(body).toHaveAttribute("data-feed-post-body-state", "loaded");
-      await expect(post.locator("[data-feed-post-body]")).toHaveText(seed.text);
+      const card = ownCard(phone.page, seed);
+      await bringIntoView(phone.page, ownCardOpener(phone.page, seed));
+      // The new profile is an index, not another full-body FeedPost consumer.
+      await expect(card.locator("[data-feed-post-body]")).toHaveCount(0);
+      await expect(
+        card.getByRole("button", { name: /展开正文|收起正文/u }),
+      ).toHaveCount(0);
     }
-    // The overflowing body offers 展开正文 without waiting for a read.
-    await expect(
-      ownPost(phone.page, LONG).getByRole("button", { name: "展开正文" }),
-    ).toBeVisible();
-    await expect(
-      ownPost(phone.page, SHORT).getByRole("button", { name: "展开正文" }),
-    ).toHaveCount(0);
+    for (const seed of [SHORT, UNTITLED])
+      await expect(
+        ownCard(phone.page, seed).locator("[data-card-excerpt]"),
+      ).toHaveText(seed.text);
+    // The following held-read cases verify the full record in Detail, so
+    // replacing the profile's full body with an excerpt cannot hide data loss.
     await phone.page.waitForTimeout(500);
     // Home's own post read its work before 我 opened; 我 read none.
     const own = new Set<string>(OWN_WORKS.map((seed) => seed.id));
@@ -644,7 +698,7 @@ test("我 Works posts show each full body from the list read, with no per-post w
   }
 });
 
-test("a 我 Works body tap opens a seeded Detail at once that its held read confirms in place", async ({
+test("a 我 Works reading card opens a seeded complete Detail that its held read confirms in place", async ({
   browser,
   page,
 }, testInfo) => {
@@ -652,10 +706,10 @@ test("a 我 Works body tap opens a seeded Detail at once that its held read conf
   const phone = await openPhone(browser, page, testInfo);
   try {
     await openOwnWorks(phone);
-    const post = ownPost(phone.page, LONG);
-    const opener = post.locator("[data-feed-post-body-open]");
+    const post = ownCard(phone.page, LONG);
+    const opener = ownCardOpener(phone.page, LONG);
     await bringIntoView(phone.page, opener);
-    await expect(opener).toHaveAttribute("aria-label", "查看详情");
+    await expect(opener).toHaveAttribute("aria-label", `打开${LONG.title}`);
     const feed = phone.page.locator('[data-primary-destination="user"]');
     const feedTop = await scrollTopOf(feed);
 
@@ -727,33 +781,33 @@ test("a 我 Works body tap opens a seeded Detail at once that its held read conf
     expect(phone.community.reads.length).toBe(sent);
     expect(phone.community.kept(LONG.id)).toBe(1);
 
-    // Back restores the feed and focuses the body's opener.
+    // Back restores the profile reading position and its actual card opener.
     await leaveDetail(phone);
     await expect(opener).toBeFocused();
     await expect
       .poll(async () => Math.abs((await scrollTopOf(feed)) - feedTop))
       .toBeLessThan(1);
-    await expect(post.locator("[data-feed-post-body]")).toHaveText(
-      REVISED_TEXT,
-    );
+    // Full revised content was asserted in the confirmed Detail above.
+    // The compact profile deliberately does not duplicate that full body.
+    await expect(post.locator("[data-feed-post-body]")).toHaveCount(0);
   } finally {
     await phone.close();
   }
 });
 
-test("the title and an untitled body open Detail; only 展开正文 and 收起正文 change the body, which still opens Detail when expanded", async ({
+test("Home title/body keep Detail and trailing-only expand; an untitled profile card opens the complete work", async ({
   browser,
   page,
 }, testInfo) => {
   skipUnlessPhone(testInfo);
   const phone = await openPhone(browser, page, testInfo);
   try {
-    await openOwnWorks(phone);
-    const long = ownPost(phone.page, LONG);
+    const long = homePost(phone.page);
+    await expect(long.locator("[data-feed-post-body]")).toHaveText(HOME.text);
 
     // The title of an overflowing body opens Detail; it expands nothing.
     const title = long.getByRole("button", {
-      name: `打开${LONG.title}`,
+      name: `打开${HOME.title}`,
       exact: true,
     });
     await bringIntoView(phone.page, title);
@@ -761,7 +815,7 @@ test("the title and an untitled body open Detail; only 展开正文 and 收起�
     await expect(title).not.toHaveAttribute("aria-expanded");
     await expect(title).not.toHaveAttribute("aria-controls");
     await tap(phone, title);
-    await expectDetail(phone, LONG);
+    await expectDetail(phone, HOME);
     await leaveDetail(phone);
     await expect(title).toBeFocused();
     await expect(long).not.toHaveAttribute("data-feed-post-expanded");
@@ -781,7 +835,7 @@ test("the title and an untitled body open Detail; only 展开正文 and 收起�
     const opener = long.locator("[data-feed-post-body-open]");
     await bringIntoView(phone.page, opener);
     await tap(phone, opener);
-    await expectDetail(phone, LONG);
+    await expectDetail(phone, HOME);
     await leaveDetail(phone);
     await expect(opener).toBeFocused();
     await expect(long).toHaveAttribute("data-feed-post-expanded", "true");
@@ -796,10 +850,15 @@ test("the title and an untitled body open Detail; only 展开正文 and 收起�
     await phone.page.waitForTimeout(CLICK_GUARD_MS);
     await expect(phone.shell).toHaveAttribute("data-detail-open", "false");
 
-    // An untitled work has no heading; its body is the route to Detail.
-    const untitled = ownPost(phone.page, UNTITLED);
-    await expect(untitled.locator("[data-feed-post-title]")).toHaveCount(0);
-    const untitledOpener = untitled.locator("[data-feed-post-body-open]");
+    // #356 preserves an untitled work's real excerpt and accessible card route.
+    // It intentionally offers no inline body expansion in the profile.
+    await openOwnWorks(phone);
+    const untitled = ownCard(phone.page, UNTITLED);
+    await expect(untitled.getByRole("heading")).toHaveCount(0);
+    await expect(untitled.locator("[data-card-excerpt]")).toHaveText(
+      UNTITLED.text,
+    );
+    const untitledOpener = ownCardOpener(phone.page, UNTITLED);
     await bringIntoView(phone.page, untitledOpener);
     await tap(phone, untitledOpener);
     await expectDetail(phone, UNTITLED);
@@ -857,11 +916,8 @@ test("a seeded Detail whose read answers 404 shows 未找到这项资料, and re
   const phone = await openPhone(browser, page, testInfo);
   try {
     await openOwnWorks(phone);
-    const post = ownPost(phone.page, SHORT);
-    const title = post.getByRole("button", {
-      name: `打开${SHORT.title}`,
-      exact: true,
-    });
+    const post = ownCard(phone.page, SHORT);
+    const title = ownCardOpener(phone.page, SHORT);
     await bringIntoView(phone.page, title);
 
     await watchSkeleton(phone.page);
@@ -876,14 +932,12 @@ test("a seeded Detail whose read answers 404 shows 未找到这项资料, and re
     await expect(detail.getByText("未找到这项资料")).toBeVisible();
     await expect(detail).not.toHaveAttribute("data-detail-provisional");
     expect(await skeletonSeen(phone.page)).toBe(false);
-    // The record is forgotten: the post's body reads once for itself.
-    await expect.poll(() => phone.community.kept(SHORT.id)).toBe(2);
-
+    // Forgetting the full record cannot start a body read in a reading card.
+    expect(phone.community.kept(SHORT.id)).toBe(1);
     await leaveDetail(phone);
-    await expect(post.locator("[data-feed-post-body-state]")).toHaveAttribute(
-      "data-feed-post-body-state",
-      "error",
-    );
+    await expect(title).toBeFocused();
+    await expect(post).toBeVisible();
+    expect(phone.community.kept(SHORT.id)).toBe(1);
 
     // Forward into the same Detail: nothing seeds it any more.
     await watchSkeleton(phone.page);
@@ -900,7 +954,7 @@ test("a seeded Detail whose read answers 404 shows 未找到这项资料, and re
   }
 });
 
-test("a horizontal swipe starting on body text pages the Home and profile tabs, not Detail", async ({
+test("a swipe on Home body text or a profile reading card pages tabs, not Detail", async ({
   browser,
   page,
 }, testInfo) => {
@@ -908,14 +962,14 @@ test("a horizontal swipe starting on body text pages the Home and profile tabs, 
   const phone = await openPhone(browser, page, testInfo);
   try {
     const session = phone.session!;
-    const swipeOn = async (opener: Locator) => {
+    const swipeOn = async (opener: Locator, travelWidth?: number) => {
       await bringIntoView(phone.page, opener);
       const { box } = await center(opener);
       await trustedDrag(
         phone.page,
         session,
         { x: box.x + box.width * 0.85, y: box.y + box.height / 2 },
-        -box.width * 0.6,
+        -(travelWidth ?? box.width) * 0.6,
       );
     };
 
@@ -929,9 +983,13 @@ test("a horizontal swipe starting on body text pages the Home and profile tabs, 
     await expect(phone.shell).toHaveAttribute("data-detail-open", "false");
 
     await openOwnWorks(phone);
-    await swipeOn(
-      ownPost(phone.page, LONG).locator("[data-feed-post-body-open]"),
-    );
+    const pager = await phone.page
+      .locator("[data-profile-tab-pager]")
+      .boundingBox({ timeout: ACTION_TIMEOUT });
+    if (pager === null) throw new Error("Missing profile pager geometry");
+    // A slow half-card drag is only ~27% of the pager and must snap back.
+    // Start on the right-hand card so a 60%-pager drag remains on screen.
+    await swipeOn(ownCardOpener(phone.page, SHORT), pager.width);
     await expect(
       phone.page.getByRole("tab", { name: "收藏", exact: true }),
     ).toHaveAttribute("aria-selected", "true");
@@ -942,24 +1000,23 @@ test("a horizontal swipe starting on body text pages the Home and profile tabs, 
   }
 });
 
-test("a double tap on body text opens Detail once, and the second tap reaches nothing under it", async ({
+test("a double tap on Home body text opens Detail once, and the second tap reaches nothing under it", async ({
   browser,
   page,
 }, testInfo) => {
   skipUnlessTrustedTouch(testInfo);
   const phone = await openPhone(browser, page, testInfo);
   try {
-    await openOwnWorks(phone);
-    const opener = ownPost(phone.page, LONG).locator(
-      "[data-feed-post-body-open]",
-    );
+    const post = homePost(phone.page);
+    await expect(post.locator("[data-feed-post-body]")).toHaveText(HOME.text);
+    const opener = post.locator("[data-feed-post-body-open]");
     await bringIntoView(phone.page, opener);
     const point = await center(opener);
     const entries = await phone.page.evaluate(() => history.length);
     await trustedTap(phone.session!, point);
     await phone.page.waitForTimeout(80);
     await trustedTap(phone.session!, point);
-    await expectDetail(phone, LONG);
+    await expectDetail(phone, HOME);
     // The second tap landed on the Detail now covering the feed.
     expect(
       await phone.page.evaluate(

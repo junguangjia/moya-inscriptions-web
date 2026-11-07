@@ -1,0 +1,367 @@
+.reading {
+  min-width: 0;
+  color: var(--yoyi-color-text-primary);
+  container: profile-reading / inline-size;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--yoyi-space-4);
+  align-items: stretch;
+}
+
+.card {
+  --profile-reading-caption-size: var(--yoyi-type-body-small-size);
+  --profile-reading-caption-inset: var(--yoyi-space-2);
+  position: relative;
+  display: flex;
+  min-width: 0;
+  height: clamp(160px, calc((100svh - 22rem) / 2), 240px);
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-surface);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-lg);
+}
+
+.card:focus-within {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.leaf {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  grid-template-columns:
+    minmax(0, 1fr)
+    calc(
+      3 * var(--profile-reading-caption-size) + 2 *
+        var(--profile-reading-caption-inset)
+    );
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.media {
+  min-width: 0;
+  min-height: 0;
+  padding: var(--yoyi-space-3);
+  overflow: hidden;
+  background: var(--yoyi-color-background-page);
+}
+
+.image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.caption {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: var(--yoyi-space-3);
+  padding: var(--yoyi-space-3) var(--profile-reading-caption-inset);
+  overflow: hidden;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  background: var(--yoyi-color-background-elevated);
+}
+
+.title {
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+  font-family: var(--yoyi-font-editorial);
+  font-size: var(--profile-reading-caption-size);
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+  overflow-wrap: anywhere;
+  max-block-size: 3em;
+  flex: 0 0 auto;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.titleSuffix {
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-caption-size);
+}
+
+.excerpt {
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--yoyi-color-text-secondary);
+  font-family: var(--yoyi-font-editorial);
+  font-size: var(--profile-reading-caption-size);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+  max-block-size: 3em;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.horizontalTitle .leaf {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.horizontalTitle .caption {
+  max-height: 3.6em;
+  padding: var(--yoyi-space-2) var(--yoyi-space-3);
+  writing-mode: horizontal-tb;
+}
+
+.horizontalTitle .title,
+.horizontalTitle .excerpt {
+  display: -webkit-box;
+  line-height: 1.4;
+  letter-spacing: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* WebKit's legacy box forces horizontal writing. Vertical copy instead uses
+   the exact two-column block limit above; only horizontal previews use it. */
+.textOnly .title,
+.textOnly .excerpt {
+  display: -webkit-box;
+}
+
+.noCaption .leaf,
+.textOnly .leaf {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.textOnly .caption {
+  writing-mode: horizontal-tb;
+  padding: var(--yoyi-space-3);
+}
+
+.textOnly .title {
+  flex: 0 0 auto;
+  font-weight: 600;
+}
+
+.textOnly .excerpt {
+  color: var(--yoyi-color-text-primary);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.8;
+  max-block-size: 3.6em;
+}
+
+.textOnly .excerpt:only-child {
+  max-block-size: 7.2em;
+  -webkit-line-clamp: 4;
+}
+
+@media (min-height: 760px) {
+  .card:not([data-reading-platform="pc"]).textOnly .excerpt {
+    max-block-size: 7.2em;
+    -webkit-line-clamp: 4;
+  }
+
+  .card:not([data-reading-platform="pc"]).textOnly .excerpt:only-child {
+    max-block-size: 10.8em;
+    -webkit-line-clamp: 6;
+  }
+}
+
+.empty {
+  align-self: center;
+  margin: 0;
+  padding: var(--yoyi-space-4);
+  color: var(--yoyi-color-text-tertiary);
+  font-family: var(--yoyi-font-editorial);
+  font-size: var(--yoyi-type-body-small-size);
+  text-align: center;
+}
+
+.footer {
+  display: flex;
+  min-width: 0;
+  min-height: 28px;
+  flex: 0 0 auto;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--yoyi-space-1) var(--yoyi-space-3);
+  padding: var(--yoyi-space-2) var(--yoyi-space-3);
+  color: var(--yoyi-color-text-tertiary);
+  border-top: 1px solid var(--yoyi-color-border-subtle);
+  font-family: var(--yoyi-font-interface);
+  font-size: var(--yoyi-type-caption-size);
+  line-height: 1.5;
+}
+
+.ordinal {
+  color: var(--yoyi-color-seal-red);
+  font-variant-numeric: tabular-nums;
+}
+
+.badges {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--yoyi-space-2);
+  margin-inline-start: auto;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.badge {
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-caption-size);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.failedImage,
+.failureMessage {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--yoyi-space-2);
+  padding: var(--yoyi-space-2);
+  color: var(--yoyi-color-text-secondary);
+  background: var(--yoyi-color-background-muted);
+  font-size: var(--yoyi-type-caption-size);
+  text-align: center;
+}
+
+.failureMessage {
+  height: auto;
+  padding: 0;
+}
+
+.retry {
+  position: relative;
+  z-index: 3;
+  min-width: 44px;
+  min-height: 44px;
+  flex: 0 0 auto;
+  padding: 0 var(--yoyi-space-3);
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-elevated);
+  border: 1px solid var(--yoyi-color-border-default);
+  border-radius: var(--yoyi-radius-full);
+  font: inherit;
+  cursor: pointer;
+}
+
+.retry:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.action {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  width: 100%;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: inherit;
+  cursor: pointer;
+  touch-action: pan-x pan-y pinch-zoom;
+}
+
+.action:focus {
+  outline: none;
+}
+
+.action[data-quick-actions="enabled"] {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  --quick-action-safe-top: env(safe-area-inset-top, 0px);
+  --quick-action-safe-right: env(safe-area-inset-right, 0px);
+  --quick-action-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --quick-action-safe-left: env(safe-area-inset-left, 0px);
+}
+
+.action[data-quick-action-phase="holding"],
+.action[data-quick-action-phase="menu-open"] {
+  box-shadow: inset 0 0 0 1px var(--yoyi-color-border-strong);
+}
+
+.reading[data-reading-platform="pc"] .grid {
+  gap: var(--yoyi-space-6);
+  direction: rtl;
+}
+
+.card[data-reading-platform="pc"] {
+  --profile-reading-caption-size: var(--yoyi-type-card-title-size);
+  --profile-reading-caption-inset: var(--yoyi-space-3);
+  height: clamp(300px, 36svh, 360px);
+  direction: ltr;
+}
+
+.card[data-reading-platform="pc"] .title {
+  font-size: var(--yoyi-type-card-title-size);
+}
+
+.card[data-reading-platform="pc"] .caption {
+  padding: var(--yoyi-space-4) var(--yoyi-space-3);
+}
+
+.card[data-reading-platform="pc"].horizontalTitle .leaf,
+.card[data-reading-platform="pc"].textOnly .leaf,
+.card[data-reading-platform="pc"].noCaption .leaf {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.card[data-reading-platform="pc"].horizontalTitle .caption {
+  padding: var(--yoyi-space-2) var(--yoyi-space-4);
+}
+
+.card[data-reading-platform="pc"].textOnly .caption {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  padding: var(--yoyi-space-5);
+}
+
+.card[data-reading-platform="pc"].textOnly :is(.title, .excerpt) {
+  display: block;
+}
+
+.card[data-reading-platform="pc"].textOnly .excerpt {
+  max-block-size: 7.2em;
+  -webkit-line-clamp: 4;
+}
+
+@container profile-reading (min-width: 900px) {
+  .reading[data-reading-platform="pc"] .grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .card:hover {
+    border-color: var(--yoyi-color-border-strong);
+  }
+}
+
+.audience {
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-caption-size);
+  white-space: nowrap;
+}

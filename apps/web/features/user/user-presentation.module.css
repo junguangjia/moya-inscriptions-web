@@ -1348,6 +1348,17 @@
   );
   top: var(--yoyi-space-7);
 }
+/* The normal personal profile's tabs and cover measure the root's bar.
+   Keep this dependency out of the #356 fixed reading shell. */
+:global(html[data-device-class="desktop"][data-platform="pc"])
+  .coverRoot:not([data-profile-reading]) {
+  --profile-header-height: 76px;
+}
+:global(html[data-device-class="desktop"][data-platform="pc"])
+  .coverRoot:not([data-profile-reading])
+  > .header {
+  grid-template-columns: auto minmax(48px, 1fr) auto;
+}
 :global(html[data-device-class="desktop"][data-platform="pc"]) .header {
   --profile-header-height: 76px;
   padding-inline: var(--yoyi-space-7);
@@ -1358,9 +1369,30 @@
   width: min(100%, var(--yoyi-desktop-workspace-max));
   margin-inline: auto;
 }
+/* A photo's measurement/identity slot must use the same 960px window as
+   its actual sticky cover. Photo-less normal profiles keep workspace width. */
+:global(html[data-device-class="desktop"][data-platform="pc"])
+  :is(
+    .coverRoot:not([data-profile-reading])[data-cover-photo]
+      > .profile.coverProfile,
+    .coverRoot:not([data-profile-reading])
+      > .profile.coverProfile[data-cover-measure]
+  ) {
+  width: min(100%, 960px);
+}
 :global(html[data-device-class="desktop"][data-platform="pc"]) .userContent {
   padding-inline: var(--yoyi-space-7);
   padding-bottom: var(--yoyi-space-10);
+}
+/* The outer desktop gutter is part of the compact content viewport,
+   not an extra scroll tail after its already viewport-sized pager. */
+:global(html[data-device-class="desktop"][data-platform="pc"])
+  .coverRoot:not([data-profile-reading])
+  > .userContent
+  .panelContent {
+  min-height: calc(
+    100dvh - var(--profile-header-height) - 49px - var(--yoyi-space-10)
+  );
 }
 :global(html[data-device-class="desktop"][data-platform="pc"]) .tabs {
   padding-inline: var(--yoyi-space-7);
