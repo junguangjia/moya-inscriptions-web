@@ -470,18 +470,31 @@ describe("Umami replies", () => {
       canDelete: true,
     };
     let clock = NOW;
-    const stub = await startStub((_url, response) => json(response, body));
+    const stub = await startStub((_url, response) => {
+      // Reproduce a healthy response that exceeds the former 30ms fixture cap.
+      setTimeout(() => json(response, body), 80);
+    });
     const cache = createAnalyticsCache({ now: () => clock });
-    const read = () =>
-      guardFor(stub, { now: () => clock, cache, callMs: 30, toolMs: 60 })
+    const read = (limits: { callMs?: number; toolMs?: number } = {}) =>
+      guardFor(stub, { now: () => clock, cache, ...limits })
         .forTool()
         .read("session", { query: { sessionId: session } });
     const answer = await read();
-    expect(answer.status).toBe("fresh");
+    // Privacy is the subject here; a successful real-HTTP seed uses the normal
+    // budgets. Only the intentionally stalled read below needs a short clock.
+    expect({
+      status: answer.status,
+      ...(answer.status === "failed"
+        ? {
+            code: answer.code,
+            ...("reason" in answer ? { reason: answer.reason } : {}),
+          }
+        : {}),
+    }).toEqual({ status: "fresh" });
     expect(JSON.stringify(answer)).not.toContain("203.0.113.9");
     clock += ANALYTICS_CACHE_TTL_MS.open;
     stub.setRespond(hang);
-    const kept = await read();
+    const kept = await read({ callMs: 30, toolMs: 60 });
     expect(kept.status).toBe("stale");
     expect(JSON.stringify(kept)).toContain("CN-11");
     expect(JSON.stringify(kept)).not.toContain("203.0.113.9");

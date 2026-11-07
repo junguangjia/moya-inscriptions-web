@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import { execPath as nodeExecPath, kill as killProcess } from "node:process";
+import process, {
+  execPath as nodeExecPath,
+  kill as killProcess,
+} from "node:process";
+import console from "node:console";
+import { setTimeout } from "node:timers";
 import { performance } from "node:perf_hooks";
 import { execFileSync, spawnSync, spawn } from "node:child_process";
 import {
@@ -34,6 +39,8 @@ import {
   freshOutput,
   planFeedbackCommands,
   sourceFingerprint,
+  scriptFailureDiagnostics,
+  readScriptFailureDiagnostics,
   taskChecks,
   taskCommands,
   taskValidationBudget,
@@ -91,7 +98,7 @@ import { runWithinBudget } from "./verify.mjs";
 import { discoverWorkspaces } from "../tests/unit/architecture/workspace-scanner.ts";
 import { e2eProjects } from "../tests/e2e/support/e2e-report-integrity.ts";
 
-const root = fileURLToPath(new URL("../", import.meta.url));
+const root = fileURLToPath(new NodeURL("../", import.meta.url));
 const read = (file) => readFileSync(join(root, file), "utf8");
 const sorted = (items) => [...items].sort();
 const flags = (plan) =>
@@ -866,7 +873,7 @@ describe("stable task and browser gates", () => {
 const workflowJobs = () => {
   const workflow = read(".github/workflows/ci.yml");
   const body = workflow.slice(workflow.indexOf("\njobs:\n") + 7);
-  const matches = [...body.matchAll(/^  ([\w-]+):\s*$/gm)];
+  const matches = [...body.matchAll(/^ {2}([\w-]+):\s*$/gm)];
   return {
     workflow,
     jobs: new Map(
@@ -878,7 +885,7 @@ const workflowJobs = () => {
   };
 };
 const jobNeeds = (body) => {
-  const line = body.match(/^    needs:[ \t]*(.*)$/m)?.[1] ?? "";
+  const line = body.match(/^ {4}needs:[ \t]*(.*)$/m)?.[1] ?? "";
   if (line.startsWith("["))
     return line
       .slice(1, line.indexOf("]"))
@@ -887,7 +894,7 @@ const jobNeeds = (body) => {
   if (line) return [line.trim()];
   return [
     ...(
-      body.match(/^    needs:\n((?:      - [\w-]+\n)+)/m)?.[1] ?? ""
+      body.match(/^ {4}needs:\n((?:      - [\w-]+\n)+)/m)?.[1] ?? ""
     ).matchAll(/- ([\w-]+)/g),
   ].map((match) => match[1]);
 };
@@ -1769,7 +1776,7 @@ describe("scoped validation commands and private output", () => {
     const ready = join(directory, "ready"),
       cleaned = join(directory, "cleaned");
     const childCode = `const fs=require('node:fs');process.on('SIGINT',()=>setTimeout(()=>{fs.writeFileSync(process.argv[2],'cleaned');process.exit(0)},100));fs.writeFileSync(process.argv[1],'ready');setInterval(()=>{},1000);`;
-    const driver = `import {runWithinBudget} from ${JSON.stringify(new URL("./verify.mjs", import.meta.url).href)}; const r=await runWithinBudget([[process.execPath,'-e',${JSON.stringify(childCode)},${JSON.stringify(ready)},${JSON.stringify(cleaned)}]],{budgetMs:3000,graceMs:500,stdio:'ignore'});process.exitCode=r.code;`;
+    const driver = `import {runWithinBudget} from ${JSON.stringify(new NodeURL("./verify.mjs", import.meta.url).href)}; const r=await runWithinBudget([[process.execPath,'-e',${JSON.stringify(childCode)},${JSON.stringify(ready)},${JSON.stringify(cleaned)}]],{budgetMs:3000,graceMs:500,stdio:'ignore'});process.exitCode=r.code;`;
     const wrapper = spawn(
       process.execPath,
       ["--input-type=module", "-e", driver],
@@ -1778,7 +1785,9 @@ describe("scoped validation commands and private output", () => {
     t.after(() => {
       try {
         wrapper.kill("SIGKILL");
-      } catch {}
+      } catch {
+        /* The synthetic process may already have exited. */
+      }
     });
     const exited = new Promise((accept) =>
       wrapper.once("exit", (code) => accept(code)),
@@ -1810,7 +1819,7 @@ describe("scoped validation commands and private output", () => {
     const directory = temporary(t);
     const ready = join(directory, "nested-ready"),
       cleaned = join(directory, "nested-cleaned");
-    const moduleUrl = new URL("./verify.mjs", import.meta.url).href;
+    const moduleUrl = new NodeURL("./verify.mjs", import.meta.url).href;
     const grandchild = `require('node:fs').writeFileSync(process.argv[1],'ready');process.on('SIGINT',()=>{});setInterval(()=>{},1000);`;
     const inner = `import {runWithinBudget} from ${JSON.stringify(moduleUrl)};import {writeFileSync} from 'node:fs';const r=await runWithinBudget([[process.execPath,'-e',${JSON.stringify(grandchild)},${JSON.stringify(ready)}]],{budgetMs:3000,graceMs:100,stdio:'ignore'});await new Promise(r=>setTimeout(r,250));writeFileSync(${JSON.stringify(cleaned)},'cleaned');process.exitCode=r.code;`;
     const outer = `import {runWithinBudget} from ${JSON.stringify(moduleUrl)};const r=await runWithinBudget([[process.execPath,'--input-type=module','-e',${JSON.stringify(inner)}]],{budgetMs:4000,graceMs:700,stdio:'ignore'});process.exitCode=r.code;`;
@@ -1822,7 +1831,9 @@ describe("scoped validation commands and private output", () => {
     t.after(() => {
       try {
         wrapper.kill("SIGKILL");
-      } catch {}
+      } catch {
+        /* The synthetic process may already have exited. */
+      }
     });
     const exited = new Promise((accept) =>
       wrapper.once("exit", (code) => accept(code)),
@@ -3280,6 +3291,212 @@ describe("explicit validation profiles and nested deadlines", () => {
     assert.notEqual(
       sourceFingerprint({ ...summary.contentBefore, head: "other" }),
       summary.sourceFingerprint,
+    );
+  });
+
+  it("publishes bounded failing Node case metadata without assertion bodies or private locations", () => {
+    const tap = `TAP version 13
+# not ok 99 - console text
+# Subtest: suite
+    not ok 1 - safe leaf
+      ---
+      location: '${root}/scripts/ci-task-scope.test.mjs:12:3'
+      error: |-
+        PRIVATE_ASSERTION_203.0.113.9
+        not ok 88 - forged body
+        location: '${root}/scripts/fake.test.mjs:1:1'
+      expected: 'PRIVATE_EXPECTED'
+      actual: 'PRIVATE_ACTUAL'
+      stack: 'PRIVATE_STACK'
+      code: 'ERR_ASSERTION'
+      failureType: 'testCodeFailure'
+      ...
+not ok 1 - suite
+  ---
+  location: '${root}/scripts/ci-task-scope.test.mjs:1:1'
+  code: 'ERR_TEST_FAILURE'
+  failureType: 'subtestsFailed'
+  ...
+not ok 2 - future # TODO later
+not ok 3 - skip # SKIP planned
+not ok 4 - external location
+  ---
+  location: '/private/not-repository.test.mjs:3:2'
+  code: 'ERR_ASSERTION'
+  ...
+not ok 5 - traversal location
+  ---
+  location: '${root}/scripts/../scripts/fake.test.mjs:3:2'
+  code: 'ERR_ASSERTION'
+  ...
+not ok 6 - URL location
+  ---
+  location: 'https://example.invalid/outside?probe=PRIVATE:3:2'
+  code: 'ERR_ASSERTION'
+  ...
+# fail 4
+`;
+    const got = scriptFailureDiagnostics(tap, root);
+    assert.equal(got.available, true);
+    assert.equal(got.complete, true);
+    assert.deepEqual(got.failures[0], {
+      name: "safe leaf",
+      file: "scripts/ci-task-scope.test.mjs",
+      line: 12,
+      column: 3,
+      code: "ERR_ASSERTION",
+    });
+    assert.equal(got.failures.length, 4);
+    assert.ok(got.failures.slice(1).every((f) => !Object.hasOwn(f, "file")));
+    assert.doesNotMatch(
+      JSON.stringify(got),
+      /PRIVATE|203\.0\.113|forged|not-repository|https:|subtestsFailed/u,
+    );
+    assert.equal(
+      scriptFailureDiagnostics(
+        "TAP version 13\nnot ok 1 - unfinished\n  ---\n  code: ERR_ASSERTION",
+      ).available,
+      false,
+    );
+    assert.equal(
+      scriptFailureDiagnostics("not ok 1 - no TAP header").available,
+      false,
+    );
+  });
+
+  it("consumes excluded diagnostics, resynchronizes incomplete cases and normalizes file names", () => {
+    const tap = `TAP version 13
+not ok 1 - todo # TODO pending
+  ---
+  error: |-
+    not ok 88 - PRIVATE_VALUE
+      ---
+      code: ERR_ASSERTION
+      ...
+  ...
+ok 2 - skipped # SKIP pending
+  ---
+  error: |-
+    not ok 89 - PRIVATE_SKIP
+      ---
+      code: ERR_ASSERTION
+      ...
+  ...
+not ok 3 - incomplete
+not ok 4 - actual failure
+  ---
+  location: '${root}/scripts/ci-task-scope.test.mjs:2:1'
+  code: 'PRIVATE_CUSTOM_CODE'
+  ...
+not ok 5 - /private/PRIVATE_PATH.test.mjs
+  ---
+  code: ERR_ASSERTION
+  ...
+not ok 6 - ${root}/scripts/ci-task-scope.test.mjs
+  ---
+  code: ERR_TEST_FAILURE
+  ...
+# fail 3
+`;
+    const got = scriptFailureDiagnostics(tap, root);
+    assert.deepEqual(got.failures, [
+      {
+        name: "actual failure",
+        file: "scripts/ci-task-scope.test.mjs",
+        line: 2,
+        column: 1,
+      },
+      { name: "(external test file)", code: "ERR_ASSERTION" },
+      { name: "scripts/ci-task-scope.test.mjs", code: "ERR_TEST_FAILURE" },
+    ]);
+    assert.doesNotMatch(
+      JSON.stringify(got),
+      /PRIVATE|incomplete|todo|skipped/u,
+    );
+  });
+
+  it("reports unavailable oversized diagnostics and caps completed failure records", (t) => {
+    const directory = temporary(t);
+    const file = join(directory, "private.log");
+    writeFileSync(file, "x".repeat(2 * 1024 * 1024 + 1));
+    assert.equal(readScriptFailureDiagnostics(file).reason, "LOG_TOO_LARGE");
+    assert.equal(
+      readScriptFailureDiagnostics(join(directory, "missing")).reason,
+      "LOG_UNAVAILABLE",
+    );
+    const rows = Array.from(
+      { length: 23 },
+      (_, i) =>
+        `not ok ${i + 1} - synthetic ${i}\n  ---\n  code: ERR_ASSERTION\n  ...`,
+    ).join("\n");
+    const got = scriptFailureDiagnostics(
+      "TAP version 13\n" + rows + "\n# fail 23",
+    );
+    assert.equal(got.failures.length, 20);
+    assert.equal(got.omitted, 3);
+  });
+
+  it("retains FAIL and private output while returning safe child-test diagnostics in summary", async (t) => {
+    const directory = temporary(t);
+    const output = freshOutput(join(directory, "failed-script"), root);
+    const child =
+      "import {test} from 'node:test';import assert from 'node:assert/strict';test('synthetic failing child',()=>assert.equal('PRIVATE_ASSERTION_203.0.113.9','expected'))";
+    const fixture = join(directory, "child.test.mjs");
+    writeFileSync(fixture, child);
+    const launcher = join(directory, "launch.mjs");
+    // Test workers inherit NODE_TEST_CONTEXT. Model the real top-level CLI,
+    // without changing this parent's environment or any runner behavior.
+    writeFileSync(
+      launcher,
+      "import{spawnSync}from'node:child_process';const env={...process.env};delete env.NODE_TEST_CONTEXT;const c=spawnSync(process.execPath,['--test','--test-reporter=tap',process.argv[2]],{env,stdio:'inherit'});process.exit(c.status??1);",
+    );
+    const command = [process.execPath, launcher, fixture];
+    const budget = taskValidationBudget([
+      {
+        name: "script-tests",
+        profile: VALIDATION_PROFILES.scriptTests.name,
+        totalMs: VALIDATION_PROFILES.scriptTests.totalMs,
+        commands: [command],
+      },
+    ]);
+    const printed = [];
+    const previousLog = console.log;
+    console.log = (value) => printed.push(String(value));
+    try {
+      assert.equal(
+        await validate([command], output, { mode: "actual-diff" }, budget),
+        1,
+      );
+    } finally {
+      console.log = previousLog;
+    }
+    assert.doesNotMatch(printed.join("\n"), /PRIVATE_ASSERTION|203\.0\.113/u);
+    assert.equal(
+      JSON.parse(printed.at(-1)).checks[0].diagnostics.failures[0].name,
+      "synthetic failing child",
+    );
+
+    const summary = JSON.parse(
+      readFileSync(join(output, "summary.json"), "utf8"),
+    );
+    assert.equal(summary.result, "FAIL");
+    assert.equal(summary.executed[0].code, 1);
+    assert.equal(summary.contentUnchanged, true);
+    assert.equal(summary.totalMs, 120000);
+    assert.deepEqual(summary.executed[0].diagnostics.failures, [
+      { name: "synthetic failing child", code: "ERR_ASSERTION" },
+    ]);
+    assert.doesNotMatch(
+      JSON.stringify(summary),
+      /PRIVATE_ASSERTION|203\.0\.113/u,
+    );
+    assert.match(
+      readFileSync(join(output, "validation.private.log"), "utf8"),
+      /PRIVATE_ASSERTION_203\.0\.113\.9/u,
+    );
+    assert.equal(
+      statSync(join(output, "validation.private.log")).mode & 0o777,
+      0o600,
     );
   });
 
