@@ -425,6 +425,6 @@ export const requiredCommunityMigrations: readonly RequiredCommunityMigration[] 
       migrationId: "20261105235900",
       filename: "20261105235900_timeline_entries.sql",
       checksum:
-        "eed46e62294b163f75b43c087201f8cad24ab7ab5f0a24d9b36de92710a36001",
+        "35ba86db00003ade4922a29c71ea608efec3ffcc55e7a3b14e792b2a0307e727",
     }),
   ]);

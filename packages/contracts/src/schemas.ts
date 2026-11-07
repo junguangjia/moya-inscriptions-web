@@ -1501,6 +1501,38 @@ export const timelineChapterSchema = z.enum([
   "民国",
   "当代",
 ]);
+
+/**
+ * Each chapter's span of start years, shared by the Web's chapter table and
+ * the operator read's chapter check. Open-ended only for 当代. Chapters overlap
+ * where the dynasties do, so a row is out of place only outside its own span.
+ */
+export const TIMELINE_CHAPTER_SPANS: Readonly<
+  Record<
+    z.infer<typeof timelineChapterSchema>,
+    readonly [number, number | null]
+  >
+> = {
+  商: [-1250, -1046],
+  西周: [-1046, -771],
+  春秋: [-770, -476],
+  战国: [-475, -221],
+  秦: [-221, -207],
+  西汉: [-206, 23],
+  东汉: [25, 220],
+  三国: [220, 280],
+  两晋: [265, 420],
+  南北朝: [420, 589],
+  隋: [581, 618],
+  唐: [618, 907],
+  五代十国: [907, 979],
+  宋辽金夏: [960, 1279],
+  元: [1271, 1368],
+  明: [1368, 1644],
+  清: [1644, 1911],
+  民国: [1912, 1949],
+  当代: [1949, null],
+};
 export const timelinePrecisionSchema = z.enum([
   "year",
   "reign",
@@ -1607,6 +1639,64 @@ export const timelineImportFileSchema = z
       catalogs.add(entry.catalogId);
     });
   });
+/**
+ * The one response carrying every row passes the Web relay's 4.5 MB cap only
+ * with room for each linked row's image candidates. Measured over the import
+ * shape of every stored row, hidden ones included: any of them may be shown.
+ */
+export const TIMELINE_RESPONSE_BYTES_MAXIMUM = 4_000_000;
+const TIMELINE_LINKED_ROW_MEDIA_BYTES = 1_500;
+export const estimateTimelineResponseBytes = (
+  entries: readonly { readonly catalogId: string | null }[],
+): number =>
+  new TextEncoder().encode(JSON.stringify(entries)).byteLength +
+  entries.filter((entry) => entry.catalogId !== null).length *
+    TIMELINE_LINKED_ROW_MEDIA_BYTES;
+/** Why a whole set may not be stored; `index` names the row in the set given. */
+export type TimelineEntrySetIssue =
+  | { readonly code: "TIMELINE_FULL" }
+  | { readonly code: "ENTRY_INVALID"; readonly index: number }
+  | { readonly code: "ENTRY_EXISTS"; readonly index: number }
+  | { readonly code: "CATALOG_ALREADY_LINKED"; readonly index: number }
+  | { readonly code: "TIMELINE_TOO_LARGE" };
+/**
+ * The check every writer of the timeline runs over the whole set it is about to
+ * store: the import over its file, each operator write over the stored rows with
+ * its change applied, inside the shared lock. Each row parses as an import row,
+ * the set holds at most TIMELINE_ENTRIES_MAXIMUM rows with distinct ids and
+ * distinct Catalog links, and its response estimate stays within the limit.
+ * Group and chapter consistency are reported, never refused, so import and
+ * operator writes refuse exactly the same sets.
+ */
+export const checkTimelineEntrySet = (
+  entries: readonly unknown[],
+):
+  | { readonly ok: true; readonly entries: readonly TimelineImportEntry[] }
+  | { readonly ok: false; readonly issue: TimelineEntrySetIssue } => {
+  if (entries.length > TIMELINE_ENTRIES_MAXIMUM)
+    return { ok: false, issue: { code: "TIMELINE_FULL" } };
+  const parsed: TimelineImportEntry[] = [];
+  const ids = new Set<string>();
+  const catalogs = new Set<string>();
+  for (const [index, candidate] of entries.entries()) {
+    const result = timelineImportEntrySchema.safeParse(candidate);
+    if (!result.success)
+      return { ok: false, issue: { code: "ENTRY_INVALID", index } };
+    const entry = result.data;
+    if (ids.has(entry.id))
+      return { ok: false, issue: { code: "ENTRY_EXISTS", index } };
+    ids.add(entry.id);
+    if (entry.catalogId !== null) {
+      if (catalogs.has(entry.catalogId))
+        return { ok: false, issue: { code: "CATALOG_ALREADY_LINKED", index } };
+      catalogs.add(entry.catalogId);
+    }
+    parsed.push(entry);
+  }
+  if (estimateTimelineResponseBytes(parsed) > TIMELINE_RESPONSE_BYTES_MAXIMUM)
+    return { ok: false, issue: { code: "TIMELINE_TOO_LARGE" } };
+  return { ok: true, entries: parsed };
+};
 export const contentStateQuerySchema = z.strictObject({
   target: contentIdentitySchema,
 });
@@ -1631,6 +1721,7 @@ export type TimelinePrecision = z.infer<typeof timelinePrecisionSchema>;
 export type TimelineEntry = z.infer<typeof timelineEntrySchema>;
 export type Timeline = z.infer<typeof timelineSchema>;
 export type TimelineImportFile = z.infer<typeof timelineImportFileSchema>;
+export type TimelineImportEntry = z.infer<typeof timelineImportEntrySchema>;
 
 export const ownCommentPageSchema = pageOf(ownCommentSchema).extend({
   totalPages: z.number().int().nonnegative(),

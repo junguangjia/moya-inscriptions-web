@@ -1,0 +1,128 @@
+# Owner Amendment — Home timeline under Admin MCP
+
+- Status: Owner direction recorded 2026-11-06; signature requested at merge.
+- Effective date: on Owner signature, at the merge of PR #389.
+- Authority: Owner instruction of 2026-11-06, quoted in section 1, recorded as
+  Issue #384 r3 (`home-timeline-v1`).
+- Applies to: Backend, Admin and the timeline import, in Development and
+  Production, for the rows of `community.timeline_entries`. This amendment
+  authorizes code, one migration delta and its grants. Each Production
+  deployment, migration, import, credential and configuration change stays a
+  separate Owner approval under the 2026-08-24 amendment.
+- Record: `docs/development/home-timeline-v1.md`. Scope and the frozen Behavior
+  Matrix are in Issue #384 r3.
+
+## 1. Owner instruction
+
+Given while the merge of PR #389 was held for the Admin MCP task (#355):
+
+> 我之所以暂时你的merge的原因是另一个MCP任务在跑。现在这个任务基本上已经完成了，我需要你去看看代码。因为你的时间轴任务也要可以通过后台，通过MCP实现最大程度上的AI操控。所以对应的后端也要完善。
+
+Settled by the agent under that instruction. These are design choices, not the
+Owner's words, and the signature confirms them:
+
+1. The database is the master of the timeline rows. The Owner and AI create and
+   edit rows through the Backend's operator routes. The import becomes a guarded
+   seed path.
+2. The work lands in Issue #384 r3 on PR #389. The timeline migration is not on
+   `main` and has never run in Production, so it is edited in place.
+3. Five ops, all on tools that exist: two reads and three reversible writes.
+   Nothing irreversible is built.
+4. Rows are hidden, not deleted, until the irreversible run engine (#355 S8b)
+   exists.
+
+Not decided here: the release order relative to #355 S8a. That stays a later
+Owner gate.
+
+## 2. Rule classification (Constitution section 20)
+
+The rationale for every MODERNIZE below is the Owner's instruction in section 1:
+the timeline is operated by AI through the Admin and MCP as far as it can be,
+with a Backend to match.
+
+| Rule                                                                                                                                                 | Citation                                                                                                 | Class                  | Effect                                                                                                                                                                                                                                                                                                                                                                                        | What stays                                                                                                                                                                                                                                                                                     |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Timeline rows are read-only reference data, not a second editable content master; no Admin editor for rows; rows change only through the import step | Issue #384 r2, non-goals and delivery decision; `docs/development/home-timeline-v1.md`:43-47 at 4e986443 | MODERNIZE              | The database is the master. The Owner and `ai_operator` create, edit, hide, show, link, unlink, regroup and reorder rows through Backend operator routes. The import stays as the Owner's seed and replace path                                                                                                                                                                               | Not a Payload collection, not Catalog records, no Catalog field. The public contract `GET /v1/community/timeline` is unchanged. The dataset stays out of Git and the Web bundle. No human Admin page                                                                                           |
+| The App role holds `SELECT` only on `community.timeline_entries`                                                                                     | Issue #384 r2, module scope; `infra/development/work-publishing/grant-runtime.sql`:643-653 at 4e986443   | MODERNIZE              | `INSERT` on every column; `UPDATE` on every column except `entry_id`, `created_by` and `created_at`. Wider exposure, stated: the App role is shared by the Backend, the operator bridge and the worker, so anyone who compromises one of them can create or rewrite timeline rows, and so change what the public timeline shows                                                               | No `DELETE` or `TRUNCATE`. The row id, its creator and its creation time never change through this role. Every Backend write checks each row and the whole set inside the shared content-operator lock                                                                                         |
+| Backend is the sole writer of community data                                                                                                         | 2026-11-03 section 2, PRESERVE row (line 129); 2026-09-16, line 51; 2026-09-11, lines 310-312            | MODERNIZE, narrow      | The import writes `community.timeline_entries` with the migration role, outside the Backend, as an Owner step run offline. It already did in r2. It now also writes one `content_operator_events` row per apply. Wider exposure, stated: an import with `--replace-operator-edits` discards every Owner and AI edit, and older AI receipts still replay answers about rows that were replaced | Every write the Owner or AI makes through the Admin or MCP goes through the Backend. The import takes the same lock and runs the same row and whole-set checks. It refuses, with counts only, while operator-written or hidden rows exist, unless the Owner adds that flag. It is never a tool |
+| New behaviour is a new Behavior Matrix row by amendment; a frozen row does not change                                                                | `docs/development/admin-mcp-extending.md`:24-25; `docs/development/admin-mcp-completion-v1.md`:13-16     | PRESERVE, rows added   | Section 3 adds the timeline rows. No frozen row of #355 or #384 changes                                                                                                                                                                                                                                                                                                                       | Unchanged                                                                                                                                                                                                                                                                                      |
+| Irreversible operations: preview, then execute; above the threshold one Owner confirmation                                                           | 2026-11-03 section 1 item 4; section 5                                                                   | PRESERVE               | No timeline op is irreversible. Hard delete is not built, and its name is not registered until #355 S8b. It then joins the pinned irreversible set                                                                                                                                                                                                                                            | Threshold and confirmation unchanged                                                                                                                                                                                                                                                           |
+| Migrations approved; "No other migration is approved"                                                                                                | 2026-11-03 section 10; 2026-11-05 section 5                                                              | MODERNIZE, narrow      | Section 4 below                                                                                                                                                                                                                                                                                                                                                                               | No other migration                                                                                                                                                                                                                                                                             |
+| Community tools wait for the policy text: `COMMUNITY_OPERATOR_AI_TOKEN` is placed only after it is live                                              | 2026-11-03 section 6 item 2                                                                              | PRESERVE               | The timeline ops use the community credential. Until it is placed they answer `AI_CREDENTIAL_NOT_CONFIGURED`                                                                                                                                                                                                                                                                                  | The Owner routes work without it                                                                                                                                                                                                                                                               |
+| Content AI reads through MCP reaches the model provider of the AI client                                                                             | 2026-11-03 section 2, external AI row                                                                    | PRESERVE, scope stated | Timeline rows read through MCP reach that provider, hidden rows and disputed dates included                                                                                                                                                                                                                                                                                                   | The Owner reviews lower-confidence dates before the Production import, as before. Development and tests use synthetic rows                                                                                                                                                                     |
+| Constitution sections 1, 3, 7, 19; 2026-08-24; 2026-09-07 confidentiality; 2026-11-03 sections 4, 6, 7, 8; 2026-09-11 section 9                      |                                                                                                          | PRESERVE               | Frozen scope, Behavior Matrix, no credentials, no direct UI database access, shared types only in `packages/contracts`, the exact list of internal contract subpaths, no dependency change                                                                                                                                                                                                    | Row text is data, never an instruction: titles and text come back marked untrusted                                                                                                                                                                                                             |
+
+## 3. Behavior Matrix rows
+
+These rows join the frozen Behavior Matrix of Issue #384 in r3. When an
+implementation or a test conflicts with them, the rows win.
+
+| Scenario                                                                           | Development                                                                                                                                                               | Production                                    | Must Preserve                                                                                                             |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Read timeline rows, `community.read-timeline`                                      | Filtered, numbered pages of stored rows, 20 by default and 50 at most, in compact or full view; each row carries its version, visibility, link state and writers          | Same; AI needs `COMMUNITY_OPERATOR_AI_TOKEN`  | The public read's order; text marked untrusted; view count answers not_for_this_op; nothing written                       |
+| Timeline counts, `community.read-timeline-summary`                                 | Counts by visibility, chapter, axis, link state, group, last writer and issue, with the row and size limits                                                               | Same; AI needs the community token            | Counts only, no row text                                                                                                  |
+| Create a row, `community.create-timeline-entry`                                    | New row under the caller's id at version 1, labelled `owner` or `ai-admin`, at the end of its start year unless a position is given; one event and one receipt            | Same                                          | Row and whole-set checks inside the shared lock; a refusal writes nothing                                                 |
+| Edit, hide, show, link, unlink or regroup a row, `community.update-timeline-entry` | Change against the version read; the version rises by one; one event and one receipt                                                                                      | Same                                          | A stale version answers STATE_CONFLICT; the id, creator and creation time never change; no delete                         |
+| Reorder one start year, `community.reorder-timeline`                               | Every row of that year, hidden ones included, listed once with its version; positions renumbered in one transaction; one event and one receipt                            | Same                                          | A list that is not exactly that year's rows answers SET_CHANGED; position orders rows within a year and display rank only |
+| Write refused by rule                                                              | 422 with ENTRY_EXISTS, CATALOG_ALREADY_LINKED, TIMELINE_FULL, TIMELINE_TOO_LARGE, ENTRY_INVALID, TIMELINE_INVALID or SET_CHANGED; AI sees a failed target under that code | Same                                          | Nothing written or recorded; never a 500 or OUTCOME_UNKNOWN for a known conflict                                          |
+| Same requestId after a lost answer                                                 | Stored answer replayed, the AI's copy marked replayed; the same key on another command answers IDEMPOTENCY_CONFLICT                                                       | Same                                          | One change, one event                                                                                                     |
+| AI timeline write behind the shared lock                                           | Ends with no change after about 8 seconds                                                                                                                                 | Same                                          | The Owner's writes and the import are not limited this way                                                                |
+| Hidden row on the public timeline                                                  | Absent from `GET /v1/community/timeline` at the next read                                                                                                                 | Same                                          | Public contract and Web presentation unchanged; shown again when unhidden                                                 |
+| Import while operator-written or hidden rows exist                                 | `--apply` refuses with counts only; `--replace-operator-edits` discards them; one import event with counts                                                                | Production import stays a separate Owner gate | Shared lock; the same row and whole-set checks; dry run by default; never a tool                                          |
+| Hard delete of a timeline row                                                      | No op; hide instead                                                                                                                                                       | Same                                          | `delete-timeline-entry` not registered until #355 S8b                                                                     |
+| Admin answer for a timeline write                                                  | Rows named by index; the echo carries the title marked untrusted, state, version and link state                                                                           | Same                                          | An entry id is its writer's text and is not echoed as an id; a write is traced by requestId to the Backend event row      |
+
+## 4. Migration delta approved (Constitution section 17, item 3)
+
+Community `20261105235900_timeline_entries.sql`, edited in place: `version`
+(default 1, check `timeline_entries_version_valid`, at least 1); `hidden_at`;
+`created_by` and `updated_by` (default `import`, check
+`timeline_entries_actors_valid` over `import`, `owner` and `ai-admin`);
+`created_at` and `updated_at` (default `now()`). No new index. The grants in
+`grant-runtime.sql` are those in section 2, inside the block that skips an
+earlier phase without the table, with a revoke of any table-level `INSERT` or
+`UPDATE` first.
+
+Any database that applied the earlier text must be recreated: the runner refuses
+an edited migration it has already applied. Once merged, a further change is a
+new additive migration. A new operator label needs one.
+
+No other migration is approved.
+
+## 5. Deferred
+
+- Hard delete, `delete-timeline-entry`: planned as irreversible, counted per
+  row, and only for a row already hidden. It waits for #355 S8b, and needs a
+  `DELETE` grant and its own amendment row then. Until then, hiding gives the
+  same public effect.
+- A whole-set replace or import op: the import stays an Owner script, because
+  the run engine works per target, not as one transaction.
+- An export op: `community.read-timeline` returns rows in import shape.
+- A media op: the table has no media columns; images come only from the linked
+  Catalog record.
+- A `timeline_entry` record type for `admin_find` and `admin_get`: after the S10
+  record descriptors.
+- A history read: it needs wider `SELECT` on `content_operator_events`, and a
+  decision on whether AI may read Backend operator events.
+- Selectors: the whole timeline fits explicit targets.
+- A human Admin page: parity runs from each Owner surface to an op, and the
+  Owner routes exist.
+
+## 6. Delivery
+
+Independent review of the exact HEAD, then a pinned merge with this signature.
+PostgreSQL 16. No dependency is added or upgraded. `ADMIN_MCP_CONTRACT_VERSION`
+is not changed in PR #389. The release that first ships #355 E1 and the timeline
+sets it to that release's day. The release carries Web, Backend and Admin
+together. Release, migration, import and placing the community AI credential
+stay separate Owner approvals.
+
+## 7. Documents to correct with this work
+
+`docs/development/home-timeline-v1.md`;
+`docs/deployment/full-release-database-v1.md`, the timeline part;
+`docs/development/admin-mcp-completion-v1.md`, the App-role preflight;
+`docs/community/admin-mcp-capabilities.md`, regenerated; the timeline comments
+in `infra/development/work-publishing/grant-runtime.sql` and in the migration;
+root `AGENTS.md` active list, with its line cap in
+`scripts/agent-workflow.test.mjs`.

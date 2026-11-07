@@ -615,10 +615,11 @@ export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort
     });
   }
   /**
-   * home-timeline-v1. The rows live on the App connection. Linked ids then take
-   * the card projection on the Catalog connection, so a link stays only while
-   * its record is eligible and its image follows the card rules; a timeline
-   * with no linked row never opens that connection.
+   * home-timeline-v1. The rows live on the App connection; a row an operator
+   * hid is left out. Linked ids then take the card projection on the Catalog
+   * connection, so a link stays only while its record is eligible and its image
+   * follows the card rules; a timeline with no linked row never opens that
+   * connection.
    */
   async timeline(): Promise<TimelineRecord> {
     const rows = await this.run(
@@ -627,7 +628,7 @@ export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort
         (
           await db.query<TimelineRow>(
             `SELECT entry_id,title,full_title,start_year,end_year,precision,date_label,on_axis,chapter,polity,disputed,group_id,group_title,province,holder,catalog_id
-            FROM community.timeline_entries ORDER BY start_year,position,entry_id LIMIT $1`,
+            FROM community.timeline_entries WHERE hidden_at IS NULL ORDER BY start_year,position,entry_id LIMIT $1`,
             [TIMELINE_ENTRIES_MAXIMUM + 1],
           )
         ).rows,

@@ -42,6 +42,7 @@ import {
   PostgresFeedbackAdapter,
   PostgresPublishingOperatorAdapter,
   PostgresThreadAdapter,
+  PostgresTimelineOperatorAdapter,
   runCommunityMigrations,
 } from "@moya/community-postgres";
 import { emptyArticleDocument } from "@moya/contracts/schemas";
@@ -184,6 +185,7 @@ const backendOn = (pool: Pool): Server =>
       publishingOperatorPort: new PostgresPublishingOperatorAdapter(pool),
       articlePublicationOperatorPort: new PostgresArticleAuthoringAdapter(pool),
       threadPort: new PostgresThreadAdapter(pool),
+      timelineOperatorPort: new PostgresTimelineOperatorAdapter(pool),
       feedbackPort: new PostgresFeedbackAdapter(pool),
       directMessagePort: new PostgresDirectMessageAdapter(pool),
       aiOperatorReader: new PostgresAiOperatorReader(pool),
@@ -419,6 +421,45 @@ const versionOfRevision = async (id: string) =>
       ])
     ).version,
   );
+
+// home-timeline-v1 (Issue #384 r3): timeline rows, each case in a start year of
+// its own, so a reorder lists exactly its own rows.
+let timelineRows = 0;
+let timelineYear = 1950;
+const newTimelineId = () => `entry-${run}-${(timelineRows += 1)}`;
+const newTimelineYear = () => (timelineYear += 1);
+const timelineCommand = (id: string, startYear = newTimelineYear()) => ({
+  id,
+  title: `Timeline ${run}`,
+  fullTitle: `Timeline entry ${run}`,
+  startYear,
+  endYear: startYear,
+  precision: "year",
+  onAxis: true,
+  chapter: "当代",
+});
+/** As the import leaves a row: labelled `import`, at version 1. */
+const newTimelineEntry = async (startYear = newTimelineYear()) => {
+  const id = newTimelineId();
+  await setup.query(
+    "INSERT INTO community.timeline_entries(entry_id,title,full_title,start_year,end_year,precision,on_axis,chapter,disputed,position) VALUES($1,$2,$2,$3,$3,'year',TRUE,'当代',FALSE,$4)",
+    [id, `Timeline ${run}`, startYear, timelineRows * 1024],
+  );
+  return id;
+};
+/** A start year holding two imported rows, and a reorder of them. */
+const newTimelineReorder = async () => {
+  const startYear = newTimelineYear();
+  const first = await newTimelineEntry(startYear);
+  const second = await newTimelineEntry(startYear);
+  return {
+    startYear,
+    entries: [
+      { id: second, expectedVersion: 1 },
+      { id: first, expectedVersion: 1 },
+    ],
+  };
+};
 const decideAs = async (
   id: string,
   action: string,
@@ -886,6 +927,58 @@ const LABEL_CASES: Readonly<
       minimum: 1,
     };
   },
+  "community.create-timeline-entry": async () => {
+    const id = newTimelineId();
+    return {
+      answer: await execute(
+        "community.create-timeline-entry",
+        timelineCommand(id),
+      ),
+      statements: [
+        contentEvents(id),
+        [
+          "SELECT created_by AS label FROM community.timeline_entries WHERE entry_id=$1 UNION ALL SELECT updated_by FROM community.timeline_entries WHERE entry_id=$1",
+          [id],
+        ],
+      ],
+      minimum: 3,
+    };
+  },
+  "community.update-timeline-entry": async () => {
+    const id = await newTimelineEntry();
+    return {
+      answer: await execute("community.update-timeline-entry", {
+        id,
+        expectedVersion: 1,
+        hidden: true,
+      }),
+      statements: [
+        contentEvents(id),
+        [
+          "SELECT updated_by AS label FROM community.timeline_entries WHERE entry_id=$1",
+          [id],
+        ],
+      ],
+      minimum: 2,
+    };
+  },
+  "community.reorder-timeline": async () => {
+    const command = await newTimelineReorder();
+    return {
+      answer: await execute("community.reorder-timeline", command),
+      statements: [
+        [
+          "SELECT operator_label AS label FROM community.content_operator_events WHERE action='timeline.reorder' AND (detail->'command'->>'startYear')::integer=$1",
+          [command.startYear],
+        ],
+        [
+          "SELECT updated_by AS label FROM community.timeline_entries WHERE start_year=$1",
+          [command.startYear],
+        ],
+      ],
+      minimum: 3,
+    };
+  },
 };
 
 describe("every registry write", () => {
@@ -1012,6 +1105,119 @@ describe("every registry write", () => {
     expect(audit.length).toBeGreaterThan(0);
     expect(JSON.stringify(audit)).not.toContain(HOSTILE);
     expect(audit.some((row) => row.target_id === work)).toBe(true);
+  });
+});
+
+// home-timeline-v1 (Issue #384 r3): what a timeline write answers and leaves.
+describe("the Home timeline, written by AI", () => {
+  it("names a row by its index, marks its title, and keeps both out of the ledger", async () => {
+    const id = newTimelineId();
+    const requestId = randomUUID();
+    const answer = await execute(
+      "community.create-timeline-entry",
+      { ...timelineCommand(id), title: `Title ${HOSTILE}` },
+      requestId,
+    );
+    expect(answer).toMatchObject({ ok: true, data: { applied: ["#0"] } });
+    expect(answer.data.results).toEqual([
+      {
+        index: 0,
+        title: `Title ${HOSTILE}`,
+        state: "visible",
+        version: 1,
+        linkState: "unlinked",
+      },
+    ]);
+    expect(answer.untrusted).toEqual(["/data/results/*/title"]);
+    // The id is the writer's own text, so nothing here echoes it.
+    expect(JSON.stringify(answer)).not.toContain(id);
+    const { drizzle } = payload.db as unknown as Pick<
+      PostgresAdapter,
+      "drizzle"
+    >;
+    const { rows: audit } = await drizzle.execute(
+      sql`SELECT * FROM mcp_audit_events WHERE request_id = ${requestId} AND key_id = ${String(keyId)}`,
+    );
+    expect(audit.length).toBeGreaterThan(0);
+    expect(JSON.stringify(audit)).not.toContain(HOSTILE);
+    expect(JSON.stringify(audit)).not.toContain(id);
+    expect(
+      await one(
+        "SELECT created_by,updated_by,version,hidden_at FROM community.timeline_entries WHERE entry_id=$1",
+        [id],
+      ),
+    ).toEqual({
+      created_by: AI,
+      updated_by: AI,
+      version: 1,
+      hidden_at: null,
+    });
+  });
+
+  it("names each refusal by its code, and changes nothing", async () => {
+    const id = await newTimelineEntry();
+    const linked = await newTimelineEntry();
+    const catalogId = `timeline-catalog-${run}`;
+    expect(
+      await execute("community.update-timeline-entry", {
+        id: linked,
+        expectedVersion: 1,
+        catalogId,
+      }),
+    ).toMatchObject({ ok: true, data: { results: [{ version: 2 }] } });
+    const refusals: readonly (readonly [string, Json, string, string])[] = [
+      [
+        "community.create-timeline-entry",
+        timelineCommand(id),
+        "failed",
+        "ENTRY_EXISTS",
+      ],
+      [
+        "community.update-timeline-entry",
+        { id, expectedVersion: 1, catalogId },
+        "failed",
+        "CATALOG_ALREADY_LINKED",
+      ],
+      [
+        "community.update-timeline-entry",
+        { id, expectedVersion: 1, endYear: 1900 },
+        "failed",
+        "ENTRY_INVALID",
+      ],
+      [
+        "community.update-timeline-entry",
+        { id, expectedVersion: 7, hidden: true },
+        "conflict",
+        "STATE_CONFLICT",
+      ],
+    ];
+    for (const [op, input, state, code] of refusals)
+      expect((await execute(op, input)).data, code).toEqual({
+        [state]: [{ index: 0, code }],
+      });
+    const reorder = await newTimelineReorder();
+    expect(
+      (
+        await execute("community.reorder-timeline", {
+          ...reorder,
+          entries: reorder.entries.slice(1),
+        })
+      ).data,
+    ).toEqual({ failed: [{ index: 0, code: "SET_CHANGED" }] });
+    expect(
+      await rows(
+        "SELECT entry_id,version,updated_by,catalog_id,hidden_at FROM community.timeline_entries WHERE entry_id=ANY($1::text[]) ORDER BY position",
+        [[id, ...reorder.entries.map((entry) => entry.id)]],
+      ),
+    ).toEqual(
+      [id, reorder.entries[1]!.id, reorder.entries[0]!.id].map((entry) => ({
+        entry_id: entry,
+        version: 1,
+        updated_by: "import",
+        catalog_id: null,
+        hidden_at: null,
+      })),
+    );
   });
 });
 
@@ -1511,6 +1717,14 @@ describe("a lost answer, retried with the same requestId", () => {
       action: "reject",
       reason: REASON,
     }),
+    "community.create-timeline-entry": async () =>
+      timelineCommand(newTimelineId()),
+    "community.update-timeline-entry": async () => ({
+      id: await newTimelineEntry(),
+      expectedVersion: 1,
+      title: `Once ${run}`,
+    }),
+    "community.reorder-timeline": newTimelineReorder,
   };
 
   it("has a case here for every write: a new one with none fails", () => {

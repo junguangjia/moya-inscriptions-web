@@ -6,10 +6,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { URL } from "node:url";
 import {
+  CONTENT_OPERATOR_LOCK_SQL,
   TIMELINE_MIGRATION_ID,
   TimelineImportRefused,
   applyImport,
-  estimateResponseBytes,
+  checkImportSet,
   insertStatements,
   loadImportFile,
   parseImportCommand,
@@ -45,7 +46,9 @@ const acceptAll = {
 const refusing = (issues) => ({
   safeParse: () => ({ success: false, error: { issues } }),
 });
+const passingSet = () => ({ ok: true });
 const standInContract = async () => ({
+  checkTimelineEntrySet: passingSet,
   timelineChapterSchema: { options: ["隋", "唐"] },
   timelineImportFileSchema: acceptAll,
 });
@@ -61,18 +64,25 @@ const withFile = async (content, run) => {
   }
 };
 
-const fakePool = ({ ledger = true, failOn } = {}) => {
+const fakePool = ({
+  ledger = true,
+  failOn,
+  stored = { total: 0, edited: 0, hidden: 0 },
+} = {}) => {
   const statements = [];
+  const bound = [];
   let released = 0;
   const client = {
-    query: async (text) => {
+    query: async (text, values) => {
       statements.push(text);
+      bound.push(values);
       if (failOn !== undefined && text.startsWith(failOn))
         throw new Error("driver error");
       if (text.includes("schema_migrations"))
         return {
           rows: ledger ? [{ migration_id: TIMELINE_MIGRATION_ID }] : [],
         };
+      if (text.includes("FILTER")) return { rows: [stored] };
       return { rows: [] };
     },
     release: () => {
@@ -82,18 +92,29 @@ const fakePool = ({ ledger = true, failOn } = {}) => {
   return {
     pool: { connect: async () => client },
     statements,
+    bound,
     released: () => released,
   };
 };
 
-test("the command takes one absolute file and an optional --apply", () => {
+test("the command takes one absolute file, an optional --apply and its discard flag", () => {
   assert.deepEqual(parseImportCommand(["--file", "/data/entries.json"]), {
     file: "/data/entries.json",
     apply: false,
+    replaceOperatorEdits: false,
   });
   assert.deepEqual(
     parseImportCommand(["--apply", "--file", "/data/entries.json"]),
-    { file: "/data/entries.json", apply: true },
+    { file: "/data/entries.json", apply: true, replaceOperatorEdits: false },
+  );
+  assert.deepEqual(
+    parseImportCommand([
+      "--replace-operator-edits",
+      "--file",
+      "/data/entries.json",
+      "--apply",
+    ]),
+    { file: "/data/entries.json", apply: true, replaceOperatorEdits: true },
   );
   for (const args of [
     [],
@@ -105,6 +126,14 @@ test("the command takes one absolute file and an optional --apply", () => {
     ["--file", "/a.json", "--file", "/b.json"],
     ["--file", "/a.json", "--apply", "--apply"],
     ["--file", "/a.json", "--dry-run"],
+    ["--file", "/a.json", "--replace-operator-edits"],
+    [
+      "--file",
+      "/a.json",
+      "--apply",
+      "--replace-operator-edits",
+      "--replace-operator-edits",
+    ],
     ["/a.json"],
   ])
     assert.throws(() => parseImportCommand(args), TimelineImportRefused);
@@ -191,15 +220,68 @@ test("inserts bind every value, batch by batch, in file order", () => {
   assert.equal(statements[1].values[0], "c");
 });
 
-test("apply replaces all rows inside one transaction", async () => {
-  const { pool, statements, released } = fakePool();
-  await applyImport(pool, [entry("a"), entry("b")]);
+test("apply replaces all rows inside one transaction under the operator lock", async () => {
+  const { pool, statements, bound, released } = fakePool({
+    stored: { total: 3, edited: 0, hidden: 0 },
+  });
+  assert.deepEqual(await applyImport(pool, [entry("a"), entry("b")]), {
+    entries: 2,
+    replaced: 3,
+    operatorEdited: 0,
+    hidden: 0,
+  });
   assert.deepEqual(
     statements.map((text) => text.split(/\s/u)[0]),
-    ["BEGIN", "SET", "SELECT", "DELETE", "INSERT", "COMMIT"],
+    [
+      "BEGIN",
+      "SET",
+      "SELECT",
+      "SELECT",
+      "SELECT",
+      "DELETE",
+      "INSERT",
+      "INSERT",
+      "COMMIT",
+    ],
   );
-  assert.equal(statements[3], "DELETE FROM community.timeline_entries");
+  assert.equal(statements[2], CONTENT_OPERATOR_LOCK_SQL);
+  assert.equal(statements[5], "DELETE FROM community.timeline_entries");
+  // One event with counts only: no row content reaches it.
+  assert.match(
+    statements[7],
+    /^INSERT INTO community\.content_operator_events\(.*VALUES\(\$1,'import','timeline\.import','timeline_entry',NULL,\$2\)$/u,
+  );
+  assert.match(bound[7][0], /^[0-9a-f-]{36}$/u);
+  assert.deepEqual(JSON.parse(bound[7][1]), {
+    entries: 2,
+    replaced: 3,
+    operatorEdited: 0,
+    hidden: 0,
+  });
   assert.equal(released(), 1);
+});
+
+test("apply refuses to discard operator edits unless told to, with counts only", async () => {
+  const edits = { total: 4, edited: 2, hidden: 1 };
+  const refused = fakePool({ stored: edits });
+  await assert.rejects(applyImport(refused.pool, [entry("a")]), (error) => {
+    assert.ok(error instanceof TimelineImportRefused);
+    assert.equal(
+      error.message,
+      "The timeline holds 2 operator-edited and 1 hidden rows; --replace-operator-edits discards them",
+    );
+    return true;
+  });
+  assert.ok(!refused.statements.some((text) => /^(DELETE|INSERT)/u.test(text)));
+  assert.equal(refused.statements.at(-1), "ROLLBACK");
+  const forced = fakePool({ stored: edits });
+  assert.deepEqual(
+    await applyImport(forced.pool, [entry("a")], {
+      replaceOperatorEdits: true,
+    }),
+    { entries: 1, replaced: 4, operatorEdited: 2, hidden: 1 },
+  );
+  assert.ok(forced.statements.includes("COMMIT"));
 });
 
 test("apply refuses a missing ledger entry before any write", async () => {
@@ -281,6 +363,78 @@ test("apply needs the migration setting and closes its pool", async () => {
   });
 });
 
+test("the discard flag reaches apply, and the output names counts only", async () => {
+  const secret = "不应出现的题名";
+  const content = JSON.stringify({
+    version: 1,
+    entries: [entry("a", { title: secret })],
+  });
+  await withFile(content, async (file) => {
+    const run = (args, stored) => {
+      const lines = [];
+      const fake = fakePool({ stored });
+      return {
+        lines,
+        fake,
+        done: runTimelineImport(
+          { APP_MIGRATION_DATABASE_URL: "postgresql://synthetic" },
+          ["--file", file, "--apply", ...args],
+          {
+            contract: standInContract,
+            openPool: async () => ({ pool: fake.pool, close: async () => {} }),
+            log: (line) => lines.push(line),
+          },
+        ),
+      };
+    };
+    const edits = { total: 2, edited: 1, hidden: 1 };
+    const guarded = run([], edits);
+    await assert.rejects(guarded.done, TimelineImportRefused);
+    assert.ok(!guarded.fake.statements.includes("COMMIT"));
+    const forced = run(["--replace-operator-edits"], edits);
+    await forced.done;
+    assert.deepEqual(forced.lines.slice(-2), [
+      "Discarded 1 operator-edited and 1 hidden rows",
+      "Timeline import: PASS (1 rows replaced)",
+    ]);
+    assert.ok(!forced.lines.join("\n").includes(secret));
+  });
+});
+
+test("the whole-set check refuses before any connection, naming a code and a row", async () => {
+  const refusing = (issue) => () => ({ ok: false, issue });
+  assert.throws(
+    () =>
+      checkImportSet([entry("a")], refusing({ code: "TIMELINE_TOO_LARGE" })),
+    /^TimelineImportRefused: The timeline file would exceed the response size limit$/u,
+  );
+  assert.throws(
+    () =>
+      checkImportSet(
+        [entry("a"), entry("b")],
+        refusing({ code: "CATALOG_ALREADY_LINKED", index: 1 }),
+      ),
+    /whole-set check: CATALOG_ALREADY_LINKED at entries\.1$/u,
+  );
+  assert.equal(checkImportSet([entry("a")], passingSet), undefined);
+  await withFile(
+    JSON.stringify({ version: 1, entries: [entry("a")] }),
+    async (file) => {
+      await assert.rejects(
+        runTimelineImport({}, ["--file", file], {
+          contract: async () => ({
+            ...(await standInContract()),
+            checkTimelineEntrySet: refusing({ code: "TIMELINE_TOO_LARGE" }),
+          }),
+          openPool: () => assert.fail("a refused file opened a connection"),
+          log: () => undefined,
+        }),
+        /response size limit/u,
+      );
+    },
+  );
+});
+
 const builtContract = new URL(
   "../packages/contracts/dist/schemas.js",
   import.meta.url,
@@ -310,10 +464,29 @@ test(
   },
 );
 
-test("refuses a file whose one response could not pass the Web relay", async () => {
-  const linked = Array.from({ length: 2_800 }, (_, index) =>
-    entry(`row-${index}`, { catalogId: `catalog-${index}` }),
-  );
-  assert.ok(estimateResponseBytes(linked) > 4_000_000);
-  assert.ok(estimateResponseBytes([entry("one")]) < 1_000);
-});
+test(
+  "the built contract refuses a set whose one response could not pass the Web relay",
+  { skip: !existsSync(builtContract) },
+  async () => {
+    const {
+      checkTimelineEntrySet,
+      estimateTimelineResponseBytes,
+      TIMELINE_RESPONSE_BYTES_MAXIMUM,
+    } = await import(builtContract.href);
+    const linked = Array.from({ length: 2_800 }, (_, index) =>
+      entry(`row-${index}`, { catalogId: `catalog-${index}` }),
+    );
+    assert.equal(TIMELINE_RESPONSE_BYTES_MAXIMUM, 4_000_000);
+    assert.ok(estimateTimelineResponseBytes(linked) > 4_000_000);
+    assert.ok(estimateTimelineResponseBytes([entry("one")]) < 1_000);
+    assert.deepEqual(checkTimelineEntrySet(linked), {
+      ok: false,
+      issue: { code: "TIMELINE_TOO_LARGE" },
+    });
+    assert.throws(
+      () => checkImportSet(linked, checkTimelineEntrySet),
+      /response size limit/u,
+    );
+    assert.equal(checkTimelineEntrySet([entry("one")]).ok, true);
+  },
+);

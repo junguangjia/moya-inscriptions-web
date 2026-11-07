@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -5,17 +6,25 @@ import process from "node:process";
 import console from "node:console";
 
 /**
- * home-timeline-v1: the controlled bulk step behind community.timeline_entries.
- * The rows are a private file validated against the contract, never a migration
- * and never Git. The default is a dry run that opens no connection; --apply
- * replaces every row in one transaction with the migration role, so a reader
- * sees the old set or the new one. Output carries counts only: no row content
+ * home-timeline-v1: the guarded seed step behind community.timeline_entries.
+ * The rows are a private file validated against the contract (each row and the
+ * whole set, as every operator write is), never a migration and never Git. The
+ * default is a dry run that opens no connection; --apply replaces every row in
+ * one transaction with the migration role, so a reader sees the old set or the
+ * new one. It holds the content-operator lock the Backend's operator writes
+ * take, and refuses to discard rows an operator created, edited or hid unless
+ * --replace-operator-edits says so. Output carries counts only: no row content
  * and no connection string.
  */
 export const TIMELINE_MIGRATION_ID = "20261105235900";
 const migrationVariable = "APP_MIGRATION_DATABASE_URL";
 const INSERT_BATCH_ROWS = 200;
 const ISSUES_SHOWN = 5;
+/** The lock of every content-operator write, the timeline's included. */
+export const CONTENT_OPERATOR_LOCK_SQL =
+  "SELECT pg_advisory_xact_lock(hashtextextended('phase4-content-operator',0))";
+const OPERATOR_ROWS_SQL =
+  "SELECT count(*)::integer AS total, count(*) FILTER (WHERE created_by<>'import' OR updated_by<>'import')::integer AS edited, count(*) FILTER (WHERE hidden_at IS NOT NULL)::integer AS hidden FROM community.timeline_entries";
 
 const entryColumns = [
   ["entry_id", (entry) => entry.id],
@@ -45,24 +54,27 @@ const refuse = (message) => {
   throw new TimelineImportRefused(message);
 };
 
-const LINKED_ROW_MEDIA_BYTES = 1_500;
-const RESPONSE_BYTES_LIMIT = 4_000_000;
-const usage = "Usage: import-timeline.mjs --file <absolute path> [--apply]";
+const usage =
+  "Usage: import-timeline.mjs --file <absolute path> [--apply [--replace-operator-edits]]";
 
 export function parseImportCommand(args) {
   let file;
   let apply = false;
+  let replaceOperatorEdits = false;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--apply" && !apply) apply = true;
+    else if (arg === "--replace-operator-edits" && !replaceOperatorEdits)
+      replaceOperatorEdits = true;
     else if (arg === "--file" && file === undefined) {
       file = args[(index += 1)];
       if (file === undefined || file.startsWith("--")) refuse(usage);
     } else refuse(usage);
   }
-  if (file === undefined) refuse(usage);
+  // Discarding operator edits is a write decision: a dry run never takes it.
+  if (file === undefined || (replaceOperatorEdits && !apply)) refuse(usage);
   if (!isAbsolute(file)) refuse("The timeline file path must be absolute");
-  return { file, apply };
+  return { file, apply, replaceOperatorEdits };
 }
 
 /** Parse and validate; a failure names issue paths and codes, never values. */
@@ -85,13 +97,19 @@ export async function loadImportFile(file, schema) {
 }
 
 /**
- * The one response carrying every row passes the Web relay's 4.5 MB cap only
- * with room for each linked row's image candidates.
+ * The contract's whole-set check, the one every operator write runs: the
+ * response estimate is the part the file schema does not cover.
  */
-export const estimateResponseBytes = (entries) =>
-  Buffer.byteLength(JSON.stringify(entries), "utf8") +
-  entries.filter((entry) => entry.catalogId !== null).length *
-    LINKED_ROW_MEDIA_BYTES;
+export const checkImportSet = (entries, checkTimelineEntrySet) => {
+  const checked = checkTimelineEntrySet(entries);
+  if (checked.ok) return;
+  const { code, index } = checked.issue;
+  if (code === "TIMELINE_TOO_LARGE")
+    refuse("The timeline file would exceed the response size limit");
+  refuse(
+    `The timeline file failed the whole-set check: ${code}${index === undefined ? "" : ` at entries.${index}`}`,
+  );
+};
 
 export const summarizeImport = (entries, chapters) => ({
   entries: entries.length,
@@ -127,22 +145,51 @@ export const insertStatements = (entries, batchRows = INSERT_BATCH_ROWS) => {
   return statements;
 };
 
-/** Replaces every row in one transaction, or changes nothing. */
-export async function applyImport(pool, entries) {
+/**
+ * Replaces every row in one transaction, or changes nothing. Rows an operator
+ * created, edited or hid stay unless `replaceOperatorEdits`; the refusal names
+ * counts only. New rows take the column defaults: 'import' as creator and
+ * editor, version 1, visible. One content-operator event records the counts.
+ */
+export async function applyImport(
+  pool,
+  entries,
+  { replaceOperatorEdits = false } = {},
+) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    // The wait for the shared lock counts too: an operator write in progress
+    // holds the import back by at most this long.
     await client.query("SET LOCAL lock_timeout='5s'");
+    await client.query(CONTENT_OPERATOR_LOCK_SQL);
     const ledger = await client.query(
       "SELECT migration_id FROM community.schema_migrations WHERE migration_id=$1",
       [TIMELINE_MIGRATION_ID],
     );
     if (ledger.rows.length !== 1)
       refuse(`Community migration ${TIMELINE_MIGRATION_ID} is not applied`);
+    const { total, edited, hidden } = (await client.query(OPERATOR_ROWS_SQL))
+      .rows[0];
+    if ((edited > 0 || hidden > 0) && !replaceOperatorEdits)
+      refuse(
+        `The timeline holds ${edited} operator-edited and ${hidden} hidden rows; --replace-operator-edits discards them`,
+      );
     await client.query("DELETE FROM community.timeline_entries");
     for (const { text, values } of insertStatements(entries))
       await client.query(text, values);
+    const counts = {
+      entries: entries.length,
+      replaced: total,
+      operatorEdited: edited,
+      hidden,
+    };
+    await client.query(
+      "INSERT INTO community.content_operator_events(id,operator_label,action,content_type,content_id,detail) VALUES($1,'import','timeline.import','timeline_entry',NULL,$2)",
+      [randomUUID(), JSON.stringify(counts)],
+    );
     await client.query("COMMIT");
+    return counts;
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
@@ -184,13 +231,16 @@ export async function runTimelineImport(
   } = {},
 ) {
   const command = parseImportCommand(args);
-  const { timelineChapterSchema, timelineImportFileSchema } = await contract();
+  const {
+    checkTimelineEntrySet,
+    timelineChapterSchema,
+    timelineImportFileSchema,
+  } = await contract();
   const { entries } = await loadImportFile(
     command.file,
     timelineImportFileSchema,
   );
-  if (estimateResponseBytes(entries) > RESPONSE_BYTES_LIMIT)
-    refuse("The timeline file would exceed the response size limit");
+  checkImportSet(entries, checkTimelineEntrySet);
   const summary = summarizeImport(entries, timelineChapterSchema.options);
   printSummary(log, summary);
   if (!command.apply) {
@@ -200,11 +250,18 @@ export async function runTimelineImport(
   if (!environment[migrationVariable])
     refuse(`Missing migration setting: ${migrationVariable}`);
   const { pool, close } = await openPool(environment);
+  let applied;
   try {
-    await applyImport(pool, entries);
+    applied = await applyImport(pool, entries, {
+      replaceOperatorEdits: command.replaceOperatorEdits,
+    });
   } finally {
     await close();
   }
+  if (applied.operatorEdited > 0 || applied.hidden > 0)
+    log(
+      `Discarded ${applied.operatorEdited} operator-edited and ${applied.hidden} hidden rows`,
+    );
   log(`Timeline import: PASS (${entries.length} rows replaced)`);
   return summary;
 }

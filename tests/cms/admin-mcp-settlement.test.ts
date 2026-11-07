@@ -40,6 +40,7 @@ import {
   PostgresCommunityReportingAdapter,
   PostgresPublishingOperatorAdapter,
   PostgresThreadAdapter,
+  PostgresTimelineOperatorAdapter,
   PostgresWorkPublishingAdapter,
   runCommunityMigrations,
 } from "@moya/community-postgres";
@@ -449,6 +450,7 @@ beforeAll(async () => {
         publication,
       }),
       threadPort: new PostgresThreadAdapter(app),
+      timelineOperatorPort: new PostgresTimelineOperatorAdapter(app),
       aiOperatorReader: new PostgresAiOperatorReader(app, publication),
       communityOperatorCredential: ownerToken,
       operatorAiBaseCredential: baseToken,

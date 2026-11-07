@@ -41,6 +41,7 @@ import {
   PostgresFeedbackAdapter,
   PostgresPublishingOperatorAdapter,
   PostgresThreadAdapter,
+  PostgresTimelineOperatorAdapter,
   runCommunityMigrations,
 } from "@moya/community-postgres";
 import { emptyArticleDocument } from "@moya/contracts/schemas";
@@ -201,6 +202,8 @@ const ids = {
   publicMediaArticle: opaque("article"),
   selfMediaArticle: opaque("article"),
   deletedComment: opaque("comment"),
+  timelineEntry: `entry-${run}`,
+  hiddenTimelineEntry: `hidden-entry-${run}`,
   deletedCommentReport: "",
   redactedReport: "",
   rightsReport: "",
@@ -354,6 +357,26 @@ const seed = async () => {
   await db.query(
     "INSERT INTO community.publishing_jobs(id,kind,subject_id,state,run_after) VALUES($1,'publish_media',$2,'queued',CURRENT_TIMESTAMP)",
     [ids.job, ids.item],
+  );
+  // Timeline rows hold the Owner's words, and link a Catalog record that is not published.
+  await db.query(
+    `INSERT INTO community.timeline_entries(entry_id,title,full_title,start_year,end_year,precision,date_label,on_axis,chapter,
+       polity,disputed,group_id,group_title,province,holder,catalog_id,position,hidden_at)
+     VALUES($1,$2,$3,148,148,'year',$4,TRUE,'东汉',$5,FALSE,$6,$7,$8,$9,$10,0,NULL),
+       ($11,'Hidden entry','Hidden entry',150,150,'year',NULL,FALSE,'东汉',NULL,FALSE,NULL,NULL,NULL,NULL,NULL,0,CURRENT_TIMESTAMP)`,
+    [
+      ids.timelineEntry,
+      hostile("timelinetitle"),
+      hostile("timelinefulltitle"),
+      hostile("datelabel"),
+      hostile("polity"),
+      `group-${run}`,
+      hostile("grouptitle"),
+      hostile("province"),
+      hostile("holder"),
+      `timeline-catalog-${run}`,
+      ids.hiddenTimelineEntry,
+    ],
   );
   const reporting = new PostgresCommunityReportingAdapter(setup);
   const standard = (id: string, description: string) =>
@@ -725,6 +748,7 @@ const backendOn = (pool: Pool): Server =>
       publishingOperatorPort: new PostgresPublishingOperatorAdapter(pool),
       articlePublicationOperatorPort: new PostgresArticleAuthoringAdapter(pool),
       threadPort: new PostgresThreadAdapter(pool),
+      timelineOperatorPort: new PostgresTimelineOperatorAdapter(pool),
       feedbackPort: new PostgresFeedbackAdapter(pool),
       directMessagePort: new PostgresDirectMessageAdapter(pool),
       aiOperatorReader: new PostgresAiOperatorReader(pool),
@@ -979,6 +1003,14 @@ const inputsOf = (op: string): readonly Json[] => {
     ],
     "read-account-capacity": [{ accountId: ids.author }],
     "read-publishing-jobs": [{}],
+    "read-timeline": [
+      {},
+      { id: ids.timelineEntry },
+      { ids: [ids.timelineEntry, ids.hiddenTimelineEntry], hidden: "only" },
+      { search: HOSTILE },
+      { linked: "not_published", issue: "not_published" },
+    ],
+    "read-timeline-summary": [{}],
   };
   const listed: Readonly<Record<string, string>> = {
     "list.comments": "read-comments",
@@ -1078,6 +1110,43 @@ describe("the canary sweep", () => {
         "list.overview",
       ]),
     );
+  });
+
+  // home-timeline-v1 (Issue #384 r3): so the sweep of the timeline reads its rows.
+  it("reads the Home timeline's rows and counts, with every word of the Owner's marked", async () => {
+    const rows = await ok("admin_read", {
+      op: "community.read-timeline",
+      view: "full",
+      input: { ids: [ids.timelineEntry, ids.hiddenTimelineEntry] },
+    });
+    expect(rows.data.total).toBe(2);
+    expect(
+      rows.data.rows.map(({ id, state, linkState, version }: Json) => [
+        id,
+        state,
+        linkState,
+        version,
+      ]),
+    ).toEqual([
+      [ids.timelineEntry, "visible", "not_published", 1],
+      [ids.hiddenTimelineEntry, "hidden", "unlinked", 1],
+    ]);
+    expect(rows.data.rows[0].updatedBy).toBe("import");
+    expect(expectHostileMarked(rows)).toBe(7);
+    expect(
+      await ok("admin_read", { op: "community.read-timeline-summary" }),
+    ).toMatchObject({
+      data: {
+        entries: { total: 2, visible: 1, hidden: 1 },
+        links: { unlinked: 1, published: 0, notPublished: 1 },
+        groups: { total: 1, folding: 0 },
+        issues: { notPublished: 1 },
+      },
+    });
+    // No count in SQL: the summary is the timeline's count.
+    expect(
+      await read({ op: "community.read-timeline", view: "count" }),
+    ).toMatchObject({ ok: false, code: "INPUT_INVALID" });
   });
 
   it("walks every queue to its end with next alone, and no page, cut or way on holds anything withheld", async () => {

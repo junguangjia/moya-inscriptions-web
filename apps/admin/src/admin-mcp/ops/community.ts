@@ -22,6 +22,18 @@ export type CommunityOpRoute = Exclude<
 
 const dm = { sensitive: "dm", tool: "admin_sensitive_read" } as const;
 
+/** A synthetic timeline row; its chapter is one of the contract's own names. */
+const timelineEntryExample = {
+  id: "synthetic-entry",
+  title: "Synthetic stele",
+  fullTitle: "Synthetic stele, full title",
+  startYear: 148,
+  endYear: 148,
+  precision: "year",
+  onAxis: true,
+  chapter: "东汉",
+} as const;
+
 const rows: Readonly<Record<CommunityOpRoute, AdminOpEntry>> = {
   "read-reports": readOp("Report cases by status and urgency.", {
     example: { status: "open", page: 1, pageSize: 20 },
@@ -341,6 +353,46 @@ const rows: Readonly<Record<CommunityOpRoute, AdminOpEntry>> = {
     {
       selectorSources: ["list.jobs"],
       example: { id: example.job, requestId: example.requestId },
+    },
+  ),
+  // home-timeline-v1 (Issue #384 r3): rows the database holds. An entry id is
+  // its writer's own text: a read's rows carry it marked, a write goes by index.
+  "read-timeline": readOp(
+    "Home timeline rows by year, chapter, link or issue.",
+    {
+      example: { yearFrom: 100, yearTo: 220, linked: "unlinked" },
+    },
+  ),
+  "read-timeline-summary": readOp("Counts and limits of the Home timeline.", {
+    example: {},
+  }),
+  "create-timeline-entry": reversibleOp(
+    "Add a Home timeline row under a new id.",
+    "receipt",
+    { example: timelineEntryExample },
+  ),
+  "update-timeline-entry": reversibleOp(
+    "Edit, hide, link or regroup a Home timeline row.",
+    "receipt",
+    {
+      example: {
+        id: timelineEntryExample.id,
+        expectedVersion: 1,
+        hidden: true,
+      },
+    },
+  ),
+  "reorder-timeline": reversibleOp(
+    "Order one start year's timeline rows, within each display rank.",
+    "receipt",
+    {
+      example: {
+        startYear: timelineEntryExample.startYear,
+        entries: [
+          { id: "synthetic-other-entry", expectedVersion: 1 },
+          { id: timelineEntryExample.id, expectedVersion: 2 },
+        ],
+      },
     },
   ),
 };

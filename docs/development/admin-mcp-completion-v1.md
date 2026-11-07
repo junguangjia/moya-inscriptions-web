@@ -659,6 +659,7 @@ FROM (VALUES
   ('community.media_public_assets','SELECT'), ('community.media_item_refs','SELECT'),
   ('community.catalog_media_assets','SELECT'), ('community.work_drafts','SELECT'),
   ('community.work_draft_snapshots','SELECT'), ('community.work_edit_drafts','SELECT'),
+  ('community.timeline_entries','SELECT'),
   ('community.discussion_command_receipts','INSERT')
 ) AS needed(rel, priv)
 UNION ALL

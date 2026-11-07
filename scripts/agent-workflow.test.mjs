@@ -162,10 +162,10 @@ describe("one canonical skill body per skill, one adapter per tool", () => {
     assert.match(agents, /## Task lifecycle skills/u);
     assert.match(agents, /When entering a task context/u);
     assert.match(agents, /delivery stop\s+is that task's authorization/u);
-    // 123 = 120 plus one registration line each for the 2026-10-04, 2026-11-03
-    // and 2026-11-05 amendments, so that no other authority entry is rewritten
-    // to fit the cap.
-    assert.ok(agents.split("\n").length <= 123, "root instructions stay brief");
+    // 124 = 120 plus one registration line each for the 2026-10-04,
+    // 2026-11-03, 2026-11-05 and 2026-11-06 amendments, so that no other
+    // authority entry is rewritten to fit the cap.
+    assert.ok(agents.split("\n").length <= 124, "root instructions stay brief");
   });
 });
 

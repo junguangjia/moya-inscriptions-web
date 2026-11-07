@@ -261,6 +261,13 @@ export const AI_OPERATOR_ROUTES: readonly AiOperatorRoute[] = [
   communityWrite("PUT", "publishing/accounts/:id/capacity"),
   communityWrite("POST", "publishing/jobs/:id/retry", "publishing_job"),
   communityWrite("POST", "articles/:id/moderation", "article"),
+  // home-timeline-v1 (Issue #384 r3): reference rows, no self-only record. The
+  // three top-level paths differ, so an entry id never matches another row.
+  communityRead("timeline-entries"),
+  communityRead("timeline-summary"),
+  communityWrite("POST", "timeline-entries"),
+  communityWrite("POST", "timeline-entries/:id"),
+  communityWrite("POST", "timeline-order"),
 ];
 
 const segmentsMatch = (pattern: string, pathname: string): boolean => {

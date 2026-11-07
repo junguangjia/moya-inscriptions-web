@@ -296,6 +296,36 @@ export type {
   OperatorThreadPage,
   UpdateThreadCommand,
 } from "./content-schemas.js";
+// home-timeline-v1 (Issue #384 r3): operator-managed timeline rows.
+export {
+  TIMELINE_REORDER_MAXIMUM,
+  adminUpdateTimelineEntryRequestSchema,
+  createTimelineEntryCommandSchema,
+  operatorTimelineEntrySchema,
+  operatorTimelinePageSchema,
+  operatorTimelineQuerySchema,
+  operatorTimelineSummarySchema,
+  reorderTimelineCommandSchema,
+  timelineActorSchema,
+  timelineImportFieldsOf,
+  timelineLinkStateSchema,
+  timelineRefusalCodeSchema,
+  timelineReorderResultSchema,
+  updateTimelineEntryCommandSchema,
+} from "./timeline-schemas.js";
+export type {
+  CreateTimelineEntryCommand,
+  OperatorTimelineEntry,
+  OperatorTimelinePage,
+  OperatorTimelineQuery,
+  OperatorTimelineSummary,
+  ReorderTimelineCommand,
+  TimelineActor,
+  TimelineLinkState,
+  TimelineRefusalCode,
+  TimelineReorderResult,
+  UpdateTimelineEntryCommand,
+} from "./timeline-schemas.js";
 // content-community-completion-v1: narrow DM moderation shapes.
 export {
   adminRemoveDmMessageRequestSchema,

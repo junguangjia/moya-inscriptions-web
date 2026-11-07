@@ -1,17 +1,24 @@
--- home-timeline-v1 (Issue #384): the read-only reference rows of the Home
--- timeline. Most rows have no Catalog record; catalog_id is a soft link to a
--- Catalog id on the published read connection, so there is no foreign key, and
--- the read keeps a link only while its record is published. Forward-only and
--- additive. This migration carries structure only: the rows arrive through
--- scripts/import-timeline.mjs with the migration role.
+-- home-timeline-v1 (Issue #384): the rows of the Home timeline. Most rows have
+-- no Catalog record; catalog_id is a soft link to a Catalog id on the published
+-- read connection, so there is no foreign key, and the read keeps a link only
+-- while its record is published. Forward-only and additive. This migration
+-- carries structure only: the rows arrive through scripts/import-timeline.mjs
+-- with the migration role, and afterwards change only through the Backend's
+-- operator routes (Owner and AI, Issue #384 r3), which the import then guards.
 --
 -- Deploy order: apply this migration, re-apply the named runtime grants
 -- (grant-runtime.sql), run the import, then start the release. The previous
 -- release starts with this applied: it reads no new relation.
 --
--- The import validates each row against packages/contracts; that is the guard
--- for the response schema of GET /v1/community/timeline. These checks repeat its
--- shape as a coarser backstop: they count code points and trim spaces only.
+-- Every writer validates each row and the whole set against packages/contracts;
+-- that is the guard for the response schema of GET /v1/community/timeline.
+-- These checks repeat its shape as a coarser backstop: they count code points
+-- and trim spaces only.
+--
+-- version, hidden_at and the actor columns serve the operator routes: a write
+-- names the version it read, a hidden row leaves the public read, and created_by
+-- / updated_by hold 'import' or the operator label the Backend passes ('owner'
+-- or 'ai-admin'). A new label needs a migration.
 CREATE TABLE community.timeline_entries (
   entry_id text PRIMARY KEY,
   title text NOT NULL,
@@ -30,6 +37,12 @@ CREATE TABLE community.timeline_entries (
   holder text,
   catalog_id text,
   position integer NOT NULL,
+  version integer NOT NULL DEFAULT 1,
+  hidden_at timestamptz,
+  created_by text NOT NULL DEFAULT 'import',
+  updated_by text NOT NULL DEFAULT 'import',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT timeline_entries_id_valid CHECK (entry_id ~ '^[a-z0-9-]{1,64}$'),
   CONSTRAINT timeline_entries_title_bounded CHECK (
     char_length(title) BETWEEN 1 AND 200 AND title = btrim(title)
@@ -69,6 +82,11 @@ CREATE TABLE community.timeline_entries (
   ),
   CONSTRAINT timeline_entries_position_bounded CHECK (
     position BETWEEN 0 AND 2000000000
+  ),
+  CONSTRAINT timeline_entries_version_valid CHECK (version >= 1),
+  CONSTRAINT timeline_entries_actors_valid CHECK (
+    created_by IN ('import', 'owner', 'ai-admin')
+    AND updated_by IN ('import', 'owner', 'ai-admin')
   )
 );
 

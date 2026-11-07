@@ -32,6 +32,7 @@ import {
   PostgresCommunityReportingAdapter,
   PostgresPublishingOperatorAdapter,
   PostgresThreadAdapter,
+  PostgresTimelineOperatorAdapter,
   runCommunityMigrations,
 } from "@moya/community-postgres";
 import { AI_OPERATOR_REQUEST_ID_HEADER } from "@moya/contracts/internal/admin-mcp";
@@ -169,6 +170,30 @@ const workReport = async (work: string, reporter: string) =>
     })
   ).id;
 
+/** A new timeline row's command (home-timeline-v1), each in a start year of its own. */
+let timelineYear = 1400;
+const newTimelineEntry = () => {
+  timelineYear += 1;
+  return {
+    requestId: randomUUID(),
+    id: `writes-${run}-${timelineYear}`,
+    title: `合成${timelineYear}`,
+    fullTitle: `合成朝合成${timelineYear}`,
+    startYear: timelineYear,
+    endYear: timelineYear,
+    precision: "year",
+    onAxis: true,
+    chapter: "明",
+  };
+};
+const timelineEvents = async (id: string) =>
+  (
+    await setup.query(
+      "SELECT operator_label,action FROM community.content_operator_events WHERE content_type='timeline_entry' AND content_id=$1 ORDER BY occurred_at",
+      [id],
+    )
+  ).rows;
+
 beforeAll(async () => {
   const probe = await admin.query(guard.disposableTestTargetProbeSql);
   guard.assertDisposableTestTarget(
@@ -214,6 +239,7 @@ beforeAll(async () => {
       publishingOperatorPort: new PostgresPublishingOperatorAdapter(app),
       articlePublicationOperatorPort: new PostgresArticleAuthoringAdapter(app),
       threadPort: new PostgresThreadAdapter(app),
+      timelineOperatorPort: new PostgresTimelineOperatorAdapter(app),
       aiOperatorReader: reader,
       communityOperatorCredential: ownerToken,
       operatorAiCommunityCredential: communityToken,
@@ -518,6 +544,141 @@ describe("what only ai-admin is told of a write", () => {
     ).toMatchObject({ status: 409, code: "STATE_CONFLICT" });
   });
 
+  it("marks a timeline replay for AI alone, and the Owner's chosen id replays unmarked", async () => {
+    const command = newTimelineEntry();
+    const first = await send(
+      communityToken,
+      "POST",
+      "timeline-entries",
+      command,
+    );
+    expect(first.status).toBe(200);
+    expect(first.json).toMatchObject({
+      id: command.id,
+      version: 1,
+      createdBy: AI,
+      updatedBy: AI,
+    });
+    expect(first.json).not.toHaveProperty("replayed");
+    const replay = await send(
+      communityToken,
+      "POST",
+      "timeline-entries",
+      command,
+    );
+    expect(replay.json).toEqual({ ...first.json, replayed: true });
+    const route = `timeline-entries/${command.id}`;
+    const update = {
+      requestId: randomUUID(),
+      expectedVersion: 1,
+      hidden: true,
+    };
+    const updated = await send(communityToken, "POST", route, update);
+    expect(updated.json).toMatchObject({ version: 2, hidden: true });
+    expect((await send(communityToken, "POST", route, update)).json).toEqual({
+      ...updated.json,
+      replayed: true,
+    });
+    const reorder = {
+      requestId: randomUUID(),
+      startYear: command.startYear,
+      entries: [{ id: command.id, expectedVersion: 2 }],
+    };
+    const ordered = await send(
+      communityToken,
+      "POST",
+      "timeline-order",
+      reorder,
+    );
+    expect(ordered.json).toEqual({ startYear: command.startYear, count: 1 });
+    expect(
+      (await send(communityToken, "POST", "timeline-order", reorder)).json,
+    ).toEqual({ ...ordered.json, replayed: true });
+    const { rows } = await setup.query(
+      "SELECT result FROM community.content_operator_receipts WHERE operator_label=$1 AND request_id=ANY($2::uuid[])",
+      [AI, [command.requestId, update.requestId, reorder.requestId]],
+    );
+    expect(rows).toHaveLength(3);
+    for (const { result } of rows)
+      expect(result).not.toHaveProperty("replayed");
+    expect(await timelineEvents(command.id)).toEqual([
+      { operator_label: AI, action: "timeline.create" },
+      { operator_label: AI, action: "timeline.update" },
+    ]);
+
+    // The id is the Owner's choice too, so a retry meets its own receipt.
+    const owners = newTimelineEntry();
+    const once = await send(ownerToken, "POST", "timeline-entries", owners);
+    const twice = await send(ownerToken, "POST", "timeline-entries", owners);
+    expect(once.json).toMatchObject({ createdBy: "owner" });
+    expect(twice.json).toEqual(once.json);
+    expect(await timelineEvents(owners.id)).toHaveLength(1);
+  });
+
+  it("passes a timeline refusal's code to the Owner and AI alike, and writes nothing", async () => {
+    const command = newTimelineEntry();
+    expect(
+      (await send(ownerToken, "POST", "timeline-entries", command)).status,
+    ).toBe(200);
+    for (const token of [ownerToken, communityToken])
+      expect(
+        await send(token, "POST", "timeline-entries", {
+          ...command,
+          requestId: randomUUID(),
+        }),
+      ).toMatchObject({ status: 422, code: "ENTRY_EXISTS" });
+    const route = `timeline-entries/${command.id}`;
+    for (const [body, status, code] of [
+      [
+        {
+          requestId: randomUUID(),
+          expectedVersion: 1,
+          endYear: command.startYear - 1,
+        },
+        422,
+        "ENTRY_INVALID",
+      ],
+      [
+        { requestId: randomUUID(), expectedVersion: 7, hidden: true },
+        409,
+        "STATE_CONFLICT",
+      ],
+      [{ requestId: randomUUID(), expectedVersion: 1 }, 400, "INVALID_COMMAND"],
+    ] as const)
+      expect(await send(communityToken, "POST", route, body)).toMatchObject({
+        status,
+        code,
+      });
+    expect(
+      await send(
+        communityToken,
+        "POST",
+        `timeline-entries/writes-${run}-none`,
+        {
+          requestId: randomUUID(),
+          expectedVersion: 1,
+          hidden: true,
+        },
+      ),
+    ).toMatchObject({ status: 404, code: "NOT_FOUND" });
+    expect(
+      await send(communityToken, "POST", "timeline-order", {
+        requestId: randomUUID(),
+        startYear: command.startYear,
+        entries: [
+          { id: command.id, expectedVersion: 1 },
+          { id: `writes-${run}-none`, expectedVersion: 1 },
+        ],
+      }),
+    ).toMatchObject({ status: 422, code: "SET_CHANGED" });
+    const { rows } = await setup.query(
+      "SELECT version,updated_by FROM community.timeline_entries WHERE entry_id=$1",
+      [command.id],
+    );
+    expect(rows).toEqual([{ version: 1, updated_by: "owner" }]);
+    expect(await timelineEvents(command.id)).toHaveLength(1);
+  });
+
   it("answers concurrent repeats of one key with one effect", async () => {
     const user = await newUser();
     const header = { [AI_OPERATOR_REQUEST_ID_HEADER]: randomUUID() };
@@ -536,6 +697,24 @@ describe("what only ai-admin is told of a write", () => {
       [user],
     );
     expect(rows).toHaveLength(1);
+
+    // A timeline row under one key: one row, one event, one receipt.
+    const command = newTimelineEntry();
+    const created = await Promise.all(
+      [0, 1, 2].map(() =>
+        send(communityToken, "POST", "timeline-entries", command),
+      ),
+    );
+    expect(created.map(({ status }) => status)).toEqual([200, 200, 200]);
+    expect(created.filter(({ json }) => json.replayed !== true)).toHaveLength(
+      1,
+    );
+    expect(await timelineEvents(command.id)).toHaveLength(1);
+    const { rows: receipts } = await setup.query(
+      "SELECT 1 FROM community.content_operator_receipts WHERE request_id=$1",
+      [command.requestId],
+    );
+    expect(receipts).toHaveLength(1);
   });
 
   it("repeats nothing of the Owner's create-thread: the same key on it is a conflict, and one row", async () => {
@@ -595,6 +774,34 @@ describe("what only ai-admin is told of a write", () => {
         title: "Another title",
       }),
     ).toMatchObject({ status: 409, code: "IDEMPOTENCY_CONFLICT" });
+    // The timeline's receipts share that key space: another command, or another route.
+    const entry = newTimelineEntry();
+    expect(
+      (await send(communityToken, "POST", "timeline-entries", entry)).status,
+    ).toBe(200);
+    for (const [route, body] of [
+      ["timeline-entries", { ...entry, title: "合成改题" }],
+      [
+        `timeline-entries/${entry.id}`,
+        { requestId: entry.requestId, expectedVersion: 1, hidden: true },
+      ],
+      [
+        "timeline-order",
+        {
+          requestId: entry.requestId,
+          startYear: entry.startYear,
+          entries: [{ id: entry.id, expectedVersion: 1 }],
+        },
+      ],
+      [
+        "timeline-entries",
+        { ...newTimelineEntry(), requestId: thread.requestId },
+      ],
+    ] as const)
+      expect(
+        await send(communityToken, "POST", route, body),
+        route,
+      ).toMatchObject({ status: 409, code: "IDEMPOTENCY_CONFLICT" });
     const job = opaque("publishing-job");
     await setup.query(
       "INSERT INTO community.publishing_jobs(id,kind,subject_id,state,run_after) VALUES($1,'publish_media',$2,'failed',CURRENT_TIMESTAMP)",
@@ -631,6 +838,7 @@ describe("how long an AI write can wait", () => {
     const comments = new PostgresCommunityCommentAdapter(pool);
     const content = new PostgresCommunityContentOperatorAdapter(pool);
     const threads = new PostgresThreadAdapter(pool);
+    const timeline = new PostgresTimelineOperatorAdapter(pool);
     const publishing = new PostgresPublishingOperatorAdapter(pool);
     const { rows: settings } = await setup.query(
       "SELECT policy FROM community.publication_setting",
@@ -656,6 +864,7 @@ describe("how long an AI write can wait", () => {
       owner: await newWork(await newUser()),
     };
     const accounts = { [AI]: account, owner: await newUser() };
+    const entries = { [AI]: newTimelineEntry(), owner: newTimelineEntry() };
     const writes = async (operator: typeof AI | "owner") => ({
       mutate: content.moderateWork(works[operator], operator, {
         requestId: randomUUID(),
@@ -679,6 +888,19 @@ describe("how long an AI write can wait", () => {
         description: "",
         tags: [],
         position: 0,
+      }),
+      timeline: timeline.operatorCreateTimelineEntry(operator, {
+        ...entries[operator],
+        dateLabel: null,
+        polity: null,
+        disputed: false,
+        groupId: null,
+        groupTitle: null,
+        province: null,
+        holder: null,
+        catalogId: null,
+        precision: "year",
+        chapter: "明",
       }),
       userStatus: identity.setUserStatus(
         user as never,
@@ -767,9 +989,14 @@ describe("how long an AI write can wait", () => {
     // Nothing of AI's stayed: each transaction rolled back.
     const { rows: labels } = await setup.query(
       "SELECT operator_label FROM community.content_operator_events WHERE operator_label=$1 AND content_id=ANY($2)",
-      [AI, [works[AI], accounts[AI]]],
+      [AI, [works[AI], accounts[AI], entries[AI].id]],
     );
     expect(labels).toEqual([]);
+    const { rows: timelineRows } = await setup.query(
+      "SELECT entry_id FROM community.timeline_entries WHERE entry_id=ANY($1)",
+      [[entries[AI].id, entries.owner.id]],
+    );
+    expect(timelineRows).toEqual([{ entry_id: entries.owner.id }]);
   }, 40_000);
 });
 

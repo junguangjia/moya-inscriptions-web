@@ -1,6 +1,8 @@
 import {
   AuthorCommunityService,
   CatalogQueryUnavailableError,
+  CommunityInputError,
+  CommunityNamedConflictError,
   CommunityNotFoundError,
 } from "@moya/api";
 import {
@@ -9,7 +11,11 @@ import {
   startServer,
   stopServer,
 } from "@moya/backend-runtime";
-import { PostgresCommunityDiscoveryAdapter } from "@moya/community-postgres";
+import {
+  PostgresCommunityDiscoveryAdapter,
+  PostgresTimelineOperatorAdapter,
+} from "@moya/community-postgres";
+import { createTimelineEntryCommandSchema } from "@moya/contracts/internal/community-operator";
 import {
   TIMELINE_ENTRIES_MAXIMUM,
   apiErrorSchema,
@@ -127,7 +133,9 @@ describe("timeline discovery adapter", () => {
     const read = app.statements.find((text) =>
       text.includes("community.timeline_entries"),
     )!;
-    expect(read).toMatch(/ORDER BY start_year,position,entry_id LIMIT \$1/u);
+    expect(read).toMatch(
+      /WHERE hidden_at IS NULL ORDER BY start_year,position,entry_id LIMIT \$1/u,
+    );
     expect(app.statements).toContain(
       "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
     );
@@ -540,5 +548,62 @@ describe("GET /v1/community/timeline", () => {
     });
     expect(response.status).toBeGreaterThanOrEqual(400);
     expect(timeline).not.toHaveBeenCalled();
+  });
+});
+
+// Issue #384 r3: the operator adapter's backstops for a writer outside the
+// shared lock; its writes themselves run in the PostgreSQL suite.
+describe("timeline operator adapter backstops", () => {
+  const command = createTimelineEntryCommandSchema.parse({
+    requestId: "8f6f2b0e-3c1d-4f7a-9b2e-5d4c3b2a1f00",
+    id: "fictional",
+    title: "虚构碑",
+    fullTitle: "虚构朝虚构碑",
+    startYear: 618,
+    endYear: 618,
+    precision: "year",
+    onAxis: true,
+    chapter: "唐",
+  });
+  const insertFailing = (error: object) =>
+    fakePool((text) => {
+      if (text.startsWith("INSERT INTO community.timeline_entries"))
+        throw Object.assign(new Error("driver error"), error);
+      return [];
+    });
+
+  it.each([
+    ["timeline_entries_pkey", "ENTRY_EXISTS"],
+    ["timeline_entries_catalog_id_unique", "CATALOG_ALREADY_LINKED"],
+  ])("names a unique violation of %s as %s", async (constraint, refusal) => {
+    const { pool, statements, release } = insertFailing({
+      code: "23505",
+      constraint,
+    });
+    const error = await new PostgresTimelineOperatorAdapter(pool)
+      .operatorCreateTimelineEntry("owner", command)
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(CommunityNamedConflictError);
+    expect(error).toMatchObject({ refusal });
+    expect(statements.at(-1)).toBe("ROLLBACK");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("reads text PostgreSQL refuses as invalid input, and passes other errors on", async () => {
+    await expect(
+      new PostgresTimelineOperatorAdapter(
+        insertFailing({ code: "22021" }).pool,
+      ).operatorCreateTimelineEntry("owner", command),
+    ).rejects.toBeInstanceOf(CommunityInputError);
+    const other = await new PostgresTimelineOperatorAdapter(
+      insertFailing({
+        code: "23514",
+        constraint: "timeline_entries_years_valid",
+      }).pool,
+    )
+      .operatorCreateTimelineEntry("owner", command)
+      .catch((caught: unknown) => caught);
+    expect(other).not.toBeInstanceOf(CommunityNamedConflictError);
+    expect(other).toMatchObject({ code: "23514" });
   });
 });
