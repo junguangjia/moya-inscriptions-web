@@ -978,7 +978,7 @@ test("a swipe on Home body text or a profile reading card pages tabs, not Detail
     await expect(post.locator("[data-feed-post-body]")).toHaveText(HOME.text);
     await expect(home).toHaveAttribute("data-active-home-feed", "discover");
     await swipeOn(post.locator("[data-feed-post-body-open]"));
-    await expect(home).toHaveAttribute("data-active-home-feed", "nearby");
+    await expect(home).toHaveAttribute("data-active-home-feed", "timeline");
     await phone.page.waitForTimeout(CLICK_GUARD_MS);
     await expect(phone.shell).toHaveAttribute("data-detail-open", "false");
 

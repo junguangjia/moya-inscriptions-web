@@ -68,6 +68,7 @@ import type {
   DirectMessageService,
   PublishingOperatorService,
   ThreadService,
+  TimelineOperatorService,
   FeedbackService,
   WorkPublishingService,
 } from "@moya/api";
@@ -119,6 +120,8 @@ export interface CommunityRouterDependencies {
   readonly discussionPort?: DiscussionPort | undefined;
   /** Operator-managed Thread routes. */
   readonly threadService?: ThreadService | undefined;
+  /** Operator-managed Home timeline rows (home-timeline-v1). */
+  readonly timelineService?: TimelineOperatorService | undefined;
   readonly feedbackService?: FeedbackService | undefined;
   /** Owner-only direct-message moderation routes. */
   readonly directMessageService?: DirectMessageService | undefined;
@@ -554,6 +557,7 @@ export const createRouter =
           publishingOperatorService: community?.publishingOperatorService,
           agentAdministrationService: community?.agentAdministrationService,
           threadService: community?.threadService,
+          timelineService: community?.timelineService,
           feedbackService: community?.feedbackService,
           directMessageService: community?.directMessageService,
           operatorCredential: community?.operatorCredential ?? "",

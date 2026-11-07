@@ -173,6 +173,7 @@ const protectedReads = [
   `/v1/catalog/${publishedCatalogId}/comments`,
   `/v1/community/content/catalog/${publishedCatalogId}/state`,
   "/v1/community/discover",
+  "/v1/community/timeline",
   "/v1/community/authors/user-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f01",
   "/v1/community/works/work-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f01",
   "/v1/community/media/user-media-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f01",

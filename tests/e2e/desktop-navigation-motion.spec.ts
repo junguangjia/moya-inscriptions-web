@@ -73,7 +73,7 @@ test("secondary rail respects reduced motion and vertical keyboard selection", a
   const first = rail.getByRole("tab", { name: "发现", exact: true });
   await first.focus();
   await first.press("ArrowDown");
-  const next = rail.getByRole("tab", { name: "附近", exact: true });
+  const next = rail.getByRole("tab", { name: "时间轴", exact: true });
   await expect(next).toBeFocused();
   await expect(next).toHaveAttribute("data-label-expanded", "true");
   await expect(next.locator("[data-tab-label-slot]")).toHaveCSS(
@@ -181,8 +181,8 @@ test("long and short menu destinations keep one desktop frame and stable gallery
       .locator('[data-home-feed-panel="calligraphy"] [data-desktop-feed-item]')
       .first();
     const cardBefore = await card.boundingBox();
-    await tabs.filter({ hasText: "附近" }).click();
-    await expect(home).toHaveAttribute("data-active-home-feed", "nearby");
+    await tabs.filter({ hasText: "时间轴" }).click();
+    await expect(home).toHaveAttribute("data-active-home-feed", "timeline");
     expect(await read()).toEqual(before);
     await tabs.filter({ hasText: "书帖" }).click();
     await expect(home).toHaveAttribute("data-active-home-feed", "calligraphy");

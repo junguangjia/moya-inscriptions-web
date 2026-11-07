@@ -132,7 +132,7 @@
 .viewport[data-orientation="vertical"]
   .tab[data-label-expanded="true"]
   .labelSlot {
-  max-height: 3em;
+  max-height: 3.5em;
   opacity: 1;
   transform: translateY(0);
 }
@@ -141,7 +141,63 @@
   opacity: 1;
 }
 .viewport[data-orientation="vertical"] .icon {
+  --top-tab-activation: 1;
   transform: none;
+}
+/* The vertical rail shows whole icons; a timeline icon builds once when the
+   selection moves to it, never on load or hover. */
+@keyframes timelineIconDraw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes timelineIconNode {
+  from {
+    transform: scale(0);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .viewport[data-orientation="vertical"]
+    .tab[data-selection-moved]
+    [data-timeline-part="axis"] {
+    animation: timelineIconDraw 112ms linear 28ms both;
+  }
+  .viewport[data-orientation="vertical"]
+    .tab[data-selection-moved]
+    [data-timeline-part="branch-1"] {
+    animation: timelineIconDraw 56ms linear 98ms both;
+  }
+  .viewport[data-orientation="vertical"]
+    .tab[data-selection-moved]
+    [data-timeline-part="node-1"] {
+    animation: timelineIconNode 42ms ease-out 140ms both;
+  }
+  .viewport[data-orientation="vertical"]
+    .tab[data-selection-moved]
+    [data-timeline-part="branch-2"] {
+    animation: timelineIconDraw 56ms linear 140ms both;
+  }
+  .viewport[data-orientation="vertical"]
+    .tab[data-selection-moved]
+    [data-timeline-part="node-2"] {
+    animation: timelineIconNode 42ms ease-out 182ms both;
+  }
+  .viewport[data-orientation="vertical"]
+    .tab[data-selection-moved]
+    [data-timeline-part="branch-3"] {
+    animation: timelineIconDraw 56ms linear 182ms both;
+  }
+  .viewport[data-orientation="vertical"]
+    .tab[data-selection-moved]
+    [data-timeline-part="node-3"] {
+    animation: timelineIconNode 56ms ease-out 224ms both;
+  }
 }
 .viewport[data-orientation="vertical"] .indicator {
   display: none;

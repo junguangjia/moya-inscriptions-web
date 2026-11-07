@@ -110,6 +110,7 @@ export interface T02pProductPreviewProps {
   ) => ReactNode;
   readonly renderDiscover?: (active: boolean) => ReactNode;
   readonly renderInscriptions?: (active: boolean) => ReactNode;
+  readonly renderTimeline?: (active: boolean) => ReactNode;
   readonly userPage?: ReactNode;
   readonly catalogDetailLoader?: CatalogDetailPresentationLoader;
   readonly developmentPlatformOverride?: PresentationPlatform | null;
@@ -145,6 +146,7 @@ export const T02pProductPreview = ({
   renderDetailActions,
   renderDiscover,
   renderInscriptions,
+  renderTimeline,
   userPage,
   developmentPlatformOverride = null,
   initialPlatform,
@@ -197,6 +199,7 @@ export const T02pProductPreview = ({
                 headerStart={headerStart}
                 headerEnd={headerEnd}
                 {...(renderDiscover ? { renderDiscover } : {})}
+                {...(renderTimeline ? { renderTimeline } : {})}
                 renderInscriptions={
                   renderInscriptions ??
                   (() => <PreviewBrowse state={states.inscriptions} />)

@@ -37,11 +37,13 @@ export {
   CommunityConflictError,
   ExecutionFenceLostError,
   CommunityIdempotencyConflictError,
+  CommunityNamedConflictError,
   CommunityNotFoundError,
   CommunityReadTimedOutError,
   isCommunityConflictError,
   isExecutionFenceLostError,
   isCommunityIdempotencyConflictError,
+  isCommunityNamedConflictError,
   isCommunityInputError,
   isCommunityNotFoundError,
   isCommunityReadTimedOutError,
@@ -201,6 +203,7 @@ export type {
   DiscoveryCardMediaRecord,
   DiscoveryCardRecord,
   DiscoveryPageRecord,
+  TimelineRecord,
 } from "./modules/community/application/ports/community-discovery-port.js";
 export type { CommunityContentOperatorPort } from "./modules/community/application/ports/community-content-operator-port.js";
 export type {
@@ -400,6 +403,9 @@ export type {
 // content-community-completion-v1: Threads over Works.
 export { ThreadService } from "./modules/community/application/services/thread-service.js";
 export type { ThreadPort } from "./modules/community/application/ports/thread-port.js";
+// home-timeline-v1 (Issue #384 r3): operator-managed Home timeline rows.
+export { TimelineOperatorService } from "./modules/community/application/services/timeline-operator-service.js";
+export type { TimelineOperatorPort } from "./modules/community/application/ports/timeline-operator-port.js";
 // content-community-completion-v1: direct messages.
 export { DirectMessageService } from "./modules/community/application/services/direct-message-service.js";
 export type {

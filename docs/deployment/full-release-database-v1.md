@@ -226,6 +226,45 @@ purge_completed_at) on `account_deletions`; `public_users` keeps no DELETE.
 Apply the migration, re-apply the runtime grants, then start the new builds (see
 [`docs/community/account-deletion-v1.md`](../community/account-deletion-v1.md)).
 
+The Home timeline (`home-timeline-v1`, Issue #384 r3, community migration
+`20261105235900`) adds the table `community.timeline_entries`. Besides the entry
+columns it holds `version` (at least 1), `hidden_at`, `created_by` and
+`updated_by`, and `created_at` and `updated_at`. The named check
+`timeline_entries_actors_valid` allows only `import`, `owner` and `ai-admin` as
+writers, so a new operator label needs a migration. The Backend's operator
+routes create and edit rows for the Owner and the AI
+([`docs/development/home-timeline-v1.md`](../development/home-timeline-v1.md)).
+
+`grant-runtime.sql` gives the App role, inside the block that skips an earlier
+phase without the table: `SELECT`; `INSERT` on the columns a new row names (the
+entry fields, `created_by` and `updated_by`), so `version`, `hidden_at`,
+`created_at` and `updated_at` come from their defaults; `UPDATE` on every column
+except `entry_id`, `created_by` and `created_at`; no `DELETE` or `TRUNCATE`. It
+first revokes any table-level `INSERT` or `UPDATE`, so a re-run converges on the
+column grants. The App role is shared with the operator bridge and the worker,
+so they could write these columns too. Writes also use the App role's existing
+grants on `content_operator_events` and `content_operator_receipts`. The design
+doc gives a read-only preflight for these grants; run it after the grants and
+before the AI credential is relied on.
+
+Rows are not migration data. The first set arrives from a private file,
+validated against `timelineImportFileSchema` and the whole-set check
+`checkTimelineEntrySet`, through `scripts/import-timeline.mjs` with the
+migration role (`APP_MIGRATION_DATABASE_URL`). Build `@moya/contracts` and
+`@moya/catalog-postgres` first, then run
+`node scripts/import-timeline.mjs --file <absolute path>`, a dry run that opens
+no connection and prints counts only, and add `--apply` once those counts are
+approved. `--apply` takes the shared content-operator lock, refuses when the
+ledger lacks the migration, and replaces every row in one transaction, so it can
+run again. Once an operator has created, edited or hidden a row, it refuses with
+counts only, unless `--replace-operator-edits` is also given, which discards
+those edits. Each apply records one `content_operator_events` row with label
+`import`, action `timeline.import` and counts only. An id it replaces comes back
+one version past the row it replaces, so a version read before the import never
+matches after it; a new id starts at version 1. The order is: apply the
+migration, re-apply the runtime grants, import, then start the new builds. With
+an empty table the feed reads as unavailable.
+
 ## Readiness and verification
 
 Community startup validates every required ledger filename/checksum read-only;

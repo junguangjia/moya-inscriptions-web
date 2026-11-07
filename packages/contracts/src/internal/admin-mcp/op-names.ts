@@ -81,6 +81,11 @@ export const ADMIN_OP_NAMES = [
   "community.read-publishing-jobs",
   "community.retry-publishing-job",
   "community.abandon-publishing-job",
+  "community.read-timeline",
+  "community.read-timeline-summary",
+  "community.create-timeline-entry",
+  "community.update-timeline-entry",
+  "community.reorder-timeline",
   // editorial/endpoints.ts, every route.
   "editorial.owner-drafts",
   "editorial.owner-history",

@@ -135,7 +135,7 @@ const states: T02pDevelopmentCatalogDestinationStates = {
   },
   home: {
     discover: { state: "empty" },
-    nearby: { state: "empty" },
+    timeline: { state: "empty" },
     topics: { state: "empty" },
   },
 };

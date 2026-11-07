@@ -21,7 +21,7 @@ const elementScrollToDescriptor = Object.getOwnPropertyDescriptor(
 );
 const emptyHome: HomeSurfaceData = {
   discover: { state: "empty" },
-  nearby: { state: "empty" },
+  timeline: { state: "empty" },
   topics: { state: "empty" },
 };
 
@@ -124,7 +124,7 @@ describe("HomeScreen integration", () => {
         return (
           Math.max(
             0,
-            ["discover", "nearby", "inscriptions", "calligraphy"].indexOf(
+            ["discover", "timeline", "inscriptions", "calligraphy"].indexOf(
               feed ?? "",
             ),
           ) * 390
@@ -165,7 +165,7 @@ describe("HomeScreen integration", () => {
 
     expect(tabs.map(({ textContent }) => textContent)).toEqual([
       "发现",
-      "附近",
+      "时间轴",
       "碑刻",
       "书帖",
     ]);
@@ -205,8 +205,8 @@ describe("HomeScreen integration", () => {
       discover: container.querySelector<HTMLElement>(
         '[data-home-feed-panel="discover"]',
       )!,
-      nearby: container.querySelector<HTMLElement>(
-        '[data-home-feed-panel="nearby"]',
+      timeline: container.querySelector<HTMLElement>(
+        '[data-home-feed-panel="timeline"]',
       )!,
       inscriptions: container.querySelector<HTMLElement>(
         '[data-home-feed-panel="inscriptions"]',
@@ -228,11 +228,11 @@ describe("HomeScreen integration", () => {
     }
 
     panels.discover.scrollTop = 137;
-    act(() => feedTab(container, "nearby").click());
+    act(() => feedTab(container, "timeline").click());
     await act(async () => vi.runAllTimers());
     expect(home.scrollTop).toBe(0);
-    expect(panels.nearby.scrollTop).toBe(0);
-    panels.nearby.scrollTop = 88;
+    expect(panels.timeline.scrollTop).toBe(0);
+    panels.timeline.scrollTop = 88;
     act(() => feedTab(container, "calligraphy").click());
     await act(async () => vi.runAllTimers());
     panels.calligraphy.scrollTop = 44;
@@ -243,9 +243,9 @@ describe("HomeScreen integration", () => {
     act(() => feedTab(container, "discover").click());
     await act(async () => vi.runAllTimers());
     expect(panels.discover.scrollTop).toBe(137);
-    act(() => feedTab(container, "nearby").click());
+    act(() => feedTab(container, "timeline").click());
     await act(async () => vi.runAllTimers());
-    expect(panels.nearby.scrollTop).toBe(88);
+    expect(panels.timeline.scrollTop).toBe(88);
     act(() => feedTab(container, "inscriptions").click());
     await act(async () => vi.runAllTimers());
     expect(panels.inscriptions.scrollTop).toBe(212);
@@ -266,7 +266,7 @@ describe("HomeScreen integration", () => {
       ),
     ).toEqual({
       discover: true,
-      nearby: true,
+      timeline: true,
       inscriptions: true,
       calligraphy: true,
     });
@@ -308,7 +308,7 @@ describe("HomeScreen integration", () => {
     scrollTo.mockClear();
 
     documentScroller.scrollTop = 137;
-    act(() => feedTab(container, "nearby").click());
+    act(() => feedTab(container, "timeline").click());
     await act(async () => vi.runAllTimers());
     expect(scrollTo).toHaveBeenLastCalledWith({ behavior: "auto", top: 0 });
 

@@ -90,7 +90,7 @@ describe("Production Product states", () => {
           items: discover.page.items,
           state: "populated",
         },
-        nearby: { state: "unavailable" },
+        timeline: { state: "loading" },
         topics: { state: "unavailable" },
       },
       inscriptions,
@@ -126,7 +126,7 @@ describe("Production Product states", () => {
       },
       home: {
         discover: { state: "unavailable" },
-        nearby: { state: "unavailable" },
+        timeline: { state: "loading" },
         topics: { state: "unavailable" },
       },
       inscriptions,

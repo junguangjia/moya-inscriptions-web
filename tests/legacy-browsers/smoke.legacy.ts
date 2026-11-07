@@ -88,7 +88,7 @@ test("switches the four home tabs", async ({ page }) => {
   await enter(page);
   const home = shell(page).locator("[data-home-surface]");
   for (const [name, feed] of [
-    ["附近", "nearby"],
+    ["时间轴", "timeline"],
     ["碑刻", "inscriptions"],
     ["书帖", "calligraphy"],
     ["发现", "discover"],

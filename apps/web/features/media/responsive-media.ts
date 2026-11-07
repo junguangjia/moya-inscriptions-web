@@ -378,7 +378,7 @@ export const coverFitFactor = (media: MediaSize): number =>
 
 export const MEDIA_SIZES = {
   /**
-   * Catalog, work and nearby feed cards (home-screen.module.css .feedMedia);
+   * Catalog and work feed cards (home-screen.module.css .feedMedia);
    * a work cover the author keeps whole draws narrower than its box, so the
    * box width stays an upper bound.
    */
@@ -409,6 +409,23 @@ export const MEDIA_SIZES = {
         ["(min-width: 768px)", box(112, 120)],
       ],
       box(88, 104),
+    );
+  },
+  /**
+   * Home timeline row image (timeline.module.css .media): a box covered by the
+   * image. Phone fills the content column (100vw - 122px) at 3:2 or 3:4;
+   * tablet and wider are 360×240 or 180×240. As with feed cards, the factor is
+   * bounded at 2 so a panorama does not pull the anchor for a thumbnail.
+   */
+  timelineRow: (media: MediaSize): string => {
+    const aspect = aspectOf(media);
+    const portrait = aspect < 1;
+    const cover = (heightPerWidth: number) =>
+      Math.min(2, Math.max(1, heightPerWidth * aspect));
+    const tablet = portrait ? 180 : 360;
+    return sizesOf(
+      [["(min-width: 768px)", px(tablet * cover(240 / tablet))]],
+      linear(scale({ vw: 100, px: -122 }, cover((portrait ? 357 : 179) / 268))),
     );
   },
   /**

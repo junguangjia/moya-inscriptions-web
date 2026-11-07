@@ -2,15 +2,24 @@ import { asCommunityOperationError } from "./availability.js";
 import { effectiveFeatured } from "./featured-content.js";
 import { randomUUID } from "node:crypto";
 import { CommunityNotFoundError, CommunityConflictError } from "@moya/api";
-import type { CommunityDiscoveryPort, DiscoveryCardRecord } from "@moya/api";
+import type {
+  CommunityDiscoveryPort,
+  DiscoveryCardRecord,
+  TimelineRecord,
+} from "@moya/api";
 import type {
   AuthorListQuery,
+  CatalogId,
   ContentIdentity,
   DiscoveryQuery,
   InscriptionFilterOptions,
   MediaId,
+  TimelineEntry,
 } from "@moya/contracts";
-import { CARD_GALLERY_MAXIMUM } from "@moya/contracts/schemas";
+import {
+  CARD_GALLERY_MAXIMUM,
+  TIMELINE_ENTRIES_MAXIMUM,
+} from "@moya/contracts/schemas";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
 import { visibleDiscussionCountSql } from "./discussion-visibility.js";
@@ -40,6 +49,9 @@ import type { RevisionCoverColumns } from "./publishing/media-read.js";
  * work's author, who sees the author revision (P07: the latest own
  * submission, never a pending label).
  */
+const eligibleCatalog = `
+ SELECT 'catalog'::text AS content_type,c.catalog_id AS content_id,c.kind,c.title,c.aliases,c.first_published_at,NULL::text AS author_id,c.filter_metadata
+ FROM catalog_discovery c`;
 /**
  * The two eligible branches. `item` narrows each branch to one materialized
  * sequence item (`s.content_type`, `s.content_id`) so a page read can be driven
@@ -47,9 +59,10 @@ import type { RevisionCoverColumns } from "./publishing/media-read.js";
  * predicates are otherwise identical, so membership and live eligibility have
  * one definition.
  */
-const eligibleBranches = (authorBranch: boolean, item = false) => `
- SELECT 'catalog'::text AS content_type,c.catalog_id AS content_id,c.kind,c.title,c.aliases,c.first_published_at,NULL::text AS author_id,c.filter_metadata
- FROM catalog_discovery c${item ? " WHERE s.content_type='catalog' AND c.catalog_id=s.content_id" : ""}
+const eligibleBranches = (
+  authorBranch: boolean,
+  item = false,
+) => `${eligibleCatalog}${item ? " WHERE s.content_type='catalog' AND c.catalog_id=s.content_id" : ""}
  UNION ALL
  SELECT 'work',w.id,NULL,COALESCE(ar.title,w.title),ARRAY[]::varchar[],w.first_published_at,w.author_id,'{}'::jsonb FROM community.works w
  JOIN community.public_users u ON u.id=w.author_id
@@ -104,6 +117,24 @@ interface CatalogCardMediaRow extends QueryResultRow {
   renditions: unknown;
   placeholder_color: unknown;
 }
+interface TimelineRow extends QueryResultRow {
+  entry_id: string;
+  title: string;
+  full_title: string;
+  start_year: number;
+  end_year: number;
+  precision: TimelineEntry["precision"];
+  date_label: string | null;
+  on_axis: boolean;
+  chapter: TimelineEntry["chapter"];
+  polity: string | null;
+  disputed: boolean;
+  group_id: string | null;
+  group_title: string | null;
+  province: string | null;
+  holder: string | null;
+  catalog_id: string | null;
+}
 const emptyFilters = {
   dynasty: [],
   textAuthor: [],
@@ -125,7 +156,9 @@ export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort
   private async run<T>(
     write: boolean,
     fn: (db: PoolClient) => Promise<T>,
-    scope: "catalog" | "app" = "catalog",
+    // "linked" reads only exact Catalog rows and joins nothing across the two
+    // connections, so it skips the complete discovery source and its bound.
+    scope: "catalog" | "linked" | "app" = "catalog",
   ): Promise<T> {
     const db = await this.pool.connect().catch((error) => {
       throw asCommunityOperationError(error, "connect");
@@ -133,9 +166,11 @@ export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort
     let catalog: PoolClient | undefined;
     let source: readonly Record<string, unknown>[] = [];
     try {
-      if (scope === "catalog" && this.options.catalogPool) {
+      if (scope !== "app" && this.options.catalogPool) {
         catalog = await this.options.catalogPool.connect();
         await catalog.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      }
+      if (scope === "catalog" && catalog) {
         source = (
           await catalog.query(
             "SELECT catalog_id,kind,title,aliases,first_published_at,filter_metadata FROM public.catalog_discovery ORDER BY catalog_id LIMIT 10001",
@@ -578,5 +613,76 @@ export class PostgresCommunityDiscoveryAdapter implements CommunityDiscoveryPort
       }
       return result as InscriptionFilterOptions;
     });
+  }
+  /**
+   * home-timeline-v1. The rows live on the App connection; a row an operator
+   * hid is left out. Linked ids then take the card projection on the Catalog
+   * connection, so a link stays only while its record is eligible and its image
+   * follows the card rules; a timeline with no linked row never opens that
+   * connection.
+   */
+  async timeline(): Promise<TimelineRecord> {
+    const rows = await this.run(
+      false,
+      async (db) =>
+        (
+          await db.query<TimelineRow>(
+            `SELECT entry_id,title,full_title,start_year,end_year,precision,date_label,on_axis,chapter,polity,disputed,group_id,group_title,province,holder,catalog_id
+            FROM community.timeline_entries WHERE hidden_at IS NULL ORDER BY start_year,position,entry_id LIMIT $1`,
+            [TIMELINE_ENTRIES_MAXIMUM + 1],
+          )
+        ).rows,
+      "app",
+    );
+    const linked = rows.flatMap(({ catalog_id }) =>
+      catalog_id === null ? [] : [catalog_id],
+    );
+    const projected =
+      linked.length === 0
+        ? []
+        : await this.run(
+            false,
+            async (db) =>
+              this.project(
+                db,
+                (
+                  await db.query<CardRow>(
+                    `${eligibleCatalog} WHERE c.catalog_id=ANY($1::text[])`,
+                    [linked],
+                  )
+                ).rows,
+                null,
+              ),
+            "linked",
+          );
+    const eligible = new Set(projected.map(({ target }) => target.id));
+    return {
+      entries: rows.map((row) => ({
+        id: row.entry_id,
+        title: row.title,
+        fullTitle: row.full_title,
+        startYear: row.start_year,
+        endYear: row.end_year,
+        precision: row.precision,
+        dateLabel: row.date_label,
+        onAxis: row.on_axis,
+        chapter: row.chapter,
+        polity: row.polity,
+        disputed: row.disputed,
+        groupId: row.group_id,
+        groupTitle: row.group_title,
+        province: row.province,
+        holder: row.holder,
+        catalogId:
+          row.catalog_id !== null && eligible.has(row.catalog_id)
+            ? (row.catalog_id as CatalogId)
+            : null,
+      })),
+      cards: projected.map(({ gallery, mediaCount, ...card }) => {
+        void gallery;
+        void mediaCount;
+        return card;
+      }),
+    };
   }
 }

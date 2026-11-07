@@ -239,6 +239,16 @@ export const handleAuthorRequest = async (
       reply(await service.discovery.filterOptions());
       return;
     }
+    // home-timeline-v1: the service's mapper validates this response.
+    if (
+      method === "GET" &&
+      path.join("/") === "timeline" &&
+      service.discovery
+    ) {
+      if (url.search) throw new InvalidInput();
+      reply(await service.timeline());
+      return;
+    }
     if (
       method === "GET" &&
       path.length === 4 &&
