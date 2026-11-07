@@ -20,7 +20,7 @@ import { HorizontalPager } from "../shell/horizontal-pager";
 import type { HorizontalPagerHandle } from "../shell/horizontal-pager";
 import { authorClient } from "./author-data";
 import { useAuthors } from "./author-context";
-import { avatarImage, coverSrc } from "../media/profile-image";
+import { avatarImage, avatarThumbSrc, coverSrc } from "../media/profile-image";
 import { useDirectMessageEntry } from "../messages/direct-message-entry";
 import { AvatarEntry } from "./avatar-editor";
 import { ProfileEditor } from "./profile-editor";
@@ -212,6 +212,7 @@ const ScopedAuthorProfile = ({
   const directEntry = useDirectMessageEntry();
   const author = useAuthors(),
     shell = useProductShell(),
+    compactProfile = shell.feedLayout === "single",
     isPreview = preview !== undefined,
     viewerId = isPreview ? null : author.viewer?.id,
     checking = isPreview ? false : author.checking,
@@ -258,6 +259,8 @@ const ScopedAuthorProfile = ({
   const profile = preview?.profile ?? loadedProfile;
   const root = useRef<HTMLElement>(null),
     topBar = useRef<HTMLElement>(null),
+    authorSummary = useRef<HTMLButtonElement>(null),
+    collectionReturn = useRef<{ tab: string; bodyOffset: number } | null>(null),
     profileHeader = useRef<HTMLElement>(null),
     identityPanel = useRef<HTMLDivElement>(null),
     identityHead = useRef<HTMLDivElement>(null),
@@ -270,7 +273,13 @@ const ScopedAuthorProfile = ({
     cardSampled = useRef(""),
     pendingScrollTop = useRef<number | null>(null),
     collapseHeight = useRef(0),
-    coverLayout = useRef({ photo: false, free: false, rest: 0, passedAt: 0 }),
+    coverLayout = useRef({
+      photo: false,
+      free: false,
+      rest: 0,
+      passedAt: 0,
+      collapse: 0,
+    }),
     pager = useRef<HorizontalPagerHandle<(typeof tabs)[number]>>(null),
     tabId = useId(),
     currentTab = state.tab === "comments" ? "works" : state.tab;
@@ -401,7 +410,7 @@ const ScopedAuthorProfile = ({
   // A photo cover pins (compact cover, identity, tabs) only when the
   // collections still get room below; a taller identity (a long bio, a
   // landscape phone) scrolls freely instead.
-  const coverFree = () => {
+  const coverTooTall = () => {
     const cover = profileHeader.current?.getBoundingClientRect().height ?? 0,
       tabs =
         root.current?.querySelector<HTMLElement>('[role="tablist"]')
@@ -412,6 +421,10 @@ const ScopedAuthorProfile = ({
       cover - restTop() - pinShift() + tabs + COVER_MIN_COLLECTIONS > port
     );
   };
+  // Reading lets the complete identity leave the viewport; only the existing
+  // top bar and classification tabs remain above the works. Its geometry never
+  // changes on scroll, so native snapping and saved offsets stay stable.
+  const coverFree = () => compactProfile || coverTooTall();
   const pinned = () => hasPhoto() && !coverFree();
   // The glass card at the collections stage, in the photo box (which then
   // spans the screen from the top down to the tabs): around the identity by
@@ -558,14 +571,27 @@ const ScopedAuthorProfile = ({
     const photo = hasPhoto(),
       free = photo && coverFree();
     page.toggleAttribute("data-cover-free", free);
-    page.toggleAttribute("data-cover-snap", photo && !free);
     const rest = restTop(),
       shift = pinShift();
     const cover = profileHeader.current?.getBoundingClientRect().height ?? 0;
+    // A reading cover must also let every biography line and action be read
+    // before it leaves. The existing foot gap may extend past the viewport;
+    // longer complete identities scroll freely instead of snapping over text.
+    const port = scrollElement()?.clientHeight ?? 0;
+    const footGap =
+      Number.parseFloat(
+        getComputedStyle(panel).getPropertyValue("--yoyi-space-9"),
+      ) || 0;
+    const readingCoverFits =
+      !compactProfile || port <= 0 || cover <= port + footGap;
+    page.toggleAttribute(
+      "data-cover-snap",
+      photo && !coverTooTall() && readingCoverFits,
+    );
     page.style.setProperty("--cover-rest", `${rest}px`);
     page.style.setProperty(
       "--cover-pinned",
-      `${Math.max(0, cover - rest - shift)}px`,
+      `${compactProfile ? bar.offsetHeight : Math.max(0, cover - rest - shift)}px`,
     );
     // The photo layer keeps the full cover's size: the compact cover shows
     // its top part, and the tabs and collections cover the rest.
@@ -581,11 +607,15 @@ const ScopedAuthorProfile = ({
         ["height", card.height],
       ] as const)
         page.style.setProperty(`--cover-card-${name}`, `${value}px`);
+    const collapse = coverCollapse();
     coverLayout.current = {
       photo,
       free,
-      rest,
-      passedAt: panel.offsetTop - bar.offsetHeight - 1,
+      rest: compactProfile ? collapse : rest,
+      passedAt: compactProfile
+        ? collapse - 1
+        : panel.offsetTop - bar.offsetHeight - 1,
+      collapse,
     };
   };
   // Scroll-linked paint values only (no geometry writes; a pinned cover reads
@@ -644,6 +674,38 @@ const ScopedAuthorProfile = ({
         160,
       );
     }
+    const condensed =
+      compactProfile &&
+      profile !== null &&
+      coverLayout.current.collapse > 0 &&
+      top >= coverLayout.current.collapse - 1;
+    const readingReturn =
+      compactProfile && collectionReturn.current?.tab === viewTab && !condensed;
+    page.toggleAttribute("data-profile-condensed", condensed);
+    page.toggleAttribute("data-profile-reading-return", readingReturn);
+    const summary = authorSummary.current,
+      full = profileHeader.current,
+      active = document.activeElement;
+    summary?.toggleAttribute("inert", !condensed && !readingReturn);
+    summary?.setAttribute("aria-hidden", String(!condensed && !readingReturn));
+    if (summary)
+      summary.setAttribute(
+        "aria-label",
+        readingReturn
+          ? `返回${labels[viewTab]}展读`
+          : `查看${summary.querySelector("strong")?.textContent ?? ""}的完整资料`,
+      );
+    // The full identity is offscreen in Works. Keep keyboard navigation in the
+    // visible header; the explicit author button restores the complete cover.
+    if (condensed && active && full?.contains(active))
+      summary?.focus({ preventScroll: true });
+    full?.toggleAttribute("inert", condensed);
+    if (condensed) full?.setAttribute("aria-hidden", "true");
+    else full?.removeAttribute("aria-hidden");
+    if (!condensed && !readingReturn && active && summary?.contains(active))
+      identityHead.current
+        ?.querySelector<HTMLElement>("h1")
+        ?.focus({ preventScroll: true });
     const hint = scrollHint.current;
     // A passed bar is solid in the reader's page colour, in their theme.
     for (const [element, dark] of [
@@ -723,6 +785,7 @@ const ScopedAuthorProfile = ({
     scrollTab,
     state.entryId,
     profile?.isOwner,
+    compactProfile,
     shell.activeDestination,
     shell.platform,
   ]);
@@ -790,9 +853,46 @@ const ScopedAuthorProfile = ({
     isPreview,
     scrollTab,
     state.entryId,
+    compactProfile,
     shell.activeDestination,
     shell.platform,
   ]);
+  const showCompleteProfile = () => {
+    const node = scrollElement();
+    if (!node) return;
+    collectionReturn.current = {
+      tab: viewTab,
+      bodyOffset: Math.max(0, node.scrollTop - coverCollapse()),
+    };
+    node.scrollTop = 0;
+    positions.current[viewTab] = 0;
+    markCover(0);
+    if (!isPreview)
+      author.cache.set(`profile-scroll:${state.entryId}`, positions.current);
+    if (!embedded) onViewChange(viewTab, 0);
+    identityHead.current
+      ?.querySelector<HTMLElement>("h1")
+      ?.focus({ preventScroll: true });
+  };
+  const enterCollection = () => {
+    const node = scrollElement(),
+      remembered = collectionReturn.current;
+    const top = compactProfile
+      ? coverCollapse() +
+        (remembered?.tab === viewTab ? remembered.bodyOffset : 0)
+      : restStage();
+    collectionReturn.current = null;
+    if (!node || top <= 0) return;
+    node.scrollTo?.({
+      top,
+      behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth",
+    });
+    root.current
+      ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+      ?.focus({ preventScroll: true });
+  };
   const panels = Object.fromEntries(
     tabs.map((tab) => [
       tab,
@@ -879,6 +979,7 @@ const ScopedAuthorProfile = ({
         } as CSSProperties
       }
       data-author-profile={id ?? "guest"}
+      data-compact-author={compactProfile ? "" : undefined}
       data-cover-photo={profile?.background ? "" : undefined}
     >
       {profile?.background && (
@@ -941,7 +1042,53 @@ const ScopedAuthorProfile = ({
             <Icon name="back" />
           </button>
         )}
-        <span />
+        {compactProfile && profile ? (
+          <button
+            ref={authorSummary}
+            type="button"
+            className={styles.profileSummary}
+            aria-label={`查看${name}的完整资料`}
+            aria-hidden="true"
+            inert
+            onClick={() =>
+              root.current?.hasAttribute("data-profile-condensed")
+                ? showCompleteProfile()
+                : enterCollection()
+            }
+            data-profile-summary=""
+          >
+            <span className={styles.summaryAvatar} aria-hidden="true">
+              {profile.avatar ? (
+                <img
+                  src={avatarThumbSrc(profile.avatar)}
+                  alt=""
+                  width={32}
+                  height={32}
+                />
+              ) : (
+                name.slice(0, 1)
+              )}
+            </span>
+            <span className={styles.summaryCopy}>
+              <strong>{name}</strong>
+              <span>{profile.studioName || `@${profile.handle}`}</span>
+            </span>
+            <span className={styles.summaryDisclosure} aria-hidden="true">
+              资料
+              <svg viewBox="0 0 24 24">
+                <path d="m6 14 6-6 6 6" />
+              </svg>
+            </span>
+            <span className={styles.summaryReturn}>
+              返回{labels[viewTab]}展读
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m6 9.5 6 6 6-6" />
+              </svg>
+            </span>
+          </button>
+        ) : (
+          <span />
+        )}
         {owner && !(embedded && shell.desktop) ? (
           <nav className={styles.profileActions} aria-label="主页管理">
             <button
@@ -1018,7 +1165,7 @@ const ScopedAuthorProfile = ({
               className={`${styles.identity} ${styles.coverNames}`}
               data-theme={coverTheme}
             >
-              <h1>{name}</h1>
+              <h1 tabIndex={-1}>{name}</h1>
               {profile && (
                 <p className={styles.coverMeta}>
                   {profile.studioName && (
@@ -1046,6 +1193,15 @@ const ScopedAuthorProfile = ({
                 </p>
               )}
               <div className={styles.coverBar} data-theme={coverTheme}>
+                {compactProfile && !profile.background && (
+                  <button
+                    type="button"
+                    className={styles.collectionEntry}
+                    onClick={enterCollection}
+                  >
+                    查看{labels[viewTab]}
+                  </button>
+                )}
                 {!isPreview &&
                   (profile.totals.following !== null ||
                     profile.totals.followers !== null) && (
@@ -1221,25 +1377,7 @@ const ScopedAuthorProfile = ({
             type="button"
             className={styles.scrollHint}
             aria-label={`向下查看${labels[viewTab as (typeof tabs)[number]] ?? "内容"}`}
-            onClick={() => {
-              const node = scrollElement(),
-                top = restStage();
-              if (!node || top <= 0) return;
-              node.scrollTo?.({
-                top,
-                behavior: window.matchMedia?.(
-                  "(prefers-reduced-motion: reduce)",
-                ).matches
-                  ? "auto"
-                  : "smooth",
-              });
-              // The hint leaves; focus goes on to the collection reached.
-              root.current
-                ?.querySelector<HTMLElement>(
-                  '[role="tab"][aria-selected="true"]',
-                )
-                ?.focus({ preventScroll: true });
-            }}
+            onClick={enterCollection}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
               <path d="M6 9.5l6 6 6-6" />

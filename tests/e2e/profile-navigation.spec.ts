@@ -408,7 +408,7 @@ async function difference(first: Buffer, second: Buffer) {
   return changed / pixels;
 }
 
-for (const layout of ["double", "single"] as const) {
+for (const layout of ["double"] as const) {
   test(`A photo profile rests on the photo or on the collections in ${layout}`, async ({
     page,
   }) => {

@@ -1420,3 +1420,130 @@
       max(0px, 100% - 100svh)
   );
 }
+
+/* Reading reuses the existing bar, with no extra pinned introduction panel.
+   The complete cover stays in normal flow; this summary never changes its size. */
+.profileSummary {
+  display: flex;
+  width: min(100%, 320px);
+  min-width: 0;
+  min-height: 44px;
+  align-items: center;
+  justify-self: center;
+  gap: var(--yoyi-space-3);
+  padding: var(--yoyi-space-2);
+  overflow: hidden;
+  visibility: hidden;
+  color: var(--yoyi-color-text-primary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--yoyi-radius-md);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.coverRoot[data-profile-condensed] .profileSummary {
+  visibility: visible;
+}
+.summaryAvatar {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: var(--yoyi-radius-full);
+  background: var(--yoyi-color-background-muted);
+  color: var(--yoyi-color-text-secondary);
+  font-family: var(--yoyi-font-editorial);
+}
+.summaryAvatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.summaryCopy {
+  display: grid;
+  min-width: 0;
+  gap: var(--yoyi-space-1);
+}
+.summaryCopy strong,
+.summaryCopy > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.summaryCopy strong {
+  font-family: var(--yoyi-font-editorial);
+  font-size: var(--yoyi-type-body-size);
+  font-weight: 600;
+  line-height: 1.2;
+}
+.summaryCopy > span {
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-caption-size);
+  line-height: 1.2;
+}
+.summaryDisclosure {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--yoyi-space-1);
+  margin-inline-start: auto;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-caption-size);
+}
+.summaryDisclosure svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+.profileSummary:focus-visible,
+.collectionEntry:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+.collectionEntry {
+  min-height: 44px;
+  padding: 0 var(--yoyi-space-3);
+  color: var(--yoyi-color-seal-red);
+  background: transparent;
+  border: 0;
+  border-radius: var(--yoyi-radius-md);
+  font: inherit;
+  font-size: var(--yoyi-type-body-small-size);
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .profileSummary:hover,
+  .collectionEntry:hover {
+    background: var(--yoyi-color-background-muted);
+  }
+}
+
+.summaryReturn {
+  display: none;
+  align-items: center;
+  gap: var(--yoyi-space-2);
+  font-size: var(--yoyi-type-body-small-size);
+}
+.summaryReturn svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+.coverRoot[data-profile-reading-return] .profileSummary {
+  visibility: visible;
+  justify-content: center;
+}
+.coverRoot[data-profile-reading-return] .profileSummary > :not(.summaryReturn) {
+  display: none;
+}
+.coverRoot[data-profile-reading-return] .summaryReturn {
+  display: flex;
+}

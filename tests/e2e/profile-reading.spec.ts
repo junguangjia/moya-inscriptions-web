@@ -80,6 +80,7 @@ async function prepare(
   normal = false,
   brokenImage = false,
   coverFirst = false,
+  options: { photo?: boolean; bio?: string; name?: string } = {},
 ) {
   let brokenRequests = 0;
   await page.addInitScript(
@@ -110,13 +111,19 @@ async function prepare(
       return route.fulfill({
         json: {
           ...identity,
-          bio: "合成验收资料，用于检查完整封面与展读作品的衔接。",
-          background: {
-            id: backgroundId,
-            src: `/api/community/media/${backgroundId}`,
-            width: 1600,
-            height: 1200,
-          },
+          displayName: options.name ?? identity.displayName,
+          bio:
+            options.bio ?? "合成验收资料，用于检查完整封面与展读作品的衔接。",
+          ...(options.photo === false
+            ? {}
+            : {
+                background: {
+                  id: backgroundId,
+                  src: `/api/community/media/${backgroundId}`,
+                  width: 1600,
+                  height: 1200,
+                },
+              }),
           studioName: "临池阁",
           avatar: {
             id: avatarId,
@@ -221,7 +228,10 @@ async function prepare(
     .click();
   const root = page.locator(`[data-author-profile="${owner}"]`);
   await expect(
-    root.getByRole("heading", { name: identity.displayName, exact: true }),
+    root.getByRole("heading", {
+      name: options.name ?? identity.displayName,
+      exact: true,
+    }),
   ).toBeVisible();
   await expect(root.locator("[data-content-id]")).not.toHaveCount(0);
   if (!coverFirst) await enterWorks(root);
@@ -232,7 +242,13 @@ async function enterWorks(root: Locator) {
   const hint = root.getByRole("button", { name: "向下查看作品", exact: true });
   // A long identity on a short screen uses the native free cover. Reach its
   // lower controls before clicking; the floating primary dock covers the edge.
-  if (await root.evaluate((node) => node.hasAttribute("data-cover-free")))
+  if (
+    await root.evaluate(
+      (node) =>
+        node.hasAttribute("data-cover-free") &&
+        !node.hasAttribute("data-cover-snap"),
+    )
+  )
     await hint.evaluate((node) =>
       node.scrollIntoView({ block: "center", behavior: "instant" }),
     );
@@ -397,6 +413,19 @@ test("fixed calligraphy reading has complete images, private tools and real vert
     expect(hint!.y + hint!.height + 13).toBeLessThanOrEqual(dock!.y);
   }
   await enterWorks(root);
+  await expect(root).toHaveAttribute("data-profile-condensed", "");
+  const summary = root.locator("[data-profile-summary]");
+  await expect(summary).toBeVisible();
+  await expect(summary).not.toHaveAttribute("inert");
+  await expect(root.locator('[aria-label="用户资料"]')).toHaveAttribute(
+    "inert",
+    "",
+  );
+  const tabsBox = await root.getByRole("tablist").boundingBox();
+  const barBox = await root.locator(":scope > header").boundingBox();
+  expect(Math.abs(tabsBox!.y - barBox!.y - barBox!.height)).toBeLessThanOrEqual(
+    1,
+  );
   const cards = root.locator("[data-profile-reading-card]");
   await expect(cards).toHaveCount(12);
   await expect(cards.first().locator("img")).toHaveCSS("object-fit", "contain");
@@ -436,7 +465,7 @@ test("fixed calligraphy reading has complete images, private tools and real vert
         }).length,
       dock.y,
     );
-    expect(complete).toBeGreaterThanOrEqual(2);
+    expect(complete).toBeGreaterThanOrEqual(4);
   }
   expect(
     await page.evaluate(
@@ -449,6 +478,111 @@ test("fixed calligraphy reading has complete images, private tools and real vert
   });
   await expect(root.locator("[data-profile-ip-location]")).toBeAttached();
 });
+
+test("compact author info expands the original cover and resumes the selected reading position", async ({
+  page,
+}, info) => {
+  const root = await prepare(page);
+  const selected = root.locator(
+    `[data-profile-reading-card][data-content-id="${id(12)}"]`,
+  );
+  await selected.scrollIntoViewIfNeeded();
+  const before = await profileScroll(page);
+  const beforeBox = await selected.boundingBox();
+  const summary = root.getByRole("button", {
+    name: `查看${identity.displayName}的完整资料`,
+    exact: true,
+  });
+  await expectHitTarget(summary);
+  await summary.click();
+  await expect(root).not.toHaveAttribute("data-profile-condensed");
+  const full = root.locator('[aria-label="用户资料"]');
+  await expect(full).not.toHaveAttribute("inert");
+  await expect(
+    full.getByRole("heading", { name: identity.displayName, exact: true }),
+  ).toBeFocused();
+  await expect(full.locator("[data-profile-ip-location]")).toBeVisible();
+  await page.screenshot({ path: info.outputPath("author-info-expanded.png") });
+  const resume = root.getByRole("button", {
+    name: "返回作品展读",
+    exact: true,
+  });
+  await expectHitTarget(resume);
+  await resume.click();
+  await expect(root).toHaveAttribute("data-profile-condensed", "");
+  await expect
+    .poll(async () => Math.abs((await profileScroll(page)) - before))
+    .toBeLessThanOrEqual(2);
+  const afterBox = await selected.boundingBox();
+  expect(Math.abs(afterBox!.y - beforeBox!.y)).toBeLessThanOrEqual(2);
+  // A fractional card edge may clip by less than one CSS pixel in WebKit.
+  // Preserve the actual position and prove the restored opener receives a click.
+  await selected
+    .getByRole("button", { name: `打开${title(12)}`, exact: true })
+    .click();
+  await expect(page).toHaveURL((url) => url.hash === "#detail");
+});
+
+for (const photo of [true, false]) {
+  test(`long author information stays reachable with photo=${photo} and a single-line Works summary`, async ({
+    page,
+  }, info) => {
+    const name = "窄屏验收作者姓名与Studio2026混排示例";
+    const bio = "临池读帖，完整资料和原文保留，检查长简介与书法展读的切换。"
+      .repeat(30)
+      .slice(0, 500);
+    const root = await prepare(page, false, false, true, { photo, name, bio });
+    const full = root.locator('[aria-label="用户资料"]');
+    await expect(
+      full.getByRole("heading", { name, exact: true }),
+    ).toBeVisible();
+    expect(await full.locator("p").allTextContents()).toContain(bio);
+    if (
+      !photo ||
+      info.project.name === "mobile-webkit" ||
+      info.project.name === "tablet-landscape-webkit"
+    )
+      await expect(root).not.toHaveAttribute("data-cover-snap");
+    const selected = root.locator(
+      `[data-profile-reading-card][data-content-id="${id(12)}"]`,
+    );
+    await selected.scrollIntoViewIfNeeded();
+    await expect(root).toHaveAttribute("data-profile-condensed", "");
+    const summary = root.getByRole("button", {
+      name: `查看${name}的完整资料`,
+      exact: true,
+    });
+    await expectHitTarget(summary);
+    const summaryName = summary.locator("strong");
+    await expect(summaryName).toHaveCSS("white-space", "nowrap");
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth - innerWidth,
+      ),
+    ).toBeLessThanOrEqual(1);
+    await summary.click();
+    await expect(full).not.toHaveAttribute("inert");
+    await expect(
+      full.getByRole("heading", { name, exact: true }),
+    ).toBeFocused();
+    expect(await full.locator("p").allTextContents()).toContain(bio);
+    // The original cover keeps its own management/relationship actions.
+    await expect(
+      full.getByRole("button", { name: "关注 1", exact: true }),
+    ).toBeVisible();
+    await page.screenshot({
+      path: info.outputPath(`long-author-photo-${photo}.png`),
+    });
+    const resume = root.getByRole("button", {
+      name: "返回作品展读",
+      exact: true,
+    });
+    await expectHitTarget(resume);
+    await resume.click();
+    await selected.scrollIntoViewIfNeeded();
+    await expect(root).toHaveAttribute("data-profile-condensed", "");
+  });
+}
 
 test("an image retry is operable above the card opener and does not navigate", async ({
   page,

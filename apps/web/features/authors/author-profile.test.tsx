@@ -775,13 +775,13 @@ describe.each(["double", "single"])("Cover stages in %s", (layout) => {
     expect(hint(scene.node)!.hasAttribute("inert")).toBe(false);
     // Past halfway the collections stage: the compact cover keeps the
     // photo, frosted, behind the identity, so it stays dark; the hint leaves.
-    await act(async () => scene.scrollBy(300));
+    await act(async () => scene.scrollBy(layout === "single" ? 400 : 300));
     expect(scene.owner.getAttribute("data-profile-stage")).toBe("content");
     expect(scene.names.getAttribute("data-theme")).toBe("dark");
     expect(scene.bar.getAttribute("data-theme")).toBe("dark");
     expect(hint(scene.node)!.hasAttribute("inert")).toBe(true);
     expect(hint(scene.node)!.hasAttribute("data-theme")).toBe(false);
-    await act(async () => scene.scrollBy(532));
+    await act(async () => scene.scrollBy(layout === "single" ? 648 : 532));
     expect(scene.owner.style.getPropertyValue("--cover-progress")).toBe(
       "1.000",
     );
@@ -791,12 +791,16 @@ describe.each(["double", "single"])("Cover stages in %s", (layout) => {
     expect(hint(scene.node)!.hasAttribute("inert")).toBe(false);
   });
 
-  it("pins the compact cover, identity and tabs, sharing the resting place across tabs", async () => {
+  it("pins the reading bar or normal identity and shares the collection resting place", async () => {
     const scene = await coverScene();
     restore = () => scene.measure.mockRestore();
-    expect(scene.owner.hasAttribute("data-cover-free")).toBe(false);
+    expect(scene.owner.hasAttribute("data-cover-free")).toBe(
+      layout === "single",
+    );
     expect(scene.owner.style.getPropertyValue("--cover-rest")).toBe("532px");
-    expect(scene.owner.style.getPropertyValue("--cover-pinned")).toBe("168px");
+    expect(scene.owner.style.getPropertyValue("--cover-pinned")).toBe(
+      layout === "single" ? "52px" : "168px",
+    );
     expect(scene.owner.style.getPropertyValue("--cover-height")).toBe("700px");
     // The glass card waits where the identity rests: 10 px around it, from
     // under the top bar to just above the tabs.
@@ -842,7 +846,10 @@ describe.each(["double", "single"])("Cover stages in %s", (layout) => {
     expect(scene.owner.style.getPropertyValue("--cover-rest")).toBe("532px");
     onViewChange.mockClear();
     await act(async () => button(scene.node, "收藏")!.click());
-    expect(onViewChange).toHaveBeenLastCalledWith("favorites", 532);
+    expect(onViewChange).toHaveBeenLastCalledWith(
+      "favorites",
+      layout === "single" ? 648 : 532,
+    );
   });
 
   it("takes the status-bar tint and the shade from the photo itself", async () => {
@@ -977,7 +984,7 @@ describe.each(["double", "single"])("Cover stages in %s", (layout) => {
     expect(button.getAttribute("aria-label")).toBe("向下查看作品");
     await act(async () => button.click());
     expect(scene.scrollTo).toHaveBeenCalledWith(
-      expect.objectContaining({ top: 532 }),
+      expect.objectContaining({ top: layout === "single" ? 648 : 532 }),
     );
     expect(document.activeElement?.getAttribute("role")).toBe("tab");
   });
@@ -1087,11 +1094,98 @@ describe.each(["double", "single"])("Cover snapping in %s", (layout) => {
     // solid in the reader's own theme.
     // A free cover does not snap.
     expect(scene.owner.hasAttribute("data-cover-snap")).toBe(false);
-    await act(async () => scene.scrollBy(700));
+    await act(async () => scene.scrollBy(layout === "single" ? 1200 : 700));
     expect(scene.bar.hasAttribute("data-cover-passed")).toBe(true);
     expect(scene.bar.hasAttribute("data-theme")).toBe(false);
     await act(async () => scene.scrollBy(0));
     expect(scene.bar.getAttribute("data-theme")).toBe("dark");
+  });
+});
+
+describe("Reading author summary", () => {
+  let restore: (() => void) | null = null;
+  afterEach(() => {
+    restore?.();
+    restore = null;
+  });
+  it.each([true, false])(
+    "keeps the complete photo=%s identity unchanged and restores reading after viewing info",
+    async (photo) => {
+      shell.feedLayout = "single";
+      const scene = await coverScene({ photo });
+      restore = () => scene.measure.mockRestore();
+      const full = scene.node.querySelector<HTMLElement>(
+        "[data-profile-background-slot]",
+      )!;
+      const originalHeight = full.getBoundingClientRect().height;
+      const summary = scene.node.querySelector<HTMLButtonElement>(
+        "[data-profile-summary]",
+      )!;
+      expect(summary.hasAttribute("inert")).toBe(true);
+      await act(async () => scene.scrollBy(400));
+      expect(scene.owner.hasAttribute("data-profile-condensed")).toBe(false);
+      await act(async () => scene.scrollBy(900));
+      expect(scene.owner.hasAttribute("data-profile-condensed")).toBe(true);
+      expect(full.getBoundingClientRect().height).toBe(originalHeight);
+      expect(full.hasAttribute("inert")).toBe(true);
+      expect(summary.getAttribute("aria-hidden")).toBe("false");
+      summary.focus();
+      await act(async () => summary.click());
+      expect(scene.owner.scrollTop).toBe(0);
+      expect(full.hasAttribute("inert")).toBe(false);
+      expect(document.activeElement).toBe(full.querySelector("h1"));
+      expect(summary.hasAttribute("inert")).toBe(false);
+      expect(summary.getAttribute("aria-label")).toBe("返回作品展读");
+      summary.focus();
+      await act(async () => scene.scrollBy(20));
+      expect(document.activeElement).toBe(summary);
+      await act(async () => window.dispatchEvent(new Event("resize")));
+      expect(document.activeElement).toBe(summary);
+      await act(async () => summary.click());
+      expect(scene.scrollTo).toHaveBeenLastCalledWith(
+        expect.objectContaining({ top: 900 }),
+      );
+    },
+  );
+  it("keeps the accessible author name current after a profile refresh and later scroll", async () => {
+    shell.feedLayout = "single";
+    const scene = await coverScene();
+    restore = () => scene.measure.mockRestore();
+    profileRead.mockResolvedValue({
+      ...profile(false),
+      displayName: "改名后的作者",
+      background: {
+        id: `user-media-${"a".repeat(32)}`,
+        src: coverPhoto,
+        width: 1600,
+        height: 1200,
+      },
+    });
+    author.revision++;
+    await act(async () => root!.render(overlay()));
+    await act(async () => scene.scrollBy(900));
+    const summary = scene.node.querySelector("[data-profile-summary]")!;
+    expect(summary.querySelector("strong")?.textContent).toBe("改名后的作者");
+    expect(summary.getAttribute("aria-label")).toBe(
+      "查看改名后的作者的完整资料",
+    );
+  });
+  it("rebases the current body offset when switching modes without changing full-cover geometry", async () => {
+    const scene = await coverScene();
+    restore = () => scene.measure.mockRestore();
+    Object.defineProperty(scene.owner, "scrollHeight", {
+      configurable: true,
+      value: 4000,
+    });
+    await act(async () => scene.scrollBy(800));
+    shell.feedLayout = "single";
+    await act(async () => root!.render(overlay()));
+    expect(scene.owner.scrollTop).toBe(916);
+    expect(scene.owner.style.getPropertyValue("--cover-pinned")).toBe("52px");
+    shell.feedLayout = "double";
+    await act(async () => root!.render(overlay()));
+    expect(scene.owner.scrollTop).toBe(800);
+    expect(scene.owner.hasAttribute("data-profile-condensed")).toBe(false);
   });
 });
 
