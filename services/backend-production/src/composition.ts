@@ -57,6 +57,7 @@ import {
   PostgresCommunityIdentityAdapter,
   PostgresThreadAdapter,
   PostgresTimelineOperatorAdapter,
+  PostgresTimelinePostsAdapter,
   PostgresFeedbackAdapter,
   PostgresDirectMessageAdapter,
   PostgresPublishingOperatorAdapter,
@@ -998,6 +999,13 @@ export const prepareProductionBackend = async (
           timelineOperatorPort: new PostgresTimelineOperatorAdapter(
             communityPool,
             { catalogPool: pool },
+          ),
+          // timeline-posts-v1: an entry's posts are Works, so their media
+          // maps to published delivery as the Works page's does.
+          timelinePostsPort: withPublishedReads(
+            new PostgresTimelinePostsAdapter(communityPool),
+            ["listTimelinePosts"],
+            deliveryOptions,
           ),
           directMessagePort: new PostgresDirectMessageAdapter(communityPool),
           feedbackPort: new PostgresFeedbackAdapter(communityPool),

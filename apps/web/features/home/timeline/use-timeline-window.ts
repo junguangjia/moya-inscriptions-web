@@ -249,6 +249,27 @@ export const useTimelineWindow = <Row extends TimelineWindowRow>({
     // A platform that resolves after hydration changes the scroller.
   }, [enabled, listRef, resetKey]);
 
+  // New estimates (timeline-posts-v1: post counts that arrive after the list)
+  // move every unmeasured row below them, so the row under the chrome is held
+  // while they settle, as a new width holds it. Taken before the read below,
+  // which would name a row by the old scroll position.
+  const previousEstimate = useRef(estimate);
+  useLayoutEffect(() => {
+    if (previousEstimate.current === estimate) return;
+    previousEstimate.current = estimate;
+    const state = latest.current;
+    if (
+      state.enabled &&
+      state.active &&
+      state.topIndex > 0 &&
+      activeAnchor(anchor.current) === null
+    )
+      anchor.current = {
+        index: state.topIndex,
+        until: performance.now() + JUMP_SETTLE_MS,
+      };
+  }, [estimate]);
+
   // New offsets (a correction, a group opening) move what the viewport shows.
   useLayoutEffect(() => {
     read.current?.();

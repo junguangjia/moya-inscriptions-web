@@ -14,17 +14,26 @@ import {
 import {
   markForAiOperator,
   operatorTimelineEntrySchema,
+  operatorTimelinePostPageSchema,
+  operatorTimelinePostSchema,
   timelineReorderResultSchema,
 } from "@moya/contracts/internal/community-operator";
 
 import { limitAiWrite } from "./ai-write-limit.js";
 import { asCommunityOperationError } from "./availability.js";
+import { isSelfOnlyWorkInScanSql } from "./self-only.js";
 
 import type { TimelineOperatorPort } from "@moya/api";
 import type {
   CreateTimelineEntryCommand,
+  OperatorReadScope,
   OperatorTimelineEntry,
+  OperatorTimelinePost,
+  OperatorTimelinePostPage,
+  OperatorTimelinePostQuery,
   ReorderTimelineCommand,
+  SetTimelinePostCommand,
+  TimelinePostRefusalCode,
   TimelineRefusalCode,
   TimelineReorderResult,
   UpdateTimelineEntryCommand,
@@ -50,6 +59,13 @@ import type { Pool, PoolClient, QueryResultRow } from "pg";
  * Link state reads the published Catalog projection: on `catalogPool` when the
  * deployment reads Catalog over its own connection, as discovery does, else on
  * the App connection.
+ *
+ * timeline-posts-v1: the operator side of community.timeline_entry_posts, one
+ * row per work, under the same receipted command. Its event names the work
+ * (content type `work`), so a work's erasure scrubs the title its answer holds
+ * from both the event and the receipt (publishing/works.ts). A write takes the
+ * table's lock order, shared with the author's command: the work FOR UPDATE,
+ * then the entry FOR SHARE when it attaches, then the post's row.
  */
 
 interface TimelineEntryRow extends QueryResultRow {
@@ -150,6 +166,68 @@ const refusalMessages: Readonly<Record<TimelineRefusalCode, string>> = {
 };
 const refused = (code: TimelineRefusalCode) =>
   new CommunityNamedConflictError(code, refusalMessages[code]);
+
+const postRefusalMessages: Readonly<Record<TimelinePostRefusalCode, string>> = {
+  WORK_NOT_PUBLIC: "Only a public work by an active author is attached",
+  ENTRY_UNAVAILABLE: "The timeline entry is unknown or hidden",
+  POST_NOT_ATTACHED: "The work's post is not attached to a timeline entry",
+};
+const postRefused = (code: TimelinePostRefusalCode) =>
+  new CommunityNamedConflictError(code, postRefusalMessages[code]);
+
+interface TimelinePostRow extends QueryResultRow {
+  work_id: string;
+  title: string;
+  author_id: string;
+  operator_state: string;
+  publicly_visible: boolean;
+  entry_id: string | null;
+  withheld_entry_id: string | null;
+  state: string;
+  attached_by: string;
+  updated_by: string;
+  version: number;
+  attached_at: Date;
+  updated_at: Date;
+}
+
+/** A post's row with its work, joined as `p`, `w` and `u`. */
+const postSource = `community.timeline_entry_posts p
+  JOIN community.works w ON w.id=p.work_id
+  JOIN community.public_users u ON u.id=w.author_id`;
+const postColumns = `p.work_id,w.title,w.author_id,w.operator_state,
+  community.work_is_public(w) AND u.status='active' AS publicly_visible,
+  p.entry_id,p.withheld_entry_id,p.state,p.attached_by,p.updated_by,p.version,p.attached_at,p.updated_at`;
+/**
+ * `$1` entry (attached there, or withheld from it), `$2` work, `$3` author, `$4`
+ * state, `$5` attacher, `$6`/`$7` the last change's range, `$8` true to leave
+ * self-only works out, so neither a row nor the total names one.
+ */
+const postsWhere = `WHERE ($1::text IS NULL OR p.entry_id=$1 OR (p.state='withheld' AND p.withheld_entry_id=$1))
+  AND ($2::text IS NULL OR p.work_id=$2)
+  AND ($3::text IS NULL OR w.author_id=$3)
+  AND ($4::text IS NULL OR p.state=$4)
+  AND ($5::text IS NULL OR p.attached_by=$5)
+  AND ($6::timestamptz IS NULL OR p.updated_at>=$6::timestamptz)
+  AND ($7::timestamptz IS NULL OR p.updated_at<=$7::timestamptz)
+  AND NOT ($8::boolean AND ${isSelfOnlyWorkInScanSql("w")})`;
+
+const postOf = (row: TimelinePostRow): OperatorTimelinePost =>
+  operatorTimelinePostSchema.parse({
+    workId: row.work_id,
+    title: row.title,
+    authorId: row.author_id,
+    workState: row.operator_state,
+    publiclyVisible: row.publicly_visible,
+    entryId: row.entry_id,
+    withheldEntryId: row.withheld_entry_id,
+    state: row.state,
+    attachedBy: row.attached_by,
+    updatedBy: row.updated_by,
+    version: row.version,
+    attachedAt: row.attached_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+  });
 
 /** The contract's write check over the stored set before and after the write. */
 const assertWritable = (
@@ -295,10 +373,14 @@ export class PostgresTimelineOperatorAdapter implements TimelineOperatorPort {
     action: string,
     /** What names the command in its fingerprint. */
     named: string,
-    /** The audited entry id; none when the command spans rows. */
-    contentId: string | null,
+    /** The audited record; a timeline entry has no id when the command spans rows. */
+    content: {
+      readonly type: "timeline_entry" | "work";
+      readonly id: string | null;
+    },
     input: { readonly requestId: string },
-    change: (db: PoolClient) => Promise<T>,
+    /** `unchanged()`: nothing was left to change, so no event; the receipt is kept. */
+    change: (db: PoolClient, unchanged: () => void) => Promise<T>,
   ): Promise<T> {
     return this.run(true, async (db) => {
       await limitAiWrite(operator, (sql) => db.query(sql));
@@ -306,7 +388,10 @@ export class PostgresTimelineOperatorAdapter implements TimelineOperatorPort {
         "SELECT pg_advisory_xact_lock(hashtextextended('phase4-content-operator',0))",
       );
       const fingerprint = commandFingerprint(action, named, input);
-      const old = await db.query<{ fingerprint: string; result: T }>(
+      const old = await db.query<{
+        fingerprint: string;
+        result: T & { permanentlyDeleted?: unknown };
+      }>(
         "SELECT fingerprint,result FROM community.content_operator_receipts WHERE operator_label=$1 AND request_id=$2",
         [operator, input.requestId],
       );
@@ -315,25 +400,34 @@ export class PostgresTimelineOperatorAdapter implements TimelineOperatorPort {
           throw new CommunityIdempotencyConflictError(
             "Request identity already used",
           );
+        // A work's erasure empties the receipt of a post on it.
+        if (old.rows[0].result.permanentlyDeleted === true)
+          throw new CommunityNotFoundError();
         return markForAiOperator(operator, old.rows[0].result, "replayed");
       }
-      const result = await change(db);
-      await db.query(
-        "INSERT INTO community.content_operator_events(id,operator_label,action,content_type,content_id,detail) VALUES($1,$2,$3,$4,$5,$6)",
-        [
-          randomUUID(),
-          operator,
-          action,
-          "timeline_entry",
-          contentId,
-          JSON.stringify({ command: input, result }),
-        ],
-      );
+      let audit = true;
+      const result = await change(db, () => {
+        audit = false;
+      });
+      if (audit)
+        await db.query(
+          "INSERT INTO community.content_operator_events(id,operator_label,action,content_type,content_id,detail) VALUES($1,$2,$3,$4,$5,$6)",
+          [
+            randomUUID(),
+            operator,
+            action,
+            content.type,
+            content.id,
+            JSON.stringify({ command: input, result }),
+          ],
+        );
       await db.query(
         "INSERT INTO community.content_operator_receipts(operator_label,request_id,fingerprint,result) VALUES($1,$2,$3,$4)",
         [operator, input.requestId, fingerprint, JSON.stringify(result)],
       );
-      return result;
+      return audit
+        ? result
+        : markForAiOperator(operator, result, "alreadyInPlace");
     });
   }
 
@@ -345,7 +439,7 @@ export class PostgresTimelineOperatorAdapter implements TimelineOperatorPort {
       operator,
       "timeline.create",
       input.id,
-      input.id,
+      { type: "timeline_entry", id: input.id },
       input,
       async (db) => {
         const rows = (await this.storedRows(db)).map(importFields);
@@ -398,7 +492,7 @@ export class PostgresTimelineOperatorAdapter implements TimelineOperatorPort {
       operator,
       "timeline.update",
       id,
-      id,
+      { type: "timeline_entry", id },
       input,
       async (db) => {
         const before = (
@@ -495,7 +589,7 @@ export class PostgresTimelineOperatorAdapter implements TimelineOperatorPort {
       operator,
       "timeline.reorder",
       `year:${input.startYear}`,
-      null,
+      { type: "timeline_entry", id: null },
       input,
       async (db) => {
         const year = (
@@ -548,6 +642,165 @@ export class PostgresTimelineOperatorAdapter implements TimelineOperatorPort {
           startYear: input.startYear,
           count: input.entries.length,
         });
+      },
+    );
+  }
+
+  /**
+   * timeline-posts-v1: per stored row, its public posts (a public work by an
+   * active author, attached), whoever asks; rows with none are absent.
+   */
+  async operatorTimelinePostCounts(): Promise<
+    Readonly<Record<string, number>>
+  > {
+    return this.run(false, async (db) => {
+      const rows = (
+        await db.query<{ entry_id: string; total: number }>(
+          `SELECT p.entry_id,count(*)::integer AS total FROM ${postSource}
+           WHERE p.state='attached' AND community.work_is_public(w) AND u.status='active'
+           GROUP BY p.entry_id`,
+        )
+      ).rows;
+      return Object.fromEntries(
+        rows.map(({ entry_id, total }) => [entry_id, total]),
+      );
+    });
+  }
+
+  /** A filtered page of post rows, newest change first, in one snapshot. */
+  async operatorTimelinePosts(
+    query: OperatorTimelinePostQuery,
+    scope?: OperatorReadScope,
+  ): Promise<OperatorTimelinePostPage> {
+    const filters = [
+      query.entryId ?? null,
+      query.workId ?? null,
+      query.authorId ?? null,
+      query.state ?? null,
+      query.attachedBy ?? null,
+      query.from ?? null,
+      query.to ?? null,
+      scope?.withholdSelfOnly === true,
+    ];
+    return this.run(false, async (db) => {
+      const total = (
+        await db.query<{ total: number }>(
+          `SELECT count(*)::integer AS total FROM ${postSource} ${postsWhere}`,
+          filters,
+        )
+      ).rows[0]!.total;
+      const rows = (
+        await db.query<TimelinePostRow>(
+          `SELECT ${postColumns} FROM ${postSource} ${postsWhere}
+           ORDER BY p.updated_at DESC,p.work_id DESC LIMIT $9 OFFSET $10`,
+          [...filters, query.pageSize, (query.page - 1) * query.pageSize],
+        )
+      ).rows;
+      return operatorTimelinePostPageSchema.parse({
+        items: rows.map(postOf),
+        total,
+        page: query.page,
+        pageSize: query.pageSize,
+      });
+    });
+  }
+
+  /**
+   * One work's post, against the version its row was read at (0: no row).
+   * Attaching needs a public work and a visible entry, and lifts a withhold
+   * from that same entry; a move or a re-attach is a new attachment, its time
+   * and attacher too. A detach or a withhold needs a row: a withhold of an
+   * attached post records the entry it leaves. Asking for what is already
+   * true writes nothing, keeps the receipt and tells AI so.
+   */
+  async operatorSetTimelinePost(
+    operator: string,
+    workId: string,
+    input: SetTimelinePostCommand,
+  ): Promise<OperatorTimelinePost> {
+    return this.command(
+      operator,
+      "timeline.post",
+      workId,
+      { type: "work", id: workId },
+      input,
+      async (db, unchanged) => {
+        const work = (
+          await db.query<{ public: boolean }>(
+            `SELECT community.work_is_public(w) AND u.status='active' AS public
+             FROM community.works w JOIN community.public_users u ON u.id=w.author_id
+             WHERE w.id=$1 FOR UPDATE OF w`,
+            [workId],
+          )
+        ).rows[0];
+        if (!work) throw new CommunityNotFoundError();
+        const entryVisible =
+          input.entryId === null ||
+          (
+            await db.query(
+              "SELECT 1 FROM community.timeline_entries WHERE entry_id=$1 AND hidden_at IS NULL FOR SHARE",
+              [input.entryId],
+            )
+          ).rowCount === 1;
+        const current = (
+          await db.query<{
+            entry_id: string | null;
+            state: string;
+            version: number;
+          }>(
+            "SELECT entry_id,state,version FROM community.timeline_entry_posts WHERE work_id=$1 FOR UPDATE",
+            [workId],
+          )
+        ).rows[0];
+        if ((current?.version ?? 0) !== input.expectedVersion)
+          throw new CommunityConflictError(
+            "The post's timeline entry changed since it was read",
+          );
+        if (input.entryId !== null) {
+          if (!work.public) throw postRefused("WORK_NOT_PUBLIC");
+          if (!entryVisible) throw postRefused("ENTRY_UNAVAILABLE");
+          if (current === undefined)
+            await db.query(
+              "INSERT INTO community.timeline_entry_posts(work_id,entry_id,attached_by,updated_by) VALUES($1,$2,$3,$3)",
+              [workId, input.entryId, operator],
+            );
+          else if (
+            current.state === "attached" &&
+            current.entry_id === input.entryId
+          )
+            unchanged();
+          else
+            await db.query(
+              `UPDATE community.timeline_entry_posts SET entry_id=$2,state='attached',
+                 withheld_entry_id=CASE WHEN withheld_entry_id=$2 THEN NULL ELSE withheld_entry_id END,
+                 attached_by=$3,attached_at=CURRENT_TIMESTAMP,updated_by=$3,version=version+1,updated_at=CURRENT_TIMESTAMP
+               WHERE work_id=$1`,
+              [workId, input.entryId, operator],
+            );
+        } else {
+          if (current === undefined) throw postRefused("POST_NOT_ATTACHED");
+          const withhold = input.state === "withheld";
+          if (current.state === "attached")
+            await db.query(
+              `UPDATE community.timeline_entry_posts SET state=$2,
+                 withheld_entry_id=CASE WHEN $2='withheld' THEN entry_id ELSE withheld_entry_id END,
+                 entry_id=NULL,updated_by=$3,version=version+1,updated_at=CURRENT_TIMESTAMP
+               WHERE work_id=$1`,
+              [workId, withhold ? "withheld" : "detached", operator],
+            );
+          // A post off its row stays off; only an attached one names the row to withhold from.
+          else if (withhold && current.state !== "withheld")
+            throw postRefused("POST_NOT_ATTACHED");
+          else unchanged();
+        }
+        return postOf(
+          (
+            await db.query<TimelinePostRow>(
+              `SELECT ${postColumns} FROM ${postSource} WHERE p.work_id=$1`,
+              [workId],
+            )
+          ).rows[0]!,
+        );
       },
     );
   }

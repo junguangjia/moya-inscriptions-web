@@ -360,13 +360,29 @@ export const timelineEntryTag = (
 
 export type TimelineRowLayout = "phone" | "tablet" | "wide";
 
-/** Phone meta carries the columns tablet and wide print on their own. */
+/**
+ * timeline-posts-v1: 「N 篇帖子」 for a row with posts, null for none (a row
+ * never says it has none).
+ */
+export const timelinePostCountText = (count: number): string | null =>
+  Number.isInteger(count) && count > 0 ? `${count} 篇帖子` : null;
+
+/**
+ * Phone meta carries the columns tablet and wide print on their own. A phone
+ * row with posts ends on their count instead of 保管 (Figma C2), so the meta
+ * stays one line; tablet and wide print the count after the name.
+ */
 export const timelineEntryMeta = (
   entry: TimelineEntry,
   layout: TimelineRowLayout,
+  postCount = 0,
 ): string =>
   (layout === "phone"
-    ? [entry.dateLabel, entry.province, entry.holder]
+    ? [
+        entry.dateLabel,
+        entry.province,
+        timelinePostCountText(postCount) ?? entry.holder,
+      ]
     : [entry.dateLabel]
   )
     .filter((part) => part !== null)
@@ -807,17 +823,44 @@ export interface TimelineRowMetrics {
   readonly layout: TimelineRowLayout;
   readonly listWidth: number;
   readonly measure: TimelineTextMeasure;
+  /**
+   * timeline-posts-v1: the viewer's post count per entry id. The rows print
+   * the same counts, so an estimate and a rendered row agree.
+   */
+  readonly postCounts?: ReadonlyMap<string, number> | undefined;
 }
+
+/** The gap before the count that follows the name on tablet and wide rows. */
+export const TIMELINE_TITLE_COUNT_GAP = 6;
+
+/** The width the name takes on its lines, the count after it included. */
+export const timelineTitleWidth = (
+  entry: TimelineEntry,
+  layout: TimelineRowLayout,
+  measure: TimelineTextMeasure,
+  postCount = 0,
+): number => {
+  const title = entry.onAxis ? entry.title : entry.fullTitle;
+  const count = layout === "phone" ? null : timelinePostCountText(postCount);
+  return (
+    measure(title, "title") +
+    (count === null ? 0 : TIMELINE_TITLE_COUNT_GAP + measure(count, "meta"))
+  );
+};
 
 const entryRowHeight = (
   row: TimelineEntryRow,
-  { layout, listWidth, measure }: TimelineRowMetrics,
+  { layout, listWidth, measure, postCounts }: TimelineRowMetrics,
 ): number => {
   const { entry } = row;
+  const postCount = postCounts?.get(entry.id) ?? 0;
   const content = timelineContentWidth(layout, listWidth);
-  const title = entry.onAxis ? entry.title : entry.fullTitle;
-  const titleLines = lineCount(measure(title, "title"), content, 2);
-  const meta = timelineEntryMeta(entry, layout);
+  const titleLines = lineCount(
+    timelineTitleWidth(entry, layout, measure, postCount),
+    content,
+    2,
+  );
+  const meta = timelineEntryMeta(entry, layout, postCount);
   const tag = timelineEntryTag(entry);
   const metaLines =
     tag !== null

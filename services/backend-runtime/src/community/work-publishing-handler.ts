@@ -273,6 +273,19 @@ export const handleWorkPublishingRequest = async (
         );
         return;
       }
+      // timeline-posts-v1: attach, move or detach the work's timeline entry.
+      if (method === "POST" && leaf === "timeline-entry") {
+        const actor = requireActor();
+        const workId = segment("workId", id);
+        reply(
+          await service.setTimelineEntry(
+            actor,
+            workId,
+            command("timelineEntry", await body()),
+          ),
+        );
+        return;
+      }
     }
 
     if (resource === "sessions" && method === "POST") {

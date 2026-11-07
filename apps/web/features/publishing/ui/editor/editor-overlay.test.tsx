@@ -183,6 +183,7 @@ vi.mock("../drafts/conflict-chooser", () => ({
 
 import { ArticleAvailability } from "../../../editorial-content/article-authoring/article-availability";
 import { ARTICLE_DRAFT_ORPHAN_NOTICE } from "../../../editorial-content/article-authoring/use-article-draft-creation";
+import { rememberTimelineEntryName } from "../../../home/timeline/timeline-session";
 import { identifyFiles } from "../../import-grouping";
 import { fileOf, jpeg } from "../../parsers/synthetic-media.test-support";
 import { PublishingProvider, useStagedItems } from "../../publishing-provider";
@@ -917,6 +918,144 @@ describe("Publishing editor", () => {
     expect(screen()).toBe("edit");
     expect(harness.transfer.starts.length).toBe(1);
     expect(fn("cancelItem")).not.toHaveBeenCalled();
+  });
+
+  it("gives an unfinished new-work session the entry 「上传这件碑帖」 was tapped on, and keeps the rest of its draft (timeline-posts-v1)", async () => {
+    rememberTimelineEntryName("tp-first-row", "合成甲碑");
+    rememberTimelineEntryName("tp-second-row", "合成乙碑");
+    const harness = await renderEditor({
+      type: "new",
+      timelineEntryId: "tp-first-row",
+    });
+    await act(async () => {
+      await staged.current!.stageFiles([fileOf(jpeg({}))], "picker");
+    });
+    await flush();
+    await act(async () => {
+      expect(staged.current!.confirm().ok).toBe(true);
+    });
+    await flush();
+    await flush();
+    await receiveStill(harness);
+    await goToPublish();
+    await type(titleInput(), "访碑草稿");
+    await click(query("[data-editor-save-now]"));
+    expect(fn("createDraft")).toHaveBeenCalledTimes(1);
+    expect(
+      (fn("createDraft").mock.calls[0]![0] as { content: WorkDraftContent })
+        .content.timelineEntryId,
+    ).toBe("tp-first-row");
+    const session = editorRegistry.current(ACCOUNT)!;
+    const { editVersion } = session.get();
+
+    // Left while the photo processes: the session stays unfinished.
+    await harness.show(false);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await flush();
+    expect(editorRegistry.current(ACCOUNT)).toBe(session);
+
+    // 「上传这件碑帖」 on another entry opens that same session.
+    await harness.rerender({ type: "new", timelineEntryId: "tp-second-row" });
+    await harness.show(true);
+    expect(editorRegistry.current(ACCOUNT)).toBe(session);
+    expect(session.get()).toMatchObject({
+      timelineEntryId: "tp-second-row",
+      title: "访碑草稿",
+      editVersion: editVersion + 1,
+    });
+    expect(titleInput()?.value).toBe("访碑草稿");
+    expect(query("[data-publish-timeline-entry]")?.textContent).toContain(
+      "合成乙碑",
+    );
+    // An author edit like any other: the next save carries it.
+    await click(query("[data-editor-save-now]"));
+    const saves = [
+      ...fn("saveDraft").mock.calls,
+      ...fn("saveDraftNow").mock.calls,
+    ] as [string, { content: WorkDraftContent }][];
+    expect(saves.at(-1)![1].content).toMatchObject({
+      title: "访碑草稿",
+      timelineEntryId: "tp-second-row",
+    });
+    // Once per opening: a later choice in the editor is never taken back.
+    act(() => session.setTimelineEntry(null));
+    await harness.rerender();
+    expect(session.get().timelineEntryId).toBeNull();
+    // Nor by a later mount: the editor entry no longer carries the tap.
+    const spent = harness.controls.replaceTarget.mock.calls.at(
+      -1,
+    )![0] as EditorTarget;
+    expect(spent).not.toHaveProperty("timelineEntryId");
+    await leaveOverlay(harness);
+    await harness.rerender(spent);
+    await harness.show(true);
+    expect(editorRegistry.current(ACCOUNT)).toBe(session);
+    expect(session.get().timelineEntryId).toBeNull();
+  });
+
+  it("spends a tapped entry once applied: a later mount of its editor entry, or the session's own target, never takes back the author's choice (timeline-posts-v1)", async () => {
+    rememberTimelineEntryName("tp-first-row", "合成甲碑");
+    const harness = await renderEditor({
+      type: "new",
+      timelineEntryId: "tp-first-row",
+    });
+    const session = editorRegistry.current(ACCOUNT)!;
+    expect(session.get().timelineEntryId).toBe("tp-first-row");
+    // The history entry (a reload, Back then Forward) and the session's
+    // target (返回正在编辑的作品) drop the tap; no draft exists yet.
+    expect(harness.controls.replaceTarget).toHaveBeenCalledExactlyOnceWith({
+      type: "new",
+    });
+    expect(session.get().target).toEqual({ type: "new" });
+
+    // The author writes and clears 关联词条 without saving a draft.
+    await goToPublish();
+    await type(titleInput(), "未存的访碑");
+    act(() => session.setTimelineEntry(null));
+    await flush();
+    expect(fn("createDraft")).not.toHaveBeenCalled();
+    await leaveOverlay(harness);
+    expect(editorRegistry.current(ACCOUNT)).toBe(session);
+
+    // The shell mounts the editor again for the entry history now holds.
+    await harness.rerender({ type: "new" });
+    await harness.show(true);
+    expect(editorRegistry.current(ACCOUNT)).toBe(session);
+    expect(session.get()).toMatchObject({
+      timelineEntryId: null,
+      title: "未存的访碑",
+    });
+    expect(harness.controls.replaceTarget).toHaveBeenCalledOnce();
+  });
+
+  it("never drops a tapped entry into an unfinished Thread post: it says another edit is open (timeline-posts-v1)", async () => {
+    const threadId = `thread-${"3".repeat(32)}`;
+    const harness = await renderEditor({ type: "new", threadId });
+    await goToPublish();
+    await type(titleInput(), "话题里的帖子");
+    await flush();
+    const thread = editorRegistry.current(ACCOUNT)!;
+    await leaveOverlay(harness);
+    expect(editorRegistry.current(ACCOUNT)).toBe(thread);
+
+    // 「上传这件碑帖」 while that post is unfinished.
+    await harness.rerender({ type: "new", timelineEntryId: "tp-first-row" });
+    await harness.show(true);
+    expect(query("[data-editor-other-session]")).not.toBeNull();
+    expect(titleInput()).toBeNull();
+    expect(thread.get()).toMatchObject({
+      timelineEntryId: null,
+      title: "话题里的帖子",
+    });
+    expect(harness.controls.replaceTarget).not.toHaveBeenCalled();
+    // Back to it as it was: the Thread post, with no entry.
+    await click(buttonByText("回到那项编辑"));
+    expect(harness.controls.replaceTarget).toHaveBeenCalledExactlyOnceWith({
+      type: "new",
+      threadId,
+    });
   });
 
   it("ends a clean session when the editor is left", async () => {

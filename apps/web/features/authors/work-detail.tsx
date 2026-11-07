@@ -18,6 +18,17 @@ import {
   PublishingRequestError,
 } from "../publishing/publishing-data";
 import { usePublishingEntry } from "../publishing/publishing-entry";
+import {
+  CatalogTimelinePosts,
+  TimelineEntryPickerSheet,
+  WorkTimelineEntryLine,
+  useContentTimelineEntry,
+} from "../home/timeline/timeline-detail";
+import {
+  invalidateTimelinePostCounts,
+  setWorkTimelineEntry,
+} from "../home/timeline/timeline-posts-data";
+import type { ContentTimelineEntryValue } from "../home/timeline/timeline-detail";
 import { requestIdentity } from "../shell/request-identity";
 import { authorClient, AuthorRequestError } from "./author-data";
 import { AuthorDialog } from "./author-dialog";
@@ -120,7 +131,9 @@ export const peekWorkDetail: CatalogDetailPresentationPeek = (id) => {
 
 type ManagementIntent =
   | { readonly kind: "visibility"; readonly visibility: WorkVisibility }
-  | { readonly kind: "delete" };
+  | { readonly kind: "delete" }
+  /** timeline-posts-v1: attach to an entry, move, or take off (`null`). */
+  | { readonly kind: "timeline"; readonly entry: ContentTimelineEntryValue };
 
 interface PendingIntent {
   readonly intent: ManagementIntent;
@@ -159,21 +172,29 @@ const DELETED_NOTICE = {
 const WorkManagement = ({
   detail,
   onDeleted,
+  onTimelineEntry,
   onVisibility,
   deleted,
+  timelineEntry,
   visibility,
 }: {
   detail: WorkDetail;
   onDeleted: () => void;
+  /** timeline-posts-v1: the entry the work is attached to after a change. */
+  onTimelineEntry: (entry: ContentTimelineEntryValue) => void;
   onVisibility: (visibility: WorkVisibility) => void;
   /** Without a Detail that can withdraw its content, only the result stays. */
   deleted: boolean;
+  /** The work's entry; undefined until it is known. */
+  timelineEntry: ContentTimelineEntryValue | undefined;
   visibility: WorkVisibility | undefined;
 }) => {
   const author = useAuthors();
   const { openEditor } = usePublishingEntry();
   const withdraw = useCatalogDetailWithdrawal();
   const [confirm, setConfirm] = useState<"delete" | null>(null);
+  // timeline-posts-v1: 关联词条's picker, in the timeline's sheet.
+  const [picking, setPicking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{
     readonly tone: "status" | "error";
@@ -181,6 +202,7 @@ const WorkManagement = ({
   } | null>(null);
   const [unconfirmed, setUnconfirmed] = useState<PendingIntent | null>(null);
   const deleteRef = useRef<HTMLButtonElement>(null);
+  const timelineEntryRef = useRef<HTMLButtonElement>(null);
   const statusRef = useRef<HTMLParagraphElement>(null);
   const busyRef = useRef(false);
   const mounted = useRef(true);
@@ -211,10 +233,40 @@ const WorkManagement = ({
     if (pending !== unconfirmed) setUnconfirmed(null);
     const { intent, requestId } = pending;
     try {
+      if (intent.kind === "timeline") {
+        const result = await setWorkTimelineEntry(detail.id, {
+          requestId,
+          entryId: intent.entry?.id ?? null,
+        });
+        if (!mounted.current) return;
+        // The answer, not the request, decides what is shown.
+        const attached =
+          result.entryId !== null && intent.entry?.id === result.entryId
+            ? intent.entry
+            : null;
+        onTimelineEntry(attached);
+        setUnconfirmed(null);
+        author.notify("");
+        setMessage({
+          tone: "status",
+          text:
+            attached !== null
+              ? `已关联到：${attached.fullTitle}`
+              : result.entryId === null
+                ? "已取消关联词条"
+                : "关联词条已更新",
+        });
+        // The timeline's row counts read again when it comes back.
+        invalidateTimelinePostCounts();
+        return;
+      }
       if (intent.kind === "delete") {
         await publishingClient.deleteWork(detail.id, { requestId });
         // Never shown again, even from a read already in progress.
         forgetWorkSnapshot(detail.id);
+        // timeline-posts-v1: the deletion took the post off its entry, so
+        // the timeline's row counts read again, as after a change of entry.
+        invalidateTimelinePostCounts();
         if (!mounted.current) return;
         setUnconfirmed(null);
         // A toast of an earlier action (作品已提交) no longer describes this work.
@@ -272,150 +324,202 @@ const WorkManagement = ({
     });
   };
 
+  // timeline-posts-v1: 关联词条's sheet closed (取消, Back, a choice); the
+  // focus goes back to its opener, and a change then reports in the status.
+  const closePicker = () => {
+    setPicking(false);
+    window.requestAnimationFrame(() => {
+      if (timelineEntryRef.current?.isConnected)
+        timelineEntryRef.current.focus();
+    });
+  };
+
   const unavailable = busy ? true : undefined;
 
   return (
-    <section
-      aria-label="作品管理"
-      className={detailStyles.workManagement}
-      data-work-management=""
-    >
-      {deleted ? null : (
-        <div className={detailStyles.workManagementRow}>
-          <button
-            aria-disabled={unavailable}
-            aria-label="编辑"
-            className={detailStyles.workIcon}
-            onClick={(event) => {
-              if (busyRef.current) return;
-              // The editor's own status replaces any earlier toast.
-              author.notify("");
-              openEditor({ type: "work", id: detail.id }, event.currentTarget);
-            }}
-            type="button"
-          >
-            <svg
-              aria-hidden="true"
-              viewBox="0 0 24 24"
-              width="24"
-              height="24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.7"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="m15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-5-5L4 14z" />
-            </svg>
-          </button>
-          <button
-            aria-disabled={unavailable}
-            aria-label="永久删除"
-            className={detailStyles.workIcon}
-            onClick={() => {
-              if (!busyRef.current) setConfirm("delete");
-            }}
-            ref={deleteRef}
-            type="button"
-          >
-            <svg
-              aria-hidden="true"
-              viewBox="0 0 24 24"
-              width="24"
-              height="24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.7"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7" />
-            </svg>
-          </button>
-          {visibility === undefined ? null : (
-            <button
-              aria-checked={visibility === "public"}
-              aria-disabled={unavailable}
-              aria-label="公开"
-              className={detailStyles.visibilitySwitch}
-              data-work-visibility={visibility}
-              onClick={() => {
-                if (!busyRef.current)
-                  start({
-                    kind: "visibility",
-                    visibility: visibility === "public" ? "self" : "public",
-                  });
-              }}
-              role="switch"
-              title={
-                visibility === "public"
-                  ? "关闭后仅自己可见"
-                  : "开启后按当前发布规则公开"
-              }
-              type="button"
-            >
-              <span
-                aria-hidden="true"
-                className={detailStyles.visibilityTrack}
-              />
-              <span>公开</span>
-            </button>
-          )}
-        </div>
-      )}
-      <p
-        aria-live="polite"
-        className={detailStyles.workManagementStatus}
-        data-tone={message?.tone}
-        data-work-management-status=""
-        ref={statusRef}
-        role="status"
-        tabIndex={-1}
+    <>
+      <section
+        aria-label="作品管理"
+        className={detailStyles.workManagement}
+        data-work-management=""
       >
-        {message?.text}
-      </p>
-      {unconfirmed !== null &&
-      !deleted &&
-      (busy || message?.tone === "error") ? (
-        <div className={detailStyles.workManagementRow}>
-          <button
-            aria-disabled={unavailable}
-            onClick={() => void run(unconfirmed)}
-            type="button"
-          >
-            重试
-          </button>
-        </div>
-      ) : null}
-      {confirm === "delete" ? (
-        <AuthorDialog
-          onClose={() => closeConfirm(deleteRef.current)}
-          title="永久删除"
-        >
-          <p className="phase4-muted">
-            作品及其草稿、历史版本将永久删除，无法恢复。
-          </p>
-          <div className="phase4-actions">
+        {deleted ? null : (
+          <div className={detailStyles.workManagementRow}>
             <button
-              data-confirm-delete=""
-              onClick={() => {
-                closeConfirm(deleteRef.current);
-                start({ kind: "delete" });
+              aria-disabled={unavailable}
+              aria-label="编辑"
+              className={detailStyles.workIcon}
+              onClick={(event) => {
+                if (busyRef.current) return;
+                // The editor's own status replaces any earlier toast.
+                author.notify("");
+                openEditor(
+                  { type: "work", id: detail.id },
+                  event.currentTarget,
+                );
               }}
               type="button"
             >
-              永久删除
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                width="24"
+                height="24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="m15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-5-5L4 14z" />
+              </svg>
             </button>
             <button
-              onClick={() => closeConfirm(deleteRef.current)}
+              aria-disabled={unavailable}
+              aria-label="永久删除"
+              className={detailStyles.workIcon}
+              onClick={() => {
+                if (!busyRef.current) setConfirm("delete");
+              }}
+              ref={deleteRef}
               type="button"
             >
-              取消
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                width="24"
+                height="24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7" />
+              </svg>
+            </button>
+            {visibility === undefined ? null : (
+              <button
+                aria-checked={visibility === "public"}
+                aria-disabled={unavailable}
+                aria-label="公开"
+                className={detailStyles.visibilitySwitch}
+                data-work-visibility={visibility}
+                onClick={() => {
+                  if (!busyRef.current)
+                    start({
+                      kind: "visibility",
+                      visibility: visibility === "public" ? "self" : "public",
+                    });
+                }}
+                role="switch"
+                title={
+                  visibility === "public"
+                    ? "关闭后仅自己可见"
+                    : "开启后按当前发布规则公开"
+                }
+                type="button"
+              >
+                <span
+                  aria-hidden="true"
+                  className={detailStyles.visibilityTrack}
+                />
+                <span>公开</span>
+              </button>
+            )}
+          </div>
+        )}
+        {deleted ? null : (
+          <div className={detailStyles.workManagementRow}>
+            <button
+              aria-disabled={unavailable}
+              aria-haspopup="dialog"
+              data-work-timeline-entry-open=""
+              onClick={() => {
+                if (!busyRef.current) setPicking(true);
+              }}
+              ref={timelineEntryRef}
+              type="button"
+            >
+              关联词条
             </button>
           </div>
-        </AuthorDialog>
+        )}
+        <p
+          aria-live="polite"
+          className={detailStyles.workManagementStatus}
+          data-tone={message?.tone}
+          data-work-management-status=""
+          ref={statusRef}
+          role="status"
+          tabIndex={-1}
+        >
+          {message?.text}
+        </p>
+        {unconfirmed !== null &&
+        !deleted &&
+        (busy || message?.tone === "error") ? (
+          <div className={detailStyles.workManagementRow}>
+            <button
+              aria-disabled={unavailable}
+              onClick={() => void run(unconfirmed)}
+              type="button"
+            >
+              重试
+            </button>
+          </div>
+        ) : null}
+        {confirm === "delete" ? (
+          <AuthorDialog
+            onClose={() => closeConfirm(deleteRef.current)}
+            title="永久删除"
+          >
+            <p className="phase4-muted">
+              作品及其草稿、历史版本将永久删除，无法恢复。
+            </p>
+            <div className="phase4-actions">
+              <button
+                data-confirm-delete=""
+                onClick={() => {
+                  closeConfirm(deleteRef.current);
+                  start({ kind: "delete" });
+                }}
+                type="button"
+              >
+                永久删除
+              </button>
+              <button
+                onClick={() => closeConfirm(deleteRef.current)}
+                type="button"
+              >
+                取消
+              </button>
+            </div>
+          </AuthorDialog>
+        ) : null}
+      </section>
+      {/* Outside the section, whose stylesheet styles every button in it. */}
+      {picking && !deleted ? (
+        <TimelineEntryPickerSheet
+          onChoose={(entry) => {
+            if ((entry?.id ?? null) === (timelineEntry?.id ?? null)) return;
+            start({
+              kind: "timeline",
+              entry:
+                entry === null
+                  ? null
+                  : {
+                      id: entry.id,
+                      title: entry.title,
+                      fullTitle: entry.fullTitle,
+                    },
+            });
+          }}
+          onClose={closePicker}
+          selectedId={timelineEntry?.id ?? null}
+        />
       ) : null}
-    </section>
+    </>
   );
 };
 
@@ -535,6 +639,11 @@ export const DetailActions = ({
     type: detail.contentType === "work" ? "work" : "catalog",
     id: detail.id,
   } as const;
+  // timeline-posts-v1: 收录于 and the author's 关联词条, read after paint.
+  const { entry: timelineEntry, replace: replaceTimelineEntry } =
+    useContentTimelineEntry(
+      detail.contentType === "work" && deletedId !== detail.id ? target : null,
+    );
   // Only the confirmed author sees management; a third party never does.
   const owner =
     detail.contentType === "work" &&
@@ -575,11 +684,22 @@ export const DetailActions = ({
       author.notify("浏览记录无法保存在本机");
     }
   }, [detail.id, author.viewer?.id, author.checking, recordable]);
+  // timeline-posts-v1 (D1-A): a Catalog record's posts follow its actions,
+  // before the discussion, in every composition; browse-only keeps them.
   if (detail.contentType !== "work")
-    return browseOnly ? null : (
+    return (
       <div>
-        <ContentActions target={target} title={detail.title} />{" "}
+        {browseOnly ? null : (
+          <>
+            <ContentActions target={target} title={detail.title} />{" "}
+          </>
+        )}
+        <CatalogTimelinePosts catalogId={detail.id} />
       </div>
+    );
+  const collected =
+    timelineEntry === undefined || timelineEntry === null || deleted ? null : (
+      <WorkTimelineEntryLine entry={timelineEntry} />
     );
   /**
    * The answer names the visibility only. Self-only is never seen by others;
@@ -651,6 +771,7 @@ export const DetailActions = ({
   if (browseOnly)
     return (
       <div>
+        {collected}
         <div className={detailStyles.workAuthorRow}>
           <WorkAuthor detail={detail} plain />
           {notice === null ? null : <p data-work-notice="">{notice}</p>}
@@ -659,6 +780,7 @@ export const DetailActions = ({
     );
   return (
     <div>
+      {collected}
       <div className={detailStyles.workAuthorRow}>
         <WorkAuthor detail={detail} />
         {notice === null ? null : <p data-work-notice="">{notice}</p>}
@@ -667,8 +789,10 @@ export const DetailActions = ({
         <WorkManagement
           detail={detail}
           onDeleted={() => setDeletedId(detail.id)}
+          onTimelineEntry={replaceTimelineEntry}
           onVisibility={followVisibility}
           deleted={deleted}
+          timelineEntry={timelineEntry}
           visibility={changedVisibility ?? detail.visibility}
         />
       ) : null}

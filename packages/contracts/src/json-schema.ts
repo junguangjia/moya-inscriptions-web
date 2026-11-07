@@ -319,6 +319,8 @@ import {
   contentCollectionPageSchema,
   inscriptionFilterOptionsSchema,
   timelineSchema,
+  timelinePostCountsSchema,
+  contentTimelineEntrySchema,
   contentStateSchema,
   savedResultSchema,
   deletedResultSchema,
@@ -349,6 +351,8 @@ export const authorCommunityJsonSchemas = {
   ContentCollectionPage: toJsonSchema(contentCollectionPageSchema),
   InscriptionFilterOptions: toJsonSchema(inscriptionFilterOptionsSchema),
   Timeline: toJsonSchema(timelineSchema),
+  TimelinePostCounts: toJsonSchema(timelinePostCountsSchema),
+  ContentTimelineEntry: toJsonSchema(contentTimelineEntrySchema),
   ContentState: toJsonSchema(contentStateSchema),
   SavedResult: toJsonSchema(savedResultSchema),
   DeletedResult: toJsonSchema(deletedResultSchema),
@@ -426,6 +430,8 @@ import {
   workSubmissionResultSchema,
   publishingReadinessCommandSchema,
   publishingReadinessSchema,
+  workTimelineEntryCommandSchema,
+  workTimelineEntryResultSchema,
   workVisibilityCommandSchema,
   workVisibilityResultSchema,
 } from "./schemas.js";
@@ -493,6 +499,8 @@ export const workPublishingJsonSchemas = {
   EditableWork: toJsonSchema(editableWorkSchema),
   WorkVisibilityCommand: toJsonSchema(workVisibilityCommandSchema),
   WorkVisibilityResult: toJsonSchema(workVisibilityResultSchema),
+  WorkTimelineEntryCommand: toJsonSchema(workTimelineEntryCommandSchema),
+  WorkTimelineEntryResult: toJsonSchema(workTimelineEntryResultSchema),
   PublishingLimits: toJsonSchema(publishingLimitsSchema),
 };
 

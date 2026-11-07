@@ -14,6 +14,7 @@ import {
 import { authorClient } from "../authors/author-data";
 import { useAuthors } from "../authors/author-context";
 import { forgetWorkSnapshot } from "../authors/work-snapshots";
+import { invalidateTimelinePostCounts } from "../home/timeline/timeline-posts-data";
 import {
   detectDeviceClass,
   resolveRuntimePresentationPlatform,
@@ -111,6 +112,8 @@ export const PublishingProvider = ({
           // The held record predates the submission: its Detail opens
           // through loading again and its feed bodies read it again.
           forgetWorkSnapshot(id);
+          // timeline-posts-v1: a new post may have joined a timeline row.
+          invalidateTimelinePostCounts();
         },
       }),
   );

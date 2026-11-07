@@ -26,6 +26,7 @@ import {
   profileUpdateSchema,
   relationshipUpdateSchema,
   requestIdentitySchema,
+  timelineEntryIdSchema,
   userMediaIdSchema,
   workPublishingFailureCodeSchema,
 } from "@moya/contracts/schemas";
@@ -249,13 +250,30 @@ export const handleAuthorRequest = async (
       reply(await service.timeline());
       return;
     }
+    // timeline-posts-v1: the posts attached to timeline rows, per viewer. The
+    // response above stays as it is. `post-counts` is itself a valid entry id,
+    // so it is reserved: no `timeline/{entryId}` route may join it.
+    if (method === "GET" && path[0] === "timeline") {
+      if (path.length === 2 && path[1] === "post-counts") {
+        if (url.search) throw new InvalidInput();
+        reply(await service.timelinePostCounts(viewer));
+        return;
+      }
+      if (path.length === 3 && path[2] === "posts") {
+        const entryId = parsed(timelineEntryIdSchema, path[1]);
+        reply(await service.timelineEntryPosts(entryId, viewer, query()));
+        return;
+      }
+    }
     if (
       method === "GET" &&
       path.length === 4 &&
       path[0] === "content" &&
       (path[1] === "catalog" || path[1] === "work") &&
       path[2] &&
-      (path[3] === "card" || path[3] === "state")
+      (path[3] === "card" ||
+        path[3] === "state" ||
+        path[3] === "timeline-entry")
     ) {
       if (url.search) throw new InvalidInput();
       let id: string;
@@ -267,6 +285,12 @@ export const handleAuthorRequest = async (
       const target = parsed(contentIdentitySchema, { type: path[1], id });
       if (path[3] === "card") {
         reply(await service.card(target, viewer));
+        return;
+      }
+      // timeline-posts-v1: the row a visible work is attached to, or the row
+      // linking a published Catalog record (Catalog Detail's 帖子 section).
+      if (path[3] === "timeline-entry") {
+        reply(await service.contentTimelineEntry(target, viewer));
         return;
       }
       await service.assertTarget(target, viewer);

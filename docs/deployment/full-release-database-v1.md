@@ -265,6 +265,29 @@ matches after it; a new id starts at version 1. The order is: apply the
 migration, re-apply the runtime grants, import, then start the new builds. With
 an empty table the feed reads as unavailable.
 
+Timeline posts (`timeline-posts-v1`, community migration `20261107010000`) add
+`community.timeline_entry_posts`, one row per work: the entry it is attached to,
+its state (`attached`, `detached` or `withheld`), the entry an operator last
+withheld it from, who attached it (`author`, `owner` or `ai-admin`) and its
+version. The entry key is checked at commit, so the import's delete and
+re-insert keeps the posts of every id it keeps. `grant-runtime.sql` gives the
+App role, in guarded blocks after revoking any table-level `INSERT` or `UPDATE`:
+`SELECT`; `INSERT` on `work_id`, `entry_id`, `attached_by`, `updated_by`,
+`attached_at` and `updated_at`; `UPDATE` on every column except `work_id`; no
+`DELETE` or `TRUNCATE`. The Backend writes the table for the author command, the
+submission, an author's deletion of a work and the operator routes; the media
+worker will write it, once it runs this code, when the account purge or the
+recycle bin's purge detaches a deleted work's row. The order is: apply the
+migration, re-apply the runtime grants, run the App-role preflight for timeline
+posts in
+[`docs/development/home-timeline-v1.md`](../development/home-timeline-v1.md),
+then start the new builds: the Backend, the Admin and the Web; the media worker
+stays on its build. No import is needed. A later import refuses, with counts
+only, a file that drops a row holding attached posts. A rollback first takes
+`timelineEntryId` out of stored drafts and their history, with the statement in
+that document's release section, because the previous Backend parses them
+strictly.
+
 ## Readiness and verification
 
 Community startup validates every required ledger filename/checksum read-only;

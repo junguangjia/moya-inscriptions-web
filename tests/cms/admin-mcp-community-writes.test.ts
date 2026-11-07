@@ -447,6 +447,17 @@ const newTimelineEntry = async (startYear = newTimelineYear()) => {
   );
   return id;
 };
+/** timeline-posts-v1: a public work and a visible row for it, with no post yet. */
+const newTimelinePost = async () => ({
+  id: await newWork(await newUser()),
+  entryId: await newTimelineEntry(),
+  expectedVersion: 0,
+});
+const postRow = (workId: string) =>
+  one(
+    "SELECT entry_id,state,withheld_entry_id,attached_by,updated_by,version FROM community.timeline_entry_posts WHERE work_id=$1",
+    [workId],
+  );
 /** A start year holding two imported rows, and a reorder of them. */
 const newTimelineReorder = async () => {
   const startYear = newTimelineYear();
@@ -962,6 +973,20 @@ const LABEL_CASES: Readonly<
       minimum: 2,
     };
   },
+  "community.set-timeline-post": async () => {
+    const command = await newTimelinePost();
+    return {
+      answer: await execute("community.set-timeline-post", command),
+      statements: [
+        contentEvents(command.id),
+        [
+          "SELECT attached_by AS label FROM community.timeline_entry_posts WHERE work_id=$1 UNION ALL SELECT updated_by FROM community.timeline_entry_posts WHERE work_id=$1",
+          [command.id],
+        ],
+      ],
+      minimum: 3,
+    };
+  },
   "community.reorder-timeline": async () => {
     const command = await newTimelineReorder();
     return {
@@ -1218,6 +1243,170 @@ describe("the Home timeline, written by AI", () => {
         hidden_at: null,
       })),
     );
+  });
+});
+
+// timeline-posts-v1: what a write on a post's row answers and leaves.
+describe("posts on the Home timeline, written by AI", () => {
+  it("attaches, moves and withholds a post by its work, and keeps the row's id out of the answer and the ledger", async () => {
+    const work = await newWork(await newUser(), `Title ${HOSTILE}`);
+    const [first, second] = [
+      await newTimelineEntry(),
+      await newTimelineEntry(),
+    ];
+    const requestId = randomUUID();
+    const attached = await execute(
+      "community.set-timeline-post",
+      { id: work, entryId: first, expectedVersion: 0 },
+      requestId,
+    );
+    expect(attached).toMatchObject({ ok: true, data: { applied: [work] } });
+    expect(attached.data.results).toEqual([
+      {
+        index: 0,
+        id: work,
+        title: `Title ${HOSTILE}`,
+        state: "attached",
+        version: 1,
+        publiclyVisible: true,
+      },
+    ]);
+    expect(attached.untrusted).toEqual(["/data/results/*/title"]);
+    // The row's id is the Owner's own text, so nothing here echoes it.
+    expect(JSON.stringify(attached)).not.toContain(first);
+    const { drizzle } = payload.db as unknown as Pick<
+      PostgresAdapter,
+      "drizzle"
+    >;
+    const { rows: audit } = await drizzle.execute(
+      sql`SELECT * FROM mcp_audit_events WHERE request_id = ${requestId} AND key_id = ${String(keyId)}`,
+    );
+    expect(audit.length).toBeGreaterThan(0);
+    expect(JSON.stringify(audit)).not.toContain(HOSTILE);
+    expect(JSON.stringify(audit)).not.toContain(first);
+    expect(audit.some((row) => row.target_id === work)).toBe(true);
+    expect(
+      (
+        await execute("community.set-timeline-post", {
+          id: work,
+          entryId: second,
+          expectedVersion: 1,
+        })
+      ).data.results,
+    ).toMatchObject([{ state: "attached", version: 2 }]);
+    expect(
+      (
+        await execute("community.set-timeline-post", {
+          id: work,
+          entryId: null,
+          state: "withheld",
+          expectedVersion: 2,
+        })
+      ).data.results,
+    ).toMatchObject([{ id: work, state: "withheld", version: 3 }]);
+    expect(await postRow(work)).toEqual({
+      entry_id: null,
+      state: "withheld",
+      withheld_entry_id: second,
+      attached_by: AI,
+      updated_by: AI,
+      version: 3,
+    });
+    // Asking again for what is already true moves nothing.
+    expect(
+      await execute("community.set-timeline-post", {
+        id: work,
+        entryId: null,
+        state: "withheld",
+        expectedVersion: 3,
+      }),
+    ).toMatchObject({ ok: true, data: { already_applied: [work] } });
+    expect(
+      await countOf(
+        "community.content_operator_events",
+        "content_id=$1 AND action='timeline.post'",
+        [work],
+      ),
+    ).toBe(3);
+  });
+
+  it("names each refusal by its code, answers a stale version as a conflict, and changes nothing", async () => {
+    const hidden = await newWork(await newUser());
+    await setup.query(
+      "UPDATE community.works SET operator_state='hidden' WHERE id=$1",
+      [hidden],
+    );
+    const work = await newWork(await newUser());
+    const entry = await newTimelineEntry();
+    const hiddenEntry = await newTimelineEntry();
+    await setup.query(
+      "UPDATE community.timeline_entries SET hidden_at=CURRENT_TIMESTAMP WHERE entry_id=$1",
+      [hiddenEntry],
+    );
+    const refusals: readonly (readonly [Json, string, string])[] = [
+      [
+        { id: hidden, entryId: entry, expectedVersion: 0 },
+        "failed",
+        "WORK_NOT_PUBLIC",
+      ],
+      [
+        { id: work, entryId: hiddenEntry, expectedVersion: 0 },
+        "failed",
+        "ENTRY_UNAVAILABLE",
+      ],
+      [
+        { id: work, entryId: `entry-${run}-none`, expectedVersion: 0 },
+        "failed",
+        "ENTRY_UNAVAILABLE",
+      ],
+      [
+        { id: work, entryId: null, state: "withheld", expectedVersion: 0 },
+        "failed",
+        "POST_NOT_ATTACHED",
+      ],
+      [
+        { id: work, entryId: entry, expectedVersion: 4 },
+        "conflict",
+        "STATE_CONFLICT",
+      ],
+    ];
+    for (const [input, state, code] of refusals)
+      expect(
+        (await execute("community.set-timeline-post", input)).data,
+        code,
+      ).toEqual({ [state]: [{ index: 0, id: input.id, code }] });
+    expect(
+      await execute("community.set-timeline-post", {
+        id: opaque("work"),
+        entryId: entry,
+        expectedVersion: 0,
+      }),
+    ).toMatchObject({ ok: false, code: "NOT_FOUND" });
+    // A withhold names no row: the Backend refuses the command as malformed.
+    expect(
+      (
+        await execute("community.set-timeline-post", {
+          id: work,
+          entryId: entry,
+          state: "withheld",
+          expectedVersion: 0,
+        })
+      ).data,
+    ).toEqual({ failed: [{ index: 0, id: work, code: "INVALID_COMMAND" }] });
+    expect(
+      await countOf(
+        "community.timeline_entry_posts",
+        "work_id=ANY($1::text[])",
+        [[hidden, work]],
+      ),
+    ).toBe(0);
+    expect(
+      await countOf(
+        "community.content_operator_events",
+        "content_id=ANY($1::text[])",
+        [[hidden, work]],
+      ),
+    ).toBe(0);
   });
 });
 
@@ -1725,6 +1914,7 @@ describe("a lost answer, retried with the same requestId", () => {
       title: `Once ${run}`,
     }),
     "community.reorder-timeline": newTimelineReorder,
+    "community.set-timeline-post": newTimelinePost,
   };
 
   it("has a case here for every write: a new one with none fails", () => {
@@ -2208,6 +2398,15 @@ describe("a self-only work, and everything under it", () => {
           target: { type: "work", id: fixture.work },
           enabled: false,
           position: 1,
+          expectedVersion: 0,
+        },
+      ],
+      [
+        "community.set-timeline-post",
+        {
+          id: fixture.work,
+          entryId: null,
+          state: "withheld",
           expectedVersion: 0,
         },
       ],

@@ -37,6 +37,8 @@ import {
   workSubmissionCommandSchema,
   workSubmissionReceiptSchema,
   workSubmissionResultSchema,
+  workTimelineEntryCommandSchema,
+  workTimelineEntryResultSchema,
   workVisibilityCommandSchema,
   workVisibilityResultSchema,
 } from "@moya/contracts/schemas";
@@ -69,6 +71,8 @@ import type {
   WorkSubmissionCommand,
   WorkSubmissionReceipt,
   WorkSubmissionResult,
+  WorkTimelineEntryCommand,
+  WorkTimelineEntryResult,
   WorkVisibilityCommand,
   WorkVisibilityResult,
 } from "@moya/contracts";
@@ -214,6 +218,9 @@ const failureMessages: Readonly<Record<PublishingRequestErrorCode, string>> = {
   thread_unavailable: "该话题已关闭或不可用，作品未发布",
   thread_conflict: "该作品已属于其他话题",
   thread_items_limit: "参与话题最多附 3 张静态图片",
+  timeline_entry_unavailable: "这个词条已不可用，请重新选择",
+  timeline_entry_conflict: "已发布的作品请在作品页关联词条",
+  timeline_entry_withheld: "这篇帖子不能再关联到这个词条",
   [PUBLISHING_DRAFT_CHANGED]: "草稿已在别处更改，未删除",
 };
 
@@ -600,6 +607,23 @@ export const publishingClient = {
       `publishing/works/${workSegment(workId)}/visibility`,
       workVisibilityResultSchema,
       command(workVisibilityCommandSchema, cmd),
+      signal,
+    ),
+
+  /**
+   * timeline-posts-v1: attaches an own work to a timeline entry, moves it, or
+   * takes it off (`entryId: null`). Takes effect at once and writes no
+   * revision; idempotent per request identity.
+   */
+  setTimelineEntry: async (
+    workId: string,
+    cmd: WorkTimelineEntryCommand,
+    signal?: AbortSignal,
+  ): Promise<WorkTimelineEntryResult> =>
+    post(
+      `publishing/works/${workSegment(workId)}/timeline-entry`,
+      workTimelineEntryResultSchema,
+      command(workTimelineEntryCommandSchema, cmd),
       signal,
     ),
 

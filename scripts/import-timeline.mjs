@@ -13,8 +13,9 @@ import console from "node:console";
  * one transaction with the migration role, so a reader sees the old set or the
  * new one. It holds the content-operator lock the Backend's operator writes
  * take, and refuses to discard rows an operator created, edited or hid unless
- * --replace-operator-edits says so. Output carries counts only: no row content
- * and no connection string.
+ * --replace-operator-edits says so, and refuses a file that drops a row holding
+ * attached posts (timeline-posts-v1). Output carries counts only: no row
+ * content and no connection string.
  */
 export const TIMELINE_MIGRATION_ID = "20261105235900";
 const migrationVariable = "APP_MIGRATION_DATABASE_URL";
@@ -25,6 +26,21 @@ export const CONTENT_OPERATOR_LOCK_SQL =
   "SELECT pg_advisory_xact_lock(hashtextextended('phase4-content-operator',0))";
 const OPERATOR_ROWS_SQL =
   "SELECT count(*)::integer AS total, count(*) FILTER (WHERE created_by<>'import' OR updated_by<>'import')::integer AS edited, count(*) FILTER (WHERE hidden_at IS NOT NULL)::integer AS hidden FROM community.timeline_entries";
+/**
+ * timeline-posts-v1 (migration 20261107010000): posts attach to rows through a
+ * foreign key checked at commit, so a replaced id keeps its posts. The table
+ * is absent on a database that migration has not reached; the timeline
+ * migration id above stays the same.
+ */
+export const POSTS_TABLE_SQL =
+  "SELECT to_regclass('community.timeline_entry_posts') IS NOT NULL AS present";
+/**
+ * Read after the replacement: what the deferred key would refuse at commit.
+ * Only an attached post names an entry. By then this transaction holds every
+ * replaced row, so no attach can land on a dropped id before it ends.
+ */
+export const DROPPED_POSTS_SQL =
+  "SELECT count(*)::integer AS posts, count(DISTINCT p.entry_id)::integer AS entries FROM community.timeline_entry_posts p WHERE p.entry_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM community.timeline_entries e WHERE e.entry_id=p.entry_id)";
 
 const entryColumns = [
   ["entry_id", (entry) => entry.id],
@@ -162,7 +178,9 @@ export const insertStatements = (
  * editor, visible. A replaced id comes back one version past the row it
  * replaces, so a version read before the import never matches the row that
  * replaces it; a new id, including one an earlier import dropped, starts at
- * version 1. One content-operator event records the counts.
+ * version 1. A file that drops a row holding attached posts is refused, with
+ * counts only, and changes nothing. One content-operator event records the
+ * counts.
  */
 export async function applyImport(
   pool,
@@ -201,6 +219,13 @@ export async function applyImport(
       replaced,
     ))
       await client.query(text, values);
+    if ((await client.query(POSTS_TABLE_SQL)).rows[0].present) {
+      const dropped = (await client.query(DROPPED_POSTS_SQL)).rows[0];
+      if (dropped.posts > 0)
+        refuse(
+          `The file drops ${dropped.entries} rows that hold ${dropped.posts} attached posts; keep those rows, or take their posts off first`,
+        );
+    }
     const counts = {
       entries: entries.length,
       replaced: total,

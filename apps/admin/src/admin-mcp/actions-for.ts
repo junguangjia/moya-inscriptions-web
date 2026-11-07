@@ -270,7 +270,10 @@ export const COMMUNITY_WRITES: Readonly<
   media_item: none("No op writes a media item; its jobs are publishing_job."),
   invitation: notBuilt("S10"),
   user: (id) => [write("community.moderate-user", { id })],
-  work: (id) => [write("community.moderate-work", { id })],
+  work: (id) => [
+    write("community.moderate-work", { id }),
+    write("community.set-timeline-post", { id }),
+  ],
   comment: (id) => [write("community.moderate-comment", { id })],
   report: (id) => [
     write("community.decide-report", { id }),
