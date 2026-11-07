@@ -1548,7 +1548,20 @@ const timelineYearSchema = z
   .min(-3000)
   .max(3000)
   .refine((year) => year !== 0);
-const timelineTextSchema = z.string().trim().min(1).max(200);
+/**
+ * PostgreSQL stores neither NUL nor an unpaired UTF-16 surrogate as text (the
+ * rule of `authorText` above and of the editorial `isWellFormedEditorialText`,
+ * which this module cannot import). Refused here, a timeline command carrying
+ * one answers INVALID_COMMAND instead of failing in the store.
+ */
+const isWellFormedTimelineText = (value: string) =>
+  !value.includes("\u0000") && !/[\uD800-\uDFFF]/u.test(value);
+const timelineTextSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .refine(isWellFormedTimelineText);
 const timelineEntryFields = {
   id: z.string().regex(/^[a-z0-9-]{1,64}$/),
   title: timelineTextSchema,
@@ -1568,7 +1581,7 @@ const timelineEntryFields = {
   groupTitle: timelineTextSchema.nullable(),
   province: timelineTextSchema.nullable(),
   holder: timelineTextSchema.nullable(),
-  catalogId: catalogIdSchema.nullable(),
+  catalogId: catalogIdSchema.refine(isWellFormedTimelineText).nullable(),
 };
 const addTimelineEntryIssues = (
   entry: {
@@ -1662,13 +1675,12 @@ export type TimelineEntrySetIssue =
   | { readonly code: "CATALOG_ALREADY_LINKED"; readonly index: number }
   | { readonly code: "TIMELINE_TOO_LARGE" };
 /**
- * The check every writer of the timeline runs over the whole set it is about to
- * store: the import over its file, each operator write over the stored rows with
- * its change applied, inside the shared lock. Each row parses as an import row,
- * the set holds at most TIMELINE_ENTRIES_MAXIMUM rows with distinct ids and
- * distinct Catalog links, and its response estimate stays within the limit.
- * Group and chapter consistency are reported, never refused, so import and
- * operator writes refuse exactly the same sets.
+ * The import's check over the whole file it is about to store, inside the shared
+ * lock: each row parses as an import row, the set holds at most
+ * TIMELINE_ENTRIES_MAXIMUM rows with distinct ids and distinct Catalog links,
+ * and its response estimate stays within the limit. A file must be wholly
+ * valid. Operator writes run `checkTimelineEntryWrite` instead. Group and
+ * chapter consistency are reported, never refused.
  */
 export const checkTimelineEntrySet = (
   entries: readonly unknown[],
@@ -1698,6 +1710,78 @@ export const checkTimelineEntrySet = (
   if (estimateTimelineResponseBytes(parsed) > TIMELINE_RESPONSE_BYTES_MAXIMUM)
     return { ok: false, issue: { code: "TIMELINE_TOO_LARGE" } };
   return { ok: true, entries: parsed };
+};
+/**
+ * A stored row's import fields as stored. A row stored before a rule tightened,
+ * or by direct SQL, may fail the import row.
+ */
+export type StoredTimelineEntry = {
+  readonly [Field in keyof TimelineImportEntry]: Field extends "catalogId"
+    ? string | null
+    : unknown;
+};
+/** One row an operator write stores: before it (null when new), after it, and hidden after it. */
+export interface TimelineEntryChange {
+  readonly before: StoredTimelineEntry | null;
+  readonly after: StoredTimelineEntry;
+  readonly hidden: boolean;
+}
+/** Why an operator write may not be stored; `index` names the row in `changes`. */
+export type TimelineEntryWriteIssue =
+  | { readonly code: "TIMELINE_FULL" }
+  | { readonly code: "ENTRY_INVALID"; readonly index: number }
+  | { readonly code: "TIMELINE_TOO_LARGE" };
+const timelineImportFieldNames = Object.keys(
+  timelineImportEntrySchema.shape,
+) as readonly (keyof TimelineImportEntry)[];
+/**
+ * The check every operator write runs inside the shared lock, over the stored
+ * set before the write and after it. A write is refused only for what it makes
+ * worse, so a row that fails the contract can always be fixed, one at a time,
+ * and taken off the public read at once:
+ * - a changed row must parse as an import row (ENTRY_INVALID) when it is
+ *   visible after the write or the write changed one of its import fields; a
+ *   write that only hides a row passes, and showing an invalid row is refused;
+ * - other stored rows never refuse a write, whether they pass or not;
+ * - TIMELINE_FULL only when the write adds rows past TIMELINE_ENTRIES_MAXIMUM;
+ * - TIMELINE_TOO_LARGE only when the response estimate after the write is past
+ *   its limit and above the estimate before it.
+ * Ids and Catalog links stay unique by the table's keys. `limits` is for tests.
+ */
+export const checkTimelineEntryWrite = (
+  write: {
+    readonly before: readonly StoredTimelineEntry[];
+    readonly after: readonly StoredTimelineEntry[];
+    readonly changes: readonly TimelineEntryChange[];
+  },
+  limits: { readonly entries: number; readonly responseBytes: number } = {
+    entries: TIMELINE_ENTRIES_MAXIMUM,
+    responseBytes: TIMELINE_RESPONSE_BYTES_MAXIMUM,
+  },
+):
+  | { readonly ok: true }
+  | { readonly ok: false; readonly issue: TimelineEntryWriteIssue } => {
+  const { before, after, changes } = write;
+  if (after.length > limits.entries && after.length > before.length)
+    return { ok: false, issue: { code: "TIMELINE_FULL" } };
+  for (const [index, change] of changes.entries()) {
+    const old = change.before;
+    const changed =
+      old === null ||
+      timelineImportFieldNames.some((name) => old[name] !== change.after[name]);
+    if (
+      (changed || !change.hidden) &&
+      !timelineImportEntrySchema.safeParse(change.after).success
+    )
+      return { ok: false, issue: { code: "ENTRY_INVALID", index } };
+  }
+  const bytes = estimateTimelineResponseBytes(after);
+  if (
+    bytes > limits.responseBytes &&
+    bytes > estimateTimelineResponseBytes(before)
+  )
+    return { ok: false, issue: { code: "TIMELINE_TOO_LARGE" } };
+  return { ok: true };
 };
 export const contentStateQuerySchema = z.strictObject({
   target: contentIdentitySchema,

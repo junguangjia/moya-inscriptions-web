@@ -13,6 +13,7 @@ import {
 } from "@moya/backend-runtime";
 import {
   operatorTimelinePageSchema,
+  operatorTimelineQuerySchema,
   operatorTimelineSummarySchema,
 } from "@moya/contracts/internal/community-operator";
 import {
@@ -208,8 +209,33 @@ const create = {
 describe("the timeline operator read", () => {
   const seeded = () => {
     const port = new FixturePort();
+    const stele = {
+      chapter: "东汉",
+      groupId: "stele",
+      groupTitle: "合成碑群",
+    } as const;
     port.rows = [
+      // Another chapter and other precisions: a group of three visible rows.
+      row("han-a", {
+        ...stele,
+        startYear: 150,
+        endYear: 150,
+        precision: "reign",
+      }),
+      row("han-b", {
+        ...stele,
+        startYear: 160,
+        endYear: 160,
+        precision: "reign",
+      }),
+      row("han-c", {
+        ...stele,
+        startYear: 170,
+        endYear: 180,
+        precision: "period",
+      }),
       row("tang-a", { position: 0, polity: "合成国", province: "陕西" }),
+      // Two visible members and a hidden one, under two titles.
       row("tang-b", {
         position: 1024,
         hidden: true,
@@ -223,6 +249,7 @@ describe("the timeline operator read", () => {
         groupTitle: "另一组名",
         onAxis: false,
       }),
+      row("tang-d", { position: 3072, groupId: "pair", groupTitle: "合成组" }),
       row("linked", {
         startYear: 700,
         endYear: 760,
@@ -252,22 +279,26 @@ describe("the timeline operator read", () => {
     const all = await send("timeline-entries");
     expect(all.status).toBe(200);
     expect(operatorTimelinePageSchema.parse(all.json)).toMatchObject({
-      total: 7,
+      total: 11,
       page: 1,
       pageSize: 20,
     });
     expect(ids(all.json)).toEqual([
+      "han-a",
+      "han-b",
+      "han-c",
       "tang-a",
       "tang-b",
       "tang-c",
+      "tang-d",
       "linked",
       "linked-off",
       "misplaced",
       "broken",
     ]);
     const second = await send("timeline-entries?page=2&pageSize=3");
-    expect(ids(second.json)).toEqual(["linked", "linked-off", "misplaced"]);
-    expect(second.json).toMatchObject({ total: 7, page: 2, pageSize: 3 });
+    expect(ids(second.json)).toEqual(["tang-a", "tang-b", "tang-c"]);
+    expect(second.json).toMatchObject({ total: 11, page: 2, pageSize: 3 });
     expect(
       ids((await send("timeline-entries?page=9&pageSize=50")).json),
     ).toEqual([]);
@@ -281,18 +312,24 @@ describe("the timeline operator read", () => {
     ["search=LINKED-OFF", ["linked-off"]],
     ["yearFrom=701", ["linked", "linked-off", "misplaced"]],
     ["yearFrom=720&yearTo=900", ["linked"]],
+    ["yearFrom=-3000&yearTo=160", ["han-a", "han-b"]],
     ["polity=%E5%90%88%E6%88%90%E5%9B%BD", ["tang-a"]],
     ["onAxis=false", ["tang-c"]],
     ["disputed=true", ["linked"]],
-    ["groupId=pair", ["tang-b", "tang-c"]],
+    ["groupId=pair", ["tang-b", "tang-c", "tang-d"]],
     ["linked=linked", ["linked", "linked-off"]],
+    ["linked=unlinked&pageSize=3", ["han-a", "han-b", "han-c"], 9],
+    ["linked=unlinked&yearFrom=700", ["misplaced"]],
     ["linked=not_published", ["linked-off"]],
     [`catalogId=catalog-${"a".repeat(8)}`, ["linked"]],
     ["hidden=only", ["tang-b"]],
-    ["hidden=exclude&chapter=%E5%94%90&pageSize=2", ["tang-a", "tang-c"], 6],
+    ["chapter=%E4%B8%9C%E6%B1%89", ["han-a", "han-b", "han-c"]],
+    ["hidden=exclude&chapter=%E5%94%90&pageSize=2", ["tang-a", "tang-c"], 7],
+    ["precision=reign", ["han-a", "han-b"]],
+    ["precision=period", ["han-c"]],
     ["updatedBy=ai-admin", ["tang-b"]],
     ["issue=contract", ["broken"]],
-    ["issue=group", ["tang-b", "tang-c"]],
+    ["issue=group", ["tang-b", "tang-c", "tang-d"]],
     ["issue=chapter_year", ["misplaced"]],
     ["issue=not_published", ["linked-off"]],
   ] as [string, string[], number?][])(
@@ -315,6 +352,18 @@ describe("the timeline operator read", () => {
     "id=Not_A_Slug",
     "page=1&page=2",
     "yearFrom=900&yearTo=700",
+    // An empty or blank number is not 0, and only decimal digits are a number.
+    "yearTo=",
+    "yearFrom=",
+    "yearFrom=%20",
+    "yearTo=1e3",
+    "page=",
+    "pageSize=%20",
+    // Keys an object inherits.
+    "constructor=1",
+    "__proto__=1",
+    "toString=1",
+    "hasOwnProperty=1",
   ])("refuses the query %s", async (query) => {
     const { send } = await start(seeded());
     expect(await send(`timeline-entries?${query}`)).toMatchObject({
@@ -323,16 +372,33 @@ describe("the timeline operator read", () => {
     });
   });
 
+  it("takes a number as a number or its decimal text, never an empty value as 0", () => {
+    for (const field of ["page", "pageSize", "yearFrom", "yearTo"])
+      for (const value of [null, "", " ", "0x10", "1e3", 1.5])
+        expect(
+          operatorTimelineQuerySchema.safeParse({ [field]: value }).success,
+          `${field} ${JSON.stringify(value)}`,
+        ).toBe(false);
+    expect(
+      operatorTimelineQuerySchema.parse({
+        page: "2",
+        pageSize: 5,
+        yearFrom: "-3000",
+        yearTo: 0,
+      }),
+    ).toMatchObject({ page: 2, pageSize: 5, yearFrom: -3000, yearTo: 0 });
+  });
+
   it("counts every row, its issues and the limits in the summary", async () => {
     const { send } = await start(seeded());
     const read = await send("timeline-summary");
     expect(read.status).toBe(200);
     const summary = operatorTimelineSummarySchema.parse(read.json);
     expect(summary.entries).toEqual({
-      total: 7,
-      visible: 6,
+      total: 11,
+      visible: 10,
       hidden: 1,
-      onAxis: 6,
+      onAxis: 10,
       shelf: 1,
       disputed: 1,
     });
@@ -341,31 +407,39 @@ describe("the timeline operator read", () => {
     );
     expect(summary.chapters.find(({ chapter }) => chapter === "唐")).toEqual({
       chapter: "唐",
-      total: 7,
+      total: 8,
       hidden: 1,
-      onAxis: 6,
+      onAxis: 7,
       shelf: 1,
     });
+    expect(summary.chapters.find(({ chapter }) => chapter === "东汉")).toEqual({
+      chapter: "东汉",
+      total: 3,
+      hidden: 0,
+      onAxis: 3,
+      shelf: 0,
+    });
     expect(summary.links).toEqual({
-      unlinked: 5,
+      unlinked: 9,
       published: 1,
       notPublished: 1,
     });
-    // The hidden member does not fold: one visible group of one.
-    expect(summary.groups).toEqual({ total: 1, folding: 0 });
+    // Three visible members fold, as on the Web. Two visible and a hidden one
+    // do not: the hidden member is not counted.
+    expect(summary.groups).toEqual({ total: 2, folding: 1 });
     expect(summary.updatedBy).toEqual({
-      import: 5,
+      import: 9,
       owner: 1,
       "ai-admin": 1,
     });
     expect(summary.issues).toEqual({
       contract: 1,
-      group: 2,
+      group: 3,
       chapterYear: 1,
       notPublished: 1,
     });
     expect(summary.limits).toMatchObject({
-      entries: 7,
+      entries: 11,
       entriesMaximum: 5000,
       responseBytesMaximum: 4_000_000,
     });

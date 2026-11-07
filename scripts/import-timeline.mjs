@@ -8,7 +8,7 @@ import console from "node:console";
 /**
  * home-timeline-v1: the guarded seed step behind community.timeline_entries.
  * The rows are a private file validated against the contract (each row and the
- * whole set, as every operator write is), never a migration and never Git. The
+ * whole set: a file must be wholly valid), never a migration and never Git. The
  * default is a dry run that opens no connection; --apply replaces every row in
  * one transaction with the migration role, so a reader sees the old set or the
  * new one. It holds the content-operator lock the Backend's operator writes
@@ -97,8 +97,8 @@ export async function loadImportFile(file, schema) {
 }
 
 /**
- * The contract's whole-set check, the one every operator write runs: the
- * response estimate is the part the file schema does not cover.
+ * The contract's whole-set check over the file: the response estimate is the
+ * part the file schema does not cover.
  */
 export const checkImportSet = (entries, checkTimelineEntrySet) => {
   const checked = checkTimelineEntrySet(entries);
@@ -121,24 +121,34 @@ export const summarizeImport = (entries, chapters) => ({
   })),
 });
 
-/** Parameterized multi-row INSERTs: row values reach only the bind list. */
-export const insertStatements = (entries, batchRows = INSERT_BATCH_ROWS) => {
+/**
+ * Parameterized multi-row INSERTs: row values reach only the bind list. Each
+ * row's version is one past the replaced row of its id in `replaced` (id to
+ * version), or 1 for a new id.
+ */
+export const insertStatements = (
+  entries,
+  batchRows = INSERT_BATCH_ROWS,
+  replaced = new Map(),
+) => {
+  const columns = [
+    ...entryColumns,
+    ["version", (entry) => (replaced.get(entry.id) ?? 0) + 1],
+  ];
   const statements = [];
-  const names = entryColumns.map(([name]) => name).join(",");
+  const names = columns.map(([name]) => name).join(",");
   for (let start = 0; start < entries.length; start += batchRows) {
     const batch = entries.slice(start, start + batchRows);
     const rows = batch.map(
       (_, row) =>
-        `(${entryColumns
-          .map(
-            (_column, column) => `$${row * entryColumns.length + column + 1}`,
-          )
+        `(${columns
+          .map((_column, column) => `$${row * columns.length + column + 1}`)
           .join(",")})`,
     );
     statements.push({
       text: `INSERT INTO community.timeline_entries(${names}) VALUES ${rows.join(",")}`,
       values: batch.flatMap((entry) =>
-        entryColumns.map(([, value]) => value(entry)),
+        columns.map(([, value]) => value(entry)),
       ),
     });
   }
@@ -149,7 +159,9 @@ export const insertStatements = (entries, batchRows = INSERT_BATCH_ROWS) => {
  * Replaces every row in one transaction, or changes nothing. Rows an operator
  * created, edited or hid stay unless `replaceOperatorEdits`; the refusal names
  * counts only. New rows take the column defaults: 'import' as creator and
- * editor, version 1, visible. One content-operator event records the counts.
+ * editor, visible. A replaced id comes back one version past the row it
+ * replaces, so a version read before the import never matches after it; a new
+ * id starts at version 1. One content-operator event records the counts.
  */
 export async function applyImport(
   pool,
@@ -175,8 +187,18 @@ export async function applyImport(
       refuse(
         `The timeline holds ${edited} operator-edited and ${hidden} hidden rows; --replace-operator-edits discards them`,
       );
-    await client.query("DELETE FROM community.timeline_entries");
-    for (const { text, values } of insertStatements(entries))
+    const replaced = new Map(
+      (
+        await client.query(
+          "DELETE FROM community.timeline_entries RETURNING entry_id,version",
+        )
+      ).rows.map(({ entry_id, version }) => [entry_id, version]),
+    );
+    for (const { text, values } of insertStatements(
+      entries,
+      INSERT_BATCH_ROWS,
+      replaced,
+    ))
       await client.query(text, values);
     const counts = {
       entries: entries.length,

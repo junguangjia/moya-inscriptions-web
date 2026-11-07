@@ -13,8 +13,8 @@ import { operatorExactIdSchema } from "./query-filters.js";
 /*
  * home-timeline-v1 (Issue #384 r3): the operator routes of the Home timeline,
  * one shape for the Owner's route and the AI's. The database holds the rows;
- * every write is checked against the import row and the whole set
- * (`checkTimelineEntrySet`) inside the shared content-operator lock.
+ * every write is checked against the import row and the stored set before and
+ * after it (`checkTimelineEntryWrite`) inside the shared content-operator lock.
  *
  * The commands are fresh objects over the import row's field schemas: the row
  * schema itself is refined, and a refined object can neither be narrowed nor
@@ -40,9 +40,13 @@ export const timelineLinkStateSchema = z.enum([
 ]);
 
 /**
- * What a write was refused for, with nothing changed and nothing recorded.
- * ENTRY_INVALID: the row as it would be stored fails the import row.
- * TIMELINE_INVALID: another stored row does (read issue=contract to find it).
+ * What a write was refused for, with nothing changed and nothing recorded. A
+ * write is refused only for what it makes worse: another stored row that fails
+ * the contract (issue=contract) never refuses it.
+ * ENTRY_INVALID: a row the write changes, or leaves visible, fails the import
+ * row as it would be stored; a write that only hides a row passes.
+ * TIMELINE_FULL, TIMELINE_TOO_LARGE: the write adds rows past the maximum, or
+ * grows a response estimate that would be past its limit.
  * SET_CHANGED: a reorder did not list exactly the rows of its start year.
  */
 export const timelineRefusalCodeSchema = z.enum([
@@ -51,7 +55,6 @@ export const timelineRefusalCodeSchema = z.enum([
   "TIMELINE_FULL",
   "TIMELINE_TOO_LARGE",
   "ENTRY_INVALID",
-  "TIMELINE_INVALID",
   "SET_CHANGED",
 ]);
 
@@ -119,7 +122,15 @@ const textBoolean = z.union([
   z.enum(["true", "false"]).transform((value) => value === "true"),
 ]);
 const timelineIds = z.array(fields.id).min(1).max(100);
-const filterYear = z.coerce.number().int().min(-3000).max(3000);
+/**
+ * As decimal text on the Backend, where a coercion would read an empty or
+ * blank value as 0, and 0 is a year.
+ */
+const textInteger = (digits: RegExp) =>
+  z.union([z.number(), z.string().regex(digits)]);
+const filterYear = textInteger(/^(?:0|-?[1-9]\d{0,3})$/u).pipe(
+  z.coerce.number<string | number>().int().min(-3000).max(3000),
+);
 
 /**
  * Every filter narrows; all are optional. `search` matches title, full title,
@@ -131,8 +142,12 @@ const filterYear = z.coerce.number().int().min(-3000).max(3000);
  * the public read's: start year, position, id.
  */
 export const operatorTimelineQuerySchema = z.strictObject({
-  page: z.coerce.number().int().positive().default(1),
-  pageSize: z.coerce.number().int().min(1).max(50).default(20),
+  page: textInteger(/^[1-9]\d*$/u)
+    .pipe(z.coerce.number<string | number>().int().positive())
+    .default(1),
+  pageSize: textInteger(/^[1-9]\d*$/u)
+    .pipe(z.coerce.number<string | number>().int().min(1).max(50))
+    .default(20),
   id: fields.id.optional(),
   /** Comma-joined on the Backend, where a query field carries one value. */
   ids: z
@@ -285,7 +300,8 @@ export const adminUpdateTimelineEntryRequestSchema =
 export const TIMELINE_REORDER_MAXIMUM = 1_000;
 /**
  * The rows of one start year in their new order, each at the version it was
- * read at. The list is exactly that year's rows, or SET_CHANGED. Positions
+ * read at. The list is exactly that year's rows, hidden ones included (a hidden
+ * row keeps its place for when it is shown again), or SET_CHANGED. Positions
  * become 0, 1024, 2048, ... in list order, and each row's version rises by one.
  */
 export const reorderTimelineCommandSchema = z.strictObject({

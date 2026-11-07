@@ -642,13 +642,15 @@ END $$;
 
 -- home-timeline-v1 (migration 20261105235900, Issue #384 r3): the Home timeline
 -- reads this table, and the Backend's operator routes (Owner and AI) create
--- and edit its rows. The row id, its creator and its creation time are never
--- rewritten, and no row is deleted or truncated through this role: hiding
--- leaves the public read. scripts/import-timeline.mjs replaces the whole set
--- with the migration role. The App role is shared with the operator bridge and
--- the worker, so they could write these columns too. Convergence as above, but
--- inside the block, because the relation is optional for earlier migration
--- phases.
+-- and edit its rows. A new row names its fields and its creator only, so its
+-- version, visibility and times come from the column defaults. The row id, its
+-- creator and its creation time are never rewritten, and no row is deleted or
+-- truncated through this role: hiding leaves the public read.
+-- scripts/import-timeline.mjs replaces the whole set with the migration role.
+-- The App role is shared with the operator bridge and the worker, so they could
+-- write these columns too. Convergence as above (a table-level REVOKE takes the
+-- column grants with it), but inside the block, because the relation is
+-- optional for earlier migration phases.
 DO $$
 BEGIN
   IF to_regclass('community.timeline_entries') IS NOT NULL THEN
@@ -661,8 +663,7 @@ BEGIN
     EXECUTE format(
       'GRANT INSERT (entry_id, title, full_title, start_year, end_year, precision,
          date_label, on_axis, chapter, polity, disputed, group_id, group_title,
-         province, holder, catalog_id, position, version, hidden_at, created_by,
-         updated_by, created_at, updated_at)
+         province, holder, catalog_id, position, created_by, updated_by)
        ON TABLE community.timeline_entries TO %I',
       current_setting('moya.runtime_app_role'));
     EXECUTE format(

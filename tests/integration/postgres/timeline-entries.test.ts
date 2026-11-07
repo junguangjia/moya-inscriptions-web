@@ -27,6 +27,7 @@ import {
 } from "@moya/contracts/schemas";
 import {
   createTimelineEntryCommandSchema,
+  timelineImportFieldsOf,
   updateTimelineEntryCommandSchema,
 } from "@moya/contracts/internal/community-operator";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -49,8 +50,8 @@ import type {
  * the App role's column grants, the public read over both connections (linked
  * published, linked unpublished, unlinked, ordering, hidden rows left out), the
  * operator writes (receipts, versions, named refusals, the whole-set limits)
- * and the guarded import. The published Catalog relations are stand-in tables.
- * Content is synthetic.
+ * and the guarded import. Each case seeds the rows it reads, so it passes alone.
+ * The published Catalog relations are stand-in tables. Content is synthetic.
  */
 
 type Pool = ReturnType<typeof createPostgresPool>;
@@ -67,7 +68,6 @@ interface ImportScript {
     entries: readonly ImportEntry[],
     options?: { readonly replaceOperatorEdits?: boolean },
   ): Promise<ImportCounts>;
-  CONTENT_OPERATOR_LOCK_SQL: string;
   TIMELINE_MIGRATION_ID: string;
 }
 interface ImportEntry {
@@ -223,6 +223,14 @@ const storedIds = async () =>
       "SELECT entry_id FROM community.timeline_entries ORDER BY entry_id",
     )
   ).rows.map(({ entry_id }) => entry_id);
+/**
+ * A case's own rows: the set emptied, then imported, so every row starts at
+ * version 1 whatever ran before.
+ */
+const seed = async (rows: readonly ImportEntry[]) => {
+  await setup.query("DELETE FROM community.timeline_entries");
+  await importScript.applyImport(setup, rows);
+};
 
 describe("timeline migration", () => {
   it("records the migration in the ledger the import checks", async () => {
@@ -265,8 +273,13 @@ describe("timeline migration", () => {
   ] satisfies readonly [string, Partial<ImportEntry>][])(
     "refuses %s",
     async (_name, overrides) => {
+      // Refused or not, the flag lets the import reach its insert whatever is stored.
       await expect(
-        code(importScript.applyImport(setup, [entry("check", overrides)])),
+        code(
+          importScript.applyImport(setup, [entry("check", overrides)], {
+            replaceOperatorEdits: true,
+          }),
+        ),
       ).resolves.toBe("23514");
     },
     SLOW,
@@ -275,10 +288,14 @@ describe("timeline migration", () => {
   it("refuses a second row linking one Catalog record", async () => {
     await expect(
       code(
-        importScript.applyImport(setup, [
-          entry("first", { catalogId: "catalog-one" }),
-          entry("second", { catalogId: "catalog-one" }),
-        ]),
+        importScript.applyImport(
+          setup,
+          [
+            entry("first", { catalogId: "catalog-one" }),
+            entry("second", { catalogId: "catalog-one" }),
+          ],
+          { replaceOperatorEdits: true },
+        ),
       ),
     ).resolves.toBe("23505");
   });
@@ -342,6 +359,29 @@ describe("timeline grants", () => {
         [appRole],
       )
     ).rows;
+  // The columns the operator adapter's INSERT names; a new row takes its
+  // version, visibility and times from the column defaults.
+  const inserted = [
+    "entry_id",
+    "title",
+    "full_title",
+    "start_year",
+    "end_year",
+    "precision",
+    "date_label",
+    "on_axis",
+    "chapter",
+    "polity",
+    "disputed",
+    "group_id",
+    "group_title",
+    "province",
+    "holder",
+    "catalog_id",
+    "position",
+    "created_by",
+    "updated_by",
+  ];
   const fixed = ["entry_id", "created_by", "created_at"];
   const expectRuntimeGrants = async () => {
     expect(await tableLevel()).toEqual(["SELECT"]);
@@ -350,7 +390,7 @@ describe("timeline grants", () => {
     for (const { name, insert, update } of columns)
       expect({ name, insert, update }).toEqual({
         name,
-        insert: true,
+        insert: inserted.includes(name),
         update: !fixed.includes(name),
       });
   };
@@ -365,6 +405,16 @@ describe("timeline grants", () => {
       "UPDATE community.timeline_entries SET created_at=now()",
       "DELETE FROM community.timeline_entries",
       "TRUNCATE community.timeline_entries",
+      ...[
+        ["version", "7"],
+        ["hidden_at", "now()"],
+        ["created_at", "now()"],
+        ["updated_at", "now()"],
+      ].map(
+        ([column, value]) =>
+          `INSERT INTO community.timeline_entries(entry_id,title,full_title,start_year,end_year,precision,on_axis,chapter,disputed,position,${column})
+           VALUES('grant-check','合成','合成',618,618,'year',true,'唐',false,0,${value})`,
+      ),
     ])
       await expect(code(app.query(write))).resolves.toBe("42501");
     await expect(
@@ -372,12 +422,57 @@ describe("timeline grants", () => {
     ).resolves.toBe("42501");
   });
 
-  it("narrows an earlier table-level grant back to the columns", async () => {
+  it("narrows an earlier table-level or wider column grant back to the columns", async () => {
     await setup.query(
       `GRANT INSERT, UPDATE ON community.timeline_entries TO "${appRole}"`,
     );
     expect(await tableLevel()).toEqual(["INSERT", "SELECT", "UPDATE"]);
     await setup.query(await runtimeGrant());
+    await expectRuntimeGrants();
+    // The column inserts an earlier draft of these grants gave.
+    await setup.query(
+      `GRANT INSERT (version, hidden_at, created_at, updated_at) ON community.timeline_entries TO "${appRole}"`,
+    );
+    await setup.query(await runtimeGrant());
+    await expectRuntimeGrants();
+  });
+
+  it("reads the design doc's App-role preflight all true, and false for each residue", async () => {
+    const sql =
+      /App-role preflight, read-only, after step 2[\s\S]*?```sql\n([\s\S]*?)```/u.exec(
+        await readFile(`${root}/docs/development/home-timeline-v1.md`, "utf8"),
+      )?.[1];
+    expect(sql).toBeTypeOf("string");
+    const preflight = async () =>
+      (await setup.query(sql!.replaceAll(":'app_role'", `'${appRole}'`))).rows;
+    const granted = {
+      reads: true,
+      creates: true,
+      edits: true,
+      no_delete: true,
+      no_truncate: true,
+      events: true,
+      receipts: true,
+    };
+    expect(await preflight()).toEqual([granted]);
+    // What an older or wider grant path could leave on a retained role.
+    const residue =
+      "INSERT (version), UPDATE (created_by), DELETE, TRUNCATE ON community.timeline_entries";
+    try {
+      await setup.query(`GRANT ${residue} TO "${appRole}"`);
+      expect(await preflight()).toEqual([
+        {
+          ...granted,
+          creates: false,
+          edits: false,
+          no_delete: false,
+          no_truncate: false,
+        },
+      ]);
+    } finally {
+      await setup.query(`REVOKE ${residue} FROM "${appRole}"`);
+    }
+    expect(await preflight()).toEqual([granted]);
     await expectRuntimeGrants();
   });
 });
@@ -393,14 +488,17 @@ describe("timeline read and import", () => {
 
   beforeAll(async () => {
     await setup.query(
-      "INSERT INTO public.catalog_discovery(catalog_id,kind,title,aliases,first_published_at,filter_metadata) VALUES($1,'inscription','合成已发布',ARRAY[]::varchar[],NULL,'{}'::jsonb),($2,'inscription','合成无图',ARRAY[]::varchar[],NULL,'{}'::jsonb)",
-      [published, textOnly],
-    );
-    await setup.query(
       "INSERT INTO public.catalog_media(catalog_id,media_id,object_key,width,height,is_representative,position) VALUES($1,$2,$3,1200,800,true,0)",
       [published, mediaId, objectKey],
     );
-    await importScript.applyImport(setup, [
+  }, SLOW);
+  /** Each case's rows and published records: a case may withdraw one or replace the rows. */
+  const seedRead = async () => {
+    await setup.query(
+      "INSERT INTO public.catalog_discovery(catalog_id,kind,title,aliases,first_published_at,filter_metadata) VALUES($1,'inscription','合成已发布',ARRAY[]::varchar[],NULL,'{}'::jsonb),($2,'inscription','合成无图',ARRAY[]::varchar[],NULL,'{}'::jsonb) ON CONFLICT (catalog_id) DO NOTHING",
+      [published, textOnly],
+    );
+    await seed([
       entry("year-later", { startYear: 650, endYear: 650 }),
       entry("same-year-b", { startYear: -221, endYear: -221, position: 1 }),
       entry("same-year-a", { startYear: -221, endYear: -221, position: 1 }),
@@ -433,9 +531,10 @@ describe("timeline read and import", () => {
         catalogId: unpublished,
       }),
     ]);
-  }, SLOW);
+  };
 
   it("returns rows ordered by start year, position and id", async () => {
+    await seedRead();
     const { entries } = await adapter().timeline();
     expect(entries.map(({ id }) => id)).toEqual([
       "same-year-first",
@@ -450,6 +549,7 @@ describe("timeline read and import", () => {
   });
 
   it("keeps a link only for a published record and resolves its image", async () => {
+    await seedRead();
     const resolver: StorageUrlResolver = {
       resolveMany: async (locators) =>
         new Map(
@@ -495,6 +595,7 @@ describe("timeline read and import", () => {
   });
 
   it("withdrawing a record drops its link on the next read", async () => {
+    await seedRead();
     await setup.query(
       "DELETE FROM public.catalog_discovery WHERE catalog_id=$1",
       [textOnly],
@@ -506,6 +607,7 @@ describe("timeline read and import", () => {
   });
 
   it("replaces all rows at once, and a failed import changes nothing", async () => {
+    await seedRead();
     const before = await storedIds();
     await expect(
       code(
@@ -530,6 +632,15 @@ const publicIds = async () =>
       catalogPool: publicRead,
     }).timeline()
   ).entries.map(({ id }) => id);
+/** The public read as the Backend answers it: one visible row that fails the contract fails it. */
+const publicTimeline = () =>
+  new AuthorCommunityService(
+    {} as AuthorCommunityPort,
+    {} as CatalogPublicationPort,
+    undefined,
+    new PostgresCommunityDiscoveryAdapter(app, { catalogPool: publicRead }),
+    { resolveMany: async () => new Map() },
+  ).timeline();
 /** A create command as the route parses it, from an import row without its position. */
 const createOf = (row: ImportEntry, extra: Record<string, unknown> = {}) =>
   createTimelineEntryCommandSchema.parse({
@@ -573,35 +684,49 @@ const receipts = async (label: string, requestId: string) =>
       [label, requestId],
     )
   ).rowCount;
+/** A Tang row of start year 618 at a position. */
+const tang = (id: string, position: number) => entry(id, { position });
+/** 150 code points for the database, 300 UTF-16 units for the contract. */
+const breakTitle = (id: string) =>
+  setup.query(
+    "UPDATE community.timeline_entries SET title=$1 WHERE entry_id=$2",
+    ["\u{20000}".repeat(150), id],
+  );
 
 describe("timeline operator writes", () => {
   const published = `catalog-${hex(8)}`;
   const unpublished = `catalog-${hex(8)}`;
+  const song = entry("song", {
+    startYear: 960,
+    endYear: 960,
+    chapter: "宋辽金夏",
+  });
+  const linked = entry("linked", {
+    startYear: 700,
+    endYear: 700,
+    catalogId: published,
+  });
 
   beforeAll(async () => {
     await setup.query(
       "INSERT INTO public.catalog_discovery(catalog_id,kind,title,aliases,first_published_at,filter_metadata) VALUES($1,'inscription','合成已发布',ARRAY[]::varchar[],NULL,'{}'::jsonb)",
       [published],
     );
-    await importScript.applyImport(
-      setup,
-      [
-        entry("tang-a", { position: 0 }),
-        entry("tang-b", { position: 1024 }),
-        entry("tang-c", { position: 2048 }),
-        entry("linked", { startYear: 700, endYear: 700, catalogId: published }),
-        entry("linked-off", {
-          startYear: 701,
-          endYear: 701,
-          catalogId: unpublished,
-        }),
-        entry("song", { startYear: 960, endYear: 960, chapter: "宋辽金夏" }),
-      ],
-      { replaceOperatorEdits: true },
-    );
   }, SLOW);
 
   it("reads every row with its version, actors, visibility and link state", async () => {
+    await seed([
+      tang("tang-a", 0),
+      tang("tang-b", 1024),
+      tang("tang-c", 2048),
+      linked,
+      entry("linked-off", {
+        startYear: 701,
+        endYear: 701,
+        catalogId: unpublished,
+      }),
+      song,
+    ]);
     const rows = await operator().operatorTimelineEntries();
     expect(rows.map(({ id }) => id)).toEqual([
       "tang-a",
@@ -631,6 +756,7 @@ describe("timeline operator writes", () => {
   });
 
   it("creates a row at the end of its year with one event and one receipt, and replays it", async () => {
+    await seed([tang("tang-a", 0), tang("tang-b", 1024), tang("tang-c", 2048)]);
     const before = (await timelineEvents()).length;
     const command = createOf(entry("tang-d"));
     const created = await operator().operatorCreateTimelineEntry(
@@ -683,6 +809,7 @@ describe("timeline operator writes", () => {
   });
 
   it("refuses an existing id and a second link by name, writing nothing", async () => {
+    await seed([tang("tang-a", 0), linked, song]);
     const before = (await timelineEvents()).length;
     expect(
       await refusal(
@@ -710,10 +837,34 @@ describe("timeline operator writes", () => {
       ),
     ).toBe("CATALOG_ALREADY_LINKED");
     expect(await timelineEvents()).toHaveLength(before);
-    expect(await storedIds()).not.toContain("second-link");
+    expect(await storedIds()).toEqual(["linked", "song", "tang-a"]);
+  });
+
+  it("refuses a new row that breaks a rule across its fields, writing nothing", async () => {
+    await seed([tang("tang-a", 0)]);
+    const before = (await timelineEvents()).length;
+    for (const command of [
+      createOf(entry("ends-early", { startYear: 700, endYear: 650 })),
+      createOf(entry("half-group", { groupId: "group-a" })),
+    ]) {
+      expect(
+        await refusal(
+          operator().operatorCreateTimelineEntry("ai-admin", command),
+        ),
+      ).toBe("ENTRY_INVALID");
+      expect(await receipts("ai-admin", command.requestId)).toBe(0);
+    }
+    expect(await timelineEvents()).toHaveLength(before);
+    expect(await storedIds()).toEqual(["tang-a"]);
   });
 
   it("updates against the version it read, and moves a row to the end of a new year", async () => {
+    await seed([
+      tang("tang-a", 0),
+      tang("tang-b", 1024),
+      tang("tang-c", 2048),
+      song,
+    ]);
     const edited = await operator().operatorUpdateTimelineEntry(
       "owner",
       "song",
@@ -767,10 +918,62 @@ describe("timeline operator writes", () => {
           chapter: "唐",
         }),
       ),
-    ).resolves.toMatchObject({ startYear: 618, position: 4096, version: 3 });
+    ).resolves.toMatchObject({ startYear: 618, position: 3072, version: 3 });
+  });
+
+  it("places a row at the position it is given, in its year or a new one, and takes it off the axis", async () => {
+    await seed([
+      tang("tang-a", 0),
+      tang("tang-b", 1024),
+      tang("tang-c", 2048),
+      song,
+    ]);
+    await expect(
+      operator().operatorUpdateTimelineEntry(
+        "owner",
+        "tang-c",
+        updateOf({ expectedVersion: 1, position: 512 }),
+      ),
+    ).resolves.toMatchObject({ position: 512, version: 2 });
+    await expect(
+      operator().operatorUpdateTimelineEntry(
+        "ai-admin",
+        "song",
+        updateOf({
+          expectedVersion: 1,
+          startYear: 618,
+          endYear: 618,
+          chapter: "唐",
+          position: 1536,
+        }),
+      ),
+    ).resolves.toMatchObject({ startYear: 618, position: 1536, version: 2 });
+    await expect(
+      operator().operatorUpdateTimelineEntry(
+        "owner",
+        "tang-b",
+        updateOf({ expectedVersion: 1, onAxis: false }),
+      ),
+    ).resolves.toMatchObject({ onAxis: false, position: 1024, version: 2 });
+    expect(
+      (await operator().operatorTimelineEntries()).map(({ id }) => id),
+    ).toEqual(["tang-a", "tang-c", "tang-b", "song"]);
+    expect(
+      (
+        await setup.query(
+          "SELECT entry_id,position,on_axis FROM community.timeline_entries ORDER BY start_year,position,entry_id",
+        )
+      ).rows,
+    ).toEqual([
+      { entry_id: "tang-a", position: 0, on_axis: true },
+      { entry_id: "tang-c", position: 512, on_axis: true },
+      { entry_id: "tang-b", position: 1024, on_axis: false },
+      { entry_id: "song", position: 1536, on_axis: true },
+    ]);
   });
 
   it("checks the row as it would be stored, so half a change is refused", async () => {
+    await seed([tang("tang-a", 0)]);
     expect(
       await refusal(
         operator().operatorUpdateTimelineEntry(
@@ -807,6 +1010,7 @@ describe("timeline operator writes", () => {
   });
 
   it("hides and shows a row, and the public read leaves a hidden row out", async () => {
+    await seed([tang("tang-a", 0), tang("tang-b", 1024)]);
     await expect(
       operator().operatorUpdateTimelineEntry(
         "ai-admin",
@@ -814,7 +1018,7 @@ describe("timeline operator writes", () => {
         updateOf({ expectedVersion: 1, hidden: true }),
       ),
     ).resolves.toMatchObject({ hidden: true, version: 2 });
-    expect(await publicIds()).not.toContain("tang-b");
+    expect(await publicIds()).toEqual(["tang-a"]);
     expect(
       (await operator().operatorTimelineEntries()).find(
         ({ id }) => id === "tang-b",
@@ -827,10 +1031,11 @@ describe("timeline operator writes", () => {
         updateOf({ expectedVersion: 2, hidden: false }),
       ),
     ).resolves.toMatchObject({ hidden: false, version: 3 });
-    expect(await publicIds()).toContain("tang-b");
+    expect(await publicIds()).toEqual(["tang-a", "tang-b"]);
   });
 
   it("unlinks a record and links it to another row", async () => {
+    await seed([linked, tang("tang-c", 2048)]);
     await expect(
       operator().operatorUpdateTimelineEntry(
         "owner",
@@ -847,7 +1052,40 @@ describe("timeline operator writes", () => {
     ).resolves.toMatchObject({ catalogId: published, linkState: "published" });
   });
 
+  it("answers the same key and body sent to another row as a conflict, and leaves that row", async () => {
+    await seed([tang("tang-a", 0), tang("tang-b", 1024)]);
+    // The update body names no row: the route's id is what tells the two apart.
+    const command = updateOf({ expectedVersion: 1, hidden: true });
+    const hidden = await operator().operatorUpdateTimelineEntry(
+      "ai-admin",
+      "tang-a",
+      command,
+    );
+    expect(hidden).toMatchObject({ id: "tang-a", hidden: true, version: 2 });
+    expect(
+      await failure(
+        operator().operatorUpdateTimelineEntry("ai-admin", "tang-b", command),
+      ),
+    ).toBeInstanceOf(CommunityIdempotencyConflictError);
+    expect(
+      (await operator().operatorTimelineEntries()).find(
+        ({ id }) => id === "tang-b",
+      ),
+    ).toMatchObject({ hidden: false, version: 1, updatedBy: "import" });
+    await expect(
+      operator().operatorUpdateTimelineEntry("ai-admin", "tang-a", command),
+    ).resolves.toEqual({ ...hidden, replayed: true });
+  });
+
   it("reorders one start year at once under one receipt and one event", async () => {
+    await seed([
+      tang("tang-a", 0),
+      tang("tang-b", 1024),
+      tang("tang-c", 2048),
+      tang("tang-d", 3072),
+      tang("tang-e", 4096),
+      entry("linked-off", { startYear: 701, endYear: 701 }),
+    ]);
     const year = (await operator().operatorTimelineEntries()).filter(
       ({ startYear }) => startYear === 618,
     );
@@ -856,7 +1094,7 @@ describe("timeline operator writes", () => {
       "tang-b",
       "tang-c",
       "tang-d",
-      "song",
+      "tang-e",
     ]);
     const reversed = [...year].reverse();
     const command = {
@@ -919,48 +1157,248 @@ describe("timeline operator writes", () => {
     expect(await timelineEvents()).toHaveLength(before + 1);
   });
 
-  it("refuses writes while another stored row fails the contract, until it is fixed", async () => {
-    // 150 code points for the database, 300 UTF-16 units for the contract.
-    await setup.query(
-      "UPDATE community.timeline_entries SET title=$1 WHERE entry_id='linked-off'",
-      ["\u{20000}".repeat(150)],
+  it("lists a year's hidden rows in its order, and refuses a list of that length naming another row", async () => {
+    await seed([
+      tang("tang-a", 0),
+      tang("tang-b", 1024),
+      tang("tang-c", 2048),
+      song,
+    ]);
+    await operator().operatorUpdateTimelineEntry(
+      "owner",
+      "tang-b",
+      updateOf({ expectedVersion: 1, hidden: true }),
     );
-    expect(
-      (await operator().operatorTimelineEntries()).find(
-        ({ id }) => id === "linked-off",
-      )?.title,
-    ).toHaveLength(300);
-    const write = () =>
-      operator().operatorUpdateTimelineEntry(
+    const listed = (ids: readonly string[]) => ({
+      requestId: randomUUID(),
+      startYear: 618,
+      entries: ids.map((id) => ({
+        id,
+        expectedVersion: id === "tang-b" ? 2 : 1,
+      })),
+    });
+    // A hidden row belongs to its year's list, so it keeps a place for when it
+    // is shown again: three rows, with another year's row in its place, or the
+    // visible rows alone, are not the year.
+    for (const ids of [
+      ["tang-c", "song", "tang-a"],
+      ["tang-c", "tang-a"],
+    ])
+      expect(
+        await refusal(operator().operatorReorderTimeline("owner", listed(ids))),
+      ).toBe("SET_CHANGED");
+    await expect(
+      operator().operatorReorderTimeline(
         "owner",
-        "tang-a",
-        updateOf({ expectedVersion: 3, dateLabel: "合成纪年" }),
-      );
-    expect(await refusal(write())).toBe("TIMELINE_INVALID");
+        listed(["tang-c", "tang-b", "tang-a"]),
+      ),
+    ).resolves.toEqual({ startYear: 618, count: 3 });
+    expect(
+      (
+        await setup.query(
+          "SELECT entry_id,position,version,hidden_at IS NOT NULL AS hidden FROM community.timeline_entries WHERE start_year=618 ORDER BY position",
+        )
+      ).rows,
+    ).toEqual([
+      { entry_id: "tang-c", position: 0, version: 2, hidden: false },
+      { entry_id: "tang-b", position: 1024, version: 3, hidden: true },
+      { entry_id: "tang-a", position: 2048, version: 2, hidden: false },
+    ]);
+    expect(await publicIds()).toEqual(["tang-c", "tang-a", "song"]);
+  });
+
+  it("fixes two stored rows that fail the contract one after the other, and other writes pass meanwhile", async () => {
+    await seed([
+      tang("tang-a", 0),
+      tang("broken-a", 1024),
+      tang("broken-b", 2048),
+      song,
+    ]);
+    await breakTitle("broken-a");
+    await breakTitle("broken-b");
+    expect(
+      (await operator().operatorTimelineEntries())
+        .filter(({ title }) => title.length === 300)
+        .map(({ id }) => id),
+    ).toEqual(["broken-a", "broken-b"]);
+    await expect(publicTimeline()).rejects.toThrow();
+    // Writes elsewhere pass: an edit and a new row in another year.
     await expect(
       operator().operatorUpdateTimelineEntry(
         "owner",
-        "linked-off",
-        updateOf({ expectedVersion: 1, title: "合成修正" }),
+        "song",
+        updateOf({ expectedVersion: 1, dateLabel: "合成纪年" }),
       ),
-    ).resolves.toMatchObject({ title: "合成修正", version: 2 });
-    await expect(write()).resolves.toMatchObject({
-      dateLabel: "合成纪年",
-      version: 4,
-    });
+    ).resolves.toMatchObject({ dateLabel: "合成纪年", version: 2 });
+    await expect(
+      operator().operatorCreateTimelineEntry(
+        "owner",
+        createOf(
+          entry("song-b", {
+            startYear: 960,
+            endYear: 960,
+            chapter: "宋辽金夏",
+          }),
+        ),
+      ),
+    ).resolves.toMatchObject({ id: "song-b", position: 1024 });
+    // A reorder writes every row it lists, and a listed row left visible must pass.
+    expect(
+      await refusal(
+        operator().operatorReorderTimeline("owner", {
+          requestId: randomUUID(),
+          startYear: 618,
+          entries: ["broken-b", "broken-a", "tang-a"].map((id) => ({
+            id,
+            expectedVersion: 1,
+          })),
+        }),
+      ),
+    ).toBe("ENTRY_INVALID");
+    // Each broken row is fixed while the other is still broken.
+    await expect(
+      operator().operatorUpdateTimelineEntry(
+        "ai-admin",
+        "broken-a",
+        updateOf({ expectedVersion: 1, title: "合成修正甲" }),
+      ),
+    ).resolves.toMatchObject({ title: "合成修正甲", version: 2 });
+    await expect(publicTimeline()).rejects.toThrow();
+    await expect(
+      operator().operatorUpdateTimelineEntry(
+        "ai-admin",
+        "broken-b",
+        updateOf({ expectedVersion: 1, title: "合成修正乙" }),
+      ),
+    ).resolves.toMatchObject({ title: "合成修正乙", version: 2 });
+    expect((await publicTimeline()).entries.map(({ id }) => id)).toEqual([
+      "tang-a",
+      "broken-a",
+      "broken-b",
+      "song",
+      "song-b",
+    ]);
+  });
+
+  it("hides a visible row that fails the contract at once, refuses to show it, and lets other writes pass", async () => {
+    await seed([
+      tang("tang-a", 0),
+      tang("tang-b", 1024),
+      entry("broken", { startYear: 701, endYear: 701 }),
+      entry("beside", { startYear: 701, endYear: 701, position: 1024 }),
+    ]);
+    await breakTitle("broken");
+    await expect(publicTimeline()).rejects.toThrow();
+    await expect(
+      operator().operatorUpdateTimelineEntry(
+        "owner",
+        "broken",
+        updateOf({ expectedVersion: 1, hidden: true }),
+      ),
+    ).resolves.toMatchObject({ hidden: true, version: 2 });
+    expect((await publicTimeline()).entries.map(({ id }) => id)).toEqual([
+      "tang-a",
+      "tang-b",
+      "beside",
+    ]);
+    // Showing it, changing a field while it still fails, or moving it is refused.
+    for (const fields of [{ hidden: false }, { dateLabel: "合成纪年" }])
+      expect(
+        await refusal(
+          operator().operatorUpdateTimelineEntry(
+            "owner",
+            "broken",
+            updateOf({ expectedVersion: 2, ...fields }),
+          ),
+        ),
+      ).toBe("ENTRY_INVALID");
+    expect(
+      await refusal(
+        operator().operatorReorderTimeline("owner", {
+          requestId: randomUUID(),
+          startYear: 701,
+          entries: [
+            { id: "beside", expectedVersion: 1 },
+            { id: "broken", expectedVersion: 2 },
+          ],
+        }),
+      ),
+    ).toBe("ENTRY_INVALID");
+    // While it stays stored, writes elsewhere pass: an edit, a new row, a reorder.
+    await expect(
+      operator().operatorUpdateTimelineEntry(
+        "ai-admin",
+        "tang-a",
+        updateOf({ expectedVersion: 1, dateLabel: "合成纪年" }),
+      ),
+    ).resolves.toMatchObject({ version: 2 });
+    await expect(
+      operator().operatorCreateTimelineEntry(
+        "ai-admin",
+        createOf(entry("tang-c")),
+      ),
+    ).resolves.toMatchObject({ position: 2048 });
+    await expect(
+      operator().operatorReorderTimeline("ai-admin", {
+        requestId: randomUUID(),
+        startYear: 618,
+        entries: [
+          { id: "tang-c", expectedVersion: 1 },
+          { id: "tang-b", expectedVersion: 1 },
+          { id: "tang-a", expectedVersion: 2 },
+        ],
+      }),
+    ).resolves.toEqual({ startYear: 618, count: 3 });
+    // Fixed while hidden, then shown again.
+    await expect(
+      operator().operatorUpdateTimelineEntry(
+        "owner",
+        "broken",
+        updateOf({ expectedVersion: 2, title: "合成修正" }),
+      ),
+    ).resolves.toMatchObject({ hidden: true, version: 3 });
+    await expect(
+      operator().operatorUpdateTimelineEntry(
+        "owner",
+        "broken",
+        updateOf({ expectedVersion: 3, hidden: false }),
+      ),
+    ).resolves.toMatchObject({ hidden: false, version: 4 });
+    expect((await publicTimeline()).entries.map(({ id }) => id)).toEqual([
+      "tang-c",
+      "tang-b",
+      "tang-a",
+      "broken",
+      "beside",
+    ]);
   });
 });
 
 describe("timeline whole-set limits", () => {
+  const long = "长".repeat(200);
+  const sized = (index: number) =>
+    entry(`size-${String(index).padStart(5, "0")}`, {
+      title: long,
+      fullTitle: long,
+      catalogId: `size-catalog-${String(index).padStart(5, "0")}`,
+    });
+  // Rows of one byte length: the most that fit, so one more does not.
+  const one = estimateTimelineResponseBytes([sized(0)]) - 2;
+  const fitting = Math.floor((TIMELINE_RESPONSE_BYTES_MAXIMUM - 1) / (one + 1));
+  const sizedRows = (count: number) =>
+    Array.from({ length: count }, (_, index) => sized(index));
+  const storedBytes = async () =>
+    estimateTimelineResponseBytes(
+      (await operator().operatorTimelineEntries()).map(timelineImportFieldsOf),
+    );
+
   it(
-    "refuses a row past the maximum, and keeps every row",
+    "refuses a row past the maximum, keeps every row, and lets a set already past it change",
     async () => {
-      await importScript.applyImport(
-        setup,
+      await seed(
         Array.from({ length: TIMELINE_ENTRIES_MAXIMUM }, (_, index) =>
           entry(`row-${index}`, { position: index }),
         ),
-        { replaceOperatorEdits: true },
       );
       expect(
         await refusal(
@@ -979,6 +1417,27 @@ describe("timeline whole-set limits", () => {
         ),
       ).resolves.toMatchObject({ hidden: true });
       expect(await storedIds()).toHaveLength(TIMELINE_ENTRIES_MAXIMUM);
+      // Direct SQL takes the set one past the maximum: a change that adds no
+      // row still passes, and a new row is still refused.
+      await setup.query(
+        "INSERT INTO community.timeline_entries(entry_id,title,full_title,start_year,end_year,precision,on_axis,chapter,disputed,position) VALUES('row-extra','合成','合成',618,618,'year',true,'唐',false,0)",
+      );
+      await expect(
+        operator().operatorUpdateTimelineEntry(
+          "owner",
+          "row-0",
+          updateOf({ expectedVersion: 2, hidden: false }),
+        ),
+      ).resolves.toMatchObject({ hidden: false, version: 3 });
+      expect(
+        await refusal(
+          operator().operatorCreateTimelineEntry(
+            "owner",
+            createOf(entry("one-more")),
+          ),
+        ),
+      ).toBe("TIMELINE_FULL");
+      expect(await storedIds()).toHaveLength(TIMELINE_ENTRIES_MAXIMUM + 1);
     },
     SLOW,
   );
@@ -986,28 +1445,14 @@ describe("timeline whole-set limits", () => {
   it(
     "refuses a row that would take the response past its size estimate",
     async () => {
-      const long = "长".repeat(200);
-      const sized = (index: number) =>
-        entry(`size-${String(index).padStart(5, "0")}`, {
-          title: long,
-          fullTitle: long,
-          catalogId: `size-catalog-${String(index).padStart(5, "0")}`,
-        });
-      // Rows of one byte length: the most that fit, so one more does not.
-      const one = estimateTimelineResponseBytes([sized(0)]) - 2;
-      const fitting = Math.floor(
-        (TIMELINE_RESPONSE_BYTES_MAXIMUM - 1) / (one + 1),
-      );
-      const rows = Array.from({ length: fitting }, (_, index) => sized(index));
+      const rows = sizedRows(fitting);
       expect(estimateTimelineResponseBytes(rows)).toBeLessThanOrEqual(
         TIMELINE_RESPONSE_BYTES_MAXIMUM,
       );
       expect(
         estimateTimelineResponseBytes([...rows, sized(fitting)]),
       ).toBeGreaterThan(TIMELINE_RESPONSE_BYTES_MAXIMUM);
-      await importScript.applyImport(setup, rows, {
-        replaceOperatorEdits: true,
-      });
+      await seed(rows);
       const next = sized(fitting);
       expect(
         await refusal(
@@ -1021,16 +1466,53 @@ describe("timeline whole-set limits", () => {
     },
     SLOW,
   );
+
+  it(
+    "lets a write shrink a set already past its size estimate, and refuses one that grows it",
+    async () => {
+      // The import writes what it is given: three rows past the most that fit.
+      await seed(sizedRows(fitting + 3));
+      expect(await storedBytes()).toBeGreaterThan(
+        TIMELINE_RESPONSE_BYTES_MAXIMUM,
+      );
+      await expect(
+        operator().operatorUpdateTimelineEntry(
+          "owner",
+          "size-00000",
+          updateOf({ expectedVersion: 1, title: "合成" }),
+        ),
+      ).resolves.toMatchObject({ title: "合成", version: 2 });
+      // Still past the limit, so a change that grows it is refused.
+      expect(await storedBytes()).toBeGreaterThan(
+        TIMELINE_RESPONSE_BYTES_MAXIMUM,
+      );
+      expect(
+        await refusal(
+          operator().operatorUpdateTimelineEntry(
+            "owner",
+            "size-00001",
+            updateOf({ expectedVersion: 1, dateLabel: "合成纪年" }),
+          ),
+        ),
+      ).toBe("TIMELINE_TOO_LARGE");
+      const next = sized(fitting + 3);
+      expect(
+        await refusal(
+          operator().operatorCreateTimelineEntry(
+            "owner",
+            createOf(next, { position: next.position }),
+          ),
+        ),
+      ).toBe("TIMELINE_TOO_LARGE");
+      expect(await storedIds()).toHaveLength(fitting + 3);
+    },
+    SLOW,
+  );
 });
 
 describe("timeline import guard", () => {
-  beforeAll(async () => {
-    await importScript.applyImport(setup, [entry("seed-a"), entry("seed-b")], {
-      replaceOperatorEdits: true,
-    });
-  }, SLOW);
-
   it("keeps operator edits unless told to discard them, and records counts only", async () => {
+    await seed([entry("seed-a"), entry("seed-b")]);
     await operator().operatorUpdateTimelineEntry(
       "owner",
       "seed-a",
@@ -1080,29 +1562,131 @@ describe("timeline import guard", () => {
     });
   });
 
-  it("waits for an operator write that holds the shared lock", async () => {
+  it("brings a replaced row back one version on, so a version read before an import never matches after it", async () => {
+    await seed([entry("kept"), entry("dropped")]);
+    const read = (await operator().operatorTimelineEntries()).find(
+      ({ id }) => id === "kept",
+    );
+    expect(read?.version).toBe(1);
+    await importScript.applyImport(setup, [
+      entry("kept", { title: "合成改订" }),
+      entry("added"),
+    ]);
+    const stored = async () =>
+      (
+        await setup.query(
+          "SELECT entry_id,version,title FROM community.timeline_entries ORDER BY entry_id",
+        )
+      ).rows;
+    expect(await stored()).toEqual([
+      { entry_id: "added", version: 1, title: "合成added" },
+      { entry_id: "kept", version: 2, title: "合成改订" },
+    ]);
+    const stale = await failure(
+      operator().operatorUpdateTimelineEntry(
+        "ai-admin",
+        "kept",
+        updateOf({ expectedVersion: read?.version, title: "合成旧读" }),
+      ),
+    );
+    expect(stale).toBeInstanceOf(CommunityConflictError);
+    expect(stale).not.toBeInstanceOf(CommunityNamedConflictError);
+    // After an operator edit, a replacing import is one version past the edit.
+    await expect(
+      operator().operatorUpdateTimelineEntry(
+        "owner",
+        "kept",
+        updateOf({ expectedVersion: 2, dateLabel: "合成纪年" }),
+      ),
+    ).resolves.toMatchObject({ version: 3 });
+    await importScript.applyImport(setup, [entry("kept")], {
+      replaceOperatorEdits: true,
+    });
+    expect(
+      await failure(
+        operator().operatorUpdateTimelineEntry(
+          "owner",
+          "kept",
+          updateOf({ expectedVersion: 3, title: "合成旧读" }),
+        ),
+      ),
+    ).toBeInstanceOf(CommunityConflictError);
+    expect(await stored()).toEqual([
+      { entry_id: "kept", version: 4, title: "合成kept" },
+    ]);
+  });
+
+  it("waits for an operator write in progress, and then counts what it wrote", async () => {
+    await seed([entry("seed-a")]);
+    /** Who waits in this database: for the shared lock, or for a row. */
+    const waits = async () =>
+      (
+        await setup.query<{ shared_lock: number; row_lock: number }>(
+          `SELECT count(*) FILTER (WHERE l.locktype='advisory')::integer AS shared_lock,
+                  count(*) FILTER (WHERE l.locktype='transactionid')::integer AS row_lock
+           FROM pg_locks l JOIN pg_stat_activity a USING (pid)
+           WHERE a.datname=current_database() AND NOT l.granted`,
+        )
+      ).rows[0]!;
+    const until = async (
+      done: (now: { shared_lock: number; row_lock: number }) => boolean,
+    ) => {
+      const deadline = Date.now() + 4_000;
+      while (!done(await waits()) && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      return waits();
+    };
     const holder = await setup.connect();
+    const pending: Promise<unknown>[] = [];
     try {
       await holder.query("BEGIN");
-      await holder.query(importScript.CONTENT_OPERATOR_LOCK_SQL);
-      const importing = importScript.applyImport(setup, [entry("after-lock")]);
-      const waiting = async () =>
-        (
-          await app.query<{ waiting: number }>(
-            "SELECT count(*)::integer AS waiting FROM pg_locks WHERE locktype='advisory' AND NOT granted AND database=(SELECT oid FROM pg_database WHERE datname=current_database())",
-          )
-        ).rows[0]!.waiting;
-      const deadline = Date.now() + 4_000;
-      while ((await waiting()) === 0 && Date.now() < deadline)
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(await waiting()).toBe(1);
-      expect(await storedIds()).toEqual(["fresh"]);
+      await holder.query(
+        "SELECT 1 FROM community.timeline_entries WHERE entry_id='seed-a' FOR UPDATE",
+      );
+      // The write takes the shared lock, then waits on the held row.
+      const writing = operator().operatorUpdateTimelineEntry(
+        "owner",
+        "seed-a",
+        updateOf({ expectedVersion: 1, dateLabel: "合成纪年" }),
+      );
+      pending.push(writing.catch(() => undefined));
+      expect(await until(({ row_lock }) => row_lock === 1)).toEqual({
+        shared_lock: 0,
+        row_lock: 1,
+      });
+      const importing = importScript
+        .applyImport(setup, [entry("after-lock")])
+        .then(
+          () => "committed",
+          (error: Error) => error.message,
+        );
+      pending.push(importing);
+      expect(await until(({ shared_lock }) => shared_lock === 1)).toEqual({
+        shared_lock: 1,
+        row_lock: 1,
+      });
+      expect(await storedIds()).toEqual(["seed-a"]);
       await holder.query("COMMIT");
-      await importing;
-      expect(await storedIds()).toEqual(["after-lock"]);
+      await expect(writing).resolves.toMatchObject({
+        dateLabel: "合成纪年",
+        version: 2,
+      });
+      // The import ran once the write committed, so it saw the edit and kept it.
+      expect(await importing).toBe(
+        "The timeline holds 1 operator-edited and 0 hidden rows; --replace-operator-edits discards them",
+      );
+      expect(await storedIds()).toEqual(["seed-a"]);
+      expect(
+        (
+          await setup.query(
+            "SELECT updated_by FROM community.timeline_entries WHERE entry_id='seed-a'",
+          )
+        ).rows,
+      ).toEqual([{ updated_by: "owner" }]);
     } finally {
       await holder.query("ROLLBACK").catch(() => undefined);
       holder.release();
+      await Promise.allSettled(pending);
     }
   });
 });

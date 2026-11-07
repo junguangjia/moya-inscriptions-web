@@ -809,7 +809,7 @@ describe("Home timeline Owner routes", () => {
     try {
       for (const [status, code, shown] of [
         [422, "ENTRY_EXISTS", "ENTRY_EXISTS"],
-        [422, "TIMELINE_INVALID", "TIMELINE_INVALID"],
+        [422, "SET_CHANGED", "SET_CHANGED"],
         [409, "STATE_CONFLICT", "STATE_CONFLICT"],
         [409, "IDEMPOTENCY_CONFLICT", "STATE_CONFLICT"],
       ] as const) {

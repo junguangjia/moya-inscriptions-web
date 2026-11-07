@@ -63,17 +63,41 @@ that. The database is now the master:
 - No row is deleted through the Backend. A hidden row leaves the public read at
   once, and can be shown again.
 
-Every writer runs the same checks inside the shared content-operator lock. Each
-row must pass `timelineImportEntrySchema`. The whole set, with the change
-applied, must pass `checkTimelineEntrySet`: at most `TIMELINE_ENTRIES_MAXIMUM`
-rows, each Catalog record linked once, and a response estimate within
-`TIMELINE_RESPONSE_BYTES_MAXIMUM`. Hidden rows count toward both limits. So no
-write can leave a set that the public read would refuse.
+Every writer runs its checks inside the shared content-operator lock, against
+the contract's import row, `timelineImportEntrySchema`. The import holds its
+whole file to `checkTimelineEntrySet`: every row passes, each id and Catalog
+record appears once, the file has at most `TIMELINE_ENTRIES_MAXIMUM` rows, and
+its response estimate is within `TIMELINE_RESPONSE_BYTES_MAXIMUM`. An operator
+write runs `checkTimelineEntryWrite` over the stored set before and after it,
+and is refused only for what it makes worse:
+
+- Each row the write stores must pass the import row when the write creates it,
+  changes one of its import fields (`position` included) or leaves it visible;
+  otherwise the write answers `ENTRY_INVALID`. So a write that only hides a row
+  passes, and showing a row that fails is refused. A reorder stores every row of
+  its year, so it is refused while a visible row of that year fails, or while a
+  hidden one that fails would move.
+- Every other stored row is left out of the check, whether it passes or not.
+- `TIMELINE_FULL` only when the write adds rows past the maximum, and
+  `TIMELINE_TOO_LARGE` only when the estimate after the write is past its limit
+  and above the estimate before it. Hidden rows count toward both limits.
+- Ids and Catalog links stay unique by the table's keys, which answer
+  `ENTRY_EXISTS` and `CATALOG_ALREADY_LINKED`.
+
+So no write takes the set past a limit, and while the set is within its limits,
+no write turns a public read that passes into one that fails. A stored row fails
+the contract, or the set passes a limit, only after direct SQL or a contract
+change. Past `TIMELINE_ENTRIES_MAXIMUM`, showing a hidden row can still make the
+public read fail. A row that fails can be hidden at once and fixed with
+`update-timeline-entry`, one at a time (see the refusals below).
 
 Group and chapter consistency are reported, not enforced: the summary counts
-them, and `read-timeline` filters on them. The chapter year spans live in the
-Web's `TIMELINE_CHAPTERS` and again in the Backend's operator mapper; a unit
-test pins the two equal.
+them, and `read-timeline` filters on them. The chapter year spans live in
+`TIMELINE_CHAPTER_SPANS` in `packages/contracts/src/schemas.ts`, which the
+operator read's mapper imports for `issue=chapter_year`. Frontend code may not
+import runtime contracts, so the Web keeps its own presentation table,
+`TIMELINE_CHAPTERS`, with the same spans, and
+`tests/unit/backend/timeline-operator-http.test.ts` pins the two equal.
 
 A linked row takes its publication and media rules from the existing Catalog
 projection. A row whose record is not published stays text-only and unlinked.
@@ -81,7 +105,9 @@ projection. A row whose record is not published stays text-only and unlinked.
 Each row records who wrote it. `created_by` and `updated_by` hold `import`,
 `owner` or `ai-admin`, the operator labels the Backend passes, and a database
 check allows only those. A new label needs a migration. `version` rises by one
-on each change, and `created_at` and `updated_at` record the times.
+on each change, and `created_at` and `updated_at` record the times. An import
+brings a replaced id back one version past the row it replaces, so a version
+read before an import never matches after it.
 
 ## Admin MCP ops
 
@@ -111,7 +137,10 @@ record that is not published. Pages hold 20 rows by default and 50 at most, in
 the public read's order: start year, position, id. Each row carries its import
 fields, `version`, `hidden`, `linkState`, its writers and times. `admin_read`'s
 compact view shows the main columns and `full` shows the rest. There is no count
-view: the summary is the count.
+view: the summary is the count. On the Backend a number is read only from its
+decimal digits, so an empty or blank `page`, `pageSize`, `yearFrom` or `yearTo`
+answers 400 `INVALID_QUERY` and is never read as 0; so does a query key that an
+object inherits, such as `constructor`.
 
 **`read-timeline-summary`.** Counts over every stored row: visible and hidden,
 on the axis and on the shelf, per chapter, by link state, by last writer and by
@@ -122,6 +151,10 @@ limits, and the last change time.
 **`create-timeline-entry`.** The caller chooses the id. Optional fields default
 to null, and `disputed` to false. Without `position`, the row goes to the end of
 its start year. The row starts at version 1 with the caller's label.
+
+A text field of either command refuses a NUL and an unpaired UTF-16 surrogate,
+which PostgreSQL text cannot hold, so the Backend answers such a command 400
+`INVALID_COMMAND` before anything runs.
 
 **`update-timeline-entry`.** Any subset of a row's fields, against the
 `expectedVersion` the caller read. The id never changes. `catalogId: null`
@@ -147,32 +180,55 @@ commands. Each write records one `content_operator_events` row with content type
 for the lock, as other AI writes do.
 
 Admin names a written row by its index, not its id, because an entry id is text
-its writer chose. The answer carries the title, marked as untrusted, the state,
-the version and the link state. To trace a write, follow its `requestId` to the
-Backend's event row.
+its writer chose. The rule is Admin's own for every op: an id is echoed only in
+a shape that no text fits in. So an entry id that is all digits (up to 15, with
+no leading zero, echoed as a number), a UUID, or a platform id such as
+`work-<32 hex>` is still echoed and audited as the target id. Any other entry
+id, a slug for example, is in neither the answer nor the Admin audit. The answer
+carries the title, marked as untrusted, the state, the version and the link
+state.
+
+To trace a write, start from the Backend's event row in
+`content_operator_events`, with content type `timeline_entry`. Its
+`detail.command.requestId` is the key that the receipt row holds as
+`content_operator_receipts.request_id`, and its `content_id` names the entry,
+except for a reorder. On the Owner's route that key is the `requestId` the Owner
+sent. On the AI path it is not the call's `requestId`. Admin sends each target
+the key `requestKeyFor(requestId, index, connectionId)`
+(`apps/admin/src/admin-mcp/tools/execute.ts`): a UUID-shaped SHA-256 of the
+call's `requestId`, the target's zero-based index and the connection id, or of
+the first two for a key with no connection. Admin's audit rows record the call's
+`requestId`, its connection id and its target count, but not the derived key. To
+match an AI call to its event rows, recompute the key for each index below that
+count, and look for it under operator label `ai-admin`. The derivation is in
+[`admin-mcp-completion-v1.md`](admin-mcp-completion-v1.md), section 7 and the
+section 22 note on one requestId over two connections.
 
 Refusals change nothing and record nothing:
 
-| Code                     | When                                                       | HTTP |
-| ------------------------ | ---------------------------------------------------------- | ---- |
-| `ENTRY_EXISTS`           | The new id is taken                                        | 422  |
-| `CATALOG_ALREADY_LINKED` | Another row links that Catalog record                      | 422  |
-| `TIMELINE_FULL`          | The set would pass `TIMELINE_ENTRIES_MAXIMUM`              | 422  |
-| `TIMELINE_TOO_LARGE`     | The response estimate would pass its limit                 | 422  |
-| `ENTRY_INVALID`          | The row as it would be stored fails the import row         | 422  |
-| `TIMELINE_INVALID`       | Another stored row fails it; find it with `issue=contract` | 422  |
-| `SET_CHANGED`            | A reorder does not list exactly the rows of its year       | 422  |
-| `STATE_CONFLICT`         | The row changed since the caller read it                   | 409  |
-| `IDEMPOTENCY_CONFLICT`   | The `requestId` was used for a different command           | 409  |
-| `INVALID_COMMAND`        | A malformed body, or an update with nothing to change      | 400  |
-| `NOT_FOUND`              | No row has that id                                         | 404  |
+| Code                     | When                                                                                            | HTTP |
+| ------------------------ | ----------------------------------------------------------------------------------------------- | ---- |
+| `ENTRY_EXISTS`           | The new id is taken                                                                             | 422  |
+| `CATALOG_ALREADY_LINKED` | Another row links that Catalog record                                                           | 422  |
+| `TIMELINE_FULL`          | The write would add rows past `TIMELINE_ENTRIES_MAXIMUM`                                        | 422  |
+| `TIMELINE_TOO_LARGE`     | The write would grow the response estimate and leave it past its limit                          | 422  |
+| `ENTRY_INVALID`          | A row the write stores, visible after it or with an import field changed, fails the import row  | 422  |
+| `SET_CHANGED`            | A reorder does not list exactly the rows of its year                                            | 422  |
+| `STATE_CONFLICT`         | The row changed since the caller read it                                                        | 409  |
+| `IDEMPOTENCY_CONFLICT`   | The `requestId` was used for a different command                                                | 409  |
+| `INVALID_COMMAND`        | A malformed body, text with a NUL or an unpaired surrogate, or an update with nothing to change | 400  |
+| `NOT_FOUND`              | No row has that id                                                                              | 404  |
 
 The named refusals answer 422 because the Owner's transport keeps a 422 code and
 turns every 409 into `STATE_CONFLICT`. The AI sees a named refusal as a failed
-target under its code, and a stale version as a conflict. `TIMELINE_INVALID`
-fails closed. Every writer checks every row, so a stored row fails the contract
-only after direct SQL or a contract change. While one exists, every other write
-is refused until `update-timeline-entry` fixes it.
+target under its code, and a stale version as a conflict.
+
+A stored row that fails the contract never refuses another write; read
+`issue=contract` to find one. While it is visible, the public read fails and the
+feed shows as unavailable. Hide it at once with `update-timeline-entry`, which
+passes although the row fails, then fix it with the same op. Until it passes,
+showing it, a change that still fails, and a reorder of its year while it is
+visible each answer `ENTRY_INVALID`.
 
 ### Not built, and why
 
@@ -203,8 +259,9 @@ The frozen Behavior Matrix is in Issue #384 and wins over tests. It covers rows
 present, linked, unpublished and unlinked rows, the unavailable message, old
 links, scroll and Detail return, viewer identity and the QA scenarios
 `timeline-demo` and `timeline-unavailable`, which replace `nearby-demo` and
-`nearby-unavailable`. r3 adds rows for the five ops, the import guard and hidden
-rows. The amendment carries the same rows.
+`nearby-unavailable`. r3 adds rows for the five ops, the import guard, hidden
+rows, command text the store cannot hold, and a stored row that fails the
+contract. The amendment carries the same rows.
 
 ## Delivery
 
@@ -240,13 +297,15 @@ already applied. Once merged, the migration only adds.
 2. **Grants.** Re-apply the runtime grants with the setup role, in one
    transaction:
    `psql -X -v ON_ERROR_STOP=1 --single-transaction -v app_role="$APP_RUNTIME_ROLE" -f infra/development/work-publishing/grant-runtime.sql`.
-   It gives the runtime role `SELECT` on `community.timeline_entries`, `INSERT`
-   on every column, and `UPDATE` on every column except `entry_id`, `created_by`
-   and `created_at`. It gives no `DELETE` or `TRUNCATE`. It first revokes any
-   table-level `INSERT` or `UPDATE`, so a re-run converges on the column grants.
-   Confirm with the App-role preflight below, because startup does not probe
-   these grants: a missed one shows only as this feed being unavailable, or as
-   failed writes.
+   It gives the runtime role `SELECT` on `community.timeline_entries`; `INSERT`
+   on the columns a new row names, which are the entry fields, `created_by` and
+   `updated_by`, so `version`, `hidden_at`, `created_at` and `updated_at` come
+   from their defaults; and `UPDATE` on every column except `entry_id`,
+   `created_by` and `created_at`. It gives no `DELETE` or `TRUNCATE`. It first
+   revokes any table-level `INSERT` or `UPDATE`, which takes the column grants
+   with it, so a re-run converges on the column grants. Confirm with the
+   App-role preflight below, because startup does not probe these grants: a
+   missed one shows only as this feed being unavailable, or as failed writes.
 3. **Import.** Run `node scripts/import-timeline.mjs --file <absolute path>` as
    a dry run and read its counts per chapter, on-axis and linked. Then repeat it
    with `--apply`, which replaces all rows in one transaction. It reads
@@ -257,8 +316,10 @@ already applied. Once merged, the migration only adds.
    row was created, edited or hidden by an operator, unless
    `--replace-operator-edits` is also given, which discards those edits. Each
    apply records one `content_operator_events` row with label `import`, action
-   `timeline.import` and counts only. Imported rows start at version 1, labelled
-   `import`, and visible.
+   `timeline.import` and counts only. Imported rows are labelled `import` and
+   visible. An id the import replaces comes back one version past the row it
+   replaces, so a version read before the import never matches after it; a new
+   id starts at version 1.
 4. **Restart.** Restart Backend, Web and Admin on the tagged release. A Backend
    restarted before step 1 fails closed on its community ledger check. The Owner
    routes work from here.
@@ -266,23 +327,32 @@ already applied. Once merged, the migration only adds.
    under the #355 amendments. Until it is placed, they answer
    `AI_CREDENTIAL_NOT_CONFIGURED`.
 
-App-role preflight, read-only, after step 2. Every column must be true:
+App-role preflight, read-only, after step 2. It checks each grant the amendment
+states: reads; `INSERT` on exactly the columns a new row names; `UPDATE` on
+every column but the id, the creator and the creation time; no `DELETE` or
+`TRUNCATE`; and the event and receipt grants the writes use. Every column must
+be true:
 
 ```sql
 SELECT
   has_table_privilege(:'app_role', 'community.timeline_entries', 'SELECT') AS reads,
-  has_column_privilege(:'app_role', 'community.timeline_entries', 'title', 'INSERT') AS creates,
-  has_column_privilege(:'app_role', 'community.timeline_entries', 'title', 'UPDATE') AS edits,
-  NOT has_column_privilege(:'app_role', 'community.timeline_entries', 'entry_id', 'UPDATE') AS id_fixed,
+  bool_and(has_column_privilege(:'app_role', attrelid, attnum, 'INSERT')
+    = (attname NOT IN ('version', 'hidden_at', 'created_at', 'updated_at'))) AS creates,
+  bool_and(has_column_privilege(:'app_role', attrelid, attnum, 'UPDATE')
+    = (attname NOT IN ('entry_id', 'created_by', 'created_at'))) AS edits,
   NOT has_table_privilege(:'app_role', 'community.timeline_entries', 'DELETE') AS no_delete,
+  NOT has_table_privilege(:'app_role', 'community.timeline_entries', 'TRUNCATE') AS no_truncate,
   has_column_privilege(:'app_role', 'community.content_operator_events', 'detail', 'INSERT') AS events,
-  has_table_privilege(:'app_role', 'community.content_operator_receipts', 'INSERT') AS receipts;
+  has_table_privilege(:'app_role', 'community.content_operator_receipts', 'SELECT')
+    AND has_table_privilege(:'app_role', 'community.content_operator_receipts', 'INSERT') AS receipts
+FROM pg_attribute
+WHERE attrelid = 'community.timeline_entries'::regclass AND attnum > 0 AND NOT attisdropped;
 ```
 
 The App-role preflight in
-[`admin-mcp-completion-v1.md`](admin-mcp-completion-v1.md) now names
-`community.timeline_entries` too. `has_table_privilege` raises an error on a
-missing relation, so run that preflight only after step 1.
+[`admin-mcp-completion-v1.md`](admin-mcp-completion-v1.md) names
+`community.timeline_entries` for reads only. Its timeline row reads null, not an
+error, before step 1, while this preflight needs the table.
 
 A withdrawn Catalog record loses its link and image on the next read, and its
 row stays as text. To take the row off the timeline as well, for a rights

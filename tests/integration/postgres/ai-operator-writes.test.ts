@@ -679,6 +679,40 @@ describe("what only ai-admin is told of a write", () => {
     expect(await timelineEvents(command.id)).toHaveLength(1);
   });
 
+  it("answers timeline text the store cannot hold as a malformed command, and writes nothing", async () => {
+    // Valid JSON whose strings carry an unpaired surrogate, as a client may send.
+    const command = newTimelineEntry();
+    for (const [token, body] of [
+      [ownerToken, { ...command, title: "合成\ud800" }],
+      [communityToken, { ...command, polity: "\udc00合成" }],
+      [communityToken, { ...command, catalogId: "catalog-\ud800" }],
+    ] as const)
+      expect(await send(token, "POST", "timeline-entries", body)).toMatchObject(
+        { status: 400, code: "INVALID_COMMAND" },
+      );
+    expect(await timelineEvents(command.id)).toEqual([]);
+    expect(
+      (await send(communityToken, "POST", "timeline-entries", command)).status,
+    ).toBe(200);
+    for (const field of ["holder", "dateLabel", "groupTitle"])
+      expect(
+        await send(communityToken, "POST", `timeline-entries/${command.id}`, {
+          requestId: randomUUID(),
+          expectedVersion: 1,
+          [field]: "合成\udbff",
+          ...(field === "groupTitle" ? { groupId: "group-a" } : {}),
+        }),
+      ).toMatchObject({ status: 400, code: "INVALID_COMMAND" });
+    const { rows } = await setup.query(
+      "SELECT version,holder,date_label,group_title FROM community.timeline_entries WHERE entry_id=$1",
+      [command.id],
+    );
+    expect(rows).toEqual([
+      { version: 1, holder: null, date_label: null, group_title: null },
+    ]);
+    expect(await timelineEvents(command.id)).toHaveLength(1);
+  });
+
   it("answers concurrent repeats of one key with one effect", async () => {
     const user = await newUser();
     const header = { [AI_OPERATOR_REQUEST_ID_HEADER]: randomUUID() };

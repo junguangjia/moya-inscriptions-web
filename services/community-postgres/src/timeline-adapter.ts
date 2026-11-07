@@ -9,7 +9,7 @@ import {
 } from "@moya/api";
 import {
   TIMELINE_ENTRIES_MAXIMUM,
-  checkTimelineEntrySet,
+  checkTimelineEntryWrite,
 } from "@moya/contracts/schemas";
 import {
   markForAiOperator,
@@ -39,8 +39,11 @@ import type { Pool, PoolClient, QueryResultRow } from "pg";
  * limit, the shared content-operator lock (the import takes it too), the
  * receipt, the change, one content_operator_events row and the receipt row.
  * Inside the lock each write reads the stored set, applies its change and runs
- * the contract's whole-set check, so a write can never leave a set the public
- * read would refuse. The public read itself lives in the discovery adapter.
+ * the contract's write check over the set before and after it: a write is
+ * refused only for what it makes worse, so a row that fails the contract after
+ * direct SQL or a contract change can always be fixed or hidden. Ids and
+ * Catalog links stay unique by the table's keys, named below. The public read
+ * itself lives in the discovery adapter.
  *
  * Link state reads the published Catalog projection: on `catalogPool` when the
  * deployment reads Catalog over its own connection, as discovery does, else on
@@ -141,32 +144,20 @@ const refusalMessages: Readonly<Record<TimelineRefusalCode, string>> = {
   TIMELINE_FULL: "The timeline holds its maximum number of entries",
   TIMELINE_TOO_LARGE: "The timeline response would exceed its size limit",
   ENTRY_INVALID: "The entry as it would be stored fails the contract",
-  TIMELINE_INVALID: "Another stored entry fails the contract",
   SET_CHANGED: "The listed entries are not exactly the rows of that year",
 };
 const refused = (code: TimelineRefusalCode) =>
   new CommunityNamedConflictError(code, refusalMessages[code]);
 
-/**
- * The whole-set check over the set as it would be stored. `written` is the
- * index of the row this write produced, last in the set; a failing row
- * anywhere else was stored before and is named TIMELINE_INVALID.
- */
-const assertStorable = (
-  set: readonly ImportFields[],
-  written: number | null,
+/** The contract's write check over the stored set before and after the write. */
+const assertWritable = (
+  write: Parameters<typeof checkTimelineEntryWrite>[0],
 ): void => {
-  const checked = checkTimelineEntrySet(set);
-  if (checked.ok) return;
-  const { issue } = checked;
-  throw refused(
-    issue.code === "ENTRY_INVALID" && issue.index !== written
-      ? "TIMELINE_INVALID"
-      : issue.code,
-  );
+  const checked = checkTimelineEntryWrite(write);
+  if (!checked.ok) throw refused(checked.issue.code);
 };
 
-/** Backstops for a writer outside the lock: the two unique rules, by name. */
+/** The two unique rules, by name: a Catalog link is unique by its index alone. */
 const constraintRefusals = new Map<string, TimelineRefusalCode>([
   ["timeline_entries_pkey", "ENTRY_EXISTS"],
   ["timeline_entries_catalog_id_unique", "CATALOG_ALREADY_LINKED"],
@@ -180,7 +171,7 @@ const asTimelineOperationError = (error: unknown): unknown => {
         ? constraintRefusals.get(error.constraint)
         : undefined;
     if (refusal !== undefined) return refused(refusal);
-    // A NUL character passes the contract but not PostgreSQL text.
+    // The contract refuses NUL; this backstops a caller that skipped it.
     if (error.code === "22021")
       return new CommunityInputError(
         "Text holds a character the store refuses",
@@ -377,7 +368,11 @@ export class PostgresTimelineOperatorAdapter implements TimelineOperatorPort {
           catalogId: input.catalogId,
           position: input.position ?? endOfYear(rows, input.startYear),
         };
-        assertStorable([...rows, entry], rows.length);
+        assertWritable({
+          before: rows,
+          after: [...rows, entry],
+          changes: [{ before: null, after: entry, hidden: false }],
+        });
         const row = (
           await db.query<TimelineEntryRow>(
             `INSERT INTO community.timeline_entries(entry_id,title,full_title,start_year,end_year,precision,date_label,on_axis,
@@ -453,7 +448,17 @@ export class PostgresTimelineOperatorAdapter implements TimelineOperatorPort {
               ? current.position
               : endOfYear(others, startYear)),
         };
-        assertStorable([...others, entry], others.length);
+        assertWritable({
+          before: [...others, current],
+          after: [...others, entry],
+          changes: [
+            {
+              before: current,
+              after: entry,
+              hidden: input.hidden ?? before.hidden_at !== null,
+            },
+          ],
+        });
         const row = (
           await db.query<TimelineEntryRow>(
             `UPDATE community.timeline_entries SET
@@ -476,7 +481,9 @@ export class PostgresTimelineOperatorAdapter implements TimelineOperatorPort {
 
   /**
    * One start year's rows in a new order, all or none, under one receipt and
-   * one event (no single entry id is audited).
+   * one event (no single entry id is audited). The year's hidden rows belong to
+   * the list too, so a row shown again keeps a place in the order. Each listed
+   * row is written, so it is checked as an update is.
    */
   async operatorReorderTimeline(
     operator: string,
@@ -490,8 +497,8 @@ export class PostgresTimelineOperatorAdapter implements TimelineOperatorPort {
       input,
       async (db) => {
         const year = (
-          await db.query<{ entry_id: string; version: number }>(
-            "SELECT entry_id,version FROM community.timeline_entries WHERE start_year=$1 FOR UPDATE",
+          await db.query<TimelineEntryRow>(
+            `SELECT ${entryColumns} FROM community.timeline_entries WHERE start_year=$1 FOR UPDATE`,
             [input.startYear],
           )
         ).rows;
@@ -514,13 +521,20 @@ export class PostgresTimelineOperatorAdapter implements TimelineOperatorPort {
         const positions = new Map(
           input.entries.map(({ id }, index) => [id, index * POSITION_STEP]),
         );
-        assertStorable(
-          (await this.storedRows(db)).map((row) => ({
-            ...importFields(row),
-            position: positions.get(row.entry_id) ?? row.position,
+        const placed = (row: TimelineEntryRow): ImportFields => ({
+          ...importFields(row),
+          position: positions.get(row.entry_id) ?? row.position,
+        });
+        const rows = await this.storedRows(db);
+        assertWritable({
+          before: rows.map(importFields),
+          after: rows.map(placed),
+          changes: year.map((row) => ({
+            before: importFields(row),
+            after: placed(row),
+            hidden: row.hidden_at !== null,
           })),
-          null,
-        );
+        });
         await db.query(
           `UPDATE community.timeline_entries t
            SET position = v.position, version = t.version + 1, updated_by = $3, updated_at = CURRENT_TIMESTAMP

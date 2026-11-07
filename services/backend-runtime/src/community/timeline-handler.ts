@@ -72,6 +72,12 @@ export const handleTimelineOperatorRequest = async (
     if (route === "timeline-entries" && rest.length === 0) {
       if (method === "GET") {
         try {
+          // A key an object inherits, such as `constructor`, would read as a
+          // value already collected: refused like any key the query lacks.
+          if (
+            [...url.searchParams.keys()].some((key) => key in Object.prototype)
+          )
+            throw new CommunityInputError("Unexpected query");
           sendJson(
             response,
             200,

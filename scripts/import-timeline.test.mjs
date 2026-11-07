@@ -68,6 +68,7 @@ const fakePool = ({
   ledger = true,
   failOn,
   stored = { total: 0, edited: 0, hidden: 0 },
+  replaced = [],
 } = {}) => {
   const statements = [];
   const bound = [];
@@ -83,6 +84,7 @@ const fakePool = ({
           rows: ledger ? [{ migration_id: TIMELINE_MIGRATION_ID }] : [],
         };
       if (text.includes("FILTER")) return { rows: [stored] };
+      if (text.startsWith("DELETE")) return { rows: replaced };
       return { rows: [] };
     },
     release: () => {
@@ -204,25 +206,44 @@ test("inserts bind every value, batch by batch, in file order", () => {
     2,
   );
   assert.equal(statements.length, 2);
-  assert.equal(statements[0].values.length, 34);
-  assert.equal(statements[1].values.length, 17);
+  assert.equal(statements[0].values.length, 36);
+  assert.equal(statements[1].values.length, 18);
   assert.match(
     statements[0].text,
-    /^INSERT INTO community\.timeline_entries\(entry_id,title,full_title,start_year,end_year,precision,date_label,on_axis,chapter,polity,disputed,group_id,group_title,province,holder,catalog_id,position\) VALUES \(\$1,/u,
+    /^INSERT INTO community\.timeline_entries\(entry_id,title,full_title,start_year,end_year,precision,date_label,on_axis,chapter,polity,disputed,group_id,group_title,province,holder,catalog_id,position,version\) VALUES \(\$1,/u,
   );
-  assert.ok(statements[0].text.endsWith(",$34)"));
+  assert.ok(statements[0].text.endsWith(",$36)"));
   assert.ok(!statements[0].text.includes(secret));
   assert.equal(statements[0].values[0], "a");
   assert.equal(statements[0].values[1], secret);
-  assert.equal(statements[0].values[17], "b");
-  assert.equal(statements[0].values[32], "catalog-b");
-  assert.equal(statements[0].values[33], 7);
+  assert.equal(statements[0].values[17], 1);
+  assert.equal(statements[0].values[18], "b");
+  assert.equal(statements[0].values[33], "catalog-b");
+  assert.equal(statements[0].values[34], 7);
+  assert.equal(statements[0].values[35], 1);
   assert.equal(statements[1].values[0], "c");
+});
+
+test("a replaced id comes back one version past the row it replaces, a new id at 1", () => {
+  const [statement] = insertStatements(
+    [entry("kept"), entry("added")],
+    200,
+    new Map([
+      ["kept", 4],
+      ["dropped", 9],
+    ]),
+  );
+  assert.equal(statement.values[17], 5);
+  assert.equal(statement.values[35], 1);
 });
 
 test("apply replaces all rows inside one transaction under the operator lock", async () => {
   const { pool, statements, bound, released } = fakePool({
     stored: { total: 3, edited: 0, hidden: 0 },
+    replaced: [
+      { entry_id: "a", version: 4 },
+      { entry_id: "gone", version: 2 },
+    ],
   });
   assert.deepEqual(await applyImport(pool, [entry("a"), entry("b")]), {
     entries: 2,
@@ -245,7 +266,13 @@ test("apply replaces all rows inside one transaction under the operator lock", a
     ],
   );
   assert.equal(statements[2], CONTENT_OPERATOR_LOCK_SQL);
-  assert.equal(statements[5], "DELETE FROM community.timeline_entries");
+  assert.equal(
+    statements[5],
+    "DELETE FROM community.timeline_entries RETURNING entry_id,version",
+  );
+  // The deleted versions carry on: "a" was at 4, "b" is new.
+  assert.equal(bound[6][17], 5);
+  assert.equal(bound[6][35], 1);
   // One event with counts only: no row content reaches it.
   assert.match(
     statements[7],
@@ -454,6 +481,12 @@ test(
     assert.ok(!accepted([entry("a", { chapter: "未知" })]));
     assert.ok(!accepted([entry("a", { groupId: "g" })]));
     assert.ok(!accepted([entry("a", { extra: true })]));
+    // Text PostgreSQL cannot store: an unpaired surrogate or a NUL.
+    assert.ok(accepted([entry("a", { title: "虚构\u{20000}" })]));
+    assert.ok(!accepted([entry("a", { title: "虚构\ud800" })]));
+    assert.ok(!accepted([entry("a", { holder: "\udc00虚构" })]));
+    assert.ok(!accepted([entry("a", { polity: "虚\u0000构" })]));
+    assert.ok(!accepted([entry("a", { catalogId: "catalog-\ud800" })]));
     assert.ok(!accepted([entry("a"), entry("a")]));
     assert.ok(
       !accepted([
