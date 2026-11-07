@@ -133,8 +133,6 @@
   cursor: pointer;
 }
 
-/* Drawn compact inside text; the hit area reaches 44px around it. */
-.bar .inlineAction,
 /* timeline-posts-v1: a field's actions side by side, at the field's start. */
 .fieldActions {
   display: flex;
@@ -143,6 +141,8 @@
   gap: var(--yoyi-space-3);
 }
 
+/* Drawn compact inside text; the hit area reaches 44px around it. */
+.bar .inlineAction,
 .inlineAction {
   position: relative;
   display: inline-flex;
