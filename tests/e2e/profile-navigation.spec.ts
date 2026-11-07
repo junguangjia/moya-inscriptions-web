@@ -632,6 +632,207 @@ test("A photo profile too tall to pin scrolls freely and keeps its hint", async 
   ).toHaveCSS("display", "none");
 });
 
+/** Decoded screen pixels, for reading what a reader actually sees. */
+const raster = (image: Buffer) =>
+  sharp(image).raw().toBuffer({ resolveWithObject: true });
+type Raster = Awaited<ReturnType<typeof raster>>;
+
+const luminance = ({ data }: Raster, at: number) => {
+  const [red, green, blue] = [0, 1, 2].map((channel) => {
+    const value = data[at + channel]! / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  }) as [number, number, number];
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+};
+
+interface Box {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+/**
+ * How well text stands off what lies behind it: the strongest WCAG contrast in
+ * its box between the screen and the same screen without the text. Real
+ * pixels, so the photo, its shade, the glass card and the page all count.
+ */
+function inkContrast(shown: Raster, bare: Raster, box: Box, scale: number) {
+  const { width, channels } = shown.info;
+  let strongest = 1;
+  for (let y = Math.floor(box.top * scale); y < box.bottom * scale; y++)
+    for (let x = Math.floor(box.left * scale); x < box.right * scale; x++) {
+      const at = (y * width + x) * channels;
+      const [a, b] = [luminance(shown, at), luminance(bare, at)];
+      strongest = Math.max(
+        strongest,
+        (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05),
+      );
+    }
+  return strongest;
+}
+
+test("A desktop photo profile keeps its identity on the photo through the whole scroll", async ({
+  page,
+}, info) => {
+  test.skip(
+    !info.project.name.startsWith("desktop"),
+    "The workspace wider than the cover belongs to full desktop width.",
+  );
+  await fixture(page, false, true);
+  // A gesture passes through the places where snapping never rests.
+  await page.addStyleTag({
+    content: "html { scroll-snap-type: none !important; }",
+  });
+  const withoutText =
+    '[aria-label="用户资料"] [data-theme], [aria-label="用户资料"] [data-theme] * { color: transparent !important; text-shadow: none !important; transition: none !important; }';
+  const problems: string[] = [];
+  for (const { width, height } of [
+    { width: 1024, height: 800 },
+    { width: 1280, height: 720 },
+    { width: 1440, height: 900 },
+    { width: 1920, height: 1080 },
+    // Too short to pin: the cover scrolls away whole.
+    { width: 1280, height: 460 },
+  ]) {
+    await scrollTo(page, 0);
+    await page.setViewportSize({ width, height });
+    await expect(page.locator("[data-product-shell]")).toHaveAttribute(
+      "data-desktop",
+      "true",
+    );
+    // The cover has re-measured for this window.
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const root = document.querySelector<HTMLElement>(
+            "[data-author-profile]",
+          )!;
+          return Math.abs(
+            Number.parseFloat(root.style.getPropertyValue("--cover-height")) -
+              root
+                .querySelector('[aria-label="用户资料"]')!
+                .getBoundingClientRect().height,
+          );
+        }),
+      )
+      .toBeLessThanOrEqual(1);
+    const { rest, second } = await stage(page);
+    const free = await page
+      .locator("[data-author-profile]")
+      .first()
+      .evaluate((root) => root.hasAttribute("data-cover-free"));
+    const stops = [0, 0.25, 0.5, 0.75, 0.95, 1].map((share) =>
+      Math.round(rest * share),
+    );
+    // Past the resting place a free cover leaves with the page; a pinned one
+    // stays while the collections scroll under it.
+    if (!free) stops.push(second, second + 200);
+    for (const top of stops) {
+      await scrollTo(page, top);
+      // The stage's colours ease over.
+      await page.waitForTimeout(300);
+      const at = `${width}x${height} at ${top}`;
+      const layout = await page.evaluate(() => {
+        const root = document.querySelector<HTMLElement>(
+          "[data-author-profile]",
+        )!;
+        const box = (element: Element | null) => {
+          const { left, right, top, bottom } =
+            element?.getBoundingClientRect() ?? new DOMRect();
+          return { left, right, top, bottom };
+        };
+        const cover = root.querySelector('[aria-label="用户资料"]')!;
+        return {
+          photo: box(root.querySelector('[aria-label="主页背景"]')),
+          cover: box(cover),
+          card: box(
+            root.querySelector(
+              '[aria-label="主页背景"] + div > span:last-child',
+            ),
+          ),
+          pencil: box(cover.querySelector('[aria-label="编辑主页背景"]')),
+          lines: [...cover.querySelectorAll("h1, p, button:has(strong)")].map(
+            (element) => {
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              const { left, right, top, bottom } =
+                range.getBoundingClientRect();
+              return {
+                text: element.textContent,
+                left,
+                right,
+                top,
+                bottom,
+              };
+            },
+          ),
+        };
+      });
+      const { photo, cover, card, pencil, lines } = layout;
+      if (
+        Math.abs(cover.left - photo.left) > 1 ||
+        Math.abs(cover.right - photo.right) > 1
+      )
+        problems.push(`${at}: the identity is not as wide as the photo`);
+      if (pencil.right > photo.right || pencil.left < photo.left)
+        problems.push(`${at}: the pencil is off the photo`);
+      // One after the other: a screenshot's style holds until it is taken.
+      const shown = await raster(
+        await page.screenshot({ animations: "disabled" }),
+      );
+      const bare = await raster(
+        await page.screenshot({ animations: "disabled", style: withoutText }),
+      );
+      const scale = shown.info.width / width;
+      expect(lines.length).toBeGreaterThanOrEqual(5);
+      for (const { text, ...line } of lines) {
+        if (line.left < photo.left || line.right > photo.right)
+          problems.push(`${at}: "${text}" leaves the photo`);
+        // A short window leaves the last lines at or below the fold at first.
+        const contrast =
+          line.top >= 0 && line.bottom <= height
+            ? inkContrast(shown, bare, line, scale)
+            : Infinity;
+        if (contrast < 4.5)
+          problems.push(`${at}: "${text}" contrast ${contrast.toFixed(2)}`);
+        if (
+          !free &&
+          top >= rest &&
+          (line.left < card.left ||
+            line.right > card.right ||
+            line.top < card.top ||
+            line.bottom > card.bottom)
+        )
+          problems.push(`${at}: "${text}" leaves the glass card`);
+      }
+    }
+  }
+  expect(problems).toEqual([]);
+});
+
+test("A desktop profile without a photo keeps the workspace and measures as one with a photo", async ({
+  page,
+}, info) => {
+  test.skip(
+    !info.project.name.startsWith("desktop"),
+    "The workspace wider than the cover belongs to full desktop width.",
+  );
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await fixture(page);
+  const section = page.locator('[data-author-profile] [aria-label="用户资料"]');
+  const widths = await section.first().evaluate((node) => {
+    const before = node.getBoundingClientRect().width;
+    // What the background editor reads for the frame of a first photo.
+    node.setAttribute("data-cover-measure", "");
+    const measured = node.getBoundingClientRect().width;
+    node.removeAttribute("data-cover-measure");
+    return { before, measured };
+  });
+  expect(widths.before).toBeGreaterThan(960);
+  expect(widths.measured).toBe(960);
+});
+
 test("Profile remains pinned after delayed identity and bio load", async ({
   page,
 }) => {
