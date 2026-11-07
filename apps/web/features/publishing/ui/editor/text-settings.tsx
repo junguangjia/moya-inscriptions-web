@@ -4,6 +4,7 @@ import { MentionControl } from "../../../notifications/mention-control";
 import { AuthorshipFields } from "./authorship-fields";
 import { bodyRule, checkEditorText, titleRule } from "./editor-text";
 import { TextField } from "./text-field";
+import { TimelineEntryField } from "./timeline-entry-field";
 import { VisibilityField } from "./visibility-field";
 import styles from "./editor.module.css";
 
@@ -78,8 +79,8 @@ export const BodyField = ({
 
 /**
  * Step 2 (phone) and the desktop text column (E04–E05): title, body,
- * authorship and visibility; upload progress stays visible
- * through the editor's own status line.
+ * authorship, visibility and, for a new work, 关联词条 (timeline-posts-v1);
+ * upload progress stays visible through the editor's own status line.
  */
 export const TextSettings = ({
   state,
@@ -106,6 +107,7 @@ export const TextSettings = ({
       )}
       <AuthorshipFields state={state} store={store} />
       <VisibilityField state={state} store={store} />
+      <TimelineEntryField state={state} store={store} />
     </div>
   );
 };

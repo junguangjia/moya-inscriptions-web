@@ -56,6 +56,10 @@ import {
   legacyNeedsSql,
   releaseRefs,
 } from "./media.js";
+import {
+  insertTimelinePost,
+  lockVisibleTimelineEntry,
+} from "./timeline-entry.js";
 
 /*
  * Explicit idempotent submissions and the receipt query for lost responses
@@ -541,13 +545,16 @@ const comparableItems = (content: WorkDraftContent): unknown[] =>
 /**
  * Stored draft content in the form a submission of the same input stores:
  * normalized text, authorship without empty optional fields (JSON drops the
- * fields left undefined), and items without their presentation provenance.
- * Only compared as JSON.
+ * fields left undefined), items without their presentation provenance, and
+ * no timeline entry (timeline-posts-v1: the submission command carries a
+ * draft's entry, never the submitted content). Only compared as JSON.
  */
 const comparableDraftContent = (content: WorkDraftContent): unknown => {
   const source = content.authorship;
+  const comparable: Partial<WorkDraftContent> = { ...content };
+  delete comparable.timelineEntryId;
   return {
-    ...content,
+    ...comparable,
     items: comparableItems(content),
     title: normalizePublishingTitle(content.title),
     body: normalizePublishingBody(content.body),
@@ -724,6 +731,13 @@ const submitInTransaction = async (
     if (!row || row.hidden_at !== null || row.status !== "open")
       fail("thread_unavailable");
   }
+  // timeline-posts-v1: only a NEW work attaches to a timeline entry on
+  // submission (an existing one attaches through works/:workId/timeline-entry),
+  // and the entry is rechecked under lock at commit.
+  if (command.timelineEntryId !== undefined) {
+    if (work !== null) fail("timeline_entry_conflict");
+    await lockVisibleTimelineEntry(db, command.timelineEntryId);
+  }
   const pending = await notReadyKeys(db, actorId, normalized);
   if (pending.length > 0) return { state: "not_ready", itemKeys: pending };
 
@@ -747,6 +761,9 @@ const submitInTransaction = async (
         "INSERT INTO community.thread_works(thread_id, work_id, created_at) VALUES($1,$2,$3::timestamptz)",
         [command.threadId, workId, at],
       );
+    // The timeline attachment commits with the Work too.
+    if (command.timelineEntryId !== undefined)
+      await insertTimelinePost(db, workId, command.timelineEntryId, now);
   }
 
   const disposition =

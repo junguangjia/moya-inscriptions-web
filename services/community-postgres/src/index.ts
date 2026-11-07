@@ -232,6 +232,8 @@ export { PostgresThreadAdapter } from "./thread-adapter.js";
 export { PostgresDirectMessageAdapter } from "./direct-message-adapter.js";
 // home-timeline-v1 (Issue #384 r3): operator reads and writes of timeline rows.
 export { PostgresTimelineOperatorAdapter } from "./timeline-adapter.js";
+// timeline-posts-v1: public reads of posts attached to timeline rows.
+export { PostgresTimelinePostsAdapter } from "./timeline-posts-adapter.js";
 
 export { createArticleConsentStore } from "./article-delegation-consent.js";
 export {

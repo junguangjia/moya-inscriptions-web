@@ -27,6 +27,7 @@ import {
   ConfirmationSheet,
   confirmationBlocked,
 } from "../editor/confirmation-sheet";
+import { takesTimelineEntry } from "../editor/editor-session-state";
 import {
   bodyRule,
   checkEditorText,
@@ -46,6 +47,8 @@ import {
 import {
   AuthorshipSection,
   ReferenceSheet,
+  TimelineEntrySection,
+  TimelineEntrySheet,
   VisibilitySection,
   hasReferences,
 } from "./publish-options";
@@ -774,6 +777,8 @@ export const PublishScreen = ({
   const slides = preview?.slides ?? [];
   const referencesOpen =
     references !== null && hasReferences(text.authorshipKind);
+  // timeline-posts-v1: 关联词条's picker, one sheet at a time.
+  const [entryPickerOpen, setEntryPickerOpen] = useState(false);
 
   return (
     <PhoneScreen
@@ -802,6 +807,12 @@ export const PublishScreen = ({
           <ReferenceSheet
             focus={references}
             onClose={() => onReferences(null)}
+            state={text}
+            store={store}
+          />
+        ) : entryPickerOpen && takesTimelineEntry(text) ? (
+          <TimelineEntrySheet
+            onClose={() => setEntryPickerOpen(false)}
             state={text}
             store={store}
           />
@@ -869,6 +880,11 @@ export const PublishScreen = ({
         store={store}
       />
       <VisibilitySection state={text} store={store} />
+      <TimelineEntrySection
+        onOpenPicker={() => setEntryPickerOpen(true)}
+        state={text}
+        store={store}
+      />
       <div className={styles.confirmation}>
         <ConfirmationSheet {...sheet} primary="hidden" summary="hidden" />
       </div>

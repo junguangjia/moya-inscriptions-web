@@ -128,6 +128,8 @@ const COMMUNITY_ROUTES = [
   "create-timeline-entry",
   "update-timeline-entry",
   "reorder-timeline",
+  "read-timeline-posts",
+  "set-timeline-post",
 ];
 const EDITORIAL_ROUTES = [
   "owner-drafts",

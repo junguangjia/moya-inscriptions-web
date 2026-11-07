@@ -28,6 +28,8 @@ import type {
   WorkSubmissionCommand,
   WorkSubmissionReceipt,
   WorkSubmissionResult,
+  WorkTimelineEntryCommand,
+  WorkTimelineEntryResult,
   WorkVisibilityCommand,
   WorkVisibilityResult,
 } from "@moya/contracts";
@@ -900,6 +902,20 @@ export interface PublishingWorkOperations {
     command: WorkVisibilityCommand,
     now: Date,
   ): Promise<WorkVisibilityResult>;
+  /**
+   * Author command (timeline-posts-v1): attach the actor's work to a visible
+   * timeline entry, move it to another, or take it off (`entryId: null`).
+   * Takes effect at once and writes no revision. A trashed or removed work
+   * throws `work_unavailable`; a hidden or unknown entry
+   * `timeline_entry_unavailable`; the entry an operator took this work off
+   * `timeline_entry_withheld`.
+   */
+  setTimelineEntry(
+    actorId: string,
+    workId: string,
+    command: WorkTimelineEntryCommand,
+    now: Date,
+  ): Promise<WorkTimelineEntryResult>;
   /**
    * Author command; `DELETE works/:workId`. Permanently erases the actor's
    * work content, revisions, drafts and snapshots. A minimal identity remains

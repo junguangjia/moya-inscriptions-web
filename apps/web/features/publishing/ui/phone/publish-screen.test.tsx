@@ -28,6 +28,7 @@ import type {
   Readiness,
 } from "../editor/editor-session-state";
 import type { PublishReasonInput } from "./publish-bar";
+import type { EditorTarget } from "../../../product-shell/product-history";
 import type {
   PublishPreview,
   PublishPreviewSlide,
@@ -80,6 +81,71 @@ vi.mock("../../../notifications/mention-control", () => ({
       </button>
     </div>
   ),
+}));
+
+/*
+ * timeline-posts-v1: 关联词条 names entries from the session's timeline; a
+ * stand-in list keeps the reads out of these cases.
+ */
+const timeline = vi.hoisted(() => ({
+  entries: [
+    {
+      id: "row-yongping",
+      title: "永平碑",
+      fullTitle: "北魏虚构永平碑",
+      startYear: 511,
+      endYear: 511,
+      precision: "year",
+      dateLabel: "永平四年",
+      onAxis: true,
+      chapter: "南北朝",
+      polity: "北魏",
+      disputed: false,
+      groupId: null,
+      groupTitle: null,
+      province: "虚构东州",
+      holder: null,
+      catalogId: null,
+      media: null,
+    },
+    {
+      id: "row-east",
+      title: "虚构东碑",
+      fullTitle: "唐虚构东碑",
+      startYear: 700,
+      endYear: 700,
+      precision: "year",
+      dateLabel: null,
+      onAxis: true,
+      chapter: "唐",
+      polity: "唐",
+      disputed: false,
+      groupId: null,
+      groupTitle: null,
+      province: "虚构东州",
+      holder: null,
+      catalogId: null,
+      media: null,
+    },
+  ],
+}));
+vi.mock("../../../home/timeline/timeline-session", () => ({
+  useTimelineEntries: () => ({
+    entries: { state: "ready", entries: timeline.entries },
+    retry: () => undefined,
+  }),
+  useTimelineEntryName: (id: string | null) => {
+    const found = timeline.entries.find((entry) => entry.id === id);
+    return {
+      name:
+        id === null
+          ? { state: "none" }
+          : found === undefined
+            ? { state: "missing" }
+            : { state: "named", name: found.title },
+      retry: () => undefined,
+    };
+  },
 }));
 
 const ACCOUNT = `user-${"a".repeat(32)}`;
@@ -171,8 +237,11 @@ const Harness = ({
 };
 
 const roots: Root[] = [];
-const render = (overrides: Overrides = {}) => {
-  const store = createEditorSessionStore(ACCOUNT, { type: "new" });
+const render = (
+  overrides: Overrides = {},
+  target: EditorTarget = { type: "new" },
+) => {
+  const store = createEditorSessionStore(ACCOUNT, target);
   const container = document.createElement("div");
   // The editor host, as its viewport frame marks it (no keyboard yet).
   container.setAttribute(KEYBOARD_ATTRIBUTE, "false");
@@ -694,6 +763,101 @@ describe("PublishScreen", () => {
     act(() => choice("self").click());
     expect(store.get().visibility).toBe("self");
     draw();
+  });
+
+  it("offers 关联词条 after 可见范围, named by the entry the 词条卡 chose (timeline-posts-v1)", () => {
+    const { screen, store } = render(
+      {},
+      { type: "new", timelineEntryId: "row-yongping" },
+    );
+    const section = screen.querySelector<HTMLElement>(
+      '[data-publish-option="timeline-entry"]',
+    )!;
+    expect(section).not.toBe(null);
+    const visibility = screen.querySelector(
+      '[data-publish-option="visibility"]',
+    )!;
+    expect(
+      visibility.compareDocumentPosition(section) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(section.querySelector("h3")!.textContent).toBe("关联词条");
+    const line = section.querySelector("[data-publish-timeline-entry]")!;
+    expect(line.textContent).toBe("永平碑发布后会出现在这个词条下。");
+    act(() =>
+      section
+        .querySelector<HTMLButtonElement>(
+          "[data-publish-timeline-entry-clear]",
+        )!
+        .click(),
+    );
+    expect(store.get().timelineEntryId).toBe(null);
+    expect(line.textContent).toBe("选择词条发布后会出现在这个词条下。");
+    expect(section.querySelector("[data-publish-timeline-entry-clear]")).toBe(
+      null,
+    );
+  });
+
+  it("picks an entry in a bottom sheet by searching the timeline", () => {
+    const { screen, store } = render();
+    act(() =>
+      screen
+        .querySelector<HTMLButtonElement>("[data-publish-timeline-entry]")!
+        .click(),
+    );
+    const sheet = document.querySelector<HTMLElement>(
+      '[data-phone-sheet="timeline-entry"]',
+    )!;
+    expect(sheet).not.toBe(null);
+    expect(sheet.querySelector("h2")!.textContent).toBe("关联词条");
+    type(
+      sheet.querySelector<HTMLInputElement>('input[type="search"]')!,
+      "东碑",
+    );
+    const option = sheet.querySelector<HTMLButtonElement>(
+      '[data-timeline-entry-option="row-east"]',
+    )!;
+    expect(option.textContent).toContain("唐虚构东碑");
+    act(() => option.click());
+    expect(store.get().timelineEntryId).toBe("row-east");
+    expect(store.get().editVersion).toBe(1);
+    expect(document.querySelector('[data-phone-sheet="timeline-entry"]')).toBe(
+      null,
+    );
+    expect(
+      screen.querySelector("[data-publish-timeline-entry]")!.textContent,
+    ).toContain("虚构东碑");
+  });
+
+  it("never offers 关联词条 when a published work is edited", () => {
+    const { screen, store, draw } = render(
+      {},
+      { type: "work", id: `work-${"2".repeat(32)}` },
+    );
+    act(() =>
+      store.setLoaded({ kind: "edit", workId: `work-${"2".repeat(32)}` }),
+    );
+    draw();
+    expect(screen.querySelector('[data-publish-option="timeline-entry"]')).toBe(
+      null,
+    );
+  });
+
+  it("never offers 关联词条 in a Thread's quick composer (参与话题)", () => {
+    const { screen } = render(
+      {},
+      {
+        type: "new",
+        threadId: `thread-${"3".repeat(32)}`,
+        timelineEntryId: "row-yongping",
+      },
+    );
+    expect(screen.querySelector('[data-publish-option="visibility"]')).not.toBe(
+      null,
+    );
+    expect(screen.querySelector('[data-publish-option="timeline-entry"]')).toBe(
+      null,
+    );
   });
 
   it("keeps 发布 unavailable with its reason above it, nudges the reason on a press, and submits once the work can go", () => {

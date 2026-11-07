@@ -268,6 +268,10 @@ export const AI_OPERATOR_ROUTES: readonly AiOperatorRoute[] = [
   communityWrite("POST", "timeline-entries"),
   communityWrite("POST", "timeline-entries/:id"),
   communityWrite("POST", "timeline-order"),
+  // timeline-posts-v1: posts on timeline rows. The read leaves self-only works
+  // out by itself; a write names its work, so it is withheld by the route.
+  communityRead("timeline-posts"),
+  communityWrite("POST", "timeline-posts/:id", "work"),
 ];
 
 const segmentsMatch = (pattern: string, pathname: string): boolean => {

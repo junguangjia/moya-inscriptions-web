@@ -13,6 +13,7 @@ import { Icon } from "@moya/ui";
 
 import { useProductShell } from "../../product-shell/product-shell";
 import { isWideLayout } from "../../shell/device-platform";
+import { useOpenPostEditor } from "./timeline-detail";
 import { TimelineEntryCard } from "./timeline-entry-card";
 import { TimelineEraSheet, TimelineLegendSheet } from "./timeline-era-sheet";
 import { parseYearParam } from "./timeline-format";
@@ -54,6 +55,7 @@ import type {
   TimelineRowLayout,
   TimelineTextMeasure,
 } from "./timeline-model";
+import type { TimelineEntryPostsActions } from "./timeline-entry-posts";
 import type { TimelineRailDragHandlers } from "./timeline-rail";
 import type { TimelineRowActions } from "./timeline-rows";
 
@@ -70,6 +72,7 @@ const RULER_CLEARANCE = 24;
 const RAIL_CELL_MIN = 18;
 const EMPTY_ENTRIES: readonly TimelineEntry[] = [];
 const EMPTY_ROWS: readonly TimelineRow[] = [];
+const NO_POST_COUNTS: ReadonlyMap<string, number> = new Map();
 
 /** PC, and a tablet that crossed the shell's wide width, use the wide layout. */
 export const resolveTimelineLayout = (
@@ -131,10 +134,14 @@ type TimelineSheetState =
     };
 
 const CardSheet = ({
+  actions,
+  browseOnly,
   closeRequested,
   entry,
   onClose,
 }: {
+  readonly actions: TimelineEntryPostsActions;
+  readonly browseOnly: boolean;
   readonly closeRequested: boolean;
   readonly entry: TimelineEntry;
   readonly onClose: () => void;
@@ -147,7 +154,11 @@ const CardSheet = ({
       onClose={onClose}
       title={entry.fullTitle}
     >
-      <TimelineEntryCard entry={entry} />
+      <TimelineEntryCard
+        actions={actions}
+        browseOnly={browseOnly}
+        entry={entry}
+      />
     </TimelineSheet>
   );
 };
@@ -155,20 +166,29 @@ const CardSheet = ({
 export const TimelineFeed = ({
   active,
   onMediaFailed,
+  onPostsChanged,
+  postCounts = NO_POST_COUNTS,
   state,
 }: {
   readonly active: boolean;
   /** A row's image failed; its URL may have expired. */
   readonly onMediaFailed?: (() => void) | undefined;
+  /** timeline-posts-v1: an attachment from a 词条卡 changed an entry's posts. */
+  readonly onPostsChanged?: (() => void) | undefined;
+  /** timeline-posts-v1: the viewer's post count per entry id, read after the list. */
+  readonly postCounts?: ReadonlyMap<string, number>;
   readonly state: HomeFeedState<TimelineEntry>;
 }) => {
   const {
     browseOnly,
     openCatalog,
+    openContent,
+    openProfile,
     platform,
     readActiveScrollTop,
     restoreActiveScrollTop,
   } = useProductShell();
+  const openPostEditor = useOpenPostEditor();
   const rootRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -219,10 +239,12 @@ export const TimelineFeed = ({
       : POSITION_BAR_HEIGHT + TABLET_COLUMN_HEADS_HEIGHT;
 
   const measure = useMemo(createTextMeasure, [layout]);
+  // Counts arrive after the rows; the window holds the reader's row while
+  // the new estimates settle.
   const estimate = useCallback(
     (row: TimelineRow, listWidth: number) =>
-      estimateRowHeight(row, { layout, listWidth, measure }),
-    [layout, measure],
+      estimateRowHeight(row, { layout, listWidth, measure, postCounts }),
+    [layout, measure, postCounts],
   );
 
   const latest = useRef({
@@ -325,6 +347,21 @@ export const TimelineFeed = ({
         opener.focus({ preventScroll: true });
     });
   };
+
+  /*
+   * timeline-posts-v1: a 词条卡's actions close its sheet first and act from
+   * the row that opened it, because the sheet's controls leave with it.
+   */
+  const cardActions = useCallback(
+    (entry: TimelineEntry, opener: HTMLElement): TimelineEntryPostsActions => ({
+      upload: () => closeSheetThen(() => openPostEditor(entry.id, opener)),
+      openWork: (workId) =>
+        closeSheetThen(() => openContent({ type: "work", id: workId }, opener)),
+      signIn: () => closeSheetThen(() => openProfile(null, opener)),
+      postsChanged: () => onPostsChanged?.(),
+    }),
+    [closeSheetThen, onPostsChanged, openContent, openPostEditor, openProfile],
+  );
 
   const actions = useMemo<TimelineRowActions>(
     () => ({
@@ -458,6 +495,9 @@ export const TimelineFeed = ({
         listWidth={view.width}
         mediaHeld={mediaHeld}
         observeRow={view.observeRow}
+        postCount={
+          row.kind === "entry" ? (postCounts.get(row.entry.id) ?? 0) : 0
+        }
         row={row}
         rowCount={rows.length}
         top={view.offsets[at]!}
@@ -617,6 +657,8 @@ export const TimelineFeed = ({
       ) : null}
       {sheet?.kind === "shelf" ? (
         <TimelineShelfSheet
+          browseOnly={browseOnly}
+          cardActions={(entry) => cardActions(entry, sheet.opener)}
           chapter={sheet.chapter}
           closeRequested={sheetClosing}
           entries={index.shelf.get(sheet.chapter) ?? EMPTY_ENTRIES}
@@ -628,6 +670,8 @@ export const TimelineFeed = ({
       ) : null}
       {sheet?.kind === "card" ? (
         <CardSheet
+          actions={cardActions(sheet.entry, sheet.opener)}
+          browseOnly={browseOnly}
           closeRequested={sheetClosing}
           entry={sheet.entry}
           onClose={handleSheetClosed}

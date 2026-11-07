@@ -37,6 +37,8 @@ import type {
   WorkSubmissionCommand,
   WorkSubmissionReceipt,
   WorkSubmissionResult,
+  WorkTimelineEntryCommand,
+  WorkTimelineEntryResult,
   WorkVisibilityCommand,
   WorkVisibilityResult,
 } from "@moya/contracts";
@@ -514,6 +516,14 @@ export class WorkPublishingService {
     command: WorkVisibilityCommand,
   ): Promise<WorkVisibilityResult> {
     return this.port.setVisibility(actorId, workId, command, this.clock());
+  }
+
+  setTimelineEntry(
+    actorId: string,
+    workId: string,
+    command: WorkTimelineEntryCommand,
+  ): Promise<WorkTimelineEntryResult> {
+    return this.port.setTimelineEntry(actorId, workId, command, this.clock());
   }
 
   createSession(

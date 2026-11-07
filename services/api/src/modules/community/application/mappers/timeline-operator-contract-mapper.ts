@@ -10,6 +10,7 @@ import { timelineImportFieldsOf } from "@moya/contracts/internal/community-opera
 
 import type {
   OperatorTimelineEntry,
+  OperatorTimelineListEntry,
   OperatorTimelineQuery,
   OperatorTimelineSummary,
 } from "@moya/contracts/internal/community-operator";
@@ -77,13 +78,14 @@ export const timelineIssuesOf = (
 
 /**
  * The summary over every stored row; groups over the visible ones, as the Web
- * folds them. The response estimate is the one every write is held to.
+ * folds them; posts as each row's public post count has them. The response
+ * estimate is the one every write is held to.
  */
 export const timelineSummaryOf = (
-  entries: readonly OperatorTimelineEntry[],
+  entries: readonly OperatorTimelineListEntry[],
 ): OperatorTimelineSummary => {
   const issues = timelineIssuesOf(entries);
-  const count = (predicate: (entry: OperatorTimelineEntry) => boolean) =>
+  const count = (predicate: (entry: OperatorTimelineListEntry) => boolean) =>
     entries.filter(predicate).length;
   const issueCount = (issue: TimelineIssue) =>
     issues.filter((found) => found.has(issue)).length;
@@ -124,6 +126,10 @@ export const timelineSummaryOf = (
       folding: [...members.values()].filter(
         (size) => size >= GROUP_FOLD_MINIMUM,
       ).length,
+    },
+    posts: {
+      total: entries.reduce((sum, { postCount }) => sum + postCount, 0),
+      entries: count(({ postCount }) => postCount > 0),
     },
     updatedBy: {
       import: count(({ updatedBy }) => updatedBy === "import"),

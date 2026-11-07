@@ -456,3 +456,77 @@ describe("direct-message reads", () => {
       expect(init.headers).toMatchObject({ "x-author-account": account });
   });
 });
+
+// timeline-posts-v1: the viewer's reads of the posts on timeline rows.
+describe("timeline post reads", () => {
+  const answering = (body: unknown) => {
+    vi.stubGlobal("window", new EventTarget());
+    const fetch = vi.fn(async () => Response.json(body));
+    vi.stubGlobal("fetch", fetch);
+    return fetch as unknown as ReturnType<typeof vi.fn> & {
+      mock: { calls: [string, RequestInit][] };
+    };
+  };
+
+  it("reads the counts privately and parses them strictly", async () => {
+    const fetch = answering({ counts: { "row-yongping": 3 } });
+    await expect(authorClient.timelinePostCounts()).resolves.toEqual({
+      counts: { "row-yongping": 3 },
+    });
+    expect(fetch.mock.calls[0]![0]).toBe("/api/community/timeline/post-counts");
+    expect(fetch.mock.calls[0]![1]).toMatchObject({
+      method: "GET",
+      cache: "no-store",
+      credentials: "same-origin",
+    });
+    // A count of zero is never sent, and nothing beyond the counts is read.
+    answering({ counts: { "row-yongping": 0 } });
+    await expect(authorClient.timelinePostCounts()).rejects.toThrow();
+    answering({ counts: {}, total: 1 });
+    await expect(authorClient.timelinePostCounts()).rejects.toThrow();
+  });
+
+  it("pages an entry's posts as a Works page", async () => {
+    const fetch = answering({ items: [], total: 0, page: 2, pageSize: 18 });
+    await expect(
+      authorClient.timelinePosts("row-yongping", { page: 2, pageSize: 18 }),
+    ).resolves.toEqual({ items: [], total: 0, page: 2, pageSize: 18 });
+    expect(fetch.mock.calls[0]![0]).toBe(
+      "/api/community/timeline/row-yongping/posts?page=2&pageSize=18",
+    );
+  });
+
+  it("reads the entry of a work or a Catalog record, or none", async () => {
+    const workId = `work-${"1".repeat(32)}`;
+    const fetch = answering({
+      entry: {
+        id: "row-yongping",
+        title: "永平碑",
+        fullTitle: "北魏虚构永平碑",
+      },
+    });
+    await expect(
+      authorClient.timelineEntryOf({ type: "work", id: workId }),
+    ).resolves.toEqual({
+      entry: {
+        id: "row-yongping",
+        title: "永平碑",
+        fullTitle: "北魏虚构永平碑",
+      },
+    });
+    expect(fetch.mock.calls[0]![0]).toBe(
+      `/api/community/content/work/${workId}/timeline-entry`,
+    );
+    const none = answering({ entry: null });
+    await expect(
+      authorClient.timelineEntryOf({ type: "catalog", id: "catalog-1" }),
+    ).resolves.toEqual({ entry: null });
+    expect(none.mock.calls[0]![0]).toBe(
+      "/api/community/content/catalog/catalog-1/timeline-entry",
+    );
+    answering({ entry: null, entryId: null });
+    await expect(
+      authorClient.timelineEntryOf({ type: "catalog", id: "catalog-1" }),
+    ).rejects.toThrow();
+  });
+});

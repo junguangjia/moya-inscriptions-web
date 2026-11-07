@@ -13,6 +13,8 @@ import {
 } from "@moya/backend-runtime";
 import {
   operatorTimelinePageSchema,
+  operatorTimelinePostPageSchema,
+  operatorTimelinePostSchema,
   operatorTimelineQuerySchema,
   operatorTimelineSummarySchema,
 } from "@moya/contracts/internal/community-operator";
@@ -30,10 +32,15 @@ import { InMemoryCommunityIdentityPort } from "./community-identity-fixture.js";
 
 import type { AuthorCommunityPort, TimelineOperatorPort } from "@moya/api";
 import type { TimelineChapter } from "@moya/contracts";
+import type { AiOperatorReader } from "@moya/contracts/internal/admin-mcp";
 import type {
   CreateTimelineEntryCommand,
+  OperatorReadScope,
   OperatorTimelineEntry,
+  OperatorTimelinePost,
+  OperatorTimelinePostQuery,
   ReorderTimelineCommand,
+  SetTimelinePostCommand,
   UpdateTimelineEntryCommand,
 } from "@moya/contracts/internal/community-operator";
 import type { Server } from "node:http";
@@ -92,12 +99,54 @@ const row = (
   ...overrides,
 });
 
+const workId = `work-${"0a".repeat(16)}`;
+/** timeline-posts-v1: one post's row, attached by its author. */
+const post = (
+  overrides: Partial<OperatorTimelinePost> = {},
+): OperatorTimelinePost => ({
+  workId,
+  title: "合成帖子",
+  authorId: `user-${"0b".repeat(16)}`,
+  workState: "visible",
+  publiclyVisible: true,
+  entryId: "tang-a",
+  withheldEntryId: null,
+  state: "attached",
+  attachedBy: "author",
+  updatedBy: "author",
+  version: 1,
+  attachedAt: "2026-11-07T00:00:00.000Z",
+  updatedAt: "2026-11-07T00:00:00.000Z",
+  ...overrides,
+});
+
 class FixturePort implements TimelineOperatorPort {
   rows: OperatorTimelineEntry[] = [];
+  postCounts: Record<string, number> = {};
   readonly calls: unknown[][] = [];
   failure: unknown = null;
   async operatorTimelineEntries() {
     return this.rows;
+  }
+  async operatorTimelinePostCounts() {
+    return this.postCounts;
+  }
+  async operatorTimelinePosts(
+    query: OperatorTimelinePostQuery,
+    scope?: OperatorReadScope,
+  ) {
+    this.calls.push(["posts", query, scope]);
+    if (this.failure !== null) throw this.failure;
+    return { items: [post()], total: 1, page: query.page, pageSize: 20 };
+  }
+  async operatorSetTimelinePost(
+    operator: string,
+    id: string,
+    command: SetTimelinePostCommand,
+  ) {
+    this.calls.push(["post", operator, id, command]);
+    if (this.failure !== null) throw this.failure;
+    return post({ updatedBy: operator as "owner", version: 2 });
   }
   private answer(call: unknown[], id: string, operator: string) {
     this.calls.push(call);
@@ -127,7 +176,10 @@ class FixturePort implements TimelineOperatorPort {
   }
 }
 
-const start = async (port?: TimelineOperatorPort) => {
+const start = async (
+  port?: TimelineOperatorPort,
+  aiOperatorReader?: AiOperatorReader,
+) => {
   const identity = new InMemoryCommunityIdentityPort();
   const server = createBackendServer(
     createBackendApplication({
@@ -147,6 +199,7 @@ const start = async (port?: TimelineOperatorPort) => {
         getById: async () => null,
       },
       ...(port ? { timelineOperatorPort: port } : {}),
+      ...(aiOperatorReader ? { aiOperatorReader } : {}),
       communityOperatorCredential: ownerToken,
       operatorAiCommunityCredential: communityToken,
       operatorAiBaseCredential: baseToken,
@@ -451,12 +504,47 @@ describe("the timeline operator read", () => {
     });
   });
 
+  // timeline-posts-v1: each row's public posts, as the port counts them.
+  it("reads each row's post count, narrows by it, and sums it in the summary", async () => {
+    const port = seeded();
+    port.postCounts = { "tang-a": 2, linked: 1, gone: 4 };
+    const { send } = await start(port);
+    const page = operatorTimelinePageSchema.parse(
+      (await send("timeline-entries?pageSize=50")).json,
+    );
+    expect(
+      Object.fromEntries(
+        page.items.map(({ id, postCount }) => [id, postCount]),
+      ),
+    ).toMatchObject({ "tang-a": 2, linked: 1, "han-a": 0, broken: 0 });
+    expect(ids((await send("timeline-entries?posts=with")).json)).toEqual([
+      "tang-a",
+      "linked",
+    ]);
+    const without = await send("timeline-entries?posts=without&pageSize=3");
+    expect(ids(without.json)).toEqual(["han-a", "han-b", "han-c"]);
+    expect(without.json.total).toBe(9);
+    expect(
+      ids((await send("timeline-entries?posts=any&chapter=%E5%94%90")).json),
+    ).toHaveLength(8);
+    expect(await send("timeline-entries?posts=some")).toMatchObject({
+      status: 400,
+      code: "INVALID_QUERY",
+    });
+    // A count for an id no stored row has is no row's.
+    expect(
+      operatorTimelineSummarySchema.parse((await send("timeline-summary")).json)
+        .posts,
+    ).toEqual({ total: 3, entries: 2 });
+  });
+
   it("answers an empty timeline with zero counts", async () => {
     const { send } = await start(new FixturePort());
     const summary = operatorTimelineSummarySchema.parse(
       (await send("timeline-summary")).json,
     );
     expect(summary.entries.total).toBe(0);
+    expect(summary.posts).toEqual({ total: 0, entries: 0 });
     expect(summary.limits.responseBytes).toBe(2);
     expect(summary.lastUpdatedAt).toBeNull();
   });
@@ -756,5 +844,213 @@ describe("the timeline routes on an AI credential", () => {
         `${method} ${route}`,
       ).toMatchObject({ status: 403, code: "AI_ROUTE_FORBIDDEN" });
     expect(port.calls).toHaveLength(3);
+  });
+});
+
+// timeline-posts-v1: posts on timeline rows, over the same router and handler.
+describe("the timeline post routes", () => {
+  const reader = (selfOnly: boolean): AiOperatorReader => ({
+    find: async () => ({ items: [], sources: {}, excluded: ["self_only"] }),
+    count: async () => ({ total: 0, oldestAt: null }),
+    settlement: async () => ({ open: 0, failed: 0, failedJobs: [] }),
+    isSelfOnly: async () => selfOnly,
+    isPersonalInfoRequest: async () => false,
+    hasCommentReceipt: async () => false,
+  });
+  const withhold = {
+    requestId,
+    expectedVersion: 1,
+    entryId: null,
+    state: "withheld",
+  };
+
+  it("hands a read its parsed query, and AI's read withholds self-only works", async () => {
+    const port = new FixturePort();
+    const { send } = await start(port);
+    const owner = await send(
+      `timeline-posts?entryId=tang-a&state=withheld&pageSize=5&from=2026-11-01T00:00:00.000Z`,
+    );
+    expect(owner.status).toBe(200);
+    expect(operatorTimelinePostPageSchema.parse(owner.json).items).toEqual([
+      post(),
+    ]);
+    expect(
+      (await send("timeline-posts", { token: communityToken })).status,
+    ).toBe(200);
+    expect(port.calls).toEqual([
+      [
+        "posts",
+        {
+          page: 1,
+          pageSize: 5,
+          entryId: "tang-a",
+          state: "withheld",
+          from: "2026-11-01T00:00:00.000Z",
+        },
+        undefined,
+      ],
+      ["posts", { page: 1, pageSize: 20 }, { withholdSelfOnly: true }],
+    ]);
+    expect(await send("timeline-posts", { token: baseToken })).toMatchObject({
+      status: 403,
+      code: "AI_ROUTE_FORBIDDEN",
+    });
+  });
+
+  it.each([
+    "pageSize=51",
+    "page=0",
+    "state=hidden",
+    "attachedBy=import",
+    "entryId=Not_A_Slug",
+    "workId=work-1",
+    "authorId=user-1",
+    "from=2026-11-07T00:00:00.000Z&to=2026-11-01T00:00:00.000Z",
+    "view=full",
+    "constructor=1",
+  ])("refuses the post query %s", async (query) => {
+    const port = new FixturePort();
+    const { send } = await start(port);
+    expect(await send(`timeline-posts?${query}`)).toMatchObject({
+      status: 400,
+      code: "INVALID_QUERY",
+    });
+    expect(port.calls).toEqual([]);
+  });
+
+  it("hands a write its work, its parsed command and the caller's label", async () => {
+    const port = new FixturePort();
+    const { send } = await start(port, reader(false));
+    const attach = { requestId, expectedVersion: 0, entryId: "tang-a" };
+    const answered = await send(`timeline-posts/${workId}`, {
+      method: "POST",
+      body: attach,
+    });
+    expect(answered.status).toBe(200);
+    expect(operatorTimelinePostSchema.parse(answered.json)).toMatchObject({
+      updatedBy: "owner",
+      version: 2,
+    });
+    expect(
+      (
+        await send(`timeline-posts/${workId}`, {
+          method: "POST",
+          body: withhold,
+          token: communityToken,
+        })
+      ).status,
+    ).toBe(200);
+    expect(port.calls).toEqual([
+      ["post", "owner", workId, attach],
+      ["post", "ai-admin", workId, withhold],
+    ]);
+  });
+
+  it("refuses a malformed write before the port, and a withhold that names a row", async () => {
+    const port = new FixturePort();
+    const { send } = await start(port);
+    const route = `timeline-posts/${workId}`;
+    for (const attempt of [
+      send(`${route}?requestId=${requestId}`, {
+        method: "POST",
+        body: withhold,
+      }),
+      send(route, { method: "POST", body: { ...withhold, extra: true } }),
+      send(route, { method: "POST", body: { ...withhold, state: "detached" } }),
+      send(route, {
+        method: "POST",
+        body: { ...withhold, expectedVersion: -1 },
+      }),
+      send(route, {
+        method: "POST",
+        body: { ...withhold, entryId: "tang-a" },
+      }),
+      send(route, { method: "POST", raw: "{" }),
+      send(route, { method: "POST" }),
+    ])
+      expect(await attempt).toMatchObject({
+        status: 400,
+        code: "INVALID_COMMAND",
+      });
+    for (const id of ["work-1", "Tang", "%ZZ", `work-${"A".repeat(32)}`])
+      expect(
+        await send(`timeline-posts/${id}`, { method: "POST", body: withhold }),
+        id,
+      ).toMatchObject({ status: 404, code: "NOT_FOUND" });
+    for (const [path, method] of [
+      ["timeline-posts", "POST"],
+      [route, "GET"],
+      [route, "PUT"],
+    ] as const)
+      expect(
+        await send(path, { method, body: method === "GET" ? undefined : {} }),
+        `${method} ${path}`,
+      ).toMatchObject({ status: 405, code: "METHOD_NOT_ALLOWED" });
+    expect(
+      await send(`${route}/withhold`, { method: "POST", body: withhold }),
+    ).toMatchObject({ status: 404, code: "NOT_FOUND" });
+    expect(port.calls).toEqual([]);
+  });
+
+  it.each([
+    ["WORK_NOT_PUBLIC", 422, "WORK_NOT_PUBLIC"],
+    ["ENTRY_UNAVAILABLE", 422, "ENTRY_UNAVAILABLE"],
+    ["POST_NOT_ATTACHED", 422, "POST_NOT_ATTACHED"],
+  ] as const)(
+    "answers the refusal %s by its code for the Owner and AI alike",
+    async (refusal, status, code) => {
+      const port = new FixturePort();
+      port.failure = new CommunityNamedConflictError(refusal);
+      const { send } = await start(port, reader(false));
+      for (const token of [ownerToken, communityToken])
+        expect(
+          await send(`timeline-posts/${workId}`, {
+            method: "POST",
+            body: withhold,
+            token,
+          }),
+        ).toMatchObject({ status, code });
+    },
+  );
+
+  it("answers a stale version as a state conflict", async () => {
+    const port = new FixturePort();
+    port.failure = new CommunityConflictError();
+    const { send } = await start(port);
+    expect(
+      await send(`timeline-posts/${workId}`, {
+        method: "POST",
+        body: withhold,
+      }),
+    ).toMatchObject({ status: 409, code: "STATE_CONFLICT" });
+  });
+
+  it("answers AI's write on a self-only work by its refusal, before the port", async () => {
+    const port = new FixturePort();
+    const { send } = await start(port, reader(true));
+    expect(
+      await send(`timeline-posts/${workId}`, {
+        method: "POST",
+        body: withhold,
+        token: communityToken,
+      }),
+    ).toMatchObject({ status: 403, code: "SELF_ONLY_OWNER_REVIEW" });
+    expect(port.calls).toEqual([]);
+    // The Owner reads and writes everything.
+    expect(
+      (
+        await send(`timeline-posts/${workId}`, {
+          method: "POST",
+          body: withhold,
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      await send(`timeline-posts/${workId}`, {
+        method: "POST",
+        body: withhold,
+        token: baseToken,
+      }),
+    ).toMatchObject({ status: 403, code: "AI_ROUTE_FORBIDDEN" });
   });
 });

@@ -56,6 +56,12 @@ export const workSnapshotIdSchema = platformId("work-snapshot");
 export const publishingSessionIdSchema = platformId("publishing-session");
 const workIdSchema = platformId("work");
 const requestIdSchema = z.uuid();
+/**
+ * timeline-posts-v1: the id of a Home timeline row (home-timeline-v1). Defined
+ * here, not beside the timeline schemas, because schemas.ts imports this
+ * module; schemas.ts re-exports it and builds the row on it.
+ */
+export const timelineEntryIdSchema = z.string().regex(/^[a-z0-9-]{1,64}$/u);
 const timestampSchema = z.iso.datetime();
 const versionSchema = z.number().int().nonnegative().max(2147483647);
 const revisionSchema = z.number().int().min(1).max(2147483647);
@@ -98,6 +104,13 @@ export const workPublishingFailureCodeSchema = z.enum([
   "thread_unavailable",
   "thread_conflict",
   "thread_items_limit",
+  // timeline-posts-v1: timeline entry association refusals. Unavailable: the
+  // entry does not exist or is hidden. Conflict: an existing work names an
+  // entry on a submission (it attaches through works/:workId/timeline-entry).
+  // Withheld: an operator took this post off that entry.
+  "timeline_entry_unavailable",
+  "timeline_entry_conflict",
+  "timeline_entry_withheld",
 ]);
 
 export const mediaItemKindSchema = z.enum(["static", "live"]);
@@ -511,7 +524,15 @@ export const isEmptyWorkContent = (content: WorkContentEmptiness): boolean =>
  * with CR) opens unchanged.
  */
 export const workDraftContentSchema = z
-  .strictObject(workContentShape("draft"))
+  .strictObject({
+    ...workContentShape("draft"),
+    /**
+     * timeline-posts-v1: the timeline entry a new work's draft will attach to
+     * on submission. Draft-only: submitted content never carries it (the
+     * submission command does), so it never reaches a revision.
+     */
+    timelineEntryId: timelineEntryIdSchema.optional(),
+  })
   .superRefine(checkContentReferences);
 
 /**
@@ -1406,6 +1427,13 @@ export const workSubmissionCommandSchema = z.strictObject({
     .string()
     .regex(/^thread-[0-9a-f]{32}$/u)
     .optional(),
+  /**
+   * timeline-posts-v1: attach this new Work to a visible timeline entry, in
+   * the same transaction as the submission. An existing Work answers
+   * `timeline_entry_conflict`; it attaches through
+   * `works/:workId/timeline-entry`.
+   */
+  timelineEntryId: timelineEntryIdSchema.optional(),
 });
 
 /** Author-neutral confirmation; the same receipt answers a lost-response query. */
@@ -1494,6 +1522,26 @@ export const workVisibilityResultSchema = z.strictObject({
   visibility: workVisibilitySchema,
 });
 
+/**
+ * timeline-posts-v1: attach an own work to a timeline entry, move it to
+ * another, or take it off (`entryId: null`). Takes effect at once; no new
+ * revision. Idempotent by requestId.
+ */
+export const workTimelineEntryCommandSchema = z.strictObject({
+  requestId: requestIdSchema,
+  entryId: timelineEntryIdSchema.nullable(),
+});
+
+/**
+ * `entryId` is the entry the work is attached to after the command, or null;
+ * `version` is its association's version, 0 while the work has none.
+ */
+export const workTimelineEntryResultSchema = z.strictObject({
+  workId: workIdSchema,
+  entryId: timelineEntryIdSchema.nullable(),
+  version: versionSchema,
+});
+
 /** What the client needs for honest counters and early feedback; the Backend still enforces. */
 export const publishingLimitsSchema = z.strictObject({
   maxItems: z.number().int().min(1).max(WORK_ITEMS_CONFIGURABLE_MAXIMUM),
@@ -1535,6 +1583,12 @@ export type WorkDraftItem = z.infer<typeof workDraftItemSchema>;
 export type WorkDraftItemOrigin = z.infer<typeof workDraftItemOriginSchema>;
 export type WorkDraftContent = z.infer<typeof workDraftContentSchema>;
 export type WorkSubmissionContent = z.infer<typeof workSubmissionContentSchema>;
+export type WorkTimelineEntryCommand = z.infer<
+  typeof workTimelineEntryCommandSchema
+>;
+export type WorkTimelineEntryResult = z.infer<
+  typeof workTimelineEntryResultSchema
+>;
 export type PublishingMediaComponent = z.infer<
   typeof publishingMediaComponentSchema
 >;
