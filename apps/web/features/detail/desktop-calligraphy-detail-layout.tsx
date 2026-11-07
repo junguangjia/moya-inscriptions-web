@@ -125,7 +125,7 @@ export const DesktopCalligraphyDetailLayout = ({
   const reveal = useCallback(
     (node: HTMLElement | null) => {
       if (!node) return;
-      if (scroll) scroll.restore(scroll.collapseTop(node));
+      if (scroll) scroll.restore(scroll.collapseTop(node), node);
       else node.scrollIntoView?.({ block: "nearest", behavior: "auto" });
     },
     [scroll],

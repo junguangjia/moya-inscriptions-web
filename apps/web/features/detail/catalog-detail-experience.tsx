@@ -98,6 +98,14 @@ export const CatalogDetailExperience = ({
   // A saved place the reader has not moved from: content that loads later
   // applies it again (CatalogDetailScrollContext.shift).
   const restorePendingRef = useRef(initialScrollTop > 0);
+  // A section the reader asked for (the 题跋 cue): content that loads later
+  // above it brings it back, until the reader moves.
+  const scrollAnchorRef = useRef<HTMLElement | null>(null);
+  /** The reader moved: neither a saved place nor an asked-for section holds. */
+  const releaseScrollHold = useCallback(() => {
+    restorePendingRef.current = false;
+    scrollAnchorRef.current = null;
+  }, []);
   const restoredCatalogIdRef = useRef(catalogId);
   const viewerOpenerRef = useRef<HTMLElement | null>(null);
   const viewerWasOpenRef = useRef(false);
@@ -177,7 +185,7 @@ export const CatalogDetailExperience = ({
     // Verified vertical input takes over immediately, including the two frames
     // after a tab restore. Automatic layout clamps still keep the desired top.
     suppressScrollRef.current = false;
-    restorePendingRef.current = false;
+    releaseScrollHold();
     if (scrollSuppressionFrameRef.current !== null) {
       window.cancelAnimationFrame(scrollSuppressionFrameRef.current);
       scrollSuppressionFrameRef.current = null;
@@ -190,7 +198,7 @@ export const CatalogDetailExperience = ({
       scrollIntentTimerRef.current = null;
       userScrollIntentRef.current = false;
     }, 240);
-  }, []);
+  }, [releaseScrollHold]);
 
   const restoreDesiredScroll = useCallback(() => {
     const scroller = scrollRef.current;
@@ -208,12 +216,25 @@ export const CatalogDetailExperience = ({
     });
   }, []);
 
-  const contentScroll = useMemo(
-    () => ({
+  const contentScroll = useMemo(() => {
+    const collapseTop = (section: HTMLElement) => {
+      const scroller = scrollRef.current;
+      if (scroller === null) return 0;
+      const header = scroller.querySelector("header");
+      return Math.max(
+        0,
+        scroller.scrollTop +
+          section.getBoundingClientRect().top -
+          scroller.getBoundingClientRect().top -
+          (header?.getBoundingClientRect().height ?? 0),
+      );
+    };
+    return {
       read: () => desiredScrollTopRef.current,
-      restore: (top: number) => {
+      restore: (top: number, anchor?: HTMLElement) => {
         clearUserScrollIntent();
-        restorePendingRef.current = false;
+        releaseScrollHold();
+        scrollAnchorRef.current = anchor ?? null;
         desiredScrollTopRef.current = Math.max(0, top);
         restoreDesiredScroll();
         onScrollTopChange(desiredScrollTopRef.current);
@@ -221,33 +242,33 @@ export const CatalogDetailExperience = ({
       shift: (below: number, delta: number) => {
         const scroller = scrollRef.current;
         if (scroller === null || delta === 0) return;
-        // A saved place was measured with this content present: apply it
-        // again, as it was. Otherwise, as scroll anchoring does, only a
-        // change that ends at or above where the reader actually is
-        // moves them, by the same amount.
-        if (!restorePendingRef.current) {
+        const anchor = scrollAnchorRef.current;
+        if (anchor?.isConnected) {
+          // The section asked for comes back, even where the page is too
+          // short to bring it to the top.
+          desiredScrollTopRef.current = collapseTop(anchor);
+        } else if (!restorePendingRef.current) {
+          // As scroll anchoring does: only a change that ended at or above
+          // the reader moves them. A shrink the page already absorbed by
+          // clamping the reader moves nothing more.
           const top = scroller.scrollTop;
           if (top < below - 1) return;
+          if (delta < 0 && top < desiredScrollTopRef.current - 1) return;
           desiredScrollTopRef.current = Math.max(0, top + delta);
         }
+        // A saved place was measured with this content present: it applies
+        // again as it was.
         restoreDesiredScroll();
         onScrollTopChange(desiredScrollTopRef.current);
       },
-      collapseTop: (section: HTMLElement) => {
-        const scroller = scrollRef.current;
-        if (scroller === null) return 0;
-        const header = scroller.querySelector("header");
-        return Math.max(
-          0,
-          scroller.scrollTop +
-            section.getBoundingClientRect().top -
-            scroller.getBoundingClientRect().top -
-            (header?.getBoundingClientRect().height ?? 0),
-        );
-      },
-    }),
-    [clearUserScrollIntent, onScrollTopChange, restoreDesiredScroll],
-  );
+      collapseTop,
+    };
+  }, [
+    clearUserScrollIntent,
+    onScrollTopChange,
+    releaseScrollHold,
+    restoreDesiredScroll,
+  ]);
 
   useLayoutEffect(() => {
     const scroller = scrollRef.current;
@@ -256,6 +277,7 @@ export const CatalogDetailExperience = ({
       restoredCatalogIdRef.current = catalogId;
       desiredScrollTopRef.current = initialScrollTop;
       restorePendingRef.current = initialScrollTop > 0;
+      scrollAnchorRef.current = null;
     }
     restoreDesiredScroll();
     restoreFrameRef.current = window.requestAnimationFrame(() => {
@@ -392,14 +414,16 @@ export const CatalogDetailExperience = ({
       return;
     }
     desiredScrollTopRef.current = top;
-    // The reader moved on from a saved place.
-    restorePendingRef.current = false;
+    // The reader moved on from a saved place or an asked-for section.
+    releaseScrollHold();
     onScrollTopChange(top);
     if (userScrollIntentRef.current) markUserScrollIntent();
   };
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!event.isPrimary) return;
+    // A press (a drag on the scrollbar too) is the reader taking over.
+    releaseScrollHold();
     pointerCandidateRef.current = {
       id: event.pointerId,
       x: event.clientX,
