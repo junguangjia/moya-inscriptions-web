@@ -693,9 +693,10 @@ runs this code, at its next release (see the table above).
    `read-timeline` on both paths. The AI path drops keys it does not know.
 
 The import is not run. The commit merged for this release raises
-`ADMIN_MCP_CONTRACT_VERSION` to the release day, because the new ops change what
-a client sees. The community AI credential is already placed, so AI access to
-posts starts with step 4.
+`ADMIN_MCP_CONTRACT_VERSION` to `2026-11-07.2`, the second release that day
+after step one's `2026-11-07`, because the new ops change what a client sees.
+The community AI credential is already placed, so AI access to posts starts with
+step 4.
 
 An older Web tab keeps working on every existing response. It cannot open a
 draft that a newer tab saved with an entry, because the draft schema is strict,

@@ -1,8 +1,8 @@
 # Owner Amendment — Posts on the Home timeline
 
-- Status: Signature requested at merge. The Owner approved the plan's three
-  recommendations on 2026-11-07 (section 1); that approval is not a signature of
-  this text.
+- Status: Signed by the Owner on 2026-11-07 (「签，merge，上线」: the signature,
+  the merge and the release authority, answered together). The Owner had
+  approved the plan's three recommendations earlier that day (section 1).
 - Effective date: at the merge of the `timeline-posts-v1` PR.
 - Authority: the Owner's decisions of 2026-11-07, quoted in section 1, recorded
   as the `timeline-posts-v1` Issue (#418), r1.
@@ -194,10 +194,10 @@ re-apply the runtime grants, run the App-role preflight, then restart the
 Backend, the Admin and the Web. The import is not run. The Owner routes parse
 the operator list and summary strictly, so the Backend and the Admin ship and
 roll back together. The commit merged for this release raises
-`ADMIN_MCP_CONTRACT_VERSION` to the release day, because the new ops change what
-a client sees. The community AI credential is already placed, so AI access to
-posts starts when the release switches. Release and migration stay separate
-Owner approvals.
+`ADMIN_MCP_CONTRACT_VERSION` to `2026-11-07.2`, the second release that day
+after step one's `2026-11-07`, because the new ops change what a client sees.
+The community AI credential is already placed, so AI access to posts starts when
+the release switches. Release and migration stay separate Owner approvals.
 
 A rollback is not just a return of the runtimes. The previous Backend parses
 stored draft content strictly, so a draft saved with 关联词条, and the history
