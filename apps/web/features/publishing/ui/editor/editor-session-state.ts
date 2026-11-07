@@ -90,6 +90,12 @@ export interface EditorSessionState {
   /** Kept while switching kinds, so 原创 → 临摹 → back restores what was typed. */
   readonly reference: ReferenceFields;
   readonly visibility: WorkVisibility;
+  /**
+   * timeline-posts-v1: 关联词条, the Home timeline entry a new work attaches
+   * to when it is published; null for none and always for an edit. It rides
+   * in the draft content and is sent on the submission command.
+   */
+  readonly timelineEntryId: string | null;
   readonly items: readonly WorkDraftItem[];
   readonly coverKey: string | null;
   readonly coverCrop: MediaCrop | null;
@@ -145,6 +151,8 @@ export const createEditorState = (
   reference: emptyReference,
   // New works default to public (P03); edits inherit when loaded.
   visibility: "public",
+  timelineEntryId:
+    target.type === "new" ? (target.timelineEntryId ?? null) : null,
   items: [],
   coverKey: null,
   coverCrop: null,
@@ -181,17 +189,42 @@ export const authorshipOf = (
   return { kind: state.authorshipKind, ...fields };
 };
 
-/** The draft content this state describes (also the submitted content). */
-export const contentOf = (state: EditorSessionState): WorkDraftContent => ({
-  title: state.title,
-  body: state.body,
-  ...(state.mentions.length ? { mentions: [...state.mentions] } : {}),
-  authorship: authorshipOf(state),
-  visibility: state.visibility,
-  items: [...state.items],
-  coverKey: state.coverKey,
-  coverCrop: state.coverKey === null ? null : state.coverCrop,
-});
+/** The contracts' timeline entry id (timelineEntryIdSchema). */
+const TIMELINE_ENTRY_ID = /^[a-z0-9-]{1,64}$/u;
+
+/**
+ * The entry a new work's content carries: only a valid id, and never on an
+ * edit (a published work attaches from its own page). A restored local copy
+ * from before timeline-posts-v1 has no field at all.
+ */
+const timelineEntryOf = (
+  state: Pick<EditorSessionState, "kind" | "timelineEntryId">,
+): string | null =>
+  state.kind === "new" &&
+  typeof state.timelineEntryId === "string" &&
+  TIMELINE_ENTRY_ID.test(state.timelineEntryId)
+    ? state.timelineEntryId
+    : null;
+
+/**
+ * The draft content this state describes. The submitted content is this
+ * without `timelineEntryId`, which the runtime moves onto the submission
+ * command (timeline-posts-v1): submitted content never carries it.
+ */
+export const contentOf = (state: EditorSessionState): WorkDraftContent => {
+  const timelineEntryId = timelineEntryOf(state);
+  return {
+    title: state.title,
+    body: state.body,
+    ...(state.mentions.length ? { mentions: [...state.mentions] } : {}),
+    authorship: authorshipOf(state),
+    visibility: state.visibility,
+    items: [...state.items],
+    coverKey: state.coverKey,
+    coverCrop: state.coverKey === null ? null : state.coverCrop,
+    ...(timelineEntryId === null ? {} : { timelineEntryId }),
+  };
+};
 
 type ManagedItem = Pick<
   WorkDraftItem,
@@ -282,6 +315,8 @@ export const sameAuthorContent = (
                 ],
           ],
       content.visibility,
+      // timeline-posts-v1: choosing or clearing 关联词条 is an author edit.
+      content.timelineEntryId ?? null,
       content.items.map((item) => [
         item.key,
         item.kind,
@@ -309,8 +344,12 @@ export const preserveLaterConflictEdits = (
     coverKey: screen.coverKey,
     coverCrop: screen.coverCrop,
   };
+  const { timelineEntryId: chosenEntry, ...chosen } = selected;
+  const entryChanged = changed({ timelineEntryId: screen.timelineEntryId });
+  const timelineEntryId = entryChanged ? screen.timelineEntryId : chosenEntry;
   return {
-    ...selected,
+    ...chosen,
+    ...(timelineEntryId === undefined ? {} : { timelineEntryId }),
     ...(changed({ title: screen.title }) ? { title: screen.title } : {}),
     ...(changed({ body: screen.body, mentions: screen.mentions ?? [] })
       ? { body: screen.body, mentions: screen.mentions ?? [] }
@@ -566,6 +605,8 @@ export interface EditorSessionStore {
   setAuthorshipKind(kind: WorkAuthorshipKind | null): void;
   setReference(field: ReferenceField, value: string): void;
   setVisibility(visibility: WorkVisibility): void;
+  /** timeline-posts-v1: 关联词条 of a new work; `null` clears it. */
+  setTimelineEntry(entryId: string | null): void;
   moveItem(key: string, toIndex: number): void;
   setItemOrder(keys: readonly string[]): void;
   setCover(key: string | null): void;
@@ -711,6 +752,13 @@ export const createEditorSessionStore = (
         reference: { ...state.reference, [field]: value },
       })),
     setVisibility: (visibility) => edit(null, () => ({ visibility })),
+    setTimelineEntry: (entryId) => {
+      const state = store.get();
+      // An edit attaches from the work page; an unchanged choice is no edit.
+      if (state.kind !== "new" || (state.timelineEntryId ?? null) === entryId)
+        return;
+      edit(null, () => ({ timelineEntryId: entryId }));
+    },
     moveItem: (itemKey, toIndex) =>
       edit("media", (state) => {
         const from = state.items.findIndex((item) => item.key === itemKey);
@@ -796,6 +844,7 @@ export const createEditorSessionStore = (
             ? state.reference
             : referenceOf(content.authorship),
         visibility: content.visibility,
+        timelineEntryId: content.timelineEntryId ?? null,
         items: content.items,
         coverKey: content.coverKey,
         coverCrop: content.coverCrop,

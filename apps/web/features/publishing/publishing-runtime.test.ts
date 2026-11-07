@@ -1456,6 +1456,60 @@ describe("publishing runtime", () => {
     });
   });
 
+  it("sends 关联词条 on a new work's command and never in its content (timeline-posts-v1)", async () => {
+    const test = setup();
+    test.signIn(ACCOUNT);
+    test.runtime.startSession({
+      target: { type: "new", timelineEntryId: "row-yongping" },
+      saveMode: "saved",
+    });
+    const chosen = { ...content("题"), timelineEntryId: "row-yongping" };
+    test.runtime.edit(chosen);
+    const state = await test.runtime.submit(chosen);
+    expect(state?.status).toBe("confirmed");
+    const command = test.client.submit.mock.calls[0]![0] as unknown as {
+      readonly content: object;
+    };
+    expect(command).toMatchObject({ timelineEntryId: "row-yongping" });
+    expect("timelineEntryId" in command.content).toBe(false);
+    expect(command.content).toEqual(content("题"));
+  });
+
+  it("names no entry on the command of a submission without one", async () => {
+    const test = setup();
+    test.signIn(ACCOUNT);
+    test.runtime.startSession({ target: { type: "new" }, saveMode: "saved" });
+    test.runtime.edit(content("题"));
+    await test.runtime.submit(content("题"));
+    expect("timelineEntryId" in test.client.submit.mock.calls[0]![0]).toBe(
+      false,
+    );
+  });
+
+  it("never names an entry when a published work is updated", async () => {
+    const test = setup();
+    test.signIn(ACCOUNT);
+    const workId = `work-${"9".repeat(32)}`;
+    const stray = { ...content("旧作"), timelineEntryId: "row-yongping" };
+    test.runtime.startSession({
+      target: { type: "work", id: workId },
+      saveMode: "saved",
+      draft: {
+        ...draftOf(content("旧作")),
+        kind: "edit",
+        workId,
+        baseRevisionId: `work-revision-${"8".repeat(32)}`,
+      },
+    });
+    test.runtime.edit(stray);
+    await test.runtime.submit(stray);
+    const command = test.client.submit.mock.calls[0]![0] as unknown as {
+      readonly content: object;
+    };
+    expect("timelineEntryId" in command).toBe(false);
+    expect("timelineEntryId" in command.content).toBe(false);
+  });
+
   it("keeps a session while anything would be lost on leaving, and ends it only when nothing would", async () => {
     const test = setup();
     test.signIn(ACCOUNT);

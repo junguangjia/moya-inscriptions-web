@@ -1,0 +1,320 @@
+/*
+ * timeline-posts-v1: the posts of a Home timeline row, as the 词条卡, Catalog
+ * Detail's 帖子 section, the 关联词条 pickers and the work page show them.
+ * Mobile first; colors, spacing and type come from --yoyi tokens. The grid
+ * is three square columns at every width (the card is at most 400 wide).
+ */
+.posts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--yoyi-space-3);
+}
+
+.heading {
+  margin: 0;
+  font: 500 var(--yoyi-type-section-title-size) / 28px
+    var(--yoyi-font-editorial);
+}
+
+/* 「上传这件碑帖」: the card's one full-width seal-red action (Figma B5). */
+.upload {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 var(--yoyi-space-5);
+  border: 0;
+  border-radius: var(--yoyi-radius-full);
+  background: var(--yoyi-color-seal-red);
+  color: var(--yoyi-color-text-inverse);
+  font: inherit;
+  font-size: var(--yoyi-type-button-size);
+  font-weight: var(--yoyi-type-button-weight);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.upload:hover {
+  background: var(--yoyi-color-seal-red-hover);
+}
+
+.upload:active {
+  background: var(--yoyi-color-seal-red-pressed);
+}
+
+.upload:focus-visible,
+.textAction:focus-visible,
+.cell:focus-visible,
+.option:focus-visible,
+.search:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.caption {
+  margin: calc(var(--yoyi-space-1) * -1) 0 0;
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-caption-size);
+  line-height: 18px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--yoyi-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cell {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  border-radius: var(--yoyi-radius-sm);
+  background: var(--yoyi-color-background-muted);
+  color: var(--yoyi-color-text-secondary);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.cell img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* A post without a presentable cover reads as its words. */
+.cellText {
+  display: -webkit-box;
+  overflow: hidden;
+  padding: var(--yoyi-space-2);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  font-size: var(--yoyi-type-caption-size);
+  line-height: 18px;
+  text-align: left;
+  word-break: break-word;
+}
+
+.placeholder {
+  aspect-ratio: 1;
+  border-radius: var(--yoyi-radius-sm);
+  background: var(--yoyi-color-background-muted);
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--yoyi-space-3);
+}
+
+.textAction {
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--yoyi-color-text-secondary);
+  font: inherit;
+  font-size: var(--yoyi-type-body-small-size);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.textAction[aria-disabled="true"] {
+  color: var(--yoyi-color-text-disabled);
+  cursor: default;
+}
+
+.status {
+  margin: 0;
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 22px;
+}
+
+.status[data-tone="error"] {
+  color: var(--yoyi-color-error);
+}
+
+/* 「关联我发过的帖子」 and 「关联词条」: a single-choice list. */
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--yoyi-space-3);
+}
+
+.pickerHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--yoyi-space-3);
+}
+
+.pickerTitle {
+  margin: 0;
+  font-size: var(--yoyi-type-body-size);
+  font-weight: 500;
+}
+
+.search {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 var(--yoyi-space-4);
+  border: 1px solid var(--yoyi-color-border-default);
+  border-radius: var(--yoyi-radius-md);
+  background: var(--yoyi-color-background-surface);
+  color: var(--yoyi-color-text-primary);
+  font: inherit;
+  font-size: var(--yoyi-type-input-size);
+}
+
+.options {
+  display: flex;
+  max-height: 360px;
+  flex-direction: column;
+  margin: 0;
+  overflow-y: auto;
+  padding: 0;
+  list-style: none;
+  overscroll-behavior: contain;
+}
+
+.option {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 56px;
+  align-items: center;
+  gap: var(--yoyi-space-3);
+  padding: var(--yoyi-space-2) var(--yoyi-space-1);
+  border: 0;
+  border-bottom: 1px solid var(--yoyi-color-border-subtle);
+  background: none;
+  color: var(--yoyi-color-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.option[aria-checked="true"] {
+  color: var(--yoyi-color-seal-red);
+}
+
+.optionThumb {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  overflow: hidden;
+  border-radius: var(--yoyi-radius-sm);
+  background: var(--yoyi-color-background-muted);
+}
+
+.optionThumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.optionText {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.optionTitle {
+  overflow: hidden;
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.optionMeta {
+  overflow: hidden;
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-caption-size);
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.optionMark {
+  flex: none;
+  font-size: var(--yoyi-type-caption-size);
+}
+
+.actions {
+  display: flex;
+  gap: var(--yoyi-space-3);
+}
+
+.primary,
+.secondary {
+  min-height: 44px;
+  flex: 1 1 0;
+  padding: 0 var(--yoyi-space-4);
+  border-radius: var(--yoyi-radius-full);
+  font: inherit;
+  font-size: var(--yoyi-type-button-size);
+  cursor: pointer;
+}
+
+.primary {
+  border: 0;
+  background: var(--yoyi-color-background-inverse);
+  color: var(--yoyi-color-text-inverse);
+}
+
+.primary[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.secondary {
+  border: 1px solid var(--yoyi-color-border-default);
+  background: none;
+  color: var(--yoyi-color-text-primary);
+}
+
+/* 收录于 on the work page: one quiet line under the title. */
+.collected {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 32px;
+  align-items: center;
+  gap: var(--yoyi-space-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--yoyi-color-text-secondary);
+  font: inherit;
+  font-size: var(--yoyi-type-metadata-size);
+  text-align: left;
+  cursor: pointer;
+}
+
+.collected span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Catalog Detail's 帖子 section sits between the actions and the reading. */
+.detailSection {
+  padding-block: var(--yoyi-space-4);
+}
+
+/* The 词条卡 opened outside the timeline keeps its own geometry. */
+.sheetHost {
+  display: contents;
+}

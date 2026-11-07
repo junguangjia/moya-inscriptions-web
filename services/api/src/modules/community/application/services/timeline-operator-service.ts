@@ -1,7 +1,11 @@
 import {
+  adminSetTimelinePostRequestSchema,
   createTimelineEntryCommandSchema,
+  operatorReadScopeFor,
+  operatorTimelinePostQuerySchema,
   operatorTimelineQuerySchema,
   reorderTimelineCommandSchema,
+  setTimelinePostCommandSchema,
   updateTimelineEntryCommandSchema,
 } from "@moya/contracts/internal/community-operator";
 
@@ -17,8 +21,10 @@ import {
 import type { TimelineIssue } from "../mappers/timeline-operator-contract-mapper.js";
 import type { TimelineOperatorPort } from "../ports/timeline-operator-port.js";
 import type {
-  OperatorTimelineEntry,
+  OperatorTimelineListEntry,
   OperatorTimelinePage,
+  OperatorTimelinePost,
+  OperatorTimelinePostPage,
   OperatorTimelineQuery,
   OperatorTimelineSummary,
 } from "@moya/contracts/internal/community-operator";
@@ -39,7 +45,7 @@ const includes = (value: string | null, search: string) =>
 
 /** Every filter given narrows; the order stays the stored one. */
 const matches = (
-  entry: OperatorTimelineEntry,
+  entry: OperatorTimelineListEntry,
   issues: ReadonlySet<TimelineIssue>,
   query: OperatorTimelineQuery,
   ids: ReadonlySet<string> | null,
@@ -72,13 +78,19 @@ const matches = (
   (query.catalogId === undefined || entry.catalogId === query.catalogId) &&
   (query.hidden === "include" || entry.hidden === (query.hidden === "only")) &&
   (query.updatedBy === undefined || entry.updatedBy === query.updatedBy) &&
-  (query.issue === undefined || issues.has(query.issue));
+  (query.issue === undefined || issues.has(query.issue)) &&
+  (query.posts === "any" || (query.posts === "with") === entry.postCount > 0);
 
 /**
  * Application boundary for the operator side of the Home timeline. The adapter
  * owns transactions, receipts and the whole-set check; reads load every stored
  * row (at most one past the contract's maximum) and filter, page and count
- * here, because `issue=contract` is a contract parse no SQL can run.
+ * here, because `issue=contract` is a contract parse no SQL can run. Each row
+ * carries its public post count (timeline-posts-v1), read beside the rows: an
+ * attach between the two reads moves a count by one, never a row.
+ *
+ * Posts on the rows (timeline-posts-v1) page in SQL. Their read takes the
+ * operator's label, so AI never reads a self-only work there.
  */
 export class TimelineOperatorService {
   constructor(private readonly port: TimelineOperatorPort) {}
@@ -87,6 +99,16 @@ export class TimelineOperatorService {
     const parsed = createTimelineEntryCommandSchema.shape.id.safeParse(value);
     if (!parsed.success) throw new CommunityNotFoundError();
     return parsed.data;
+  }
+
+  /** Every stored row with its public post count. */
+  private async listed(): Promise<OperatorTimelineListEntry[]> {
+    const entries = await this.port.operatorTimelineEntries();
+    const counts = await this.port.operatorTimelinePostCounts();
+    return entries.map((entry) => ({
+      ...entry,
+      postCount: Object.hasOwn(counts, entry.id) ? counts[entry.id]! : 0,
+    }));
   }
 
   /** Operator inputs arrive untrusted; the Contracts decide what is a query. */
@@ -98,7 +120,7 @@ export class TimelineOperatorService {
       query.yearFrom > query.yearTo
     )
       throw new CommunityInputError("The year range ends before it starts");
-    const entries = await this.port.operatorTimelineEntries();
+    const entries = await this.listed();
     const issues = timelineIssuesOf(entries);
     const ids = query.ids === undefined ? null : new Set(query.ids);
     const search = query.search?.toLowerCase() ?? null;
@@ -116,7 +138,7 @@ export class TimelineOperatorService {
 
   /** Counts, issues and limits over every stored row. */
   async operatorSummary(): Promise<OperatorTimelineSummary> {
-    return timelineSummaryOf(await this.port.operatorTimelineEntries());
+    return timelineSummaryOf(await this.listed());
   }
 
   operatorCreate(operator: string, input: unknown) {
@@ -136,5 +158,31 @@ export class TimelineOperatorService {
       operator,
       command(reorderTimelineCommandSchema, input),
     );
+  }
+
+  /** A filtered page of post rows; AI's label leaves self-only works out. */
+  async operatorPosts(
+    operator: string,
+    input: unknown,
+  ): Promise<OperatorTimelinePostPage> {
+    return this.port.operatorTimelinePosts(
+      command(operatorTimelinePostQuerySchema, input),
+      ...operatorReadScopeFor(operator),
+    );
+  }
+
+  /** One work's post: attach, move, take off or withhold it. */
+  async operatorSetPost(
+    operator: string,
+    workId: string,
+    input: unknown,
+  ): Promise<OperatorTimelinePost> {
+    const parsed = command(setTimelinePostCommandSchema, input);
+    // A withheld post is off its row, so the command names none.
+    if (parsed.state === "withheld" && parsed.entryId !== null)
+      throw new CommunityInputError("A withhold names no timeline row");
+    const id = adminSetTimelinePostRequestSchema.shape.id.safeParse(workId);
+    if (!id.success) throw new CommunityNotFoundError();
+    return this.port.operatorSetTimelinePost(operator, id.data, parsed);
   }
 }

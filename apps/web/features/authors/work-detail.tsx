@@ -18,6 +18,17 @@ import {
   PublishingRequestError,
 } from "../publishing/publishing-data";
 import { usePublishingEntry } from "../publishing/publishing-entry";
+import {
+  CatalogTimelinePosts,
+  WorkTimelineEntryLine,
+  useContentTimelineEntry,
+} from "../home/timeline/timeline-detail";
+import { TimelineEntryPicker } from "../home/timeline/timeline-entry-picker";
+import {
+  invalidateTimelinePostCounts,
+  setWorkTimelineEntry,
+} from "../home/timeline/timeline-posts-data";
+import type { ContentTimelineEntryValue } from "../home/timeline/timeline-detail";
 import { requestIdentity } from "../shell/request-identity";
 import { authorClient, AuthorRequestError } from "./author-data";
 import { AuthorDialog } from "./author-dialog";
@@ -120,7 +131,9 @@ export const peekWorkDetail: CatalogDetailPresentationPeek = (id) => {
 
 type ManagementIntent =
   | { readonly kind: "visibility"; readonly visibility: WorkVisibility }
-  | { readonly kind: "delete" };
+  | { readonly kind: "delete" }
+  /** timeline-posts-v1: attach to an entry, move, or take off (`null`). */
+  | { readonly kind: "timeline"; readonly entry: ContentTimelineEntryValue };
 
 interface PendingIntent {
   readonly intent: ManagementIntent;
@@ -159,21 +172,29 @@ const DELETED_NOTICE = {
 const WorkManagement = ({
   detail,
   onDeleted,
+  onTimelineEntry,
   onVisibility,
   deleted,
+  timelineEntry,
   visibility,
 }: {
   detail: WorkDetail;
   onDeleted: () => void;
+  /** timeline-posts-v1: the entry the work is attached to after a change. */
+  onTimelineEntry: (entry: ContentTimelineEntryValue) => void;
   onVisibility: (visibility: WorkVisibility) => void;
   /** Without a Detail that can withdraw its content, only the result stays. */
   deleted: boolean;
+  /** The work's entry; undefined until it is known. */
+  timelineEntry: ContentTimelineEntryValue | undefined;
   visibility: WorkVisibility | undefined;
 }) => {
   const author = useAuthors();
   const { openEditor } = usePublishingEntry();
   const withdraw = useCatalogDetailWithdrawal();
   const [confirm, setConfirm] = useState<"delete" | null>(null);
+  // timeline-posts-v1: 关联词条's picker, open in place.
+  const [picking, setPicking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{
     readonly tone: "status" | "error";
@@ -211,6 +232,33 @@ const WorkManagement = ({
     if (pending !== unconfirmed) setUnconfirmed(null);
     const { intent, requestId } = pending;
     try {
+      if (intent.kind === "timeline") {
+        const result = await setWorkTimelineEntry(detail.id, {
+          requestId,
+          entryId: intent.entry?.id ?? null,
+        });
+        if (!mounted.current) return;
+        // The answer, not the request, decides what is shown.
+        const attached =
+          result.entryId !== null && intent.entry?.id === result.entryId
+            ? intent.entry
+            : null;
+        onTimelineEntry(attached);
+        setUnconfirmed(null);
+        author.notify("");
+        setMessage({
+          tone: "status",
+          text:
+            attached !== null
+              ? `已关联到：${attached.title}`
+              : result.entryId === null
+                ? "已取消关联词条"
+                : "关联词条已更新",
+        });
+        // The timeline's row counts read again when it comes back.
+        invalidateTimelinePostCounts();
+        return;
+      }
       if (intent.kind === "delete") {
         await publishingClient.deleteWork(detail.id, { requestId });
         // Never shown again, even from a read already in progress.
@@ -363,6 +411,42 @@ const WorkManagement = ({
           )}
         </div>
       )}
+      {deleted ? null : (
+        <div className={detailStyles.workManagementRow}>
+          <button
+            aria-disabled={unavailable}
+            aria-expanded={picking}
+            data-work-timeline-entry-open=""
+            onClick={() => {
+              if (!busyRef.current) setPicking((open) => !open);
+            }}
+            type="button"
+          >
+            关联词条
+          </button>
+        </div>
+      )}
+      {picking && !deleted ? (
+        <TimelineEntryPicker
+          onCancel={() => setPicking(false)}
+          onChoose={(entry) => {
+            setPicking(false);
+            if ((entry?.id ?? null) === (timelineEntry?.id ?? null)) return;
+            start({
+              kind: "timeline",
+              entry:
+                entry === null
+                  ? null
+                  : {
+                      id: entry.id,
+                      title: entry.title,
+                      fullTitle: entry.fullTitle,
+                    },
+            });
+          }}
+          selectedId={timelineEntry?.id ?? null}
+        />
+      ) : null}
       <p
         aria-live="polite"
         className={detailStyles.workManagementStatus}
@@ -535,6 +619,11 @@ export const DetailActions = ({
     type: detail.contentType === "work" ? "work" : "catalog",
     id: detail.id,
   } as const;
+  // timeline-posts-v1: 收录于 and the author's 关联词条, read after paint.
+  const { entry: timelineEntry, replace: replaceTimelineEntry } =
+    useContentTimelineEntry(
+      detail.contentType === "work" && deletedId !== detail.id ? target : null,
+    );
   // Only the confirmed author sees management; a third party never does.
   const owner =
     detail.contentType === "work" &&
@@ -575,11 +664,22 @@ export const DetailActions = ({
       author.notify("浏览记录无法保存在本机");
     }
   }, [detail.id, author.viewer?.id, author.checking, recordable]);
+  // timeline-posts-v1 (D1-A): a Catalog record's posts follow its actions,
+  // before the discussion, in every composition; browse-only keeps them.
   if (detail.contentType !== "work")
-    return browseOnly ? null : (
+    return (
       <div>
-        <ContentActions target={target} title={detail.title} />{" "}
+        {browseOnly ? null : (
+          <>
+            <ContentActions target={target} title={detail.title} />{" "}
+          </>
+        )}
+        <CatalogTimelinePosts catalogId={detail.id} />
       </div>
+    );
+  const collected =
+    timelineEntry === undefined || timelineEntry === null || deleted ? null : (
+      <WorkTimelineEntryLine entry={timelineEntry} />
     );
   /**
    * The answer names the visibility only. Self-only is never seen by others;
@@ -651,6 +751,7 @@ export const DetailActions = ({
   if (browseOnly)
     return (
       <div>
+        {collected}
         <div className={detailStyles.workAuthorRow}>
           <WorkAuthor detail={detail} plain />
           {notice === null ? null : <p data-work-notice="">{notice}</p>}
@@ -659,6 +760,7 @@ export const DetailActions = ({
     );
   return (
     <div>
+      {collected}
       <div className={detailStyles.workAuthorRow}>
         <WorkAuthor detail={detail} />
         {notice === null ? null : <p data-work-notice="">{notice}</p>}
@@ -667,8 +769,10 @@ export const DetailActions = ({
         <WorkManagement
           detail={detail}
           onDeleted={() => setDeletedId(detail.id)}
+          onTimelineEntry={replaceTimelineEntry}
           onVisibility={followVisibility}
           deleted={deleted}
+          timelineEntry={timelineEntry}
           visibility={changedVisibility ?? detail.visibility}
         />
       ) : null}

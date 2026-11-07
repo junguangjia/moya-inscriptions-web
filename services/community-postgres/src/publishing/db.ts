@@ -68,6 +68,7 @@ export const publishingAuthorActions = {
   retryProcessing: "publishing.item.retry_processing",
   submit: "publishing.submit",
   setVisibility: "publishing.work.visibility",
+  setTimelineEntry: "publishing.work.timeline_entry",
   deleteWork: "publishing.work.delete",
 } as const;
 

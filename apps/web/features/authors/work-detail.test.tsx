@@ -39,6 +39,13 @@ const mocks = vi.hoisted(() => {
     },
     entry: { checking: false, openEditor: vi.fn(() => true) },
     publishing: { setVisibility: vi.fn(), deleteWork: vi.fn() },
+    // timeline-posts-v1: the work's entry as its read answers, and the write.
+    timeline: {
+      entry: null as null | { id: string; title: string; fullTitle: string },
+      set: vi.fn(),
+      invalidate: vi.fn(),
+      reads: [] as (null | { type: string; id: string })[],
+    },
     work: vi.fn(),
     profile: vi.fn(async () => ({ avatar: null })),
     // Whom the author client reads for; an account change starts a new epoch.
@@ -75,6 +82,63 @@ vi.mock("./content-actions", () => ({
   useContentActions: () => ({ environment: {} }),
 }));
 vi.mock("./local-library", () => ({ recordLocalHistory: vi.fn() }));
+vi.mock("../home/timeline/timeline-detail", async () => {
+  const { useState } = await import("react");
+  return {
+    useContentTimelineEntry: (target: { type: string; id: string } | null) => {
+      mocks.timeline.reads.push(target);
+      const [entry, setEntry] = useState(() => mocks.timeline.entry);
+      return {
+        entry: target === null ? undefined : entry,
+        replace: setEntry,
+      };
+    },
+    WorkTimelineEntryLine: ({
+      entry,
+    }: {
+      entry: { id: string; fullTitle: string };
+    }) => (
+      <span data-work-timeline-entry={entry.id}>
+        收录于 · {entry.fullTitle}
+      </span>
+    ),
+    CatalogTimelinePosts: ({ catalogId }: { catalogId: string }) => (
+      <div data-catalog-timeline-posts={catalogId} />
+    ),
+  };
+});
+vi.mock("../home/timeline/timeline-posts-data", () => ({
+  setWorkTimelineEntry: mocks.timeline.set,
+  invalidateTimelinePostCounts: mocks.timeline.invalidate,
+}));
+// The picker's search has its own tests; here it offers two fixed choices.
+vi.mock("../home/timeline/timeline-entry-picker", () => ({
+  TimelineEntryPicker: ({
+    onChoose,
+    selectedId,
+  }: {
+    onChoose: (entry: unknown) => void;
+    selectedId: string | null;
+  }) => (
+    <div data-test-entry-picker={selectedId ?? ""}>
+      <button
+        onClick={() =>
+          onChoose({
+            id: "row-yongping",
+            title: "永平碑",
+            fullTitle: "北魏虚构永平碑",
+          })
+        }
+        type="button"
+      >
+        选永平碑
+      </button>
+      <button onClick={() => onChoose(null)} type="button">
+        不关联词条
+      </button>
+    </div>
+  ),
+}));
 // The native modal's history handling has its own tests; here only its use.
 vi.mock("./author-dialog", () => ({
   AuthorDialog: ({
@@ -186,6 +250,8 @@ const render = (
 };
 
 beforeEach(() => {
+  mocks.timeline.entry = null;
+  mocks.timeline.reads = [];
   mocks.author.viewer = { id: AUTHOR };
   mocks.identity.account = AUTHOR;
   mocks.identity.epoch = 1;
@@ -828,6 +894,115 @@ describe("Work detail follows whether others can see the author's work", () => {
   });
 });
 
+describe("a work's timeline entry (timeline-posts-v1)", () => {
+  it("shows 收录于 for every reader once the entry is known, and reads it for a work only", () => {
+    mocks.author.viewer = { id: OTHER };
+    mocks.timeline.entry = {
+      id: "row-yongping",
+      title: "永平碑",
+      fullTitle: "北魏虚构永平碑",
+    };
+    const view = render(detail({ canEdit: false }));
+    expect(mocks.timeline.reads.at(-1)).toEqual({ type: "work", id: WORK });
+    const line = view.container.querySelector("[data-work-timeline-entry]");
+    expect(line?.textContent).toBe("收录于 · 北魏虚构永平碑");
+    // Above the author, under the title the composition draws.
+    expect(
+      line!.compareDocumentPosition(
+        view.container.querySelector(
+          ".workAuthorRow, [class*='workAuthorRow']",
+        )!,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(view.button("关联词条")).toBeUndefined();
+
+    mocks.timeline.entry = null;
+    const none = render(detail({ canEdit: false }));
+    expect(
+      none.container.querySelector("[data-work-timeline-entry]"),
+    ).toBeNull();
+  });
+
+  it("lets the author attach, then take the work off its entry, at once", async () => {
+    mocks.timeline.set.mockResolvedValueOnce({
+      workId: WORK,
+      entryId: "row-yongping",
+      version: 1,
+    });
+    const view = render(detail({}));
+    act(() => view.button("关联词条")!.click());
+    expect(
+      view.container.querySelector("[data-test-entry-picker]"),
+    ).not.toBeNull();
+    await act(async () => view.button("选永平碑")!.click());
+    expect(mocks.timeline.set).toHaveBeenCalledWith(WORK, {
+      requestId: expect.any(String),
+      entryId: "row-yongping",
+    });
+    expect(view.status()).toBe("已关联到：永平碑");
+    expect(
+      view.container.querySelector("[data-work-timeline-entry]")?.textContent,
+    ).toBe("收录于 · 北魏虚构永平碑");
+    expect(view.container.querySelector("[data-test-entry-picker]")).toBeNull();
+    expect(mocks.timeline.invalidate).toHaveBeenCalledOnce();
+
+    mocks.timeline.set.mockResolvedValueOnce({
+      workId: WORK,
+      entryId: null,
+      version: 2,
+    });
+    act(() => view.button("关联词条")!.click());
+    expect(
+      view.container
+        .querySelector("[data-test-entry-picker]")
+        ?.getAttribute("data-test-entry-picker"),
+    ).toBe("row-yongping");
+    await act(async () => view.button("不关联词条")!.click());
+    expect(mocks.timeline.set).toHaveBeenLastCalledWith(WORK, {
+      requestId: expect.any(String),
+      entryId: null,
+    });
+    expect(view.status()).toBe("已取消关联词条");
+    expect(
+      view.container.querySelector("[data-work-timeline-entry]"),
+    ).toBeNull();
+  });
+
+  it("writes nothing for the entry the work already has, and repeats an unconfirmed change with the same request", async () => {
+    mocks.timeline.entry = {
+      id: "row-yongping",
+      title: "永平碑",
+      fullTitle: "北魏虚构永平碑",
+    };
+    const view = render(detail({}));
+    act(() => view.button("关联词条")!.click());
+    await act(async () => view.button("选永平碑")!.click());
+    expect(mocks.timeline.set).not.toHaveBeenCalled();
+
+    mocks.timeline.set.mockRejectedValueOnce(
+      new mocks.PublishingRequestError(
+        0,
+        "网络连接中断，结果尚未确认",
+        null,
+        true,
+      ),
+    );
+    act(() => view.button("关联词条")!.click());
+    await act(async () => view.button("不关联词条")!.click());
+    expect(view.status()).toBe("网络连接中断，结果尚未确认");
+    mocks.timeline.set.mockResolvedValueOnce({
+      workId: WORK,
+      entryId: null,
+      version: 2,
+    });
+    await act(async () => view.button("重试")!.click());
+    expect(mocks.timeline.set.mock.calls[1]![1]).toEqual(
+      mocks.timeline.set.mock.calls[0]![1],
+    );
+    expect(view.status()).toBe("已取消关联词条");
+  });
+});
+
 describe("Work detail actions in wide-screen browse-only (pc-browse-only-v1)", () => {
   beforeEach(() => {
     mocks.author.viewer = null;
@@ -853,13 +1028,18 @@ describe("Work detail actions in wide-screen browse-only (pc-browse-only-v1)", (
     expect(container.querySelector("[data-work-author-plain]")).not.toBeNull();
   });
 
-  it("renders nothing for a catalog record", () => {
+  it("offers no action for a catalog record and keeps its posts (timeline-posts-v1)", () => {
     const { container } = render({
       ...detail({}),
       contentType: "catalog",
     } as unknown as CatalogDetailPresentation);
     expect(container.textContent).toBe("");
     expect(container.querySelector("[data-content-actions]")).toBeNull();
+    expect(
+      container
+        .querySelector("[data-catalog-timeline-posts]")
+        ?.getAttribute("data-catalog-timeline-posts"),
+    ).toBe(WORK);
   });
 
   it("keeps the profile button and actions without browse-only", () => {

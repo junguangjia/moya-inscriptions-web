@@ -3,6 +3,8 @@
 import { Icon } from "@moya/ui";
 import { useEffect, useId, useRef } from "react";
 
+import { TimelineEntryPicker } from "../../../home/timeline/timeline-entry-picker";
+import { useTimelineEntryName } from "../../../home/timeline/timeline-session";
 import {
   AUTHORSHIP_KINDS,
   REFERENCE_INPUTS,
@@ -525,3 +527,106 @@ export const ReferenceSheet = ({
 
 /** Whether the work's 作品性质 has reference fields (the sheet can open). */
 export const hasReferences = isReferenceKind;
+
+/** What 关联词条 says about the chosen entry (timeline-posts-v1). */
+export const TIMELINE_ENTRY_HINT = "发布后会出现在这个词条下。";
+
+/**
+ * 关联词条 (timeline-posts-v1 §2.3): new works and their drafts only, under
+ * 可见范围. The line names the chosen entry by its short title and opens the
+ * picker; 清除 takes the choice back. A published work attaches from its
+ * own page instead, so an edit never shows this.
+ */
+export const TimelineEntrySection = ({
+  state,
+  store,
+  onOpenPicker,
+}: {
+  readonly state: EditorSessionState;
+  readonly store: EditorSessionStore;
+  readonly onOpenPicker: () => void;
+}) => {
+  const headingId = useId();
+  const chosen = state.timelineEntryId ?? null;
+  const { name } = useTimelineEntryName(chosen);
+  if (state.kind !== "new") return null;
+  const line =
+    name.state === "named"
+      ? name.name
+      : name.state === "missing"
+        ? "这个词条已不可用，请重新选择"
+        : name.state === "none"
+          ? "选择词条"
+          : "已选择词条";
+  return (
+    <section
+      aria-labelledby={headingId}
+      className={styles.optSection}
+      data-editor-field="timelineEntry"
+      data-publish-option="timeline-entry"
+    >
+      <div className={styles.optHead}>
+        <h3 id={headingId}>关联词条</h3>
+        <span className={styles.optOptional}>可选</span>
+        {chosen === null ? null : (
+          <button
+            className={`${styles.inlineAction} ${styles.optClear}`}
+            data-publish-timeline-entry-clear=""
+            onClick={() => store.setTimelineEntry(null)}
+            type="button"
+          >
+            清除
+          </button>
+        )}
+      </div>
+      <button
+        aria-haspopup="dialog"
+        className={styles.refLine}
+        data-publish-timeline-entry=""
+        onClick={onOpenPicker}
+        type="button"
+      >
+        <span className={styles.refText}>
+          <b>{line}</b>
+          <small>{TIMELINE_ENTRY_HINT}</small>
+        </span>
+        <Icon
+          aria-hidden="true"
+          className={styles.refChevron}
+          name="next"
+          size="sm"
+        />
+      </button>
+    </section>
+  );
+};
+
+/** The 关联词条 picker as 发布's bottom sheet; a choice closes it. */
+export const TimelineEntrySheet = ({
+  state,
+  store,
+  onClose,
+}: {
+  readonly state: EditorSessionState;
+  readonly store: EditorSessionStore;
+  readonly onClose: () => void;
+}) => (
+  <PhoneSheet
+    initialFocus='input[type="search"]'
+    name="timeline-entry"
+    onCancel={onClose}
+    subtitle={TIMELINE_ENTRY_HINT}
+    title="关联词条"
+  >
+    <div className={styles.entrySheetBody}>
+      <TimelineEntryPicker
+        onCancel={onClose}
+        onChoose={(entry) => {
+          store.setTimelineEntry(entry?.id ?? null);
+          onClose();
+        }}
+        selectedId={state.timelineEntryId ?? null}
+      />
+    </div>
+  </PhoneSheet>
+);

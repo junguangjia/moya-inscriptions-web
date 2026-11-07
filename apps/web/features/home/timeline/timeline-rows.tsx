@@ -20,6 +20,7 @@ import {
   timelineEntryMeta,
   timelineEntryTag,
   timelineMediaBox,
+  timelinePostCountText,
 } from "./timeline-model";
 import styles from "./timeline.module.css";
 
@@ -146,16 +147,21 @@ const EntryRow = ({
   layout,
   listWidth,
   mediaHeld,
+  postCount,
   row,
 }: {
   readonly actions: TimelineRowActions;
   readonly layout: TimelineRowLayout;
   readonly listWidth: number;
   readonly mediaHeld: boolean;
+  readonly postCount: number;
   readonly row: TimelineEntryRow;
 }) => {
   const { entry } = row;
-  const meta = timelineEntryMeta(entry, layout);
+  // The model measures the same text, so the row's height matches its estimate.
+  const meta = timelineEntryMeta(entry, layout, postCount);
+  const titleCount =
+    layout === "phone" ? null : timelinePostCountText(postCount);
   const tag = timelineEntryTag(entry);
   return (
     <button
@@ -172,6 +178,11 @@ const EntryRow = ({
         <span className={styles.text}>
           <span className={styles.title}>
             {entry.onAxis ? entry.title : entry.fullTitle}
+            {titleCount === null ? null : (
+              <span className={styles.titleCount} data-timeline-post-count="">
+                {titleCount}
+              </span>
+            )}
           </span>
           {tag !== null || meta !== "" ? (
             <span className={styles.metaRow}>
@@ -331,12 +342,14 @@ const TimelineRowBody = ({
   layout,
   listWidth,
   mediaHeld,
+  postCount,
   row,
 }: {
   readonly actions: TimelineRowActions;
   readonly layout: TimelineRowLayout;
   readonly listWidth: number;
   readonly mediaHeld: boolean;
+  readonly postCount: number;
   readonly row: TimelineRow;
 }) => {
   switch (row.kind) {
@@ -363,6 +376,7 @@ const TimelineRowBody = ({
           layout={layout}
           listWidth={listWidth}
           mediaHeld={mediaHeld}
+          postCount={postCount}
           row={row}
         />
       );
@@ -407,6 +421,7 @@ export const TimelineRowView = memo(function TimelineRowView({
   listWidth,
   mediaHeld,
   observeRow,
+  postCount = 0,
   row,
   rowCount,
   top,
@@ -417,6 +432,8 @@ export const TimelineRowView = memo(function TimelineRowView({
   readonly listWidth: number;
   readonly mediaHeld: boolean;
   readonly observeRow: RefCallback<HTMLElement>;
+  /** timeline-posts-v1: the viewer's posts on an entry row (0 for none). */
+  readonly postCount?: number;
   readonly row: TimelineRow;
   readonly rowCount: number;
   readonly top: number;
@@ -438,6 +455,7 @@ export const TimelineRowView = memo(function TimelineRowView({
         layout={layout}
         listWidth={listWidth}
         mediaHeld={mediaHeld}
+        postCount={postCount}
         row={row}
       />
     </div>

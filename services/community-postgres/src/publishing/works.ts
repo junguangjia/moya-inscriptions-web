@@ -14,6 +14,8 @@ import type {
   MediaCrop,
   MediaEdit,
   PublishingMediaItem,
+  WorkTimelineEntryCommand,
+  WorkTimelineEntryResult,
   WorkVisibilityCommand,
   WorkVisibilityResult,
 } from "@moya/contracts";
@@ -45,6 +47,7 @@ import {
   touchWork,
   withholdReplacedPublicRevision,
 } from "./submissions.js";
+import { setAuthorTimelineEntry } from "./timeline-entry.js";
 
 /*
  * Author work reads, visibility changes, permanent deletion and legacy
@@ -215,6 +218,36 @@ const lockOwnWork = async (
 const workUnavailable = (): never => {
   throw new CommunityInputError("work_unavailable");
 };
+
+/**
+ * WorkPublishingPort.setTimelineEntry (timeline-posts-v1): metadata of the
+ * work, like its visibility, so it takes effect at once and writes no
+ * revision. Only the author's own work outside the recycle bin, not removed.
+ */
+export const setTimelineEntry = async (
+  pool: Pool,
+  actorId: string,
+  workId: string,
+  command: WorkTimelineEntryCommand,
+  now: Date,
+): Promise<WorkTimelineEntryResult> =>
+  authorCommand(
+    pool,
+    {
+      actorId,
+      requestId: command.requestId,
+      action: publishingAuthorActions.setTimelineEntry,
+      subjectId: workId,
+      input: command,
+      now,
+    },
+    async (db) => {
+      const work = await lockOwnWork(db, actorId, workId);
+      if (work.trashed_at !== null || work.operator_state === "removed")
+        workUnavailable();
+      return setAuthorTimelineEntry(db, workId, command.entryId, now);
+    },
+  );
 
 /** WorkPublishingPort.setVisibility */
 export const setVisibility = async (

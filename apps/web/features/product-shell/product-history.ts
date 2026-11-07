@@ -85,6 +85,11 @@ export type EditorTarget =
       readonly type: "new";
       /** content-community-completion-v1: publish the new work into this Thread. */
       readonly threadId?: string;
+      /**
+       * timeline-posts-v1: 关联词条 starts on this Home timeline entry (the
+       * 词条卡's 「上传这件碑帖」); the author may change or clear it.
+       */
+      readonly timelineEntryId?: string;
     }
   | { readonly type: "draft"; readonly id: string }
   | { readonly type: "work"; readonly id: string };
@@ -521,15 +526,26 @@ export const profileLocation = (
 };
 const draftIdPattern = /^work-draft-[0-9a-f]{32}$/u;
 const threadIdPattern = /^thread-[0-9a-f]{32}$/u;
+/** The contracts' timeline entry id (timelineEntryIdSchema). */
+const timelineEntryIdPattern = /^[a-z0-9-]{1,64}$/u;
 const workIdPattern = /^work-[0-9a-f]{32}$/u;
 export const parseEditorTarget = (value: unknown): EditorTarget | null => {
   if (!value || typeof value !== "object") return null;
   const r = value as Record<string, unknown>;
   if (r.type === "new")
-    // content-community-completion-v1: a new work may target a Thread.
-    return typeof r.threadId === "string" && threadIdPattern.test(r.threadId)
-      ? { type: "new", threadId: r.threadId }
-      : { type: "new" };
+    // content-community-completion-v1: a new work may target a Thread;
+    // timeline-posts-v1: and start attached to a timeline entry. A value
+    // that is not an id is dropped, never the target.
+    return {
+      type: "new",
+      ...(typeof r.threadId === "string" && threadIdPattern.test(r.threadId)
+        ? { threadId: r.threadId }
+        : {}),
+      ...(typeof r.timelineEntryId === "string" &&
+      timelineEntryIdPattern.test(r.timelineEntryId)
+        ? { timelineEntryId: r.timelineEntryId }
+        : {}),
+    };
   if (typeof r.id !== "string") return null;
   return r.type === "draft" && draftIdPattern.test(r.id)
     ? { type: "draft", id: r.id }

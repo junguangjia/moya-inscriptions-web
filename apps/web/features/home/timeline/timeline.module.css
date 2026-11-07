@@ -754,6 +754,17 @@
   word-break: break-word;
 }
 
+/*
+ * timeline-posts-v1: 「N 篇帖子」 after the name on tablet and wide rows, in the
+ * metadata style; the model measures it with the name (6 px gap).
+ */
+.titleCount {
+  margin-left: 6px;
+  color: var(--yoyi-color-text-tertiary);
+  font: 400 var(--yoyi-type-metadata-size) / 18px var(--yoyi-font-interface);
+  white-space: nowrap;
+}
+
 .metaRow {
   display: flex;
   align-items: flex-start;

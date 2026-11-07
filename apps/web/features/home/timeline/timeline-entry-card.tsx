@@ -1,14 +1,25 @@
 "use client";
 
+import { TimelineEntryPosts } from "./timeline-entry-posts";
 import { timelineEntryDate } from "./timeline-model";
 import styles from "./timeline.module.css";
 
 import type { TimelineEntry } from "@moya/contracts";
+import type { TimelineEntryPostsActions } from "./timeline-entry-posts";
 
-/** 词条卡 of an entry with no Catalog page: absent values leave no row. */
+/**
+ * 词条卡 of an entry with no Catalog page: absent values leave no row.
+ * timeline-posts-v1: under the facts, 「上传这件碑帖」, its line and the
+ * entry's posts (Figma B5); browse-only keeps the posts alone.
+ */
 export const TimelineEntryCard = ({
+  actions,
+  browseOnly = false,
   entry,
 }: {
+  /** Without actions (a static preview) the card shows its facts only. */
+  readonly actions?: TimelineEntryPostsActions | undefined;
+  readonly browseOnly?: boolean;
   readonly entry: TimelineEntry;
 }) => {
   const facts = [
@@ -29,6 +40,14 @@ export const TimelineEntryCard = ({
           ),
         )}
       </dl>
+      {actions === undefined ? null : (
+        <TimelineEntryPosts
+          actions={actions}
+          browseOnly={browseOnly}
+          entryId={entry.id}
+          entryTitle={entry.title}
+        />
+      )}
     </div>
   );
 };

@@ -1673,13 +1673,21 @@ export class PublishingRuntime {
       session.submitting = false;
       return controller.store.get();
     }
+    // timeline-posts-v1: 关联词条 rides in the draft content but is a
+    // property of the submission, never of the submitted content; only a new
+    // work names it (a published one attaches from its own page).
+    const { timelineEntryId, ...submitted } =
+      current as WorkSubmissionContent & { readonly timelineEntryId?: string };
     const result = await controller.submit({
       holder,
-      content: current,
+      content: submitted,
       baseRevisionId: session.view.baseRevisionId,
       ...(session.view.threadId === null
         ? {}
         : { threadId: session.view.threadId }),
+      ...(timelineEntryId === undefined || session.view.workId !== null
+        ? {}
+        : { timelineEntryId }),
     });
     session.submitting = false;
     // Refused as not ready: those items show as processing and the account

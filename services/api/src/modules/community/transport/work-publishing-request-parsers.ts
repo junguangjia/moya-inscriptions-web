@@ -21,6 +21,7 @@ import {
   workPublishingFailureCodeSchema,
   workRevisionIdSchema,
   workSubmissionCommandSchema,
+  workTimelineEntryCommandSchema,
   workVisibilityCommandSchema,
 } from "@moya/contracts/schemas";
 
@@ -89,6 +90,7 @@ const commandSchemas = {
   registerItem: registerMediaItemCommandSchema,
   submission: workSubmissionCommandSchema,
   visibility: workVisibilityCommandSchema,
+  timelineEntry: workTimelineEntryCommandSchema,
   pageQuery: publishingPageQuerySchema,
 } as const;
 

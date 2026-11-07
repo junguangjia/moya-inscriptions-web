@@ -302,6 +302,7 @@ export {
   adminUpdateTimelineEntryRequestSchema,
   createTimelineEntryCommandSchema,
   operatorTimelineEntrySchema,
+  operatorTimelineListEntrySchema,
   operatorTimelinePageSchema,
   operatorTimelineQuerySchema,
   operatorTimelineSummarySchema,
@@ -316,6 +317,7 @@ export {
 export type {
   CreateTimelineEntryCommand,
   OperatorTimelineEntry,
+  OperatorTimelineListEntry,
   OperatorTimelinePage,
   OperatorTimelineQuery,
   OperatorTimelineSummary,
@@ -326,6 +328,26 @@ export type {
   TimelineReorderResult,
   UpdateTimelineEntryCommand,
 } from "./timeline-schemas.js";
+// timeline-posts-v1: the operator side of posts on timeline rows.
+export {
+  adminSetTimelinePostRequestSchema,
+  operatorTimelinePostPageSchema,
+  operatorTimelinePostQuerySchema,
+  operatorTimelinePostSchema,
+  setTimelinePostCommandSchema,
+  timelinePostActorSchema,
+  timelinePostRefusalCodeSchema,
+  timelinePostStateSchema,
+} from "./timeline-post-schemas.js";
+export type {
+  OperatorTimelinePost,
+  OperatorTimelinePostPage,
+  OperatorTimelinePostQuery,
+  SetTimelinePostCommand,
+  TimelinePostActor,
+  TimelinePostRefusalCode,
+  TimelinePostState,
+} from "./timeline-post-schemas.js";
 // content-community-completion-v1: narrow DM moderation shapes.
 export {
   adminRemoveDmMessageRequestSchema,
