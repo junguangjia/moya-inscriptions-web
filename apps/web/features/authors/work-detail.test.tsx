@@ -105,52 +105,51 @@ vi.mock("../home/timeline/timeline-detail", async () => {
     CatalogTimelinePosts: ({ catalogId }: { catalogId: string }) => (
       <div data-catalog-timeline-posts={catalogId} />
     ),
+    // The picker's search and the sheet's transition have their own tests;
+    // here it offers two fixed choices and 取消, and closes as the sheet
+    // does: `onClose` first, then the choice.
+    TimelineEntryPickerSheet: ({
+      onChoose,
+      onClose,
+      selectedId,
+    }: {
+      onChoose: (entry: unknown) => void;
+      onClose: () => void;
+      selectedId: string | null;
+    }) => (
+      <div data-test-entry-picker={selectedId ?? ""} role="dialog">
+        <button
+          onClick={() => {
+            onClose();
+            onChoose({
+              id: "row-yongping",
+              title: "永平碑",
+              fullTitle: "北魏虚构永平碑",
+            });
+          }}
+          type="button"
+        >
+          选永平碑
+        </button>
+        <button
+          onClick={() => {
+            onClose();
+            onChoose(null);
+          }}
+          type="button"
+        >
+          不关联词条
+        </button>
+        <button onClick={onClose} type="button">
+          取消
+        </button>
+      </div>
+    ),
   };
 });
 vi.mock("../home/timeline/timeline-posts-data", () => ({
   setWorkTimelineEntry: mocks.timeline.set,
   invalidateTimelinePostCounts: mocks.timeline.invalidate,
-}));
-// The picker's search and its own focus have their own tests; here it offers
-// two fixed choices and 取消, and says whether it was asked to take the focus.
-vi.mock("../home/timeline/timeline-entry-picker", () => ({
-  TimelineEntryPicker: ({
-    focusOnOpen,
-    onCancel,
-    onChoose,
-    selectedId,
-  }: {
-    focusOnOpen?: boolean;
-    onCancel?: () => void;
-    onChoose: (entry: unknown) => void;
-    selectedId: string | null;
-  }) => (
-    <div
-      data-test-entry-picker={selectedId ?? ""}
-      data-test-focus-on-open={focusOnOpen === true ? "" : undefined}
-    >
-      <button
-        onClick={() =>
-          onChoose({
-            id: "row-yongping",
-            title: "永平碑",
-            fullTitle: "北魏虚构永平碑",
-          })
-        }
-        type="button"
-      >
-        选永平碑
-      </button>
-      <button onClick={() => onChoose(null)} type="button">
-        不关联词条
-      </button>
-      {onCancel === undefined ? null : (
-        <button onClick={onCancel} type="button">
-          取消
-        </button>
-      )}
-    </div>
-  ),
 }));
 // The native modal's history handling has its own tests; here only its use.
 vi.mock("./author-dialog", () => ({
@@ -956,7 +955,7 @@ describe("a work's timeline entry (timeline-posts-v1)", () => {
       requestId: expect.any(String),
       entryId: "row-yongping",
     });
-    expect(view.status()).toBe("已关联到：永平碑");
+    expect(view.status()).toBe("已关联到：北魏虚构永平碑");
     expect(
       view.container.querySelector("[data-work-timeline-entry]")?.textContent,
     ).toBe("收录于 · 北魏虚构永平碑");
@@ -1019,7 +1018,7 @@ describe("a work's timeline entry (timeline-posts-v1)", () => {
     expect(view.status()).toBe("已取消关联词条");
   });
 
-  it("opens 关联词条's picker with the focus on it, and gives the focus back to 关联词条 when it closes without a change", async () => {
+  it("opens 关联词条's picker as a sheet outside the management section, and gives the focus back to 关联词条 when it closes without a change", async () => {
     mocks.timeline.entry = {
       id: "row-yongping",
       title: "永平碑",
@@ -1028,12 +1027,12 @@ describe("a work's timeline entry (timeline-posts-v1)", () => {
     const view = render(detail({}));
     const opener = view.button("关联词条")!;
     opener.focus();
+    expect(opener.getAttribute("aria-haspopup")).toBe("dialog");
     act(() => opener.click());
-    expect(
-      view.container
-        .querySelector("[data-test-entry-picker]")
-        ?.hasAttribute("data-test-focus-on-open"),
-    ).toBe(true);
+    const sheet = view.container.querySelector("[data-test-entry-picker]");
+    expect(sheet).not.toBeNull();
+    // Not inside the section, whose stylesheet draws every button as a pill.
+    expect(sheet!.closest("[data-work-management]")).toBeNull();
     // 取消 goes with the picker: the focus is not dropped to the page.
     const cancel = view.button("取消")!;
     cancel.focus();

@@ -1,11 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Icon } from "@moya/ui";
 
 import { useOptionalAuthors } from "../../authors/author-context";
+import { DetailBand, useInDetailBand } from "../../detail/detail-band";
 import { useProductShell } from "../../product-shell/product-shell";
 import { isWideLayout } from "../../shell/device-platform";
 import { TimelineEntryCard } from "./timeline-entry-card";
+import { TimelineEntryPicker } from "./timeline-entry-picker";
 import { TimelineEntryPosts } from "./timeline-entry-posts";
 import {
   readContentTimelineEntry,
@@ -20,7 +23,7 @@ import { TimelineSheet } from "./timeline-sheet";
 import timelineStyles from "./timeline.module.css";
 import styles from "./timeline-posts.module.css";
 
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import type {
   ContentIdentity,
   ContentTimelineEntry,
@@ -61,7 +64,8 @@ export const useContentTimelineEntry = (
     readContentTimelineEntry({ type, id }, controller.signal).then(
       (entry) => {
         if (controller.signal.aborted) return;
-        if (entry !== null) rememberTimelineEntryName(entry.id, entry.title);
+        if (entry !== null)
+          rememberTimelineEntryName(entry.id, entry.fullTitle);
         setAnswer({ key, entry });
       },
       () => undefined,
@@ -71,7 +75,7 @@ export const useContentTimelineEntry = (
   const replace = useCallback(
     (entry: ContentTimelineEntryValue) => {
       if (key === null) return;
-      if (entry !== null) rememberTimelineEntryName(entry.id, entry.title);
+      if (entry !== null) rememberTimelineEntryName(entry.id, entry.fullTitle);
       setAnswer({ key, entry });
     },
     [key],
@@ -105,7 +109,9 @@ export const useOpenPostEditor = () => {
  * Catalog Detail's 帖子 section (timeline-posts-v1, Owner D1-A): the 60
  * entries that open Detail instead of a 词条卡 show their posts and
  * 「上传这件碑帖」 here, with the 词条卡's own components. Nothing at all
- * while the record has no entry or the answer is pending.
+ * while the record has no entry or the answer is pending. On the desktop
+ * Detail it renders in the band under the first screen, so the image keeps
+ * its place; elsewhere it follows the actions.
  */
 export const CatalogTimelinePosts = ({
   catalogId,
@@ -118,6 +124,7 @@ export const CatalogTimelinePosts = ({
     type: "catalog",
     id: catalogId,
   });
+  const inBand = useInDetailBand();
   if (entry === undefined || entry === null) return null;
   const actions: TimelineEntryPostsActions = {
     upload: (opener) => openPostEditor(entry.id, opener),
@@ -127,31 +134,40 @@ export const CatalogTimelinePosts = ({
     postsChanged: invalidateTimelinePostCounts,
   };
   return (
-    <div className={styles.detailSection} data-detail-timeline-posts="">
-      <TimelineEntryPosts
-        actions={actions}
-        browseOnly={browseOnly}
-        entryId={entry.id}
-        entryTitle={entry.title}
-        heading="帖子"
-      />
-    </div>
+    <DetailBand>
+      <div
+        className={styles.detailSection}
+        data-detail-band-section={inBand ? "" : undefined}
+        data-detail-timeline-posts=""
+      >
+        <TimelineEntryPosts
+          actions={actions}
+          browseOnly={browseOnly}
+          entryId={entry.id}
+          entryTitle={entry.title}
+          heading="帖子"
+        />
+      </div>
+    </DetailBand>
   );
 };
 
-/** The 词条卡 opened outside the timeline, from a work's 收录于. */
-export const TimelineEntryCardSheet = ({
-  entry,
+/**
+ * The timeline's sheet outside the timeline: a bottom sheet on phone, a
+ * side sheet on tablet, a drawer when wide. `children` gets `closeThen`,
+ * which plays the closing transition, calls `onClose`, then runs the action.
+ */
+const TimelineSheetHost = ({
+  children,
   onClose,
-  opener,
+  title,
 }: {
-  readonly entry: TimelineEntry;
+  readonly children: (closeThen: (action: () => void) => void) => ReactNode;
+  /** After any close: Back, the scrim, × or `closeThen`. */
   readonly onClose: () => void;
-  /** The control the card returns to; its actions act from it. */
-  readonly opener: HTMLElement;
+  readonly title: string;
 }) => {
-  const { browseOnly, openContent, openProfile, platform } = useProductShell();
-  const openPostEditor = useOpenPostEditor();
+  const { platform } = useProductShell();
   const navigationRef = useRef<AuthorDialogNavigationHandle>(null);
   const [closing, setClosing] = useState(false);
   const after = useRef<(() => void) | null>(null);
@@ -170,13 +186,6 @@ export const TimelineEntryCardSheet = ({
   const closeThen = (action: () => void) => {
     after.current = action;
     setClosing(true);
-  };
-  const actions: TimelineEntryPostsActions = {
-    upload: () => closeThen(() => openPostEditor(entry.id, opener)),
-    openWork: (workId) =>
-      closeThen(() => openContent({ type: "work", id: workId }, opener)),
-    signIn: () => closeThen(() => openProfile(null, opener)),
-    postsChanged: invalidateTimelinePostCounts,
   };
   return (
     // The timeline's sheet geometry is keyed on its root and layout; this
@@ -200,20 +209,78 @@ export const TimelineEntryCardSheet = ({
           onClose();
           action?.();
         }}
-        title={entry.fullTitle}
+        title={title}
       >
-        <TimelineEntryCard
-          actions={actions}
-          browseOnly={browseOnly}
-          entry={entry}
-        />
+        {children(closeThen)}
       </TimelineSheet>
     </div>
   );
 };
 
+/** The 词条卡 opened outside the timeline, from a work's 收录于. */
+export const TimelineEntryCardSheet = ({
+  entry,
+  onClose,
+  opener,
+}: {
+  readonly entry: TimelineEntry;
+  readonly onClose: () => void;
+  /** The control the card returns to; its actions act from it. */
+  readonly opener: HTMLElement;
+}) => {
+  const { browseOnly, openContent, openProfile } = useProductShell();
+  const openPostEditor = useOpenPostEditor();
+  return (
+    <TimelineSheetHost onClose={onClose} title={entry.fullTitle}>
+      {(closeThen) => (
+        <TimelineEntryCard
+          actions={{
+            upload: () => closeThen(() => openPostEditor(entry.id, opener)),
+            openWork: (workId) =>
+              closeThen(() =>
+                openContent({ type: "work", id: workId }, opener),
+              ),
+            signIn: () => closeThen(() => openProfile(null, opener)),
+            postsChanged: invalidateTimelinePostCounts,
+          }}
+          browseOnly={browseOnly}
+          entry={entry}
+        />
+      )}
+    </TimelineSheetHost>
+  );
+};
+
 /**
- * 收录于 · 题名 (timeline-posts-v1 §2.4): under a work's title for everyone
+ * A work's 关联词条 on its own page (timeline-posts-v1 §2.4): the picker in
+ * the timeline's sheet, so the Detail under it keeps its layout. A choice
+ * closes the sheet, then `onChoose` runs; every close calls `onClose`.
+ */
+export const TimelineEntryPickerSheet = ({
+  onChoose,
+  onClose,
+  selectedId,
+}: {
+  readonly onChoose: (entry: TimelineEntry | null) => void;
+  readonly onClose: () => void;
+  readonly selectedId: string | null;
+}) => (
+  <TimelineSheetHost onClose={onClose} title="关联词条">
+    {(closeThen) => (
+      <div className={timelineStyles.card} data-timeline-entry-picker-sheet="">
+        <h2 className={timelineStyles.cardTitle}>关联词条</h2>
+        <TimelineEntryPicker
+          onCancel={() => closeThen(() => undefined)}
+          onChoose={(entry) => closeThen(() => onChoose(entry))}
+          selectedId={selectedId}
+        />
+      </div>
+    )}
+  </TimelineSheetHost>
+);
+
+/**
+ * 收录于 · 题名 (timeline-posts-v1 §2.4): above a work's author for everyone
  * once its entry is known. It opens the same 词条卡, reading the session's
  * timeline only then, because the card needs the entry's facts.
  */
@@ -264,6 +331,12 @@ export const WorkTimelineEntryLine = ({
         type="button"
       >
         收录于 · <span>{entry.fullTitle}</span>
+        <Icon
+          aria-hidden="true"
+          className={styles.collectedChevron}
+          name="next"
+          size="sm"
+        />
       </button>
       {card === null ? null : (
         <TimelineEntryCardSheet

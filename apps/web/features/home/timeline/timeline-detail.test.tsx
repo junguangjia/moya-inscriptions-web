@@ -201,7 +201,7 @@ describe("Catalog Detail's 帖子 section (D1-A)", () => {
     };
     act(() => root.render(<Probe />));
     await flush();
-    expect(named!.name).toEqual({ state: "named", name: "永平碑" });
+    expect(named!.name).toEqual({ state: "named", name: "北魏虚构永平碑" });
     expect(client.timeline).not.toHaveBeenCalled();
   });
 
@@ -223,6 +223,32 @@ describe("Catalog Detail's 帖子 section (D1-A)", () => {
     );
     expect(container.querySelector("[data-timeline-upload]")).toBeNull();
     expect(container.querySelector("[data-timeline-posts]")).not.toBeNull();
+  });
+
+  it("renders in the desktop Detail's band, never in the actions slot under the image", async () => {
+    const { detail } = await load();
+    const { DetailBandContext } = await import("../../detail/detail-band");
+    data.readContentTimelineEntry.mockResolvedValue(yongping);
+    // Outside the root's container, as the layout's band is outside the slot.
+    const band = document.createElement("div");
+    document.body.append(band);
+    act(() =>
+      root.render(
+        <DetailBandContext.Provider value={band}>
+          <div data-test-actions-slot="">
+            <detail.CatalogTimelinePosts catalogId="catalog-linked" />
+          </div>
+        </DetailBandContext.Provider>,
+      ),
+    );
+    await flush();
+    const section = band.querySelector("[data-detail-timeline-posts]");
+    expect(section?.parentElement).toBe(band);
+    expect(section?.hasAttribute("data-detail-band-section")).toBe(true);
+    expect(
+      container.querySelector("[data-test-actions-slot]")?.children,
+    ).toHaveLength(0);
+    band.remove();
   });
 });
 

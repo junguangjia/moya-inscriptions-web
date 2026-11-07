@@ -1285,6 +1285,21 @@
   line-height: 30px;
 }
 
+/*
+ * timeline-posts-v1: a card with posts scrolls, so on wide its title stays
+ * at the top as the drawer's header, under the close button, and the rest
+ * scrolls beneath it. At rest it sits where it did.
+ */
+.root[data-timeline-layout="wide"] .card > .cardTitle {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  flex: none;
+  margin-block: calc(var(--yoyi-space-7) * -1) calc(var(--yoyi-space-3) * -1);
+  padding-block: var(--yoyi-space-7) var(--yoyi-space-3);
+  background: var(--yoyi-color-background-elevated);
+}
+
 .root[data-timeline-layout="wide"] .eraHeader {
   padding-right: var(--yoyi-space-9);
 }

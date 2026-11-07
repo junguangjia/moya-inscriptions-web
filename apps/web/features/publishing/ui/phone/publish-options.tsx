@@ -534,7 +534,7 @@ export const TIMELINE_ENTRY_HINT = "发布后会出现在这个词条下。";
 
 /**
  * 关联词条 (timeline-posts-v1 §2.3): new works and their drafts only, under
- * 可见范围. The line names the chosen entry by its short title and opens the
+ * 可见范围. The line names the chosen entry by its full title and opens the
  * picker; 清除 takes the choice back. A published work attaches from its
  * own page instead, so an edit never shows this, and neither does the
  * Thread quick composer (`takesTimelineEntry`).

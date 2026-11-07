@@ -105,7 +105,7 @@ export const useTimelineEntries = (
 };
 
 /*
- * Short titles learned without the list (Catalog Detail and the work page
+ * Full titles learned without the list (Catalog Detail and the work page
  * read their entry's title), so 关联词条 can name an entry it was opened
  * with before, or without, reading megabytes. Titles are public.
  */
@@ -124,8 +124,9 @@ export type TimelineEntryName =
   | { readonly state: "failed" };
 
 /**
- * The short title of a chosen entry: what was learned or the session's list
- * names, else a read of the list, started only because a name is needed.
+ * The full title of a chosen entry (with its dynasty, as the picker and the
+ * 词条卡 name it): what was learned or the session's list names, else a
+ * read of the list, started only because a name is needed.
  */
 export const useTimelineEntryName = (
   id: string | null,
@@ -133,7 +134,7 @@ export const useTimelineEntryName = (
   const cachedEntry =
     id === null ? undefined : sessionEntries?.find((entry) => entry.id === id);
   const known =
-    id === null ? undefined : (cachedEntry?.title ?? knownNames.get(id));
+    id === null ? undefined : (cachedEntry?.fullTitle ?? knownNames.get(id));
   const { entries, retry } = useTimelineEntries(
     id !== null && known === undefined,
   );
@@ -146,7 +147,7 @@ export const useTimelineEntryName = (
       name:
         entry === undefined
           ? { state: "missing" }
-          : { state: "named", name: entry.title },
+          : { state: "named", name: entry.fullTitle },
       retry,
     };
   }

@@ -20,10 +20,10 @@ import {
 import { usePublishingEntry } from "../publishing/publishing-entry";
 import {
   CatalogTimelinePosts,
+  TimelineEntryPickerSheet,
   WorkTimelineEntryLine,
   useContentTimelineEntry,
 } from "../home/timeline/timeline-detail";
-import { TimelineEntryPicker } from "../home/timeline/timeline-entry-picker";
 import {
   invalidateTimelinePostCounts,
   setWorkTimelineEntry,
@@ -193,7 +193,7 @@ const WorkManagement = ({
   const { openEditor } = usePublishingEntry();
   const withdraw = useCatalogDetailWithdrawal();
   const [confirm, setConfirm] = useState<"delete" | null>(null);
-  // timeline-posts-v1: 关联词条's picker, open in place.
+  // timeline-posts-v1: 关联词条's picker, in the timeline's sheet.
   const [picking, setPicking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{
@@ -251,7 +251,7 @@ const WorkManagement = ({
           tone: "status",
           text:
             attached !== null
-              ? `已关联到：${attached.title}`
+              ? `已关联到：${attached.fullTitle}`
               : result.entryId === null
                 ? "已取消关联词条"
                 : "关联词条已更新",
@@ -324,9 +324,8 @@ const WorkManagement = ({
     });
   };
 
-  // timeline-posts-v1: 关联词条's picker closes without a change (取消, or
-  // the entry the work has); the focus goes back to its opener. A change
-  // hands it to the result line instead.
+  // timeline-posts-v1: 关联词条's sheet closed (取消, Back, a choice); the
+  // focus goes back to its opener, and a change then reports in the status.
   const closePicker = () => {
     setPicking(false);
     window.requestAnimationFrame(() => {
@@ -338,120 +337,172 @@ const WorkManagement = ({
   const unavailable = busy ? true : undefined;
 
   return (
-    <section
-      aria-label="作品管理"
-      className={detailStyles.workManagement}
-      data-work-management=""
-    >
-      {deleted ? null : (
-        <div className={detailStyles.workManagementRow}>
-          <button
-            aria-disabled={unavailable}
-            aria-label="编辑"
-            className={detailStyles.workIcon}
-            onClick={(event) => {
-              if (busyRef.current) return;
-              // The editor's own status replaces any earlier toast.
-              author.notify("");
-              openEditor({ type: "work", id: detail.id }, event.currentTarget);
-            }}
-            type="button"
-          >
-            <svg
-              aria-hidden="true"
-              viewBox="0 0 24 24"
-              width="24"
-              height="24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.7"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="m15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-5-5L4 14z" />
-            </svg>
-          </button>
-          <button
-            aria-disabled={unavailable}
-            aria-label="永久删除"
-            className={detailStyles.workIcon}
-            onClick={() => {
-              if (!busyRef.current) setConfirm("delete");
-            }}
-            ref={deleteRef}
-            type="button"
-          >
-            <svg
-              aria-hidden="true"
-              viewBox="0 0 24 24"
-              width="24"
-              height="24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.7"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7" />
-            </svg>
-          </button>
-          {visibility === undefined ? null : (
+    <>
+      <section
+        aria-label="作品管理"
+        className={detailStyles.workManagement}
+        data-work-management=""
+      >
+        {deleted ? null : (
+          <div className={detailStyles.workManagementRow}>
             <button
-              aria-checked={visibility === "public"}
               aria-disabled={unavailable}
-              aria-label="公开"
-              className={detailStyles.visibilitySwitch}
-              data-work-visibility={visibility}
-              onClick={() => {
-                if (!busyRef.current)
-                  start({
-                    kind: "visibility",
-                    visibility: visibility === "public" ? "self" : "public",
-                  });
+              aria-label="编辑"
+              className={detailStyles.workIcon}
+              onClick={(event) => {
+                if (busyRef.current) return;
+                // The editor's own status replaces any earlier toast.
+                author.notify("");
+                openEditor(
+                  { type: "work", id: detail.id },
+                  event.currentTarget,
+                );
               }}
-              role="switch"
-              title={
-                visibility === "public"
-                  ? "关闭后仅自己可见"
-                  : "开启后按当前发布规则公开"
-              }
               type="button"
             >
-              <span
+              <svg
                 aria-hidden="true"
-                className={detailStyles.visibilityTrack}
-              />
-              <span>公开</span>
+                viewBox="0 0 24 24"
+                width="24"
+                height="24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="m15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-5-5L4 14z" />
+              </svg>
             </button>
-          )}
-        </div>
-      )}
-      {deleted ? null : (
-        <div className={detailStyles.workManagementRow}>
-          <button
-            aria-disabled={unavailable}
-            aria-expanded={picking}
-            data-work-timeline-entry-open=""
-            onClick={() => {
-              if (!busyRef.current) setPicking((open) => !open);
-            }}
-            ref={timelineEntryRef}
-            type="button"
+            <button
+              aria-disabled={unavailable}
+              aria-label="永久删除"
+              className={detailStyles.workIcon}
+              onClick={() => {
+                if (!busyRef.current) setConfirm("delete");
+              }}
+              ref={deleteRef}
+              type="button"
+            >
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                width="24"
+                height="24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7" />
+              </svg>
+            </button>
+            {visibility === undefined ? null : (
+              <button
+                aria-checked={visibility === "public"}
+                aria-disabled={unavailable}
+                aria-label="公开"
+                className={detailStyles.visibilitySwitch}
+                data-work-visibility={visibility}
+                onClick={() => {
+                  if (!busyRef.current)
+                    start({
+                      kind: "visibility",
+                      visibility: visibility === "public" ? "self" : "public",
+                    });
+                }}
+                role="switch"
+                title={
+                  visibility === "public"
+                    ? "关闭后仅自己可见"
+                    : "开启后按当前发布规则公开"
+                }
+                type="button"
+              >
+                <span
+                  aria-hidden="true"
+                  className={detailStyles.visibilityTrack}
+                />
+                <span>公开</span>
+              </button>
+            )}
+          </div>
+        )}
+        {deleted ? null : (
+          <div className={detailStyles.workManagementRow}>
+            <button
+              aria-disabled={unavailable}
+              aria-haspopup="dialog"
+              data-work-timeline-entry-open=""
+              onClick={() => {
+                if (!busyRef.current) setPicking(true);
+              }}
+              ref={timelineEntryRef}
+              type="button"
+            >
+              关联词条
+            </button>
+          </div>
+        )}
+        <p
+          aria-live="polite"
+          className={detailStyles.workManagementStatus}
+          data-tone={message?.tone}
+          data-work-management-status=""
+          ref={statusRef}
+          role="status"
+          tabIndex={-1}
+        >
+          {message?.text}
+        </p>
+        {unconfirmed !== null &&
+        !deleted &&
+        (busy || message?.tone === "error") ? (
+          <div className={detailStyles.workManagementRow}>
+            <button
+              aria-disabled={unavailable}
+              onClick={() => void run(unconfirmed)}
+              type="button"
+            >
+              重试
+            </button>
+          </div>
+        ) : null}
+        {confirm === "delete" ? (
+          <AuthorDialog
+            onClose={() => closeConfirm(deleteRef.current)}
+            title="永久删除"
           >
-            关联词条
-          </button>
-        </div>
-      )}
+            <p className="phase4-muted">
+              作品及其草稿、历史版本将永久删除，无法恢复。
+            </p>
+            <div className="phase4-actions">
+              <button
+                data-confirm-delete=""
+                onClick={() => {
+                  closeConfirm(deleteRef.current);
+                  start({ kind: "delete" });
+                }}
+                type="button"
+              >
+                永久删除
+              </button>
+              <button
+                onClick={() => closeConfirm(deleteRef.current)}
+                type="button"
+              >
+                取消
+              </button>
+            </div>
+          </AuthorDialog>
+        ) : null}
+      </section>
+      {/* Outside the section, whose stylesheet styles every button in it. */}
       {picking && !deleted ? (
-        <TimelineEntryPicker
-          focusOnOpen
-          onCancel={closePicker}
+        <TimelineEntryPickerSheet
           onChoose={(entry) => {
-            if ((entry?.id ?? null) === (timelineEntry?.id ?? null)) {
-              closePicker();
-              return;
-            }
-            setPicking(false);
+            if ((entry?.id ?? null) === (timelineEntry?.id ?? null)) return;
             start({
               kind: "timeline",
               entry:
@@ -464,62 +515,11 @@ const WorkManagement = ({
                     },
             });
           }}
+          onClose={closePicker}
           selectedId={timelineEntry?.id ?? null}
         />
       ) : null}
-      <p
-        aria-live="polite"
-        className={detailStyles.workManagementStatus}
-        data-tone={message?.tone}
-        data-work-management-status=""
-        ref={statusRef}
-        role="status"
-        tabIndex={-1}
-      >
-        {message?.text}
-      </p>
-      {unconfirmed !== null &&
-      !deleted &&
-      (busy || message?.tone === "error") ? (
-        <div className={detailStyles.workManagementRow}>
-          <button
-            aria-disabled={unavailable}
-            onClick={() => void run(unconfirmed)}
-            type="button"
-          >
-            重试
-          </button>
-        </div>
-      ) : null}
-      {confirm === "delete" ? (
-        <AuthorDialog
-          onClose={() => closeConfirm(deleteRef.current)}
-          title="永久删除"
-        >
-          <p className="phase4-muted">
-            作品及其草稿、历史版本将永久删除，无法恢复。
-          </p>
-          <div className="phase4-actions">
-            <button
-              data-confirm-delete=""
-              onClick={() => {
-                closeConfirm(deleteRef.current);
-                start({ kind: "delete" });
-              }}
-              type="button"
-            >
-              永久删除
-            </button>
-            <button
-              onClick={() => closeConfirm(deleteRef.current)}
-              type="button"
-            >
-              取消
-            </button>
-          </div>
-        </AuthorDialog>
-      ) : null}
-    </section>
+    </>
   );
 };
 
