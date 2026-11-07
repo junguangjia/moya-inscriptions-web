@@ -217,6 +217,11 @@
   max-height: none;
 }
 
+/* The actions keep the sheet's bottom with or without a list above them. */
+.sheetPicker .actions {
+  margin-top: auto;
+}
+
 /*
  * The phone's bottom sheet otherwise sizes to its content and would jump as
  * results arrive: it takes its full height at once, the search stays put.

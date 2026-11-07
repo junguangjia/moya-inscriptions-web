@@ -167,10 +167,16 @@ export const TimelineEntryPosts = ({
     setAttaching(false);
   };
 
-  // A new entry, account or attachment starts over from the preview.
+  // A new entry, account or attachment starts over from the preview. After
+  // an attachment the posts shown stay until the new preview replaces them,
+  // so the list (and a Detail page around it) does not shrink and regrow.
+  const loadedFor = useRef<string | null>(null);
   useEffect(() => {
     const controller = new AbortController();
-    setState({ state: "loading" });
+    const key = `${entryId}\n${viewerId ?? ""}`;
+    if (loadedFor.current !== key || latest.current.state !== "ready")
+      setState({ state: "loading" });
+    loadedFor.current = key;
     readTimelinePosts(entryId, 1, TIMELINE_POSTS_PREVIEW, controller.signal)
       .then((page) => {
         if (!controller.signal.aborted)

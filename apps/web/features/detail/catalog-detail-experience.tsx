@@ -95,7 +95,8 @@ export const CatalogDetailExperience = ({
     readonly y: number;
   } | null>(null);
   const desiredScrollTopRef = useRef(initialScrollTop);
-  // A saved place not reached yet: content that loads later may let it be.
+  // A saved place the reader has not moved from: content that loads later
+  // applies it again (CatalogDetailScrollContext.shift).
   const restorePendingRef = useRef(initialScrollTop > 0);
   const restoredCatalogIdRef = useRef(catalogId);
   const viewerOpenerRef = useRef<HTMLElement | null>(null);
@@ -196,8 +197,6 @@ export const CatalogDetailExperience = ({
     if (scroller === null) return;
     suppressScrollRef.current = true;
     scroller.scrollTop = Math.max(0, desiredScrollTopRef.current);
-    if (scroller.scrollTop >= desiredScrollTopRef.current - 1)
-      restorePendingRef.current = false;
     if (scrollSuppressionFrameRef.current !== null) {
       window.cancelAnimationFrame(scrollSuppressionFrameRef.current);
     }
@@ -220,13 +219,16 @@ export const CatalogDetailExperience = ({
         onScrollTopChange(desiredScrollTopRef.current);
       },
       shift: (below: number, delta: number) => {
-        if (delta === 0) return;
+        const scroller = scrollRef.current;
+        if (scroller === null || delta === 0) return;
+        // A saved place was measured with this content present: apply it
+        // again, as it was. Otherwise, as scroll anchoring does, only a
+        // change that ends at or above where the reader actually is
+        // moves them, by the same amount.
         if (!restorePendingRef.current) {
-          if (desiredScrollTopRef.current < below - 1) return;
-          desiredScrollTopRef.current = Math.max(
-            0,
-            desiredScrollTopRef.current + delta,
-          );
+          const top = scroller.scrollTop;
+          if (top < below - 1) return;
+          desiredScrollTopRef.current = Math.max(0, top + delta);
         }
         restoreDesiredScroll();
         onScrollTopChange(desiredScrollTopRef.current);
@@ -390,6 +392,8 @@ export const CatalogDetailExperience = ({
       return;
     }
     desiredScrollTopRef.current = top;
+    // The reader moved on from a saved place.
+    restorePendingRef.current = false;
     onScrollTopChange(top);
     if (userScrollIntentRef.current) markUserScrollIntent();
   };

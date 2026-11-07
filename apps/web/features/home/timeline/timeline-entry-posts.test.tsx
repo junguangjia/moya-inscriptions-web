@@ -357,6 +357,36 @@ describe("「关联我发过的帖子」", () => {
     expect(container.querySelectorAll("[data-timeline-post]")).toHaveLength(1);
   });
 
+  it("keeps the posts shown while the attachment's new preview is read", async () => {
+    data.readTimelinePosts.mockResolvedValueOnce(page([work(1)], 1));
+    await openPicker();
+    data.readContentTimelineEntry.mockResolvedValue(null);
+    data.setWorkTimelineEntry.mockResolvedValue({
+      workId: workId(2),
+      entryId: "row-yongping",
+      version: 1,
+    });
+    let answer: (value: ReturnType<typeof page>) => void = () => {};
+    data.readTimelinePosts.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    click(query(`[data-timeline-attach-work="${workId(2)}"]`));
+    click(query("[data-timeline-attach-confirm]"));
+    await flush();
+    expect(data.readTimelinePosts).toHaveBeenCalledTimes(2);
+    // No placeholders in between: the list does not shrink and regrow.
+    expect(query("[data-timeline-posts]")?.hasAttribute("aria-busy")).toBe(
+      false,
+    );
+    expect(container.querySelectorAll("[data-timeline-post]")).toHaveLength(1);
+    expect(query(`[data-timeline-post="${workId(1)}"]`)).not.toBeNull();
+    await act(async () => answer(page([work(2), work(1)], 2)));
+    await flush();
+    expect(container.querySelectorAll("[data-timeline-post]")).toHaveLength(2);
+  });
+
   it("asks before moving a work that is already on another entry", async () => {
     await openPicker();
     data.readContentTimelineEntry.mockResolvedValue({

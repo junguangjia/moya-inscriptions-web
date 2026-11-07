@@ -396,9 +396,22 @@ describe("CatalogDetailExperience", () => {
     act(() => scroll!.shift!(800, 400));
     expect(scroller.scrollTop).toBe(1500);
     expect(onScrollTopChange).toHaveBeenLastCalledWith(1500);
-    // Reached: a later change above the reader keeps their place again.
+    // Until the reader moves, the saved place stays what is applied.
     act(() => scroll!.shift!(800, 100));
-    expect(scroller.scrollTop).toBe(1600);
+    expect(scroller.scrollTop).toBe(1500);
+    // Once they scroll, a change above them keeps their place again.
+    contentHeight = 3000;
+    scroller.scrollTop = 1520;
+    act(() => scroller.dispatchEvent(new Event("scroll", { bubbles: true })));
+    act(() => scroll!.shift!(800, 100));
+    expect(scroller.scrollTop).toBe(1620);
+    // A reader above the change, or inside it, does not move: the test is
+    // where they are, not a place the page clamped them away from.
+    scroller.scrollTop = 600;
+    act(() => scroller.dispatchEvent(new Event("wheel", { bubbles: true })));
+    act(() => scroller.dispatchEvent(new Event("scroll", { bubbles: true })));
+    act(() => scroll!.shift!(900, 200));
+    expect(scroller.scrollTop).toBe(600);
   });
 
   it("withdraws a Detail in place: the Viewer closes, the notice is read from the top with focus", () => {
