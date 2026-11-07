@@ -63,6 +63,7 @@ import type {
   EditorialContentReadPort,
   ThreadPort,
   TimelineOperatorPort,
+  TimelinePostsPort,
   FeedbackPort,
   PublishingMediaProcessorPort,
   PublishingMediaStorePort,
@@ -181,6 +182,12 @@ export interface BackendApplicationOptions {
    * unrouted.
    */
   readonly timelineOperatorPort?: TimelineOperatorPort;
+  /**
+   * Public reads of posts attached to timeline rows (timeline-posts-v1).
+   * Absent leaves those routes not found; the author's attach command lives
+   * on the work publishing port.
+   */
+  readonly timelinePostsPort?: TimelinePostsPort;
   /** Private settings feedback. */
   readonly feedbackPort?: FeedbackPort;
   /** Direct messages. */
@@ -466,6 +473,7 @@ const resolveCommunity = (
                 ),
             threadService,
             directMessageService,
+            options.timelinePostsPort,
           ),
         }
       : {}),

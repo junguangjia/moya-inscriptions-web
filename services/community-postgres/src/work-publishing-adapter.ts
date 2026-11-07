@@ -25,6 +25,8 @@ import type {
   WorkSubmissionCommand,
   WorkSubmissionReceipt,
   WorkSubmissionResult,
+  WorkTimelineEntryCommand,
+  WorkTimelineEntryResult,
   WorkVisibilityCommand,
   WorkVisibilityResult,
 } from "@moya/contracts";
@@ -447,6 +449,14 @@ export class PostgresWorkPublishingAdapter
       now,
       this.options.publication,
     );
+  }
+  setTimelineEntry(
+    actorId: string,
+    workId: string,
+    command: WorkTimelineEntryCommand,
+    now: Date,
+  ): Promise<WorkTimelineEntryResult> {
+    return works.setTimelineEntry(this.pool, actorId, workId, command, now);
   }
   deleteWork(
     actorId: string,

@@ -23,8 +23,16 @@ const sendOperatorError = (
 ): void => sendJson(response, status, { error: { status, code } });
 
 const internal = "/internal/community/";
-const ROUTES = ["timeline-entries", "timeline-summary", "timeline-order"];
-/** The shape of a contract refusal code (timelineRefusalCodeSchema): never text. */
+const ROUTES = [
+  "timeline-entries",
+  "timeline-summary",
+  "timeline-order",
+  "timeline-posts",
+];
+/**
+ * The shape of a contract refusal code (timelineRefusalCodeSchema,
+ * timelinePostRefusalCodeSchema): never text.
+ */
 const REFUSAL_CODE = /^[A-Z][A-Z_]{2,63}$/u;
 
 /**
@@ -36,8 +44,13 @@ const REFUSAL_CODE = /^[A-Z][A-Z_]{2,63}$/u;
  *   POST timeline-entries                    a new row (body requestId)
  *   POST timeline-entries/{id}               a change against a read version
  *   POST timeline-order                      one start year's new order
+ *   GET  timeline-posts?page&pageSize&...    a filtered page of post rows
+ *                                            (timeline-posts-v1; AI never
+ *                                            reads a self-only work)
+ *   POST timeline-posts/{workId}             attach, move, take off or
+ *                                            withhold one work's post
  *
- * The three top-level paths differ, so an entry id never names another route.
+ * The top-level paths differ, so an entry or work id never names another route.
  * A refusal by rule answers 422 with its fixed contract code (ENTRY_EXISTS,
  * TIMELINE_FULL, ...), which the Owner's transport keeps as well as the AI's.
  * The runtime does not import the operator contracts, so the code is checked
@@ -68,25 +81,29 @@ export const handleTimelineOperatorRequest = async (
     if (url.search) throw new CommunityInputError("Unexpected query");
     return readJsonBody(request, 100000);
   };
+  // A filtered read: its query alone, refused as a query.
+  const list = async (
+    read: (query: Record<string, unknown>) => Promise<unknown>,
+  ): Promise<void> => {
+    try {
+      // A key an object inherits, such as `constructor`, would read as a
+      // value already collected: refused like any key the query lacks.
+      if ([...url.searchParams.keys()].some((key) => key in Object.prototype))
+        throw new CommunityInputError("Unexpected query");
+      sendJson(
+        response,
+        200,
+        await read(collectTransportQuery(url.searchParams)),
+      );
+    } catch (error) {
+      if (!isCommunityInputError(error)) throw error;
+      sendOperatorError(response, 400, "INVALID_QUERY");
+    }
+  };
   try {
     if (route === "timeline-entries" && rest.length === 0) {
       if (method === "GET") {
-        try {
-          // A key an object inherits, such as `constructor`, would read as a
-          // value already collected: refused like any key the query lacks.
-          if (
-            [...url.searchParams.keys()].some((key) => key in Object.prototype)
-          )
-            throw new CommunityInputError("Unexpected query");
-          sendJson(
-            response,
-            200,
-            await service.operatorList(collectTransportQuery(url.searchParams)),
-          );
-        } catch (error) {
-          if (!isCommunityInputError(error)) throw error;
-          sendOperatorError(response, 400, "INVALID_QUERY");
-        }
+        await list((query) => service.operatorList(query));
         return true;
       }
       if (method === "POST") {
@@ -128,8 +145,27 @@ export const handleTimelineOperatorRequest = async (
       );
       return true;
     }
+    if (route === "timeline-posts" && rest.length === 0 && method === "GET") {
+      await list((query) => service.operatorPosts(operator, query));
+      return true;
+    }
+    if (route === "timeline-posts" && rest.length === 1 && method === "POST") {
+      const id = decodePathSegment(rest[0]!);
+      if (id === undefined) {
+        sendOperatorError(response, 404, "NOT_FOUND");
+        return true;
+      }
+      sendJson(
+        response,
+        200,
+        await service.operatorSetPost(operator, id, await command()),
+      );
+      return true;
+    }
     const known =
-      rest.length === 0 || (route === "timeline-entries" && rest.length === 1);
+      rest.length === 0 ||
+      ((route === "timeline-entries" || route === "timeline-posts") &&
+        rest.length === 1);
     sendOperatorError(
       response,
       known ? 405 : 404,

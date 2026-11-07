@@ -30,6 +30,9 @@ import {
   timelineEntryTag,
   timelineMediaBox,
   timelinePositionAt,
+  timelinePostCountText,
+  timelineTitleWidth,
+  TIMELINE_TITLE_COUNT_GAP,
   timelineShelfMeta,
   timelineWindowRange,
   timelineYearFraction,
@@ -849,6 +852,93 @@ describe("row text", () => {
         }),
       ),
     ).toBeNull();
+  });
+});
+
+describe("post counts on rows (timeline-posts-v1)", () => {
+  const row = (overrides: Partial<TimelineEntry>) => {
+    const found = buildTimelineRows(
+      buildTimelineIndex([entry(overrides)]),
+    ).find((candidate) => candidate.kind === "entry");
+    if (found === undefined || found.kind !== "entry")
+      throw new Error("No entry row");
+    return found;
+  };
+
+  it("says 「N 篇帖子」 for posts and nothing for none", () => {
+    expect(timelinePostCountText(1)).toBe("1 篇帖子");
+    expect(timelinePostCountText(128)).toBe("128 篇帖子");
+    expect(timelinePostCountText(0)).toBeNull();
+    expect(timelinePostCountText(-1)).toBeNull();
+    expect(timelinePostCountText(1.5)).toBeNull();
+  });
+
+  it("ends a phone meta on the count instead of 保管 (Figma C2)", () => {
+    expect(timelineEntryMeta(entry(), "phone", 3)).toBe(
+      "虚元八年 · 虚构西州 · 3 篇帖子",
+    );
+    expect(timelineEntryMeta(entry({ holder: null }), "phone", 2)).toBe(
+      "虚元八年 · 虚构西州 · 2 篇帖子",
+    );
+    expect(timelineEntryMeta(entry(), "phone", 0)).toBe(
+      "虚元八年 · 虚构西州 · 虚构碑林",
+    );
+    // Tablet and wide print the count after the name, not in the meta.
+    expect(timelineEntryMeta(entry(), "tablet", 3)).toBe("虚元八年");
+    expect(timelineEntryMeta(entry(), "wide", 3)).toBe("虚元八年");
+  });
+
+  it("estimates a phone row from the meta it renders with its count", () => {
+    // A tagged meta wraps; the count replaces 保管, so the estimate must
+    // measure the count's text, which the row then prints.
+    const tagged = row({
+      id: "row-tagged",
+      title: "虚构南寺碑",
+      disputed: true,
+      dateLabel: "虚构定年",
+      province: "虚构西州",
+      holder: "虚构".repeat(30),
+    });
+    const counts = new Map([["row-tagged", 3]]);
+    const metaWidth = (count: number) =>
+      estimateTextWidth(
+        timelineEntryMeta(tagged.entry, "phone", count),
+        "meta",
+      );
+    const column = timelineContentWidth("phone", 390) - 30;
+    const lines = (count: number) =>
+      Math.min(2, Math.max(1, Math.ceil(metaWidth(count) / column)));
+    expect(lines(0)).toBe(2);
+    expect(lines(3)).toBe(1);
+    expect(estimateRowHeight(tagged, metrics)).toBe(20 + 24 + 2 + 18 * 2);
+    expect(estimateRowHeight(tagged, { ...metrics, postCounts: counts })).toBe(
+      20 + 24 + 2 + 18 * lines(3),
+    );
+  });
+
+  it("measures a wide or tablet name with the count after it", () => {
+    const named = row({ id: "row-named", title: "虚构南寺碑".repeat(5) });
+    const title = estimateTextWidth(named.entry.title, "title");
+    expect(timelineTitleWidth(named.entry, "wide", estimateTextWidth, 0)).toBe(
+      title,
+    );
+    expect(timelineTitleWidth(named.entry, "wide", estimateTextWidth, 7)).toBe(
+      title + TIMELINE_TITLE_COUNT_GAP + estimateTextWidth("7 篇帖子", "meta"),
+    );
+    // A phone row carries its count in the meta, never after the name.
+    expect(timelineTitleWidth(named.entry, "phone", estimateTextWidth, 7)).toBe(
+      title,
+    );
+    // 400 of title in a 392 tablet column: two lines once the count follows.
+    const tablet = { ...metrics, layout: "tablet", listWidth: 834 } as const;
+    const fits = row({ id: "row-fits", title: "虚构南寺碑".repeat(4) + "碑" });
+    expect(estimateRowHeight(fits, tablet)).toBe(16 + 24 + 18);
+    expect(
+      estimateRowHeight(fits, {
+        ...tablet,
+        postCounts: new Map([["row-fits", 12]]),
+      }),
+    ).toBe(16 + 48 + 18);
   });
 });
 

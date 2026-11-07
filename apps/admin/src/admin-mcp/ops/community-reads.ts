@@ -637,6 +637,8 @@ const TIMELINE_PAGE_MAX = 50;
 /**
  * Reference rows, not a queue: nothing is withheld and nothing counts in SQL. `position`
  * orders a start year's rows within each display rank, so it is read with the year.
+ * `postCount` counts public posts only, as it does for the Owner, so it names no
+ * self-only one.
  */
 const TIMELINE: CommunitySource = {
   route: "read-timeline",
@@ -652,6 +654,7 @@ const TIMELINE: CommunitySource = {
     onAxis: item.onAxis,
     position: item.position,
     linkState: item.linkState,
+    postCount: item.postCount,
   }),
   fields: {
     fullTitle: (item) => shortOrFacts(item.fullTitle),
@@ -668,6 +671,34 @@ const TIMELINE: CommunitySource = {
     updatedBy: plain("updatedBy"),
     createdAt: plain("createdAt"),
     updatedAt: plain("updatedAt"),
+  },
+};
+
+/**
+ * timeline-posts-v1: one row per post on a timeline row, newest change first. The
+ * Backend leaves a self-only work out of the page and its total, so the answer names
+ * the category. An entry id is the Owner's own text, carried marked with the row.
+ */
+const TIMELINE_POSTS: CommunitySource = {
+  route: "read-timeline-posts",
+  withholds: true,
+  pageMax: TIMELINE_PAGE_MAX,
+  row: (item) => ({
+    id: item.workId,
+    title: shortOrFacts(item.title),
+    state: item.state,
+    version: item.version,
+    entryId: item.entryId,
+    publiclyVisible: item.publiclyVisible,
+    authorId: item.authorId,
+    attachedBy: item.attachedBy,
+    updatedAt: item.updatedAt,
+  }),
+  fields: {
+    withheldEntryId: plain("withheldEntryId"),
+    workState: plain("workState"),
+    attachedAt: plain("attachedAt"),
+    updatedBy: plain("updatedBy"),
   },
 };
 
@@ -1029,6 +1060,7 @@ export const COMMUNITY_READ_FACTS: Readonly<
   "read-account-capacity": one({ route: "read-account-capacity" }),
   "read-timeline": source(TIMELINE),
   "read-timeline-summary": one({ route: "read-timeline-summary" }),
+  "read-timeline-posts": source(TIMELINE_POSTS),
   // Behind the dm switch, on admin_sensitive_read.
   "read-dm-conversation": notBuilt("S13"),
   "lookup-dm-conversation": notBuilt("S13"),

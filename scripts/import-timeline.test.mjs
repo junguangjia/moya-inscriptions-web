@@ -7,6 +7,8 @@ import { test } from "node:test";
 import { URL } from "node:url";
 import {
   CONTENT_OPERATOR_LOCK_SQL,
+  DROPPED_POSTS_SQL,
+  POSTS_TABLE_SQL,
   TIMELINE_MIGRATION_ID,
   TimelineImportRefused,
   applyImport,
@@ -69,6 +71,8 @@ const fakePool = ({
   failOn,
   stored = { total: 0, edited: 0, hidden: 0 },
   replaced = [],
+  postsTable = true,
+  dropped = { posts: 0, entries: 0 },
 } = {}) => {
   const statements = [];
   const bound = [];
@@ -84,6 +88,8 @@ const fakePool = ({
           rows: ledger ? [{ migration_id: TIMELINE_MIGRATION_ID }] : [],
         };
       if (text.includes("FILTER")) return { rows: [stored] };
+      if (text === POSTS_TABLE_SQL) return { rows: [{ present: postsTable }] };
+      if (text === DROPPED_POSTS_SQL) return { rows: [dropped] };
       if (text.startsWith("DELETE")) return { rows: replaced };
       return { rows: [] };
     },
@@ -261,6 +267,8 @@ test("apply replaces all rows inside one transaction under the operator lock", a
       "SELECT",
       "DELETE",
       "INSERT",
+      "SELECT",
+      "SELECT",
       "INSERT",
       "COMMIT",
     ],
@@ -273,13 +281,16 @@ test("apply replaces all rows inside one transaction under the operator lock", a
   // The deleted versions carry on: "a" was at 4, "b" is new.
   assert.equal(bound[6][17], 5);
   assert.equal(bound[6][35], 1);
+  // timeline-posts-v1: attached posts are counted after the replacement.
+  assert.equal(statements[7], POSTS_TABLE_SQL);
+  assert.equal(statements[8], DROPPED_POSTS_SQL);
   // One event with counts only: no row content reaches it.
   assert.match(
-    statements[7],
+    statements[9],
     /^INSERT INTO community\.content_operator_events\(.*VALUES\(\$1,'import','timeline\.import','timeline_entry',NULL,\$2\)$/u,
   );
-  assert.match(bound[7][0], /^[0-9a-f-]{36}$/u);
-  assert.deepEqual(JSON.parse(bound[7][1]), {
+  assert.match(bound[9][0], /^[0-9a-f-]{36}$/u);
+  assert.deepEqual(JSON.parse(bound[9][1]), {
     entries: 2,
     replaced: 3,
     operatorEdited: 0,
@@ -309,6 +320,46 @@ test("apply refuses to discard operator edits unless told to, with counts only",
     { entries: 1, replaced: 4, operatorEdited: 2, hidden: 1 },
   );
   assert.ok(forced.statements.includes("COMMIT"));
+});
+
+test("apply refuses a file that drops rows holding attached posts, with counts only", async () => {
+  const { pool, statements, released } = fakePool({
+    dropped: { posts: 3, entries: 2 },
+  });
+  await assert.rejects(
+    applyImport(pool, [entry("kept")], { replaceOperatorEdits: true }),
+    (error) => {
+      assert.ok(error instanceof TimelineImportRefused);
+      assert.equal(
+        error.message,
+        "The file drops 2 rows that hold 3 attached posts; keep those rows, or take their posts off first",
+      );
+      return true;
+    },
+  );
+  // Refused inside the transaction: the replacement rolls back, and no event.
+  assert.ok(
+    !statements.some((text) => text.includes("content_operator_events")),
+  );
+  assert.ok(!statements.includes("COMMIT"));
+  assert.equal(statements.at(-1), "ROLLBACK");
+  assert.equal(released(), 1);
+  // The count is of what the deferred key would refuse: attached rows only.
+  assert.match(
+    DROPPED_POSTS_SQL,
+    /WHERE p\.entry_id IS NOT NULL AND NOT EXISTS/u,
+  );
+});
+
+test("apply skips the posts check on a database without the posts table", async () => {
+  const { pool, statements } = fakePool({
+    postsTable: false,
+    dropped: { posts: 9, entries: 9 },
+  });
+  await applyImport(pool, [entry("a")]);
+  assert.ok(statements.includes(POSTS_TABLE_SQL));
+  assert.ok(!statements.includes(DROPPED_POSTS_SQL));
+  assert.ok(statements.includes("COMMIT"));
 });
 
 test("apply refuses a missing ledger entry before any write", async () => {

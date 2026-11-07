@@ -13,10 +13,15 @@ import type { Root } from "react-dom/client";
 const client = vi.hoisted(() => ({
   accountEpoch: vi.fn(() => 0),
   timeline: vi.fn(),
+  timelinePostCounts: vi.fn(),
 }));
-const author = vi.hoisted(() => ({ checking: false }));
+const author = vi.hoisted(() => ({
+  checking: false,
+  viewer: null as { id: string } | null,
+}));
 vi.mock("../../authors/author-context", () => ({
   useAuthors: () => author,
+  useOptionalAuthors: () => author,
 }));
 vi.mock("../../authors/author-data", () => ({
   authorClient: client,
@@ -74,8 +79,11 @@ const feedState = () =>
 beforeEach(() => {
   vi.resetModules();
   author.checking = false;
+  author.viewer = null;
   client.accountEpoch.mockReturnValue(0);
   client.timeline.mockReset();
+  client.timelinePostCounts.mockReset();
+  client.timelinePostCounts.mockResolvedValue({ counts: {} });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -296,5 +304,114 @@ describe("LiveTimeline", () => {
     await flush();
     expect(client.timeline).toHaveBeenCalledTimes(1);
     expect(feedState()).toBe("populated");
+  });
+
+  it("reads the post counts only once the list is on screen, and prints them", async () => {
+    let answer: (value: {
+      entries: readonly TimelineEntry[];
+    }) => void = () => {};
+    client.timeline.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    client.timelinePostCounts.mockResolvedValue({ counts: { "row-1": 3 } });
+    const LiveTimeline = await load();
+    act(() => root.render(<LiveTimeline active />));
+    await flush();
+    // The counts never hold up the list's first read.
+    expect(client.timelinePostCounts).not.toHaveBeenCalled();
+    answer({ entries });
+    await flush();
+    expect(client.timelinePostCounts).toHaveBeenCalledOnce();
+    // The phone row ends on the count instead of 保管 (Figma C2).
+    expect(container.textContent).toContain("虚元八年 · 虚构西州 · 3 篇帖子");
+    expect(container.textContent).not.toContain("虚构碑林");
+  });
+
+  it("keeps the rows when the counts fail, and never shows another account's", async () => {
+    client.timeline.mockResolvedValue({ entries });
+    client.timelinePostCounts.mockRejectedValueOnce(new Error("offline"));
+    const LiveTimeline = await load();
+    act(() => root.render(<LiveTimeline active />));
+    await flush();
+    expect(feedState()).toBe("populated");
+    expect(container.textContent).toContain("虚构碑林");
+
+    client.timelinePostCounts.mockResolvedValue({ counts: { "row-1": 2 } });
+    author.viewer = { id: `user-${"a".repeat(32)}` };
+    act(() => root.render(<LiveTimeline active />));
+    await flush();
+    expect(container.textContent).toContain("2 篇帖子");
+
+    // Another account: the earlier account's count leaves at once.
+    client.accountEpoch.mockReturnValue(1);
+    client.timelinePostCounts.mockReturnValue(new Promise(() => undefined));
+    author.viewer = { id: `user-${"b".repeat(32)}` };
+    act(() => root.render(<LiveTimeline active />));
+    await flush();
+    expect(container.textContent).not.toContain("篇帖子");
+    expect(container.textContent).toContain("虚构碑林");
+  });
+
+  it("reads the counts again when posts change elsewhere, while the feed is shown", async () => {
+    client.timeline.mockResolvedValue({ entries });
+    client.timelinePostCounts.mockResolvedValue({ counts: { "row-1": 1 } });
+    const LiveTimeline = await load();
+    const { invalidateTimelinePostCounts } =
+      await import("./timeline-posts-data");
+    act(() => root.render(<LiveTimeline active />));
+    await flush();
+    expect(container.textContent).toContain("1 篇帖子");
+    client.timelinePostCounts.mockResolvedValue({ counts: { "row-1": 2 } });
+    // A work page or a published post changed them.
+    act(() => invalidateTimelinePostCounts());
+    await flush();
+    expect(client.timelinePostCounts).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("2 篇帖子");
+    // A fresh copy answers a re-activation without a read.
+    act(() => root.render(<LiveTimeline active={false} />));
+    act(() => root.render(<LiveTimeline active />));
+    await flush();
+    expect(client.timelinePostCounts).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads the counts again when posts change during a read, and never keeps that older answer", async () => {
+    client.timeline.mockResolvedValue({ entries });
+    type Counts = { counts: Record<string, number> };
+    let older: (value: Counts) => void = () => {};
+    let newer: (value: Counts) => void = () => {};
+    client.timelinePostCounts.mockReturnValueOnce(
+      new Promise<Counts>((resolve) => {
+        older = resolve;
+      }),
+    );
+    const LiveTimeline = await load();
+    const { invalidateTimelinePostCounts } =
+      await import("./timeline-posts-data");
+    act(() => root.render(<LiveTimeline active />));
+    await flush();
+    expect(client.timelinePostCounts).toHaveBeenCalledOnce();
+    client.timelinePostCounts.mockReturnValueOnce(
+      new Promise<Counts>((resolve) => {
+        newer = resolve;
+      }),
+    );
+    // A post was attached while the first read was on its way.
+    act(() => invalidateTimelinePostCounts());
+    await flush();
+    expect(client.timelinePostCounts).toHaveBeenCalledTimes(2);
+    newer({ counts: { "row-1": 2 } });
+    await flush();
+    expect(container.textContent).toContain("2 篇帖子");
+    older({ counts: { "row-1": 1 } });
+    await flush();
+    expect(container.textContent).toContain("2 篇帖子");
+    // The copy kept for a re-activation is the newer answer.
+    act(() => root.render(<LiveTimeline active={false} />));
+    act(() => root.render(<LiveTimeline active />));
+    await flush();
+    expect(client.timelinePostCounts).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("2 篇帖子");
   });
 });

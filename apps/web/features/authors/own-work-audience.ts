@@ -58,22 +58,24 @@ export const setOwnWorkAudience = (
 };
 
 /**
+ * What the author's own view of a work says about its audience; null for a
+ * third party's view, or one without the author-only fields.
+ */
+export const ownWorkAudienceOf = (work: UserWork): OwnWorkAudience | null =>
+  !work.canEdit ||
+  work.publiclyVisible === undefined ||
+  work.visibility === undefined
+    ? null
+    : { publiclyVisible: work.publiclyVisible, visibility: work.visibility };
+
+/**
  * Records what the author's own view of a work says; a third party's view,
  * or one without the author-only fields, removes nothing it cannot know.
  */
 export const recordOwnWorkAudience = (work: UserWork): void => {
   // Module state is per browser page; a server render never records.
   if (typeof window === "undefined" || !work.canEdit) return;
-  setOwnWorkAudience(
-    work.authorId,
-    work.id,
-    work.publiclyVisible === undefined || work.visibility === undefined
-      ? null
-      : {
-          publiclyVisible: work.publiclyVisible,
-          visibility: work.visibility,
-        },
-  );
+  setOwnWorkAudience(work.authorId, work.id, ownWorkAudienceOf(work));
 };
 
 export const readOwnWorkAudience = (
@@ -125,3 +127,18 @@ export const ownWorkAudienceNote = (
     : audience.publiclyVisible === null && audience.unconfirmed === true
       ? "暂时无法确认其他人能否看到此作品。"
       : null;
+
+/**
+ * The short mark an author's own work carries in a works grid while others
+ * cannot see it (the profile works grid's, and the timeline posts grid's):
+ * 仅自己可见 when it is self-only, else 暂不公开, never a pending or review
+ * label. Null while others can see it, or while that is not known.
+ */
+export const ownWorkAudienceLabel = (
+  audience: OwnWorkAudience,
+): string | null =>
+  audience.publiclyVisible === false
+    ? audience.visibility === "self"
+      ? "仅自己可见"
+      : "暂不公开"
+    : null;

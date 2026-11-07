@@ -92,6 +92,18 @@ export const operatorTimelineEntrySchema = z.strictObject({
 });
 
 /**
+ * timeline-posts-v1: a row as the operator list reads it, with the number of
+ * public posts attached to it (a public work by an active author). The count
+ * is the same for the Owner and AI, so it never says that a self-only post
+ * exists. List-only: a create or an update answers, and its receipt keeps, the
+ * row without it, so a replay of an older receipt still reads.
+ */
+export const operatorTimelineListEntrySchema =
+  operatorTimelineEntrySchema.extend({
+    postCount: z.number().int().nonnegative(),
+  });
+
+/**
  * A row's import fields in the contract's order, as the import file holds
  * them: what `timelineImportEntrySchema` (issue=contract) and the response
  * estimate read.
@@ -138,8 +150,9 @@ const filterYear = textInteger(/^(?:0|-?[1-9]\d{0,3})$/u).pipe(
  * span overlaps them. `issue`: `contract`, the row fails the import row;
  * `group`, its group has more than one title or members differ in chapter or
  * axis; `chapter_year`, its start year lies outside its chapter's span;
- * `not_published`, it links a Catalog record that is not published. Order is
- * the public read's: start year, position, id.
+ * `not_published`, it links a Catalog record that is not published. `posts`
+ * (timeline-posts-v1): `with` keeps rows holding at least one public post,
+ * `without` the rest. Order is the public read's: start year, position, id.
  */
 export const operatorTimelineQuerySchema = z.strictObject({
   page: textInteger(/^[1-9]\d*$/u)
@@ -178,10 +191,11 @@ export const operatorTimelineQuerySchema = z.strictObject({
   issue: z
     .enum(["contract", "group", "chapter_year", "not_published"])
     .optional(),
+  posts: z.enum(["any", "with", "without"]).default("any"),
 });
 
 export const operatorTimelinePageSchema = z.strictObject({
-  items: z.array(operatorTimelineEntrySchema).max(50),
+  items: z.array(operatorTimelineListEntrySchema).max(50),
   total: z.number().int().nonnegative(),
   page: z.number().int().positive(),
   pageSize: z.number().int().positive(),
@@ -191,8 +205,10 @@ const count = z.number().int().nonnegative();
 /**
  * Counts over every stored row unless named otherwise; `hidden` counts the
  * hidden ones among them. Groups count over visible rows, as the Web folds
- * them: `folding` groups have at least three visible members. The response
- * estimate is the one every write is held to.
+ * them: `folding` groups have at least three visible members. `posts`
+ * (timeline-posts-v1) counts public posts attached to any stored row, and the
+ * rows holding at least one, as `postCount` does. The response estimate is
+ * the one every write is held to.
  */
 export const operatorTimelineSummarySchema = z.strictObject({
   entries: z.strictObject({
@@ -220,6 +236,7 @@ export const operatorTimelineSummarySchema = z.strictObject({
     notPublished: count,
   }),
   groups: z.strictObject({ total: count, folding: count }),
+  posts: z.strictObject({ total: count, entries: count }),
   updatedBy: z.strictObject({
     import: count,
     owner: count,
@@ -325,6 +342,9 @@ export type TimelineActor = z.infer<typeof timelineActorSchema>;
 export type TimelineLinkState = z.infer<typeof timelineLinkStateSchema>;
 export type TimelineRefusalCode = z.infer<typeof timelineRefusalCodeSchema>;
 export type OperatorTimelineEntry = z.infer<typeof operatorTimelineEntrySchema>;
+export type OperatorTimelineListEntry = z.infer<
+  typeof operatorTimelineListEntrySchema
+>;
 export type OperatorTimelineQuery = z.infer<typeof operatorTimelineQuerySchema>;
 export type OperatorTimelinePage = z.infer<typeof operatorTimelinePageSchema>;
 export type OperatorTimelineSummary = z.infer<

@@ -114,6 +114,7 @@ describe("community migration family", () => {
         "20261105020000_agent_connection_operator_preset.sql",
         "20261105030000_agent_connection_resume_secret.sql",
         "20261105235900_timeline_entries.sql",
+        "20261107010000_timeline_entry_posts.sql",
       ],
     );
     expect(files.every((file) => file.sql.includes("community."))).toBe(true);

@@ -436,4 +436,33 @@ describe("useTimelineWindow", () => {
     expect(current.totalHeight).toBe(10_000);
     expect(current.width).toBe(430);
   });
+
+  it("holds the reader's row when new estimates arrive (post counts)", () => {
+    render({ rowHeight: 100 });
+    listTop = -983;
+    fireScroll();
+    const reading = current.topIndex;
+    expect(reading).toBeGreaterThan(0);
+    const before = current.scrollTopForIndex(reading);
+    scrollTo.mockClear();
+    // Same layout and width: only the estimate changed.
+    render({ rowHeight: 120 });
+    expect(current.scrollTopForIndex(reading)).toBeGreaterThan(before);
+    expect(scrollTo.mock.calls.at(-1)?.[0]).toBe(
+      current.scrollTopForIndex(reading),
+    );
+  });
+
+  it("does not hold a row for new estimates at the top or off screen", () => {
+    render({ rowHeight: 100 });
+    scrollTo.mockClear();
+    render({ rowHeight: 120 });
+    expect(scrollTo).not.toHaveBeenCalled();
+    render({ active: false, rowHeight: 120 });
+    listTop = -983;
+    fireScroll();
+    scrollTo.mockClear();
+    render({ active: false, rowHeight: 140 });
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
 });

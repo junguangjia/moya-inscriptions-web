@@ -403,6 +403,8 @@ export type {
 // content-community-completion-v1: Threads over Works.
 export { ThreadService } from "./modules/community/application/services/thread-service.js";
 export type { ThreadPort } from "./modules/community/application/ports/thread-port.js";
+// timeline-posts-v1: public reads of posts attached to timeline rows.
+export type { TimelinePostsPort } from "./modules/community/application/ports/timeline-posts-port.js";
 // home-timeline-v1 (Issue #384 r3): operator-managed Home timeline rows.
 export { TimelineOperatorService } from "./modules/community/application/services/timeline-operator-service.js";
 export type { TimelineOperatorPort } from "./modules/community/application/ports/timeline-operator-port.js";

@@ -681,3 +681,40 @@ BEGIN
       current_setting('moya.runtime_app_role'));
   END IF;
 END $$;
+
+-- timeline-posts-v1 (migration 20261107010000): an author attaches, moves and
+-- detaches an own post on a timeline row, and the Backend's operator routes
+-- (Owner and AI) withhold or move one. A new row names the work, its entry,
+-- who attached it and its times, so its state and version come from the
+-- column defaults. The work id is never rewritten, and no row is deleted or
+-- truncated through this role: a detach or a withhold is an update. A move
+-- rewrites the attachment's time and attacher with its entry, and every update
+-- writes its own updated_at. Convergence as for the timeline rows above, in
+-- guarded blocks, because the relation is optional for earlier migration
+-- phases.
+DO $$
+BEGIN
+  IF to_regclass('community.timeline_entry_posts') IS NOT NULL THEN
+    EXECUTE format(
+      'REVOKE INSERT, UPDATE ON TABLE community.timeline_entry_posts FROM %I',
+      current_setting('moya.runtime_app_role'));
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF to_regclass('community.timeline_entry_posts') IS NOT NULL THEN
+    EXECUTE format(
+      'GRANT SELECT ON TABLE community.timeline_entry_posts TO %I',
+      current_setting('moya.runtime_app_role'));
+    EXECUTE format(
+      'GRANT INSERT (work_id, entry_id, attached_by, updated_by, attached_at,
+         updated_at)
+       ON TABLE community.timeline_entry_posts TO %I',
+      current_setting('moya.runtime_app_role'));
+    EXECUTE format(
+      'GRANT UPDATE (entry_id, state, withheld_entry_id, attached_by,
+         updated_by, version, attached_at, updated_at)
+       ON TABLE community.timeline_entry_posts TO %I',
+      current_setting('moya.runtime_app_role'));
+  END IF;
+END $$;

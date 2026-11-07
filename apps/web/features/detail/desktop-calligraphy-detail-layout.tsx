@@ -3,6 +3,7 @@
 import {
   useCallback,
   useContext,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -21,6 +22,7 @@ import {
   CatalogDetailReadingStrip,
   type CatalogDetailReadingStripHandle,
 } from "./catalog-detail-reading-strip";
+import { DetailBandContext } from "./detail-band";
 import { DetailInteractionsContext } from "./detail-interactions";
 import { CatalogDetailScrollContext } from "./catalog-detail-scroll";
 import type { CatalogDetailPresentation } from "./catalog-detail-presentation";
@@ -55,6 +57,8 @@ export const DesktopCalligraphyDetailLayout = ({
   const scroll = useContext(CatalogDetailScrollContext);
   const [canLike, setCanLike] = useState(false);
   const [paging, setPaging] = useState({ forward: false, backward: false });
+  // timeline-posts-v1: the band under the first screen (DetailBand).
+  const [band, setBand] = useState<HTMLDivElement | null>(null);
   const like = useRef<(() => void) | null>(null);
   const hasColophon =
     colophon !== undefined && colophon !== null && colophon !== false;
@@ -101,10 +105,27 @@ export const DesktopCalligraphyDetailLayout = ({
       node.removeEventListener("scroll", measure);
     };
   }, [detail.id, hasColophon]);
+  // timeline-posts-v1: the band fills after paint; when it grows above the
+  // reader, the reader keeps their place (CatalogDetailScrollContext.shift).
+  useEffect(() => {
+    if (band === null || typeof ResizeObserver === "undefined") return;
+    let height = band.offsetHeight;
+    let top: number | null = null;
+    const observer = new ResizeObserver(() => {
+      const next = band.offsetHeight;
+      // An empty band is not displayed and has no position of its own.
+      if (next > 0 && scroll !== null) top = scroll.collapseTop(band);
+      if (next !== height && top !== null)
+        scroll?.shift?.(top + height, next - height);
+      height = next;
+    });
+    observer.observe(band);
+    return () => observer.disconnect();
+  }, [band, scroll]);
   const reveal = useCallback(
     (node: HTMLElement | null) => {
       if (!node) return;
-      if (scroll) scroll.restore(scroll.collapseTop(node));
+      if (scroll) scroll.restore(scroll.collapseTop(node), node);
       else node.scrollIntoView?.({ block: "nearest", behavior: "auto" });
     },
     [scroll],
@@ -137,234 +158,246 @@ export const DesktopCalligraphyDetailLayout = ({
   );
   return (
     <DetailInteractionsContext.Provider value={interactions}>
-      <div
-        className={styles.layout}
-        data-desktop-calligraphy-detail=""
-        data-desktop-detail-content={
-          detail.contentType === "work" ? "work" : "catalog"
-        }
-        data-detail-text-only={textOnly ? "" : undefined}
-      >
-        <div className={styles.firstScreen} data-desktop-detail-first-screen="">
-          <div className={styles.hero} data-desktop-detail-upper="">
-            {textOnly ? null : (
-              <div
-                className={styles.mediaColumn}
-                data-desktop-detail-image-pane=""
-              >
-                <nav aria-label="书法阅读定位" className={styles.navigation}>
-                  {detail.media.length === 0 ? null : (
-                    <button
-                      aria-label="前往图片"
-                      title="图片"
-                      type="button"
-                      onClick={() => {
-                        reveal(mediaRegion.current);
-                        mediaRegion.current
-                          ?.querySelector<HTMLElement>(
-                            '[data-feed-slide][aria-hidden="false"] [data-feed-slide-image]',
-                          )
-                          ?.focus({ preventScroll: true });
-                      }}
-                    >
-                      <Icon name="image" />
-                    </button>
-                  )}
-                  <button
-                    aria-label={
-                      detail.contentType === "work" ? "前往正文" : "前往资料"
-                    }
-                    title="资料"
-                    type="button"
-                    onClick={() => informationRegion.current?.focus()}
-                  >
-                    <Icon name="category" />
-                  </button>
-                  {hasColophon ? (
-                    <button
-                      aria-controls={`${id}-colophon`}
-                      aria-label="前往题跋"
-                      title="下方题跋"
-                      type="button"
-                      onClick={onComment}
-                    >
-                      <Icon name="message" />
-                    </button>
-                  ) : null}
-                </nav>
+      <DetailBandContext.Provider value={band}>
+        <div
+          className={styles.layout}
+          data-desktop-calligraphy-detail=""
+          data-desktop-detail-content={
+            detail.contentType === "work" ? "work" : "catalog"
+          }
+          data-detail-text-only={textOnly ? "" : undefined}
+        >
+          <div
+            className={styles.firstScreen}
+            data-desktop-detail-first-screen=""
+          >
+            <div className={styles.hero} data-desktop-detail-upper="">
+              {textOnly ? null : (
                 <div
-                  className={styles.media}
-                  ref={mediaRegion}
-                  data-detail-calligraphy-media={
-                    detail.media.length ? "" : undefined
-                  }
+                  className={styles.mediaColumn}
+                  data-desktop-detail-image-pane=""
                 >
-                  {detail.media.length ? (
-                    <FeedPostStage
-                      activeMediaIndex={activeMediaIndex}
-                      burstEnabled={canLike}
-                      enableLivePlayback
-                      imageFit="contain"
-                      live={detail.media[0]?.live !== undefined}
-                      media={detail.media}
-                      onActiveMediaIndexChange={onActiveMediaIndexChange}
-                      onDoubleTap={() => like.current?.()}
-                      onOpenViewer={onOpenViewer}
-                      viewerOpen={viewerOpen}
-                    />
-                  ) : (
-                    <div
-                      className={styles.missingMedia}
-                      data-detail-media-state="missing"
+                  <nav aria-label="书法阅读定位" className={styles.navigation}>
+                    {detail.media.length === 0 ? null : (
+                      <button
+                        aria-label="前往图片"
+                        title="图片"
+                        type="button"
+                        onClick={() => {
+                          reveal(mediaRegion.current);
+                          mediaRegion.current
+                            ?.querySelector<HTMLElement>(
+                              '[data-feed-slide][aria-hidden="false"] [data-feed-slide-image]',
+                            )
+                            ?.focus({ preventScroll: true });
+                        }}
+                      >
+                        <Icon name="image" />
+                      </button>
+                    )}
+                    <button
+                      aria-label={
+                        detail.contentType === "work" ? "前往正文" : "前往资料"
+                      }
+                      title="资料"
+                      type="button"
+                      onClick={() => informationRegion.current?.focus()}
                     >
-                      <MediaFallback
-                        label={`暂无公开图像：${detail.title}`}
-                        state="missing"
+                      <Icon name="category" />
+                    </button>
+                    {hasColophon ? (
+                      <button
+                        aria-controls={`${id}-colophon`}
+                        aria-label="前往题跋"
+                        title="下方题跋"
+                        type="button"
+                        onClick={onComment}
+                      >
+                        <Icon name="message" />
+                      </button>
+                    ) : null}
+                  </nav>
+                  <div
+                    className={styles.media}
+                    ref={mediaRegion}
+                    data-detail-calligraphy-media={
+                      detail.media.length ? "" : undefined
+                    }
+                  >
+                    {detail.media.length ? (
+                      <FeedPostStage
+                        activeMediaIndex={activeMediaIndex}
+                        burstEnabled={canLike}
+                        enableLivePlayback
+                        imageFit="contain"
+                        live={detail.media[0]?.live !== undefined}
+                        media={detail.media}
+                        onActiveMediaIndexChange={onActiveMediaIndexChange}
+                        onDoubleTap={() => like.current?.()}
+                        onOpenViewer={onOpenViewer}
+                        viewerOpen={viewerOpen}
                       />
+                    ) : (
+                      <div
+                        className={styles.missingMedia}
+                        data-detail-media-state="missing"
+                      >
+                        <MediaFallback
+                          label={`暂无公开图像：${detail.title}`}
+                          state="missing"
+                        />
+                      </div>
+                    )}
+                    {detail.media.length > 1 ? (
+                      <div className={styles.imageEdges} aria-label="图像翻页">
+                        <button
+                          className={styles.previousImage}
+                          type="button"
+                          aria-label="上一张图像"
+                          title="上一张"
+                          disabled={activeMediaIndex === 0}
+                          onClick={() =>
+                            onActiveMediaIndexChange(activeMediaIndex - 1)
+                          }
+                        >
+                          <Icon name="next" />
+                        </button>
+                        <button
+                          className={styles.nextImage}
+                          type="button"
+                          aria-label="下一张图像"
+                          title="下一张"
+                          disabled={
+                            activeMediaIndex === detail.media.length - 1
+                          }
+                          onClick={() =>
+                            onActiveMediaIndexChange(activeMediaIndex + 1)
+                          }
+                        >
+                          <Icon name="back" />
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                  {detailActions === undefined ? null : (
+                    <div
+                      className={styles.actions}
+                      data-desktop-detail-actions=""
+                    >
+                      {detailActions}
                     </div>
                   )}
-                  {detail.media.length > 1 ? (
-                    <div className={styles.imageEdges} aria-label="图像翻页">
-                      <button
-                        className={styles.previousImage}
-                        type="button"
-                        aria-label="上一张图像"
-                        title="上一张"
-                        disabled={activeMediaIndex === 0}
-                        onClick={() =>
-                          onActiveMediaIndexChange(activeMediaIndex - 1)
-                        }
-                      >
-                        <Icon name="next" />
-                      </button>
-                      <button
-                        className={styles.nextImage}
-                        type="button"
-                        aria-label="下一张图像"
-                        title="下一张"
-                        disabled={activeMediaIndex === detail.media.length - 1}
-                        onClick={() =>
-                          onActiveMediaIndexChange(activeMediaIndex + 1)
-                        }
-                      >
-                        <Icon name="back" />
-                      </button>
-                    </div>
-                  ) : null}
                 </div>
-                {detailActions === undefined ? null : (
-                  <div
-                    className={styles.actions}
-                    data-desktop-detail-actions=""
-                  >
-                    {detailActions}
-                  </div>
-                )}
-              </div>
-            )}
-            <DesktopArchiveReader
-              ref={informationRegion}
-              detailId={`${detail.contentType ?? "catalog"}:${detail.id}`}
-              label={detail.contentType === "work" ? "作品资料" : "馆藏资料"}
-              positionKey={positionKey}
-              sections={archiveSections}
-            />
+              )}
+              <DesktopArchiveReader
+                ref={informationRegion}
+                detailId={`${detail.contentType ?? "catalog"}:${detail.id}`}
+                label={detail.contentType === "work" ? "作品资料" : "馆藏资料"}
+                positionKey={positionKey}
+                sections={archiveSections}
+              />
+            </div>
+            {hasColophon ? (
+              <button
+                className={styles.colophonCue}
+                data-desktop-colophon-cue=""
+                type="button"
+                aria-controls={`${id}-colophon`}
+                onClick={onComment}
+              >
+                <span>题跋</span>
+                <span className={styles.cueHint}>向下查看 · 横向阅读</span>
+                <Icon name="next" aria-hidden="true" />
+              </button>
+            ) : null}
           </div>
+          <div
+            className={styles.band}
+            data-desktop-detail-band=""
+            ref={setBand}
+          />
+          {textOnly && detailActions !== undefined ? (
+            <div className={styles.actions} data-desktop-detail-actions="">
+              {detailActions}
+            </div>
+          ) : null}
           {hasColophon ? (
-            <button
-              className={styles.colophonCue}
-              data-desktop-colophon-cue=""
-              type="button"
-              aria-controls={`${id}-colophon`}
-              onClick={onComment}
+            <section
+              className={styles.lower}
+              data-desktop-detail-colophon=""
+              ref={lowerRegion}
+              aria-label="题跋阅读区"
             >
-              <span>题跋</span>
-              <span className={styles.cueHint}>向下查看 · 横向阅读</span>
-              <Icon name="next" aria-hidden="true" />
-            </button>
+              <header className={styles.colophonHeader}>
+                <div>
+                  <h2>题跋</h2>
+                  <p>从右向左，横向阅读</p>
+                </div>
+                <nav aria-label="题跋横向翻页">
+                  <button
+                    type="button"
+                    aria-label="向右读题跋"
+                    disabled={!paging.backward}
+                    title="向右"
+                    aria-controls={`${id}-colophon`}
+                    onClick={() => lower.current?.scrollByPage("backward")}
+                  >
+                    <Icon name="next" />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="向左读题跋"
+                    disabled={!paging.forward}
+                    title="向左"
+                    aria-controls={`${id}-colophon`}
+                    onClick={() => lower.current?.scrollByPage("forward")}
+                  >
+                    <Icon name="back" />
+                  </button>
+                </nav>
+              </header>
+              <CatalogDetailReadingStrip
+                ref={lower}
+                colophon={colophon}
+                detailId={detail.id}
+                id={`${id}-colophon`}
+                information={null}
+                label="题跋"
+                onRevealReading={revealComments}
+                positionKey={
+                  positionKey === undefined
+                    ? undefined
+                    : `${positionKey}:colophon`
+                }
+                variant="desktop-comments"
+              />
+              <button
+                aria-label="写题跋"
+                className={styles.compose}
+                onClick={() => {
+                  revealComments();
+                  const input =
+                    lowerRegion.current?.querySelector<HTMLTextAreaElement>(
+                      "[data-colophon-input-box]",
+                    );
+                  input?.focus();
+                  // The empty reader grows in response to focus. Its old scroll
+                  // range may clamp the first reveal; align again after layout.
+                  requestAnimationFrame(() => {
+                    if (input && document.activeElement === input)
+                      revealComments();
+                  });
+                }}
+                title="写题跋"
+                type="button"
+              >
+                <Icon name="edit" />
+                <span>写题跋</span>
+              </button>
+            </section>
           ) : null}
         </div>
-        {textOnly && detailActions !== undefined ? (
-          <div className={styles.actions} data-desktop-detail-actions="">
-            {detailActions}
-          </div>
-        ) : null}
-        {hasColophon ? (
-          <section
-            className={styles.lower}
-            data-desktop-detail-colophon=""
-            ref={lowerRegion}
-            aria-label="题跋阅读区"
-          >
-            <header className={styles.colophonHeader}>
-              <div>
-                <h2>题跋</h2>
-                <p>从右向左，横向阅读</p>
-              </div>
-              <nav aria-label="题跋横向翻页">
-                <button
-                  type="button"
-                  aria-label="向右读题跋"
-                  disabled={!paging.backward}
-                  title="向右"
-                  aria-controls={`${id}-colophon`}
-                  onClick={() => lower.current?.scrollByPage("backward")}
-                >
-                  <Icon name="next" />
-                </button>
-                <button
-                  type="button"
-                  aria-label="向左读题跋"
-                  disabled={!paging.forward}
-                  title="向左"
-                  aria-controls={`${id}-colophon`}
-                  onClick={() => lower.current?.scrollByPage("forward")}
-                >
-                  <Icon name="back" />
-                </button>
-              </nav>
-            </header>
-            <CatalogDetailReadingStrip
-              ref={lower}
-              colophon={colophon}
-              detailId={detail.id}
-              id={`${id}-colophon`}
-              information={null}
-              label="题跋"
-              onRevealReading={revealComments}
-              positionKey={
-                positionKey === undefined
-                  ? undefined
-                  : `${positionKey}:colophon`
-              }
-              variant="desktop-comments"
-            />
-            <button
-              aria-label="写题跋"
-              className={styles.compose}
-              onClick={() => {
-                revealComments();
-                const input =
-                  lowerRegion.current?.querySelector<HTMLTextAreaElement>(
-                    "[data-colophon-input-box]",
-                  );
-                input?.focus();
-                // The empty reader grows in response to focus. Its old scroll
-                // range may clamp the first reveal; align again after layout.
-                requestAnimationFrame(() => {
-                  if (input && document.activeElement === input)
-                    revealComments();
-                });
-              }}
-              title="写题跋"
-              type="button"
-            >
-              <Icon name="edit" />
-              <span>写题跋</span>
-            </button>
-          </section>
-        ) : null}
-      </div>
+      </DetailBandContext.Provider>
     </DetailInteractionsContext.Provider>
   );
 };
