@@ -22,6 +22,8 @@ import {
 import { MappedStorageUrlResolver } from "@moya/image";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { TIMELINE_CHAPTERS } from "../../../apps/web/features/home/timeline/timeline-model";
+
 import { InMemoryCommunityCommentPort } from "./community-comment-fixture.js";
 import { InMemoryCommunityIdentityPort } from "./community-identity-fixture.js";
 
@@ -383,6 +385,17 @@ describe("the timeline operator read", () => {
     expect(summary.entries.total).toBe(0);
     expect(summary.limits.responseBytes).toBe(2);
     expect(summary.lastUpdatedAt).toBeNull();
+  });
+
+  it("keeps the Web's chapter table on the shared chapter spans", () => {
+    expect(
+      Object.fromEntries(
+        TIMELINE_CHAPTERS.map(({ chapter, startYear, endYear }) => [
+          chapter,
+          [startYear, endYear],
+        ]),
+      ),
+    ).toEqual(TIMELINE_CHAPTER_SPANS);
   });
 
   it("places a start year in its chapter by the shared chapter spans", async () => {

@@ -5,8 +5,6 @@ import {
   formatYearRange,
 } from "./timeline-format";
 
-import { TIMELINE_CHAPTER_SPANS } from "@moya/contracts/schemas";
-
 import type { TimelineChapter, TimelineEntry } from "@moya/contracts";
 
 /*
@@ -29,6 +27,8 @@ export interface TimelineChapterInfo {
 
 const chapterInfo = (
   chapter: TimelineChapter,
+  startYear: number,
+  endYear: number | null,
   display: {
     readonly name?: string;
     readonly shortName?: string;
@@ -38,35 +38,35 @@ const chapterInfo = (
   chapter,
   name: display.name ?? chapter,
   shortName: display.shortName ?? chapter,
-  startYear: TIMELINE_CHAPTER_SPANS[chapter][0],
-  endYear: TIMELINE_CHAPTER_SPANS[chapter][1],
+  startYear,
+  endYear,
   note: display.note ?? null,
 });
 
 export const TIMELINE_CHAPTERS: readonly TimelineChapterInfo[] = [
-  chapterInfo("商", {
+  chapterInfo("商", -1250, -1046, {
     name: "晚商",
     shortName: "晚商",
     note: "甲骨文与金文并见",
   }),
-  chapterInfo("西周", { note: "金文鼎盛" }),
-  chapterInfo("春秋"),
-  chapterInfo("战国"),
-  chapterInfo("秦"),
-  chapterInfo("西汉", { name: "西汉 · 新莽" }),
-  chapterInfo("东汉"),
-  chapterInfo("三国"),
-  chapterInfo("两晋"),
-  chapterInfo("南北朝"),
-  chapterInfo("隋"),
-  chapterInfo("唐"),
-  chapterInfo("五代十国"),
-  chapterInfo("宋辽金夏"),
-  chapterInfo("元"),
-  chapterInfo("明"),
-  chapterInfo("清"),
-  chapterInfo("民国"),
-  chapterInfo("当代"),
+  chapterInfo("西周", -1046, -771, { note: "金文鼎盛" }),
+  chapterInfo("春秋", -770, -476),
+  chapterInfo("战国", -475, -221),
+  chapterInfo("秦", -221, -207),
+  chapterInfo("西汉", -206, 23, { name: "西汉 · 新莽" }),
+  chapterInfo("东汉", 25, 220),
+  chapterInfo("三国", 220, 280),
+  chapterInfo("两晋", 265, 420),
+  chapterInfo("南北朝", 420, 589),
+  chapterInfo("隋", 581, 618),
+  chapterInfo("唐", 618, 907),
+  chapterInfo("五代十国", 907, 979),
+  chapterInfo("宋辽金夏", 960, 1279),
+  chapterInfo("元", 1271, 1368),
+  chapterInfo("明", 1368, 1644),
+  chapterInfo("清", 1644, 1911),
+  chapterInfo("民国", 1912, 1949),
+  chapterInfo("当代", 1949, null),
 ];
 
 const chapterInfoByName = new Map(

@@ -1503,9 +1503,11 @@ export const timelineChapterSchema = z.enum([
 ]);
 
 /**
- * Each chapter's span of start years, shared by the Web's chapter table and
- * the operator read's chapter check. Open-ended only for 当代. Chapters overlap
- * where the dynasties do, so a row is out of place only outside its own span.
+ * Each chapter's span of start years, for the operator read's chapter check.
+ * Open-ended only for 当代. Chapters overlap where the dynasties do, so a row is
+ * out of place only outside its own span. Frontend code may not import runtime
+ * contracts, so the Web's chapter table holds the same spans and a unit test
+ * (tests/unit/backend/timeline-operator-http.test.ts) keeps the two equal.
  */
 export const TIMELINE_CHAPTER_SPANS: Readonly<
   Record<
