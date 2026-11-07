@@ -1,7 +1,8 @@
 # Owner Amendment — Home timeline under Admin MCP
 
-- Status: Owner direction recorded 2026-11-06; signature requested at merge.
-- Effective date: on Owner signature, at the merge of PR #389.
+- Status: Signed by the Owner on 2026-11-07 (「签，B，是」: the signature, the
+  pre-import data option and the release authority, answered together).
+- Effective date: at the merge of PR #389.
 - Authority: Owner instruction of 2026-11-06, quoted in section 1, recorded as
   Issue #384 r3 (`home-timeline-v1`).
 - Applies to: Backend, Admin and the timeline import, in Development and

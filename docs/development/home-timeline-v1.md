@@ -273,13 +273,17 @@ presentation change. r3 changes no presentation: the public read only leaves out
 hidden rows. The Owner's device acceptance of r2 therefore carries forward, and
 the review checks that the Web is unchanged. r3 adds a migration delta and
 grants, so the PR stays Draft until an independent review of the exact head, and
-the Owner signs the amendment at merge.
+the Owner signs the amendment at merge (signed on 2026-11-07).
 
-Production release, migration and import are separate Owner gates. Before them,
-the Owner still has to review the lower-confidence dates in the private dataset.
-The import file stays in the private task directory, never in Git, the Web
-bundle or the Issue. Development and tests use synthetic rows, so the private
-dataset never goes through MCP before the Production import.
+Production release, migration and import are separate Owner gates. For the
+lower-confidence dates the Owner chose on 2026-11-07 to move every row
+rated考证（中） with a single year off the axis to its chapter's shelf before
+the import, to drop one entry that duplicates a live Catalog record, and to have
+the AI re-check those rows through the Admin MCP after launch, putting each back
+on the axis once its date is confirmed. The import file stays in the private
+task directory, never in Git, the Web bundle or the Issue. Development and tests
+use synthetic rows, so the private dataset never goes through MCP before the
+Production import.
 
 The contract change means Web, Backend and Admin ship together; a Web-only
 release cannot carry it. `main` is ahead of the last Production tag, so the

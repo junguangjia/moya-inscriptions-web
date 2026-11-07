@@ -49,7 +49,7 @@ The active amendments are:
 - [`2026-10-04 unified media pipeline`](docs/governance/amendments/2026-10-04-unified-media-pipeline.md)
 - [`2026-11-03 Admin MCP completion`](docs/governance/amendments/2026-11-03-admin-mcp-completion.md)
 - [`2026-11-05 Admin MCP login door (signed under delegation)`](docs/governance/amendments/2026-11-05-admin-mcp-oauth-door.md)
-- [`2026-11-06 Home timeline under Admin MCP (signature requested at merge)`](docs/governance/amendments/2026-11-06-home-timeline-admin-mcp.md)
+- [`2026-11-06 Home timeline under Admin MCP`](docs/governance/amendments/2026-11-06-home-timeline-admin-mcp.md)
 
 No lower-level prompt, Plan, implementation decision, PR description, inferred
 best practice, or code comment may relax or override a higher authority.
