@@ -1675,7 +1675,8 @@ export class PublishingRuntime {
     }
     // timeline-posts-v1: 关联词条 rides in the draft content but is a
     // property of the submission, never of the submitted content; only a new
-    // work names it (a published one attaches from its own page).
+    // work names it (a published one attaches from its own page), and never
+    // a post from a Thread's quick composer.
     const { timelineEntryId, ...submitted } =
       current as WorkSubmissionContent & { readonly timelineEntryId?: string };
     const result = await controller.submit({
@@ -1685,7 +1686,9 @@ export class PublishingRuntime {
       ...(session.view.threadId === null
         ? {}
         : { threadId: session.view.threadId }),
-      ...(timelineEntryId === undefined || session.view.workId !== null
+      ...(timelineEntryId === undefined ||
+      session.view.workId !== null ||
+      session.view.threadId !== null
         ? {}
         : { timelineEntryId }),
     });

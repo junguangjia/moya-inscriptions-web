@@ -307,13 +307,20 @@ export class AuthorCommunityService {
   /**
    * timeline-posts-v1: the timeline row of a work or a Catalog record. A
    * target the viewer may not see is not found, as its card and state are.
+   * A work follows the posts list's own rule (workVisibleTo): its author
+   * reads the row of an own work that list shows them, one an operator hid
+   * or removed included, so they can take it off; a third party only while
+   * the work is public, as its card.
    */
   async contentTimelineEntry(
     target: ContentIdentity,
     viewer: string | null,
   ): Promise<ContentTimelineEntry> {
     if (!this.timelinePostsPort) throw new CommunityNotFoundError();
-    await this.assertTarget(target, viewer);
+    if (target.type === "work") {
+      const work = await this.port.readWork(target.id, viewer);
+      if (!work.available && !work.canEdit) throw new CommunityNotFoundError();
+    } else await this.assertTarget(target, viewer);
     return mapContentTimelineEntry(
       await this.timelinePostsPort.timelineEntryOf(target, viewer),
     );

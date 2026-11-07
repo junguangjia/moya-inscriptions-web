@@ -189,6 +189,40 @@ describe("an entry's posts", () => {
     expect(actions.openWork).toHaveBeenCalledWith(workId(1), cells[0]);
   });
 
+  it("marks the author's own posts that others cannot see, with the profile works grid's mark", async () => {
+    data.readTimelinePosts.mockResolvedValue(
+      page(
+        [
+          work(1, { visibility: "public", publiclyVisible: true }),
+          work(2, { visibility: "self", publiclyVisible: false }),
+          // A first public submission still pending, or one taken down.
+          work(3, { visibility: "public", publiclyVisible: false }),
+          // Another author's post carries no author-only fields.
+          work(4, { authorId: `user-${"b".repeat(32)}`, canEdit: false }),
+        ],
+        4,
+      ),
+    );
+    render();
+    await flush();
+    const cell = (n: number) =>
+      container.querySelector(`[data-timeline-post="${workId(n)}"]`)!;
+    expect(
+      [1, 2, 3, 4].map(
+        (n) =>
+          cell(n).querySelector("[data-timeline-post-audience]")?.textContent ??
+          null,
+      ),
+    ).toEqual([null, "仅自己可见", "暂不公开", null]);
+    expect(cell(2).getAttribute("aria-label")).toBe("访碑记2，仅自己可见");
+    expect(
+      cell(2)
+        .querySelector("[data-timeline-post-audience]")
+        ?.getAttribute("title"),
+    ).toBe("此作品当前仅你可见。");
+    expect(cell(1).getAttribute("aria-label")).toBe("访碑记1");
+  });
+
   it("says a failed read in its own words and reads again on 重试", async () => {
     data.readTimelinePosts.mockRejectedValueOnce(new Error("offline"));
     render();
@@ -232,6 +266,61 @@ describe("「关联我发过的帖子」", () => {
     expect(actions.signIn).toHaveBeenCalledWith(attach);
     expect(query("[data-timeline-attach-picker]")).toBeNull();
     expect(data.readOwnWorks).not.toHaveBeenCalled();
+  });
+
+  it("keeps the focus in the section: on the list's title when it opens, through the move question, and back on its button when it closes", async () => {
+    render();
+    await flush();
+    const opener = () => query("[data-timeline-attach]") as HTMLButtonElement;
+    opener().focus();
+    click(opener());
+    await flush();
+    expect(document.activeElement).toBe(
+      query("[data-timeline-attach-picker] h3"),
+    );
+    // 取消 closes it: the focus is not dropped to the page.
+    const cancel = button("取消")!;
+    cancel.focus();
+    click(cancel);
+    expect(query("[data-timeline-attach-picker]")).toBeNull();
+    expect(document.activeElement).toBe(opener());
+
+    // The 「已在」 question takes the focus, and its 取消 gives it to 关联.
+    click(opener());
+    await flush();
+    data.readContentTimelineEntry.mockResolvedValueOnce({
+      id: "row-other",
+      title: "虚构东碑",
+      fullTitle: "唐虚构东碑",
+    });
+    click(query(`[data-timeline-attach-work="${workId(1)}"]`));
+    const confirm = () =>
+      query("[data-timeline-attach-confirm]") as HTMLButtonElement;
+    confirm().focus();
+    click(confirm());
+    await flush();
+    expect(document.activeElement).toBe(
+      query("[data-timeline-attach-move] [role='status']"),
+    );
+    const back = [
+      ...query("[data-timeline-attach-move]")!.querySelectorAll("button"),
+    ].find((candidate) => candidate.textContent === "取消")!;
+    back.focus();
+    click(back);
+    expect(document.activeElement).toBe(confirm());
+
+    // An attachment closes the list and gives the focus back to its button.
+    data.readContentTimelineEntry.mockResolvedValueOnce(null);
+    data.setWorkTimelineEntry.mockResolvedValue({
+      workId: workId(2),
+      entryId: "row-yongping",
+      version: 1,
+    });
+    click(query(`[data-timeline-attach-work="${workId(2)}"]`));
+    click(confirm());
+    await flush();
+    expect(query("[data-timeline-attach-picker]")).toBeNull();
+    expect(document.activeElement).toBe(opener());
   });
 
   it("attaches a chosen work at once and reads the posts again", async () => {

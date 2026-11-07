@@ -5,6 +5,7 @@ import {
   editorLocation,
   parseEditorTarget,
   parseProductHistoryState,
+  sameEditorTarget,
 } from "./product-history";
 
 describe("a new work's 关联词条 in the editor target (timeline-posts-v1)", () => {
@@ -40,6 +41,31 @@ describe("a new work's 关联词条 in the editor target (timeline-posts-v1)", (
         timelineEntryId: "row-1",
       }),
     ).toEqual({ type: "draft", id: `work-draft-${"1".repeat(32)}` });
+  });
+
+  it("tells a new target with a tapped entry or a Thread from a plain one, so the editor can replace a spent tap", () => {
+    const plain = { type: "new" as const };
+    const tapped = { type: "new" as const, timelineEntryId: "row-yongping" };
+    const thread = {
+      type: "new" as const,
+      threadId: `thread-${"3".repeat(32)}`,
+    };
+    expect(sameEditorTarget(plain, { type: "new" })).toBe(true);
+    expect(sameEditorTarget(tapped, { ...tapped })).toBe(true);
+    expect(sameEditorTarget(thread, { ...thread })).toBe(true);
+    expect(sameEditorTarget(tapped, plain)).toBe(false);
+    expect(sameEditorTarget(plain, tapped)).toBe(false);
+    expect(sameEditorTarget(tapped, thread)).toBe(false);
+    expect(
+      sameEditorTarget(tapped, { type: "new", timelineEntryId: "row-1" }),
+    ).toBe(false);
+    // Drafts and works still compare by id alone.
+    const draft = {
+      type: "draft" as const,
+      id: `work-draft-${"1".repeat(32)}`,
+    };
+    expect(sameEditorTarget(draft, { ...draft })).toBe(true);
+    expect(sameEditorTarget(draft, plain)).toBe(false);
   });
 
   it("travels in private history only: the link stays the plain #editor", () => {

@@ -428,14 +428,30 @@ comes from new routes, so no existing strict response gains a field.
   caption「发布后会出现在这个词条下。」, which is also the empty state. Below
   it, the entry's posts as a 3-column grid of square covers, newest attachment
   first: 6, then 「全部 N 篇」, then pages of 18 in the same sheet. A tap opens
-  Work Detail. A failed read shows 「帖子载入失败」 and 重试. Under the
-  grid,「关联我发过的帖子」 lists the reader's own works to pick one. A work
-  already on another entry asks 「已在：X。改为关联到「Y」？」 before it moves.
+  Work Detail. The author's own posts that others cannot see carry the profile
+  works grid's mark on their cover: 仅自己可见 for a self-only
+  work, 暂不公开 for a pending, hidden or removed one. A failed read
+  shows 「帖子载入失败」and 重试. Under the grid,「关联我发过的帖子」 lists the
+  reader's own works to pick one. Each pick is checked on its own when it is
+  chosen, through `content/work/{id}/timeline-entry`: a work already on another
+  entry asks「已在：X。改为关联到「Y」？」 before it moves, and a work already
+  on this entry writes nothing. There is no batch route, so the list itself
+  shows no「已在」 mark.
 - **Upload.** 「上传这件碑帖」 closes the card and opens a new-work editor
   with 关联词条 set to that entry. 作品性质 is not chosen for the author. A
   guest reaches sign-in, and a browse-only layout shows no upload or attach
-  button. An unfinished new-work session opens as it was, with its own 关联词条,
-  as it does for a Thread.
+  button. When an unfinished new-work session exists, the editor opens that
+  session and the tapped entry wins: it becomes the session's 关联词条 as an
+  author edit, saved like any other choice, and the rest of the draft stays as
+  it was. The same holds for 「上传这件碑帖」 in Catalog Detail and in the card
+  that 收录于 opens. The tap is spent once it is applied: the editor's history
+  entry and the session's own target drop the entry, so a reload (a phone tab
+  the browser restored included), Back then Forward, or 返回正在编辑的作品 never
+  applies it again over the author's later choice. An unfinished Thread quick
+  composer post (参与话题) takes no entry, so a tap that finds one
+  shows「还有一项编辑没有结束」, as any other open edit does: the author returns
+  to that post as it was, or saves and ends it first. The entry is never dropped
+  unseen.
 - **Catalog Detail.** A record that a visible row links shows a 帖子 section
   built from the same parts, in every Detail layout, loaded after the Detail has
   painted. A record with no such row shows nothing.
@@ -444,12 +460,16 @@ comes from new routes, so no existing strict response gains a field.
   searches the cached timeline locally (every word must match, 50 results at
   most) and takes one entry; 不关联词条 clears it. The choice is saved,
   autosaved and restored with the draft. Editing a published work shows no such
-  row.
+  row, and neither does the Thread quick composer (参与话题): a post written
+  there never sends `timelineEntryId`.
 - **Work Detail.** The author's management menu gains 关联词条, the same picker,
   which takes effect at once. A work on a visible entry
   shows 「收录于 · 题名」under its title for everyone, read after the Detail has
   painted; a tap opens that entry's card, and only that tap reads the whole
-  timeline.
+  timeline. The picker opens with the focus on its search; closing it without a
+  change gives the focus back to 关联词条, and a change to the result line. The
+  same holds for the desktop text settings' picker (back to 选择词条 or 更改)
+  and for 「关联我发过的帖子」, whose list takes the focus on its title.
 - **Rows.** On phone, 「N 篇帖子」 takes the place of 保管 at the end of the
   meta line. On tablet and wide, a small count follows the name inside its
   two-line clamp, and the row-height estimate includes it. 0 shows nothing.
@@ -460,10 +480,13 @@ Who sees which posts follows the shared Work read rule (`workVisibleTo` in
 `services/community-postgres/src/work-dto.ts`): public works for everyone, and
 the viewer's own self-only, pending or removed works outside the recycle bin.
 One predicate serves the list, the counts and a work's entry, so a row's count
-always equals that viewer's list, blocks included. A work that becomes hidden,
-removed, trashed or deleted, or whose author is suspended, leaves at the next
-read with no write. A hidden entry's posts leave with it, and come back when it
-is shown again.
+always equals that viewer's list, blocks included. The entry route checks the
+Work read first by the same rule: a third party asks only about a public work,
+and an author about an own work the list shows them, one an operator hid or
+removed included, so Work Detail can take a hidden one off its entry. A work
+that becomes hidden, removed, trashed or deleted, or whose author is suspended,
+leaves at the next read with no write. A hidden entry's posts leave with it, and
+come back when it is shown again.
 
 ### The table
 
@@ -476,16 +499,33 @@ and no row is deleted. Every change raises the version, so an operator's
 compare-and-set sees an author's change too.
 
 An author takes a post off by detaching it. An operator takes one off by
-withholding it: its author can then attach it to any other entry, but not back
-to the one it was withheld from. Only the most recent withhold is remembered. An
+withholding it, and the row records the entry it was withheld from
+(`withheld_entry_id`). That record blocks an author re-attach to that entry
+only: the author answers `timeline_entry_withheld` there, and may attach the
+post to any other entry. Only the most recent withhold is remembered. An
 operator attach to that entry lifts the withhold, and an author's detach of a
 withheld post keeps it withheld.
 
+A work's permanent deletion detaches its attached row in the same transaction:
+by its author, by the purge of a deleted account, or by the recycle bin's purge
+when its retention ends. The row turns `detached`, with no entry, its version
+raised and `updated_by` `author`. An erased post therefore never shows, never
+counts and never holds an import back. A detached or withheld row stays as it
+is. The two purges run in the media worker in Production. This release leaves
+the worker on its current build, so there they detach only once the worker runs
+this code; until then such a row stays attached, never shows or counts, and the
+import refusal counts it.
+
 Every writer locks in one order: the work `FOR UPDATE`, then the entry
-`FOR SHARE` while it is visible, then the post row. The entry lock holds off an
-operator hiding the entry, and the import replacing it, until the write ends. An
-attach that races an import may find its entry gone and answers
-`timeline_entry_unavailable`; the Web offers a retry.
+`FOR SHARE` while it is visible, then the post row. Operator writes and the
+import also hold the shared content-operator lock, so they never overlap each
+other. The entry lock holds off an operator hiding the entry, and the import
+replacing it, until the write ends; the import then sees the attach, and refuses
+a file that drops its entry. An attach that waited for an import locks its entry
+again once the import has committed, so it ends as if it had started after the
+import: on the row that replaced its entry, or with `timeline_entry_unavailable`
+when the file dropped it. No pair of writers deadlocks: PG16 tests race an
+author attach with an operator write, and with the import, in both orders.
 
 ### Public routes
 
@@ -549,12 +589,12 @@ route, `POST /api/community-moderation/<route>`.
   work by an active author to a visible row, or moves it there; an operator
   attach of the row the post was withheld from lifts that withhold.
   `entryId: null` takes the post off; with `state: "withheld"` its author also
-  cannot attach it to that row again. A wrong version answers 409
-  `STATE_CONFLICT`. A refusal answers 422 with `WORK_NOT_PUBLIC`,
-  `ENTRY_UNAVAILABLE` or `POST_NOT_ATTACHED`, and changes and records nothing. A
-  request for what is already true writes no event and answers AI `ALREADY_SET`.
-  An AI write on a self-only work answers `SELF_ONLY_OWNER_REVIEW` before it
-  runs.
+  cannot attach it to that row again, and may attach it to any other. A wrong
+  version answers 409 `STATE_CONFLICT`. A refusal answers 422 with
+  `WORK_NOT_PUBLIC`, `ENTRY_UNAVAILABLE` or `POST_NOT_ATTACHED`, and changes and
+  records nothing. A request for what is already true writes no event and
+  answers AI `ALREADY_SET`. An AI write on a self-only work answers
+  `SELF_ONLY_OWNER_REVIEW` before it runs.
 
 Each write runs in the timeline's receipted command: the AI's lock wait limit,
 the shared content-operator lock, one `content_operator_events` row with action
@@ -587,8 +627,10 @@ without the table: `SELECT`; `INSERT` on `work_id`, `entry_id`, `attached_by`,
 their defaults and stored times come from the Backend's clock; `UPDATE` on every
 column except `work_id`; and no `DELETE` or `TRUNCATE`. It first revokes any
 table-level `INSERT` or `UPDATE`, so a re-run converges on the column grants.
-The App role is shared with the operator bridge and the worker, so they could
-write these columns too.
+The App role is shared with the operator bridge and the media worker. Once the
+worker runs this code it writes these columns in one place: the account purge
+and the recycle bin's purge detach a deleted work's row, with the same update as
+an author's deletion.
 
 App-role preflight for timeline posts, read-only, after the grants. Every column
 must be true:
@@ -622,13 +664,15 @@ nothing: keep the row, or take its posts off first. `--replace-operator-edits`
 does not override it. The check runs after the replacement, inside the import's
 transaction, where it holds every replaced row, so no author attach can land on
 a dropped id before it ends. Posts that are detached or withheld name no entry
-and never hold an import back. On a database without the posts table the import
-skips the check; `TIMELINE_MIGRATION_ID` stays the same.
+and never hold an import back, and neither does an erased post, whose erasure
+detached it. On a database without the posts table the import skips the check;
+`TIMELINE_MIGRATION_ID` stays the same.
 
 ### Release order
 
-One release carries Backend, Admin and Web; the worker and the issuer are
-unchanged.
+One release carries Backend, Admin and Web; the issuer and the media worker are
+unchanged. The worker's two purges detach a deleted work's post once the worker
+runs this code, at its next release (see the table above).
 
 1. **Migrate.** `pnpm db:migrate:community` applies
    `20261107010000_timeline_entry_posts.sql` with the migration authority. The
@@ -655,8 +699,39 @@ posts starts with step 4.
 
 An older Web tab keeps working on every existing response. It cannot open a
 draft that a newer tab saved with an entry, because the draft schema is strict,
-until it reloads; the release notes say so. To roll back, return the runtimes to
-the previous release; the new table is additive and stays unused.
+until it reloads; the release notes say so.
+
+**Rollback.** The new table is additive: the previous release starts with it and
+leaves it unused, and the attachments stay. Stored drafts are not: the previous
+Backend parses draft content strictly, so a draft saved with 关联词条, and the
+history of any draft or edit whose lineage holds such a snapshot (a work
+published from that draft included), would fail to open. Before the runtimes
+(Backend, Admin and Web) return to the previous release, take the key out of
+stored drafts and their history, once, with the setup role, in one transaction.
+Those drafts lose their chosen entry; the author picks it again.
+
+```sql
+UPDATE community.work_drafts
+SET content = content - 'timelineEntryId',
+  content_sha256 = encode(sha256(convert_to((content - 'timelineEntryId')::text, 'UTF8')), 'hex')
+WHERE content ? 'timelineEntryId';
+UPDATE community.work_draft_snapshots
+SET content = content - 'timelineEntryId'
+WHERE content ? 'timelineEntryId';
+```
+
+The previous release does not detach a deleted work's post. A work deleted while
+it runs, by its author, an account purge or the recycle bin's purge, keeps its
+row attached, and an import that drops that entry is refused for it. Once this
+release runs again, detach those rows once, with the setup role:
+
+```sql
+UPDATE community.timeline_entry_posts p
+SET state = 'detached', entry_id = NULL, updated_by = 'author',
+  version = p.version + 1, updated_at = now()
+FROM community.works w
+WHERE w.id = p.work_id AND p.state = 'attached' AND w.deleted_at IS NOT NULL;
+```
 
 ### Not built, and why
 
@@ -665,8 +740,9 @@ the previous release; the new table is additive and stays unused.
 - **Review of each attachment before it shows** (D3 options B and C): a new
   queue op.
 - **Telling an author about a withhold.** The author sees 收录于 disappear.
-- **An 「已在：某词条」 mark in the list of my works.** It needs a batch read of
-  which entry each work is on. The picker asks when a work is picked instead.
+- **A batch route for an 「已在：某词条」 mark in the list of my works.** Not
+  built, by decision: the picker checks each pick when it is chosen and asks
+  before a move.
 - **Counts on group members and shelf entries.** The design did not draw them.
 - **Every withheld entry.** The row keeps only the latest.
 - **A `timeline_post` record type for `admin_find` and `admin_get`.** After the

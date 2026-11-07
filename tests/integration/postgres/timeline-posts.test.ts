@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import {
+  AuthorCommunityService,
   CommunityConflictError,
   CommunityIdempotencyConflictError,
   CommunityInputError,
@@ -15,6 +16,7 @@ import {
   parsePostgresConfig,
 } from "@moya/catalog-postgres";
 import {
+  PostgresAuthorCommunityAdapter,
   PostgresTimelineOperatorAdapter,
   PostgresTimelinePostsAdapter,
   PostgresWorkPublishingAdapter,
@@ -38,6 +40,7 @@ import {
   requireSyntheticTestDatabaseUrl,
 } from "./synthetic-test-database.js";
 
+import type { CatalogPublicationPort } from "@moya/api";
 import type {
   WorkDraftContent,
   WorkSubmissionCommand,
@@ -382,24 +385,24 @@ describe("the deferred entry key", () => {
   });
 });
 
-describe("the timeline import with attached posts", () => {
-  /** The stored set as an import file, so a case replaces only what it says. */
-  const storedFile = async (): Promise<ImportEntry[]> =>
-    (
-      await setup.query<ImportEntry>(
-        `SELECT entry_id AS id,title,full_title AS "fullTitle",start_year AS "startYear",end_year AS "endYear",precision,
-           date_label AS "dateLabel",on_axis AS "onAxis",chapter,polity,disputed,group_id AS "groupId",group_title AS "groupTitle",
-           province,holder,catalog_id AS "catalogId",position
-         FROM community.timeline_entries ORDER BY start_year,position,entry_id`,
-      )
-    ).rows;
-  const storedIds = async () =>
-    (
-      await setup.query<{ entry_id: string; version: number }>(
-        "SELECT entry_id,version FROM community.timeline_entries ORDER BY entry_id",
-      )
-    ).rows;
+/** The stored set as an import file, so a case replaces only what it says. */
+const storedFile = async (): Promise<ImportEntry[]> =>
+  (
+    await setup.query<ImportEntry>(
+      `SELECT entry_id AS id,title,full_title AS "fullTitle",start_year AS "startYear",end_year AS "endYear",precision,
+         date_label AS "dateLabel",on_axis AS "onAxis",chapter,polity,disputed,group_id AS "groupId",group_title AS "groupTitle",
+         province,holder,catalog_id AS "catalogId",position
+       FROM community.timeline_entries ORDER BY start_year,position,entry_id`,
+    )
+  ).rows;
+const storedIds = async () =>
+  (
+    await setup.query<{ entry_id: string; version: number }>(
+      "SELECT entry_id,version FROM community.timeline_entries ORDER BY entry_id",
+    )
+  ).rows;
 
+describe("the timeline import with attached posts", () => {
   it("keeps the posts of every id it keeps, and refuses with counts only a file dropping a row that holds posts", async () => {
     const author = await user();
     const kept = await entry();
@@ -462,6 +465,114 @@ describe("the timeline import with attached posts", () => {
       entry_id: null,
       withheld_entry_id: row,
     });
+  });
+
+  it("never counts an erased post: the author's deletion and the account purge take it off its row", async () => {
+    const author = await user();
+    const purgedAuthor = await user();
+    const row = await entry();
+    const deleted = await publish(author, { entryId: row });
+    const withheld = await publish(author, { entryId: row });
+    const purged = await publish(purgedAuthor, { entryId: row });
+    await setup.query(
+      "UPDATE community.timeline_entry_posts SET state='withheld',entry_id=NULL,withheld_entry_id=$2,updated_by='owner',version=version+1,updated_at=now() WHERE work_id=$1",
+      [withheld, row],
+    );
+    // The author's own permanent deletion.
+    await publishing().deleteWork(
+      author,
+      deleted,
+      { requestId: randomUUID() },
+      clock(),
+    );
+    await publishing().deleteWork(
+      author,
+      withheld,
+      { requestId: randomUUID() },
+      clock(),
+    );
+    // A deleted account's purge erases through the same primitive.
+    await setup.query(
+      "UPDATE community.public_users SET status='deleted' WHERE id=$1",
+      [purgedAuthor],
+    );
+    await setup.query(
+      "INSERT INTO community.account_deletions(user_id,request_key_hash,session_id,deleted_at) VALUES($1,$2,$3,$4)",
+      [purgedAuthor, hex(32), `session-${hex(16)}`, clock()],
+    );
+    expect(
+      (await publishing().purgeDeletedAccount(purgedAuthor, clock())).status,
+    ).toBe("purged");
+    for (const work of [deleted, purged])
+      expect(await association(work)).toMatchObject({
+        entry_id: null,
+        state: "detached",
+        withheld_entry_id: null,
+        attached_by: "author",
+        updated_by: "author",
+        version: 2,
+      });
+    // A withheld row names no entry already and keeps the operator's record.
+    expect(await association(withheld)).toMatchObject({
+      entry_id: null,
+      state: "withheld",
+      withheld_entry_id: row,
+      updated_by: "owner",
+      version: 2,
+    });
+    // So a file dropping the row is not refused for erased posts.
+    await importScript.applyImport(
+      setup,
+      (await storedFile()).filter(({ id }) => id !== row),
+      { replaceOperatorEdits: true },
+    );
+    expect((await storedIds()).map(({ entry_id }) => entry_id)).not.toContain(
+      row,
+    );
+  });
+
+  it("never counts a post the recycle bin purged: the trash purge takes it off its row", async () => {
+    const author = await user();
+    const row = await entry();
+    const purged = await publish(author, { entryId: row });
+    const kept = await publish(author, { entryId: row });
+    // In the recycle bin past its retention, as the trash retention finds it.
+    await setup.query(
+      "UPDATE community.works SET trashed_at=$2::timestamptz,trash_purge_after=$3::timestamptz WHERE id=$1",
+      [purged, new Date(Date.UTC(2026, 8, 1)), new Date(Date.UTC(2026, 9, 1))],
+    );
+    expect(await publishing().purgeTrashedWork(purged, clock())).toBe("purged");
+    expect(await association(purged)).toMatchObject({
+      entry_id: null,
+      state: "detached",
+      withheld_entry_id: null,
+      attached_by: "author",
+      updated_by: "author",
+      version: 2,
+    });
+    // The purge keeps the work's title and text, yet nothing reaches its row:
+    // the author's command finds no work, and no read lists it.
+    expect(await outcome(setEntry(author, purged, null))).toBe("not_found");
+    expect((await listed(row, author)).ids).toEqual([kept]);
+    expect((await counted(author))[row]).toBe(1);
+    // A file dropping the row is refused for the kept post alone.
+    const file = (await storedFile()).filter(({ id }) => id !== row);
+    await expect(
+      importScript.applyImport(setup, file, { replaceOperatorEdits: true }),
+    ).rejects.toThrow(
+      new importScript.TimelineImportRefused(
+        "The file drops 1 rows that hold 1 attached posts; keep those rows, or take their posts off first",
+      ),
+    );
+    await setEntry(author, kept, null);
+    await importScript.applyImport(
+      setup,
+      (await storedFile()).filter(({ id }) => id !== row),
+      { replaceOperatorEdits: true },
+    );
+    expect((await storedIds()).map(({ entry_id }) => entry_id)).not.toContain(
+      row,
+    );
   });
 });
 
@@ -1069,6 +1180,54 @@ describe("timeline post reads", () => {
     expect(await entryOf({ type: "work", id: selfOnly }, reader)).toBeNull();
     expect(await entryOf({ type: "work", id: plain }, author)).toBeNull();
   });
+
+  it("answers the row of an own post an operator hid to its author, as the list shows it, and lets them take it off; no one else reads it", async () => {
+    const author = await user();
+    const reader = await user();
+    const row = await entry();
+    const hidden = await publish(author, { entryId: row });
+    await setup.query(
+      "UPDATE community.works SET operator_state='hidden' WHERE id=$1",
+      [hidden],
+    );
+    const named = {
+      id: row,
+      title: `合成${row}`,
+      fullTitle: `合成朝合成${row}`,
+    };
+    // The Backend's read, as the route runs it: the Work read decides who
+    // may ask, the posts adapter answers.
+    const service = new AuthorCommunityService(
+      new PostgresAuthorCommunityAdapter(app),
+      {} as CatalogPublicationPort,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      posts(),
+    );
+    const read = async (viewer: string | null) =>
+      contentTimelineEntrySchema.parse(
+        await service.contentTimelineEntry(
+          { type: "work", id: hidden },
+          viewer,
+        ),
+      ).entry;
+    expect((await listed(row, author)).ids).toEqual([hidden]);
+    expect(await read(author)).toEqual(named);
+    for (const viewer of [reader, null]) {
+      expect((await listed(row, viewer)).ids).toEqual([]);
+      expect(await outcome(read(viewer))).toBe("not_found");
+    }
+    // Only a trashed or removed work is refused; a hidden one comes off.
+    expect(await setEntry(author, hidden, null)).toMatchObject({
+      entryId: null,
+    });
+    expect(await read(author)).toBeNull();
+    expect((await listed(row, author)).ids).toEqual([]);
+  });
 });
 
 // timeline-posts-v1 §6: the operator side, over the App role's own grants.
@@ -1439,4 +1598,280 @@ describe("the operator side of timeline posts", () => {
       ),
     ).toBe("not_found");
   });
+});
+
+describe("the table's lock order under concurrent writers", () => {
+  /*
+   * Every writer takes the work, then the entry, then the post row; the
+   * import takes the shared content-operator lock and replaces every entry.
+   * Each case holds one lock in an open transaction until both writers wait
+   * for a lock, in the order the case starts them, and then lets go. Neither
+   * may end in a deadlock (40P01), and the end state must be the one the two
+   * writes give when run one after the other in that order.
+   */
+  const AI = "ai-admin";
+  const operator = () => new PostgresTimelineOperatorAdapter(app);
+  /** How a writer ended: its answer, or its refusal's name, message or SQLSTATE. */
+  const settle = (attempt: Promise<unknown>) =>
+    attempt.then(
+      (value) => ({ value }),
+      (error: unknown) => ({
+        refused:
+          error instanceof CommunityNamedConflictError
+            ? error.refusal
+            : error instanceof CommunityConflictError
+              ? "conflict"
+              : error instanceof CommunityInputError ||
+                  error instanceof importScript.TimelineImportRefused
+                ? (error as Error).message
+                : String((error as { readonly code?: unknown }).code ?? error),
+      }),
+    );
+  /** Sessions of this test's own database waiting for a lock. */
+  const waiting = () =>
+    countOf(
+      "SELECT count(DISTINCT l.pid) AS total FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid WHERE a.datname=current_database() AND NOT l.granted",
+      [],
+    );
+  const untilWaiting = async (sessions: number) => {
+    const deadline = Date.now() + 10_000;
+    while ((await waiting()) < sessions) {
+      if (Date.now() > deadline)
+        throw new Error(`Fewer than ${sessions} sessions wait for a lock`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  };
+  /**
+   * Holds `hold` in an open transaction; starts `first` and waits until it
+   * waits for a lock, then `second` likewise; then rolls the hold back.
+   */
+  const race = async (
+    hold: { readonly sql: string; readonly values: readonly unknown[] },
+    first: () => Promise<unknown>,
+    second: () => Promise<unknown>,
+  ) => {
+    const holder = await setup.connect();
+    const pending: Promise<unknown>[] = [];
+    try {
+      await holder.query("BEGIN");
+      await holder.query(hold.sql, [...hold.values]);
+      const one = settle(first());
+      pending.push(one);
+      await untilWaiting(1);
+      const two = settle(second());
+      pending.push(two);
+      await untilWaiting(2);
+      await holder.query("ROLLBACK");
+      return [await one, await two] as const;
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      holder.release();
+      await Promise.allSettled(pending);
+    }
+  };
+  /** Holding the post row: a writer that reached it holds its work and entry. */
+  const holdPost = (workId: string) => ({
+    sql: "SELECT 1 FROM community.timeline_entry_posts WHERE work_id=$1 FOR UPDATE",
+    values: [workId],
+  });
+  const withhold = (workId: string, expectedVersion: number) => () =>
+    operator().operatorSetTimelinePost(AI, workId, {
+      requestId: randomUUID(),
+      expectedVersion,
+      entryId: null,
+      state: "withheld",
+    });
+  const move = (workId: string, entryId: string, expectedVersion: number) =>
+    operator().operatorSetTimelinePost(AI, workId, {
+      requestId: randomUUID(),
+      expectedVersion,
+      entryId,
+    });
+
+  it("serializes an author's move with an operator's withhold of the same post, in either order", async () => {
+    const author = await user();
+    const [from, to] = [await entry(), await entry()];
+    // The author first: the withhold read version 1 and finds version 2.
+    const authorFirst = await publish(author, { entryId: from });
+    expect(
+      await race(
+        holdPost(authorFirst),
+        () => setEntry(author, authorFirst, to),
+        withhold(authorFirst, 1),
+      ),
+    ).toEqual([
+      { value: { workId: authorFirst, entryId: to, version: 2 } },
+      { refused: "conflict" },
+    ]);
+    expect(await association(authorFirst)).toMatchObject({
+      entry_id: to,
+      state: "attached",
+      withheld_entry_id: null,
+      attached_by: "author",
+      version: 2,
+    });
+    // The operator first: withheld from its entry, and the author's move to
+    // another entry is allowed.
+    const operatorFirst = await publish(author, { entryId: from });
+    const [withheld, moved] = await race(
+      holdPost(operatorFirst),
+      withhold(operatorFirst, 1),
+      () => setEntry(author, operatorFirst, to),
+    );
+    expect(withheld).toMatchObject({
+      value: { state: "withheld", withheldEntryId: from, version: 2 },
+    });
+    expect(moved).toEqual({
+      value: { workId: operatorFirst, entryId: to, version: 3 },
+    });
+    expect(await association(operatorFirst)).toMatchObject({
+      entry_id: to,
+      state: "attached",
+      withheld_entry_id: from,
+      attached_by: "author",
+      version: 3,
+    });
+  });
+
+  it("serializes an author's move with an operator's move, both holding entries, in either order", async () => {
+    const author = await user();
+    const [from, mine, theirs] = [await entry(), await entry(), await entry()];
+    const authorFirst = await publish(author, { entryId: from });
+    expect(
+      await race(
+        holdPost(authorFirst),
+        () => setEntry(author, authorFirst, mine),
+        () => move(authorFirst, theirs, 1),
+      ),
+    ).toEqual([
+      { value: { workId: authorFirst, entryId: mine, version: 2 } },
+      { refused: "conflict" },
+    ]);
+    const operatorFirst = await publish(author, { entryId: from });
+    const [operatorMove, authorMove] = await race(
+      holdPost(operatorFirst),
+      () => move(operatorFirst, theirs, 1),
+      () => setEntry(author, operatorFirst, mine),
+    );
+    expect(operatorMove).toMatchObject({
+      value: { entryId: theirs, attachedBy: AI, version: 2 },
+    });
+    expect(authorMove).toEqual({
+      value: { workId: operatorFirst, entryId: mine, version: 3 },
+    });
+    expect(await association(operatorFirst)).toMatchObject({
+      entry_id: mine,
+      attached_by: "author",
+      updated_by: "author",
+      version: 3,
+    });
+    expect((await listed(theirs, null)).ids).toEqual([]);
+  });
+
+  it.each([
+    { file: "keeps", refusal: null },
+    {
+      file: "drops",
+      refusal:
+        "The file drops 1 rows that hold 1 attached posts; keep those rows, or take their posts off first",
+    },
+  ] as const)(
+    "lets an author's attach that holds its entry finish before an import that $file it",
+    async ({ file, refusal }) => {
+      const author = await user();
+      const [from, target] = [await entry(), await entry()];
+      const work = await publish(author, { entryId: from });
+      const stored = await storedFile();
+      const before = await storedIds();
+      const [attach, imported] = await race(
+        holdPost(work),
+        () => setEntry(author, work, target),
+        () =>
+          importScript.applyImport(
+            setup,
+            file === "keeps"
+              ? stored
+              : stored.filter(({ id }) => id !== target),
+            { replaceOperatorEdits: true },
+          ),
+      );
+      // The import waited on the entry the attach held, then saw the attach.
+      expect(attach).toEqual({
+        value: { workId: work, entryId: target, version: 2 },
+      });
+      if (refusal === null) {
+        expect(imported).toHaveProperty("value");
+        expect(
+          (await storedIds()).find((row) => row.entry_id === target),
+        ).toMatchObject({
+          version: before.find((row) => row.entry_id === target)!.version + 1,
+        });
+      } else {
+        expect(imported).toEqual({ refused: refusal });
+        expect(await storedIds()).toEqual(before);
+      }
+      expect(await association(work)).toMatchObject({
+        entry_id: target,
+        state: "attached",
+      });
+      expect((await listed(target, null)).ids).toEqual([work]);
+    },
+  );
+
+  it.each([
+    { file: "keeps", attached: true },
+    { file: "drops", attached: false },
+  ] as const)(
+    "lets an import that holds the entries finish before an author's attach, and the attach then sees what the import $file",
+    async ({ file, attached }) => {
+      const author = await user();
+      const target = await entry();
+      const work = await publish(author);
+      // A new id the file brings: holding it, uncommitted, stops the import
+      // after it has deleted every row and before it commits.
+      const added = `tp-${hex(6)}`;
+      const stored = await storedFile();
+      const importFile = [
+        ...(file === "keeps"
+          ? stored
+          : stored.filter(({ id }) => id !== target)),
+        {
+          ...stored.find(({ id }) => id === target)!,
+          id: added,
+          title: `合成${added}`,
+          fullTitle: `合成朝合成${added}`,
+        },
+      ];
+      const [imported, attach] = await race(
+        {
+          sql: "INSERT INTO community.timeline_entries(entry_id,title,full_title,start_year,end_year,precision,on_axis,chapter,disputed,position) VALUES($1,'合成','合成',618,618,'year',TRUE,'唐',FALSE,0)",
+          values: [added],
+        },
+        () =>
+          importScript.applyImport(setup, importFile, {
+            replaceOperatorEdits: true,
+          }),
+        () => setEntry(author, work, target),
+      );
+      expect(imported).toHaveProperty("value");
+      const ids = (await storedIds()).map(({ entry_id }) => entry_id);
+      expect(ids).toContain(added);
+      if (attached) {
+        // The attach waited on the deleted row; it then locks the row that
+        // replaced it, as if it had started after the import.
+        expect(attach).toEqual({
+          value: { workId: work, entryId: target, version: 1 },
+        });
+        expect(await association(work)).toMatchObject({
+          entry_id: target,
+          state: "attached",
+        });
+        expect((await listed(target, null)).ids).toEqual([work]);
+      } else {
+        expect(ids).not.toContain(target);
+        expect(attach).toEqual({ refused: "timeline_entry_unavailable" });
+        expect(await association(work)).toBeUndefined();
+      }
+    },
+  );
 });

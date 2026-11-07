@@ -129,6 +129,45 @@ describe("关联词条 in the desktop text settings (timeline-posts-v1)", () => 
     expect(field()!.querySelector("[data-editor-timeline-entry]")).toBe(null);
   });
 
+  it("keeps the focus in the field: on the search when the picker opens, back on its opener when it closes or 清除 goes", () => {
+    const { field } = render({ type: "new" });
+    const opener = () =>
+      field()!.querySelector<HTMLButtonElement>(
+        "[data-editor-timeline-entry-open]",
+      );
+    const search = () =>
+      field()!.querySelector<HTMLInputElement>('input[type="search"]');
+    opener()!.focus();
+    click(opener());
+    expect(document.activeElement).toBe(search());
+    // 取消 closes it: the focus is not dropped to the page.
+    const cancel = [...field()!.querySelectorAll("button")].find(
+      (button) => button.textContent === "取消",
+    )!;
+    cancel.focus();
+    click(cancel);
+    expect(field()!.querySelector("[data-timeline-entry-picker]")).toBe(null);
+    expect(document.activeElement).toBe(opener());
+    // A choice closes it the same way.
+    click(opener());
+    type(search()!, "永平");
+    const option = field()!.querySelector<HTMLButtonElement>(
+      '[data-timeline-entry-option="row-yongping"]',
+    )!;
+    option.focus();
+    click(option);
+    expect(document.activeElement).toBe(opener());
+    expect(opener()!.textContent).toBe("更改");
+    // 清除 removes itself; the focus moves to 选择词条.
+    const clear = field()!.querySelector<HTMLButtonElement>(
+      "[data-editor-timeline-entry-clear]",
+    )!;
+    clear.focus();
+    click(clear);
+    expect(document.activeElement).toBe(opener());
+    expect(opener()!.textContent).toBe("选择词条");
+  });
+
   it("names an entry it was opened with and says when it is gone", () => {
     expect(
       render({ type: "new", timelineEntryId: "row-yongping" })
@@ -151,6 +190,17 @@ describe("关联词条 in the desktop text settings (timeline-posts-v1)", () => 
       store.setLoaded({ kind: "edit", workId: `work-${"2".repeat(32)}` }),
     );
     act(() => root.render(<Harness store={store} />));
+    expect(field()).toBe(null);
+  });
+
+  it("is not offered in a Thread's quick composer (参与话题)", () => {
+    const { container, field } = render({
+      type: "new",
+      threadId: `thread-${"3".repeat(32)}`,
+    });
+    expect(
+      container.querySelector('[data-editor-field="visibility"]'),
+    ).not.toBe(null);
     expect(field()).toBe(null);
   });
 });

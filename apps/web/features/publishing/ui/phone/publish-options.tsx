@@ -9,6 +9,7 @@ import {
   AUTHORSHIP_KINDS,
   REFERENCE_INPUTS,
 } from "../editor/authorship-fields";
+import { takesTimelineEntry } from "../editor/editor-session-state";
 import { checkEditorText, issueMessage } from "../editor/editor-text";
 import {
   VISIBILITY_EDIT_HINT,
@@ -535,7 +536,8 @@ export const TIMELINE_ENTRY_HINT = "发布后会出现在这个词条下。";
  * 关联词条 (timeline-posts-v1 §2.3): new works and their drafts only, under
  * 可见范围. The line names the chosen entry by its short title and opens the
  * picker; 清除 takes the choice back. A published work attaches from its
- * own page instead, so an edit never shows this.
+ * own page instead, so an edit never shows this, and neither does the
+ * Thread quick composer (`takesTimelineEntry`).
  */
 export const TimelineEntrySection = ({
   state,
@@ -549,7 +551,7 @@ export const TimelineEntrySection = ({
   const headingId = useId();
   const chosen = state.timelineEntryId ?? null;
   const { name } = useTimelineEntryName(chosen);
-  if (state.kind !== "new") return null;
+  if (!takesTimelineEntry(state)) return null;
   const line =
     name.state === "named"
       ? name.name

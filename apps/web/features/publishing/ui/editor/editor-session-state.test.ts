@@ -12,6 +12,7 @@ import {
   resolveSession,
   sameAuthorContent,
   preserveLaterConflictEdits,
+  takesTimelineEntry,
 } from "./editor-session-state";
 
 import type {
@@ -563,6 +564,20 @@ describe("editor session store", () => {
     expect(resolveSession(null, { type: "new" }, null).kind).toBe("create");
     expect(resolveSession(null, { type: "new" }, view).kind).toBe("other");
   });
+
+  it("answers a tapped entry from a new-work session, never from a Thread post, which takes none (timeline-posts-v1)", () => {
+    const tapped = { type: "new", timelineEntryId: "row-yongping" } as const;
+    const plain = createEditorSessionStore(ACCOUNT, { type: "new" });
+    expect(resolveSession(plain, tapped, null).kind).toBe("store");
+    const thread = createEditorSessionStore(ACCOUNT, {
+      type: "new",
+      threadId: `thread-${"3".repeat(32)}`,
+    });
+    expect(resolveSession(thread, { type: "new" }, null).kind).toBe("store");
+    const other = resolveSession(thread, tapped, null);
+    expect(other).toMatchObject({ kind: "other", store: thread });
+    expect(thread.get().timelineEntryId).toBeNull();
+  });
 });
 
 describe("conflict edits made after the recorded device version", () => {
@@ -711,5 +726,47 @@ describe("关联词条 of a new work (timeline-posts-v1)", () => {
       ...base,
       title: "账号",
     });
+  });
+});
+
+describe("关联词条 in a Thread's quick composer (timeline-posts-v1)", () => {
+  const thread = `thread-${"3".repeat(32)}`;
+
+  it("never takes an entry, so neither the draft nor the submission names one", () => {
+    const store = createEditorSessionStore(ACCOUNT, {
+      type: "new",
+      threadId: thread,
+      timelineEntryId: "row-yongping",
+    });
+    expect(takesTimelineEntry(store.get())).toBe(false);
+    expect(store.get().timelineEntryId).toBeNull();
+    store.setTimelineEntry("row-yongping");
+    expect(store.get().timelineEntryId).toBeNull();
+    expect(store.get().editVersion).toBe(0);
+    // A stray value, as from an older local copy, never reaches the content.
+    store.store.set({ ...store.get(), timelineEntryId: "row-yongping" });
+    expect("timelineEntryId" in contentOf(store.get())).toBe(false);
+  });
+
+  it("is a rule of the session it opened as, not of its later draft target", () => {
+    const store = createEditorSessionStore(ACCOUNT, {
+      type: "new",
+      threadId: thread,
+    });
+    store.setTarget({ type: "draft", id: `work-draft-${"4".repeat(32)}` });
+    expect(takesTimelineEntry(store.get())).toBe(false);
+    expect(
+      takesTimelineEntry(
+        createEditorSessionStore(ACCOUNT, {
+          type: "draft",
+          id: `work-draft-${"4".repeat(32)}`,
+        }).get(),
+      ),
+    ).toBe(true);
+    expect(
+      takesTimelineEntry(
+        createEditorSessionStore(ACCOUNT, { type: "new" }).get(),
+      ),
+    ).toBe(true);
   });
 });

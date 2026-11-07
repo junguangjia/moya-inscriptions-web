@@ -4,6 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useOptionalAuthors } from "../../authors/author-context";
 import { UNTITLED_WORK_LABEL } from "../../authors/content-card";
+import {
+  ownWorkAudienceLabel,
+  ownWorkAudienceNote,
+  ownWorkAudienceOf,
+} from "../../authors/own-work-audience";
 import { workCard } from "../../authors/profile-list";
 import {
   placeholderStyle,
@@ -49,6 +54,11 @@ type PostsState =
       readonly more: "idle" | "loading" | "failed";
     };
 
+/**
+ * One post's cover. The author's own post that others cannot see (self-only,
+ * pending, hidden or removed) carries the profile works grid's mark, so the
+ * author can tell why nobody else finds it here.
+ */
 const PostCell = ({
   onOpen,
   work,
@@ -60,10 +70,12 @@ const PostCell = ({
   const label = work.title === "" ? UNTITLED_WORK_LABEL : work.title;
   const media = card.media;
   const image = media === null ? null : responsiveImage(media, CELL_SIZES);
+  const audience = ownWorkAudienceOf(work);
+  const mark = audience === null ? null : ownWorkAudienceLabel(audience);
   return (
     <li>
       <button
-        aria-label={label}
+        aria-label={mark === null ? label : `${label}，${mark}`}
         className={styles.cell}
         data-timeline-post={work.id}
         onClick={(event) => onOpen(work.id, event.currentTarget)}
@@ -85,6 +97,16 @@ const PostCell = ({
             style={placeholderStyle(media.placeholderColor)}
             width={media.width}
           />
+        )}
+        {mark === null || audience === null ? null : (
+          <span
+            aria-hidden="true"
+            className={styles.audience}
+            data-timeline-post-audience=""
+            title={ownWorkAudienceNote(audience) ?? undefined}
+          >
+            {mark}
+          </span>
         )}
       </button>
     </li>
@@ -131,6 +153,19 @@ export const TimelineEntryPosts = ({
   const [notice, setNotice] = useState<string | null>(null);
   const latest = useRef(state);
   latest.current = state;
+  // 「关联我发过的帖子」 is replaced by its picker; when the picker closes
+  // (取消 or an attachment), the focus comes back to the new button.
+  const attachRef = useRef<HTMLButtonElement>(null);
+  const attachClosed = useRef(false);
+  useEffect(() => {
+    if (attaching || !attachClosed.current) return;
+    attachClosed.current = false;
+    attachRef.current?.focus();
+  }, [attaching]);
+  const closeAttach = () => {
+    attachClosed.current = true;
+    setAttaching(false);
+  };
 
   // A new entry, account or attachment starts over from the preview.
   useEffect(() => {
@@ -267,9 +302,9 @@ export const TimelineEntryPosts = ({
           authorId={viewerId}
           entryId={entryId}
           entryTitle={entryTitle}
-          onCancel={() => setAttaching(false)}
+          onCancel={closeAttach}
           onAttached={(text) => {
-            setAttaching(false);
+            closeAttach();
             setNotice(text);
             setRevision((value) => value + 1);
             actions.postsChanged?.();
@@ -281,6 +316,7 @@ export const TimelineEntryPosts = ({
             className={styles.textAction}
             data-timeline-attach=""
             onClick={(event) => openAttach(event.currentTarget)}
+            ref={attachRef}
             type="button"
           >
             关联我发过的帖子

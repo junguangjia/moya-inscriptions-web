@@ -16,7 +16,11 @@ import { useProductShell } from "../product-shell/product-shell";
 import type { PresentationPlatform } from "../shell/device-platform";
 import { useContentActions } from "./content-actions";
 import { useAuthors } from "./author-context";
-import { ownWorkAudienceNote, useOwnWorkAudience } from "./own-work-audience";
+import {
+  ownWorkAudienceLabel,
+  ownWorkAudienceNote,
+  useOwnWorkAudience,
+} from "./own-work-audience";
 import { contentLabel } from "./content-card";
 import { VerticalText } from "./vertical-text";
 import styles from "./profile-reading.module.css";
@@ -135,11 +139,7 @@ export const ProfileReadingCard = ({
   const audienceNote =
     audience?.publiclyVisible === false ? ownWorkAudienceNote(audience) : null;
   const audienceLabel =
-    audienceNote === null
-      ? null
-      : audience?.visibility === "self"
-        ? "仅自己可见"
-        : "暂不公开";
+    audience === null ? null : ownWorkAudienceLabel(audience);
   const excerpt = item.excerpt?.trim() ?? "";
   const textOnly = item.target.type === "work" && item.media === null;
   const title = desktopCardTitleParts(item.title);

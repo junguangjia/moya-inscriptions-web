@@ -843,6 +843,23 @@ describe("PublishScreen", () => {
     );
   });
 
+  it("never offers 关联词条 in a Thread's quick composer (参与话题)", () => {
+    const { screen } = render(
+      {},
+      {
+        type: "new",
+        threadId: `thread-${"3".repeat(32)}`,
+        timelineEntryId: "row-yongping",
+      },
+    );
+    expect(screen.querySelector('[data-publish-option="visibility"]')).not.toBe(
+      null,
+    );
+    expect(screen.querySelector('[data-publish-option="timeline-entry"]')).toBe(
+      null,
+    );
+  });
+
   it("keeps 发布 unavailable with its reason above it, nudges the reason on a press, and submits once the work can go", () => {
     const onSubmit = vi.fn();
     const publish = { label: "发布", busy: false, onSubmit };

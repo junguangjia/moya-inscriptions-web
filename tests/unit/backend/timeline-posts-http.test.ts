@@ -270,6 +270,39 @@ describe("GET /v1/community/content/{type}/{id}/timeline-entry", () => {
       "INVALID_INPUT",
     );
   });
+
+  it("names the row of the author's own work an operator hid, which the posts list shows them, and never a third party's", async () => {
+    const timelineEntryOf = vi
+      .fn<TimelinePostsPort["timelineEntryOf"]>()
+      .mockResolvedValue({ entry: named });
+    // The author's read of an own hidden work: listed, not available.
+    let read: UserWork = { ...work, canEdit: true, available: false };
+    const { base, signIn } = await backend({
+      posts: { timelineEntryOf },
+      readWork: async () => read,
+    });
+    const token = await signIn();
+    const path = `${base}/v1/community/content/work/${workId}/timeline-entry`;
+    const own = await fetch(path, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(own.status).toBe(200);
+    expect(contentTimelineEntrySchema.parse(await own.json())).toEqual({
+      entry: named,
+    });
+    expect(timelineEntryOf.mock.calls).toEqual([
+      [{ type: "work", id: workId }, actor],
+    ]);
+    // A work that is not available to a third party stays not found.
+    read = { ...work, canEdit: false, available: false };
+    await expectApiError(
+      await fetch(path, { headers: { authorization: `Bearer ${token}` } }),
+      404,
+      "ITEM_NOT_FOUND",
+    );
+    await expectApiError(await fetch(path), 404, "ITEM_NOT_FOUND");
+    expect(timelineEntryOf).toHaveBeenCalledOnce();
+  });
 });
 
 describe("POST /v1/community/publishing/works/{workId}/timeline-entry", () => {

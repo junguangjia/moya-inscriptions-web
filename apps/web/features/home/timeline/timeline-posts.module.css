@@ -100,6 +100,28 @@
   word-break: break-word;
 }
 
+/*
+ * The author's own post that others cannot see: the profile works grid's
+ * mark (caption size, secondary text), on a surface chip so it reads over a
+ * cover.
+ */
+.audience {
+  position: absolute;
+  inset-block-end: var(--yoyi-space-1);
+  inset-inline-start: var(--yoyi-space-1);
+  max-width: calc(100% - var(--yoyi-space-2));
+  overflow: hidden;
+  padding: 0 var(--yoyi-space-1);
+  border-radius: var(--yoyi-radius-sm);
+  background: var(--yoyi-color-background-surface);
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-caption-size);
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .placeholder {
   aspect-ratio: 1;
   border-radius: var(--yoyi-radius-sm);

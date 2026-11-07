@@ -47,7 +47,7 @@ import {
   touchWork,
   withholdReplacedPublicRevision,
 } from "./submissions.js";
-import { setAuthorTimelineEntry } from "./timeline-entry.js";
+import { detachErasedPost, setAuthorTimelineEntry } from "./timeline-entry.js";
 
 /*
  * Author work reads, visibility changes, permanent deletion and legacy
@@ -359,7 +359,8 @@ export const setVisibility = async (
  * deleted, whose title, text and revisions that purge keeps (the account
  * purge, account-deletion-v1); its deletion time is kept. Returns false,
  * having changed nothing, for an unknown or foreign work, and under "live"
- * for a deleted one.
+ * for a deleted one. A timeline post on an entry is detached with it
+ * (timeline-posts-v1).
  */
 export const eraseWork = async (
   db: PublishingDb,
@@ -432,6 +433,8 @@ export const eraseWork = async (
       updated_at=$2::timestamptz,version=version+1 WHERE id=$1`,
     [workId, at],
   );
+  // timeline-posts-v1: its author erased it, or the account it belonged to.
+  await detachErasedPost(db, workId, now);
   await db.query(
     "DELETE FROM community.work_draft_snapshots WHERE work_id=$1 OR draft_id=ANY($2::text[])",
     [workId, drafts],
@@ -565,6 +568,11 @@ export const purgeTrashedWork = async (
       "UPDATE community.works SET deleted_at=$2::timestamptz,updated_at=$2::timestamptz,version=version+1 WHERE id=$1",
       [workId, at],
     );
+    // timeline-posts-v1: the recycle bin's purge is a permanent deletion too,
+    // so its post leaves its entry here, as an erasure's does. Nothing could
+    // take it off later: the author's command refuses a deleted work, and AI
+    // never sees one that keeps its content.
+    await detachErasedPost(db, workId, now);
     await closePendingRevisions(db, workId, "withdrawn");
     const holders = (
       await db.query<{

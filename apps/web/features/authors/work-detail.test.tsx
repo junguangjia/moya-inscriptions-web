@@ -111,16 +111,24 @@ vi.mock("../home/timeline/timeline-posts-data", () => ({
   setWorkTimelineEntry: mocks.timeline.set,
   invalidateTimelinePostCounts: mocks.timeline.invalidate,
 }));
-// The picker's search has its own tests; here it offers two fixed choices.
+// The picker's search and its own focus have their own tests; here it offers
+// two fixed choices and 取消, and says whether it was asked to take the focus.
 vi.mock("../home/timeline/timeline-entry-picker", () => ({
   TimelineEntryPicker: ({
+    focusOnOpen,
+    onCancel,
     onChoose,
     selectedId,
   }: {
+    focusOnOpen?: boolean;
+    onCancel?: () => void;
     onChoose: (entry: unknown) => void;
     selectedId: string | null;
   }) => (
-    <div data-test-entry-picker={selectedId ?? ""}>
+    <div
+      data-test-entry-picker={selectedId ?? ""}
+      data-test-focus-on-open={focusOnOpen === true ? "" : undefined}
+    >
       <button
         onClick={() =>
           onChoose({
@@ -136,6 +144,11 @@ vi.mock("../home/timeline/timeline-entry-picker", () => ({
       <button onClick={() => onChoose(null)} type="button">
         不关联词条
       </button>
+      {onCancel === undefined ? null : (
+        <button onClick={onCancel} type="button">
+          取消
+        </button>
+      )}
     </div>
   ),
 }));
@@ -389,6 +402,7 @@ describe("Work detail actions for the author", () => {
     expect(dialog?.getAttribute("aria-label")).toBe("永久删除");
     expect(dialog?.textContent).toContain("无法恢复");
     expect(mocks.publishing.deleteWork).not.toHaveBeenCalled();
+    expect(mocks.timeline.invalidate).not.toHaveBeenCalled();
 
     await act(async () =>
       view.container
@@ -398,6 +412,9 @@ describe("Work detail actions for the author", () => {
     expect(mocks.publishing.deleteWork).toHaveBeenCalledExactlyOnceWith(WORK, {
       requestId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
     });
+    // timeline-posts-v1: the deletion took the post off its entry, so the
+    // timeline's row counts read again.
+    expect(mocks.timeline.invalidate).toHaveBeenCalledOnce();
     expect(view.status()).toBe("作品已永久删除");
     expect(view.button("编辑")).toBeUndefined();
     expect(view.container.querySelector("[data-content-actions]")).toBeNull();
@@ -1000,6 +1017,36 @@ describe("a work's timeline entry (timeline-posts-v1)", () => {
       mocks.timeline.set.mock.calls[0]![1],
     );
     expect(view.status()).toBe("已取消关联词条");
+  });
+
+  it("opens 关联词条's picker with the focus on it, and gives the focus back to 关联词条 when it closes without a change", async () => {
+    mocks.timeline.entry = {
+      id: "row-yongping",
+      title: "永平碑",
+      fullTitle: "北魏虚构永平碑",
+    };
+    const view = render(detail({}));
+    const opener = view.button("关联词条")!;
+    opener.focus();
+    act(() => opener.click());
+    expect(
+      view.container
+        .querySelector("[data-test-entry-picker]")
+        ?.hasAttribute("data-test-focus-on-open"),
+    ).toBe(true);
+    // 取消 goes with the picker: the focus is not dropped to the page.
+    const cancel = view.button("取消")!;
+    cancel.focus();
+    act(() => cancel.click());
+    expect(view.container.querySelector("[data-test-entry-picker]")).toBeNull();
+    expect(document.activeElement).toBe(opener);
+    // The entry the work already has changes nothing, and closes the same way.
+    act(() => opener.click());
+    const same = view.button("选永平碑")!;
+    same.focus();
+    await act(async () => same.click());
+    expect(mocks.timeline.set).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(opener);
   });
 });
 

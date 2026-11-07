@@ -202,6 +202,7 @@ const WorkManagement = ({
   } | null>(null);
   const [unconfirmed, setUnconfirmed] = useState<PendingIntent | null>(null);
   const deleteRef = useRef<HTMLButtonElement>(null);
+  const timelineEntryRef = useRef<HTMLButtonElement>(null);
   const statusRef = useRef<HTMLParagraphElement>(null);
   const busyRef = useRef(false);
   const mounted = useRef(true);
@@ -263,6 +264,9 @@ const WorkManagement = ({
         await publishingClient.deleteWork(detail.id, { requestId });
         // Never shown again, even from a read already in progress.
         forgetWorkSnapshot(detail.id);
+        // timeline-posts-v1: the deletion took the post off its entry, so
+        // the timeline's row counts read again, as after a change of entry.
+        invalidateTimelinePostCounts();
         if (!mounted.current) return;
         setUnconfirmed(null);
         // A toast of an earlier action (作品已提交) no longer describes this work.
@@ -317,6 +321,17 @@ const WorkManagement = ({
     setConfirm(null);
     window.requestAnimationFrame(() => {
       if (opener?.isConnected) opener.focus();
+    });
+  };
+
+  // timeline-posts-v1: 关联词条's picker closes without a change (取消, or
+  // the entry the work has); the focus goes back to its opener. A change
+  // hands it to the result line instead.
+  const closePicker = () => {
+    setPicking(false);
+    window.requestAnimationFrame(() => {
+      if (timelineEntryRef.current?.isConnected)
+        timelineEntryRef.current.focus();
     });
   };
 
@@ -420,6 +435,7 @@ const WorkManagement = ({
             onClick={() => {
               if (!busyRef.current) setPicking((open) => !open);
             }}
+            ref={timelineEntryRef}
             type="button"
           >
             关联词条
@@ -428,10 +444,14 @@ const WorkManagement = ({
       )}
       {picking && !deleted ? (
         <TimelineEntryPicker
-          onCancel={() => setPicking(false)}
+          focusOnOpen
+          onCancel={closePicker}
           onChoose={(entry) => {
+            if ((entry?.id ?? null) === (timelineEntry?.id ?? null)) {
+              closePicker();
+              return;
+            }
             setPicking(false);
-            if ((entry?.id ?? null) === (timelineEntry?.id ?? null)) return;
             start({
               kind: "timeline",
               entry:

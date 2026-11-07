@@ -52,7 +52,9 @@ const outcomeUnknown = (error: unknown) =>
  * 「关联我发过的帖子」 (timeline-posts-v1 §2.2): the viewer's own works as a
  * single-choice list. A work already attached to another entry is moved
  * only after the author confirms 「已在：某词条」. The attachment takes effect
- * at once; the list and the counts read again after it.
+ * at once; the list and the counts read again after it. It opens in place
+ * of its button with the focus on its title, so the focus is not dropped to
+ * the page.
  */
 export const TimelineAttachPicker = ({
   authorId,
@@ -77,6 +79,21 @@ export const TimelineAttachPicker = ({
     readonly text: string;
   } | null>(null);
   const [unconfirmed, setUnconfirmed] = useState<Pending | null>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    titleRef.current?.focus();
+  }, []);
+  // 关联 gives way to the 「已在」 question and comes back after its 取消;
+  // the focus follows, never left on a button that went.
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  const moveRef = useRef<HTMLParagraphElement>(null);
+  const asking = step.kind === "move";
+  const askedBefore = useRef(false);
+  useEffect(() => {
+    if (asking) moveRef.current?.focus();
+    else if (askedBefore.current) confirmRef.current?.focus();
+    askedBefore.current = asking;
+  }, [asking]);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -201,7 +218,12 @@ export const TimelineAttachPicker = ({
       role="group"
     >
       <div className={styles.pickerHead}>
-        <h3 className={styles.pickerTitle} id={titleId}>
+        <h3
+          className={styles.pickerTitle}
+          id={titleId}
+          ref={titleRef}
+          tabIndex={-1}
+        >
           选择要关联的帖子
         </h3>
         <button className={styles.textAction} onClick={onCancel} type="button">
@@ -291,7 +313,12 @@ export const TimelineAttachPicker = ({
       ) : null}
       {step.kind === "move" ? (
         <div className={styles.picker} data-timeline-attach-move="">
-          <p className={styles.status} role="status">
+          <p
+            className={styles.status}
+            ref={moveRef}
+            role="status"
+            tabIndex={-1}
+          >
             已在：{step.from}。改为关联到「{entryTitle}」？
           </p>
           <div className={styles.actions}>
@@ -321,6 +348,7 @@ export const TimelineAttachPicker = ({
             className={styles.primary}
             data-timeline-attach-confirm=""
             onClick={() => void attach()}
+            ref={confirmRef}
             type="button"
           >
             {busy ? "正在关联" : "关联"}

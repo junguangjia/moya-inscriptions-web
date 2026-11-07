@@ -1475,6 +1475,25 @@ describe("publishing runtime", () => {
     expect(command.content).toEqual(content("题"));
   });
 
+  it("never names an entry for a post from a Thread's quick composer", async () => {
+    const test = setup();
+    test.signIn(ACCOUNT);
+    const threadId = `thread-${"3".repeat(32)}`;
+    test.runtime.startSession({
+      target: { type: "new", threadId, timelineEntryId: "row-yongping" },
+      saveMode: "saved",
+    });
+    const stray = { ...content("话题帖"), timelineEntryId: "row-yongping" };
+    test.runtime.edit(stray);
+    await test.runtime.submit(stray);
+    const command = test.client.submit.mock.calls[0]![0] as unknown as {
+      readonly content: object;
+    };
+    expect(command).toMatchObject({ threadId });
+    expect("timelineEntryId" in command).toBe(false);
+    expect("timelineEntryId" in command.content).toBe(false);
+  });
+
   it("names no entry on the command of a submission without one", async () => {
     const test = setup();
     test.signIn(ACCOUNT);

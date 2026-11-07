@@ -568,12 +568,22 @@ export const parseProductEditorTarget = (
   }
   return parseEditorTarget(value);
 };
+/**
+ * The same editor: its type and id, and for a new work the Thread it posts
+ * into and the entry a tap of 「上传这件碑帖」 brought (timeline-posts-v1),
+ * so the editor can replace its entry with one that no longer carries a
+ * spent tap, and return to a Thread post from a tapped entry.
+ */
 export const sameEditorTarget = (
   left: ProductEditorTarget,
   right: ProductEditorTarget,
 ) =>
   left.type === right.type &&
-  ("id" in left ? "id" in right && right.id === left.id : true);
+  ("id" in left ? "id" in right && right.id === left.id : true) &&
+  (left.type !== "new" ||
+    right.type !== "new" ||
+    (left.threadId === right.threadId &&
+      left.timelineEntryId === right.timelineEntryId));
 export const editorHistoryState = (
   editorTarget: ProductEditorTarget,
   sourceDestination: PrimaryDestination,

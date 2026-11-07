@@ -27,6 +27,7 @@ import {
   ConfirmationSheet,
   confirmationBlocked,
 } from "../editor/confirmation-sheet";
+import { takesTimelineEntry } from "../editor/editor-session-state";
 import {
   bodyRule,
   checkEditorText,
@@ -809,7 +810,7 @@ export const PublishScreen = ({
             state={text}
             store={store}
           />
-        ) : entryPickerOpen && text.kind === "new" ? (
+        ) : entryPickerOpen && takesTimelineEntry(text) ? (
           <TimelineEntrySheet
             onClose={() => setEntryPickerOpen(false)}
             state={text}

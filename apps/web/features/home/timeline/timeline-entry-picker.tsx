@@ -1,6 +1,13 @@
 "use client";
 
-import { useDeferredValue, useId, useMemo, useState } from "react";
+import {
+  useDeferredValue,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { timelineEntryDate } from "./timeline-model";
 import { useTimelineEntries } from "./timeline-session";
@@ -61,18 +68,30 @@ export const timelinePickerMeta = (entry: TimelineEntry): string =>
  * 关联词条's picker (timeline-posts-v1 §2.3): a local search over the Home
  * timeline the page session holds (read on first use, never with the page)
  * and a single choice. Hidden rows are not in the public list, so they
- * never appear. `onChoose(null)` takes the post off its entry.
+ * never appear. `onChoose(null)` takes the post off its entry. A picker
+ * that opens in place takes the focus to its search (`focusOnOpen`), so
+ * the focus is not dropped to the page with its opener; a sheet that moves
+ * the focus itself leaves it off.
  */
 export const TimelineEntryPicker = ({
+  focusOnOpen = false,
   onCancel,
   onChoose,
   selectedId,
 }: {
+  readonly focusOnOpen?: boolean | undefined;
   readonly onCancel?: (() => void) | undefined;
   readonly onChoose: (entry: TimelineEntry | null) => void;
   readonly selectedId: string | null;
 }) => {
   const { entries, retry } = useTimelineEntries(true);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const focusedOnOpen = useRef(false);
+  useEffect(() => {
+    if (!focusOnOpen || focusedOnOpen.current) return;
+    focusedOnOpen.current = true;
+    searchRef.current?.focus();
+  }, [focusOnOpen]);
   const [query, setQuery] = useState("");
   const deferred = useDeferredValue(query);
   const searchId = useId();
@@ -106,6 +125,7 @@ export const TimelineEntryPicker = ({
         id={searchId}
         onChange={(event) => setQuery(event.currentTarget.value)}
         placeholder="题名、年代或地点"
+        ref={searchRef}
         type="search"
         value={query}
       />

@@ -17,25 +17,35 @@ import type { PublishingDb } from "./db.js";
  * Lock order, shared by every writer of the table: the work FOR UPDATE, then
  * the entry FOR SHARE, then the association row. The entry lock holds an
  * operator hiding it, and the timeline import replacing it, until this
- * transaction ends; an attach racing an import may find the entry gone and
- * answers timeline_entry_unavailable. Every change bumps the row's version, so
- * an operator's compare-and-set sees an author's change too.
+ * transaction ends; an attach that waited for an import sees the rows the
+ * import left (lockVisibleTimelineEntry). Every change bumps the row's
+ * version, so an operator's compare-and-set sees an author's change too.
  */
 
 const refuse = (code: WorkPublishingFailureCode): never => {
   throw new CommunityInputError(code);
 };
 
-/** Locks a visible entry until commit; a hidden or unknown one is unavailable. */
+const LOCK_VISIBLE_ENTRY_SQL =
+  "SELECT entry_id FROM community.timeline_entries WHERE entry_id=$1 AND hidden_at IS NULL FOR SHARE";
+
+/**
+ * Locks a visible entry until commit; a hidden or unknown one is unavailable.
+ * The timeline import deletes every row and inserts it again under the same
+ * id. A lock that waited for that import finds the deleted version, which a
+ * READ COMMITTED lock skips, so it is asked once more: the new statement's
+ * snapshot is taken after the import committed and sees the row that
+ * replaced it, or none when the import dropped the id. Either way the attach
+ * ends as if it had started after the import.
+ */
 export const lockVisibleTimelineEntry = async (
   db: PublishingDb,
   entryId: string,
 ): Promise<void> => {
-  const entry = await db.query(
-    "SELECT entry_id FROM community.timeline_entries WHERE entry_id=$1 AND hidden_at IS NULL FOR SHARE",
-    [entryId],
-  );
-  if (entry.rowCount !== 1) refuse("timeline_entry_unavailable");
+  if ((await db.query(LOCK_VISIBLE_ENTRY_SQL, [entryId])).rowCount === 1)
+    return;
+  if ((await db.query(LOCK_VISIBLE_ENTRY_SQL, [entryId])).rowCount !== 1)
+    refuse("timeline_entry_unavailable");
 };
 
 /**
@@ -52,6 +62,25 @@ export const insertTimelinePost = async (
   await db.query(
     "INSERT INTO community.timeline_entry_posts(work_id,entry_id,attached_by,updated_by,attached_at,updated_at) VALUES($1,$2,'author','author',$3::timestamptz,$3::timestamptz)",
     [workId, entryId, nowParam(now)],
+  );
+};
+
+/**
+ * Takes a permanently deleted work's post off its entry, in the deletion's
+ * transaction, which holds the work FOR UPDATE: the author's erasure, the
+ * account purge's and the recycle bin's purge. Its row then never names an
+ * entry again, so the timeline import never counts a post no one can see or
+ * reach. A detached or withheld row names no entry already and keeps what it
+ * records.
+ */
+export const detachErasedPost = async (
+  db: PublishingDb,
+  workId: string,
+  now: Date,
+): Promise<void> => {
+  await db.query(
+    "UPDATE community.timeline_entry_posts SET state='detached',entry_id=NULL,updated_by='author',version=version+1,updated_at=$2::timestamptz WHERE work_id=$1 AND state='attached'",
+    [workId, nowParam(now)],
   );
 };
 
