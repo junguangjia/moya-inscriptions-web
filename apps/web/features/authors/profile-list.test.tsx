@@ -76,6 +76,7 @@ vi.mock("../publishing/ui/drafts/drafts-card", () => ({
 }));
 
 import { ProfileList, workCard, workCardExcerpt } from "./profile-list";
+import { AuthorRequestError } from "./author-data";
 import { readWorkSnapshot, resetWorkSnapshots } from "./work-snapshots";
 
 import type { UserWork, WorkMedia } from "@moya/contracts";
@@ -197,7 +198,7 @@ describe("Profile works drafts card", () => {
     expect(works).toHaveBeenCalledTimes(1);
   });
 
-  it("omits unavailable third-party works in reading mode and clears content when privacy is refused", async () => {
+  it("omits unavailable third-party works in reading mode", async () => {
     layout.feedLayout = "single";
     author.viewer = { id: VISITOR };
     works.mockResolvedValue({
@@ -208,33 +209,74 @@ describe("Profile works drafts card", () => {
     });
     const node = await render({ authorId: OWNER, owner: false });
     expect(cards(node)).toEqual([work(1).id]);
-    await act(async () => root?.unmount());
-    root = null;
-    node.remove();
-    collection.mockRejectedValue(
-      new (await import("./author-data")).AuthorRequestError(
-        403,
-        "该列表仅自己可见",
-      ),
-    );
-    author.cache.set(`list:${VISITOR}:entry-1:${OWNER}:favorites`, {
-      items: [workCard(work(1))],
-      page: 1,
-      total: 1,
-      search: "",
-      kind: "all",
-      revision: 1,
-    });
-    const hidden = await render({
-      authorId: OWNER,
-      owner: false,
-      tab: "favorites",
-    });
-    expect(cards(hidden)).toEqual([]);
-    expect(hidden.querySelector('[role="alert"]')?.textContent).toContain(
-      "该列表仅自己可见",
-    );
   });
+
+  it.each([
+    { feedLayout: "single", tab: "favorites" },
+    { feedLayout: "single", tab: "likes" },
+    { feedLayout: "double", tab: "favorites" },
+    { feedLayout: "double", tab: "likes" },
+  ] as const)(
+    "clears cached $tab after a deferred 403 and recovers on retry in $feedLayout layout",
+    async ({ feedLayout, tab }) => {
+      layout.feedLayout = feedLayout;
+      author.viewer = { id: VISITOR };
+      const cacheKey = `list:${VISITOR}:entry-1:${OWNER}:${tab}`;
+      const cached = workCard(work(1));
+      const refreshed = workCard(work(2));
+      author.cache.set(cacheKey, {
+        items: [cached],
+        page: 1,
+        total: 1,
+        search: "",
+        kind: "all",
+        revision: author.revision,
+      });
+      let refuse!: (reason: unknown) => void;
+      const pending = new Promise<never>((_, reject) => {
+        refuse = reject;
+      });
+      collection.mockReturnValueOnce(pending).mockResolvedValueOnce({
+        items: [refreshed],
+        total: 1,
+        page: 1,
+        pageSize: 12,
+      });
+
+      const node = await render({ authorId: OWNER, owner: false, tab });
+      expect(cards(node)).toEqual([cached.target.id]);
+      expect(node.querySelector('[role="alert"]')).toBeNull();
+      expect(node.querySelector('[role="status"]')?.textContent).toContain(
+        "正在加载",
+      );
+      expect(collection).toHaveBeenCalledOnce();
+      expect(collection).toHaveBeenLastCalledWith(OWNER, tab, 1, "", "all");
+
+      await act(async () => {
+        refuse(new AuthorRequestError(403, "该列表仅自己可见"));
+        await pending.catch(() => undefined);
+      });
+      expect(cards(node)).toEqual([]);
+      expect(author.cache.get(cacheKey)).toMatchObject({ items: [], total: 0 });
+      expect(node.querySelector('[role="alert"]')?.textContent).toContain(
+        "该列表仅自己可见",
+      );
+
+      const retry = node.querySelector<HTMLButtonElement>(
+        '[role="alert"] button',
+      )!;
+      expect(retry).not.toBeNull();
+      await act(async () => retry.click());
+      expect(collection).toHaveBeenCalledTimes(2);
+      expect(collection).toHaveBeenNthCalledWith(2, OWNER, tab, 1, "", "all");
+      expect(cards(node)).toEqual([refreshed.target.id]);
+      expect(node.querySelector('[role="alert"]')).toBeNull();
+      expect(author.cache.get(cacheKey)).toMatchObject({
+        items: [refreshed],
+        total: 1,
+      });
+    },
+  );
   it("finishes revalidating cached Works when StrictMode replays the mount", async () => {
     author.viewer = { id: OWNER };
     author.cache.set(`list:${OWNER}:entry-1:${OWNER}:works`, {

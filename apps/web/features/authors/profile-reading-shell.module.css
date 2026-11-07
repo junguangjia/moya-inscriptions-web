@@ -1,5 +1,5 @@
 /*
- * #356 reading-shell draft. Not applied to the worktree.
+ * #356 calligraphy profile reading shell.
  *
  * Scope: the real AuthorProfile root carries data-profile-reading and
  * data-reading-platform="phone" | "tablet" | "pc".
@@ -525,7 +525,6 @@
   flex: 1 1 auto;
 }
 
-/* Keep native hidden effective after the more specific desktop display rules. */
 .root[data-profile-reading] .toolbar > .heading {
   margin-inline-end: auto;
   color: var(--yoyi-color-text-secondary);
@@ -605,4 +604,10 @@
 .root[data-profile-reading][data-reading-platform]
   :is(.details, .tabList, .toolbar)[hidden] {
   display: none;
+}
+
+/* Open profile menus must clear the header/content and the desktop rail clip. */
+.root[data-profile-reading] > .identity:has([role="menu"]) {
+  z-index: 6;
+  overflow: visible;
 }

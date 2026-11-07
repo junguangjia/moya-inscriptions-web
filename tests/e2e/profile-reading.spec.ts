@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { addSessionCookie } from "./support/session-cookie";
 
 // Explicit synthetic account/content. No production session or data is used.
@@ -12,8 +12,15 @@ const identity = {
 const id = (n: number) => `work-${String(n).padStart(32, "0")}`;
 const mediaId = (n: number) => `media-item-${String(n).padStart(32, "0")}`;
 const avatarId = `user-media-${"7".repeat(32)}`;
-const title = (n: number) =>
-  n === 4 ? "" : n === 5 ? "iCloud 2026 study" : `合成临帖 ${n} 号`;
+const title = (n: number) => {
+  if (n === 4 || n === 11) return "";
+  if (n === 5) return "iCloud 2026 study";
+  if (n === 7) return "长篇合成书法题名保留完整字形".repeat(12);
+  if (n === 8) return "长篇纯文字作品题名".repeat(12);
+  if (n === 9) return "A long synthetic Latin title ".repeat(12);
+  if (n === 10) return "临帖与 iCloud 2026 A4 混排".repeat(12);
+  return `合成临帖 ${n} 号`;
+};
 const dimensions = (n: number): readonly [number, number] =>
   n % 3 === 1 ? [900, 1600] : n % 3 === 2 ? [2400, 600] : [1200, 1200];
 const work = (n: number) => {
@@ -24,13 +31,13 @@ const work = (n: number) => {
     authorName: identity.displayName,
     title: title(n),
     text:
-      n === 4
+      n === 4 || n === 8 || n === 11
         ? "这是用于验证纯文字展读的合成正文。A4 临帖记录，保留原文与阅读顺序。".repeat(
             15,
           )
         : "",
     media:
-      n === 4
+      n === 4 || n === 8
         ? []
         : [
             {
@@ -213,6 +220,10 @@ test("fixed calligraphy reading has complete images, private tools and real vert
   const root = await prepare(page),
     pc = info.project.name.startsWith("desktop");
   await expect(root).toHaveAttribute("data-profile-reading", "");
+  await expect(root.locator(":scope > header")).toHaveCSS(
+    "height",
+    pc ? "52px" : "44px",
+  );
   await expect(root.getByRole("tab")).toHaveCount(3);
   await expect(
     root.getByRole("button", { name: "总览", exact: true }),
@@ -234,24 +245,37 @@ test("fixed calligraphy reading has complete images, private tools and real vert
     await expect(
       root.getByRole("button", { name: "设置", exact: true }),
     ).toBeInViewport();
-  await root.locator("[data-icon]").evaluateAll(async (icons) => {
-    const urls = [
-      ...new Set(
-        icons
-          .map((icon) => getComputedStyle(icon).maskImage)
-          .filter((value) => value.startsWith("url("))
-          .map((value) => value.slice(4, -1).replace(/^['"]|['"]$/g, "")),
-      ),
-    ];
-    await Promise.all(
-      urls.map(async (src) => {
-        const image = new Image();
-        image.src = src;
-        await image.decode();
-      }),
-    );
-    await document.fonts.ready;
-  });
+  const loadedMasks = await page
+    .locator("[data-icon]")
+    .evaluateAll(async (icons) => {
+      const urls = [
+        ...new Set(
+          icons
+            .flatMap((icon) => {
+              const style = getComputedStyle(icon);
+              return [
+                style.getPropertyValue("mask-image"),
+                style.getPropertyValue("-webkit-mask-image"),
+              ];
+            })
+            .filter((value) => value.startsWith("url("))
+            .map((value) => value.slice(4, -1).replace(/^['"]|['"]$/g, "")),
+        ),
+      ];
+      await Promise.all(
+        urls.map(async (src) => {
+          const image = new Image();
+          image.src = src;
+          await image.decode();
+        }),
+      );
+      await document.fonts.ready;
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+      return urls.length;
+    });
+  expect(loadedMasks).toBeGreaterThan(0);
   const avatar = root.getByRole("button", { name: "更换头像", exact: true });
   await expect
     .poll(() =>
@@ -324,6 +348,9 @@ test("fixed calligraphy reading has complete images, private tools and real vert
       .getByRole("dialog", { name: "个人资料", exact: true })
       .getByRole("button", { name: "返回", exact: true })
       .click();
+  await expect(
+    root.getByRole("button", { name: "个人资料", exact: true }),
+  ).toBeFocused();
 });
 
 test("an image retry is operable above the card opener and does not navigate", async ({
@@ -349,9 +376,7 @@ test("an image retry is operable above the card opener and does not navigate", a
   await expect(page).not.toHaveURL((url) => url.hash === "#detail");
 });
 
-test("another author has reading works and public relationship actions but no owner tools", async ({
-  page,
-}) => {
+async function prepareOther(page: Page, guest = false) {
   await prepare(page);
   const other = `user-${"8".repeat(32)}`;
   await page.route(`**/api/community/authors/${other}**`, async (route) => {
@@ -400,11 +425,24 @@ test("another author has reading works and public relationship actions but no ow
       },
     });
   });
+  if (guest) {
+    await page.context().clearCookies();
+    await page.route("**/api/community/me", (route) =>
+      route.fulfill({ status: 401, json: { error: "not_signed_in" } }),
+    );
+  }
   await page.goto(`/?authorId=${other}#profile`);
   const root = page.locator(`[data-author-profile="${other}"]`);
   await expect(
     root.getByRole("heading", { name: "另一位合成作者", exact: true }),
   ).toBeVisible();
+  return root;
+}
+
+test("another author has reading works and public relationship actions but no owner tools", async ({
+  page,
+}) => {
+  const root = await prepareOther(page);
   await expect(root).toHaveAttribute("data-profile-reading", "");
   await expect(root.locator("[data-profile-reading-card]")).toHaveCount(1);
   await expect(
@@ -417,6 +455,207 @@ test("another author has reading works and public relationship actions but no ow
   await expect(
     root.getByRole("button", { name: "编辑主页背景", exact: true }),
   ).toHaveCount(0);
+});
+
+const expectHitTarget = async (target: Locator) => {
+  await expect(target).toBeInViewport({ ratio: 1 });
+  await expect
+    .poll(() =>
+      target.evaluate((node) => {
+        const box = node.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          box.x + box.width / 2,
+          box.y + box.height / 2,
+        );
+        return hit !== null && (hit === node || node.contains(hit));
+      }),
+    )
+    .toBe(true);
+};
+
+test("profile block and report menus receive real pointer clicks above the reading chrome", async ({
+  page,
+}) => {
+  const root = await prepareOther(page);
+  const more = root.getByRole("button", { name: "更多操作", exact: true });
+  await more.click();
+  const block = root.getByRole("menuitem", { name: "屏蔽", exact: true });
+  await expectHitTarget(block);
+  let confirmation = "";
+  page.once("dialog", async (dialog) => {
+    confirmation = dialog.message();
+    await dialog.dismiss();
+  });
+  await block.click();
+  expect(confirmation).toContain("屏蔽 另一位合成作者");
+  await more.click();
+  const report = root.getByRole("menuitem", { name: "举报用户", exact: true });
+  await expectHitTarget(report);
+  await report.click();
+  await expect(
+    page.getByRole("dialog", { name: "举报", exact: true }),
+  ).toBeVisible();
+});
+
+test("a signed-out reader can click report and enter the existing sign-in flow", async ({
+  page,
+}) => {
+  const root = await prepareOther(page, true);
+  await expect(
+    root.getByRole("link", { name: "登录后关注", exact: true }),
+  ).toBeVisible();
+  await root.getByRole("button", { name: "更多操作", exact: true }).click();
+  const report = root.getByRole("menuitem", { name: "举报", exact: true });
+  await expectHitTarget(report);
+  await report.click();
+  await expect(page).toHaveURL((url) => url.pathname === "/login");
+});
+
+test("the reading background editor uses the canonical phone and desktop reference ratios", async ({
+  page,
+}) => {
+  const root = await prepare(page);
+  await root.getByRole("button", { name: "编辑主页背景", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "主页背景", exact: true });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("tab", { name: "手机", exact: true }).click();
+  await expect(dialog.locator('[data-cover-preview="phone"]')).toHaveCSS(
+    "aspect-ratio",
+    "390 / 844",
+  );
+  await dialog.getByRole("tab", { name: "电脑", exact: true }).click();
+  await expect(dialog.locator('[data-cover-preview="desktop"]')).toHaveCSS(
+    "aspect-ratio",
+    "960 / 800",
+  );
+});
+
+test("long reading titles end on whole columns and leave room for the text excerpt", async ({
+  page,
+}, info) => {
+  if (info.project.name === "mobile-webkit")
+    await page.setViewportSize({ width: 320, height: 800 });
+  const root = await prepare(page);
+  for (const n of [7, 8, 9, 10]) {
+    const card = root.locator(
+      `[data-profile-reading-card][data-content-id="${id(n)}"]`,
+    );
+    await card.scrollIntoViewIfNeeded();
+    const heading = card.getByRole("heading", { name: title(n), exact: true });
+    await expect(heading).toHaveCSS("-webkit-line-clamp", "2");
+    const metrics = await heading.evaluate((node) => {
+      const style = getComputedStyle(node),
+        box = node.getBoundingClientRect();
+      const vertical = style.writingMode.startsWith("vertical");
+      const caption = node.parentElement!;
+      const padding = getComputedStyle(caption);
+      return {
+        blockSize: vertical ? box.width : box.height,
+        lineHeight: Number.parseFloat(style.lineHeight),
+        vertical,
+        capacity:
+          caption.clientWidth -
+          Number.parseFloat(padding.paddingLeft) -
+          Number.parseFloat(padding.paddingRight),
+      };
+    });
+    expect(metrics.blockSize).toBeLessThanOrEqual(2 * metrics.lineHeight + 1);
+    if (metrics.vertical && n !== 8)
+      expect(metrics.capacity).toBeCloseTo(2 * metrics.lineHeight, 0);
+    await expect(
+      card.getByRole("button", { name: `打开${title(n)}`, exact: true }),
+    ).toHaveCount(1);
+  }
+  const textCard = root.locator(
+    `[data-profile-reading-card][data-content-id="${id(8)}"]`,
+  );
+  await textCard.scrollIntoViewIfNeeded();
+  const excerpt = textCard.locator("[data-card-excerpt]");
+  const room = await excerpt.evaluate((node) => {
+    const box = node.getBoundingClientRect(),
+      parent = node.parentElement!.getBoundingClientRect();
+    const style = getComputedStyle(node);
+    const vertical = style.writingMode.startsWith("vertical");
+    return {
+      visible: vertical
+        ? Math.min(box.right, parent.right) - Math.max(box.left, parent.left)
+        : Math.min(box.bottom, parent.bottom) - Math.max(box.top, parent.top),
+      line: Number.parseFloat(style.lineHeight),
+    };
+  });
+  expect(room.visible).toBeGreaterThanOrEqual(room.line - 1);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    ),
+  ).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: info.outputPath("long-reading-text.png") });
+});
+
+test("the reading opener shows hold feedback and suppresses native touch selection", async ({
+  page,
+}) => {
+  const root = await prepare(page);
+  const opener = root
+    .locator("[data-profile-reading-card]")
+    .first()
+    .getByRole("button", { name: `打开${title(1)}`, exact: true });
+  await expect(opener).toHaveCSS(
+    test.info().project.name.includes("webkit")
+      ? "-webkit-user-select"
+      : "user-select",
+    "none",
+  );
+  if (await page.evaluate(() => CSS.supports("-webkit-touch-callout", "none")))
+    await expect(opener).toHaveCSS("-webkit-touch-callout", "none");
+  else
+    test.info().annotations.push({
+      type: "capability",
+      description:
+        "Host WebKit does not expose iOS touch-callout; physical iOS acceptance remains separate.",
+    });
+  expect(
+    await opener.evaluate((node) =>
+      ["top", "right", "bottom", "left"].every(
+        (side) =>
+          Number.parseFloat(
+            getComputedStyle(node).getPropertyValue(
+              `--quick-action-safe-${side}`,
+            ),
+          ) >= 0,
+      ),
+    ),
+  ).toBe(true);
+  await page.clock.install();
+  const box = await opener.boundingBox();
+  if (!box) throw new Error("No reading opener geometry");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await opener.evaluate((node) => {
+    node.addEventListener(
+      "pointerdown",
+      (event) =>
+        node.setAttribute(
+          "data-test-pointer-id",
+          String((event as PointerEvent).pointerId),
+        ),
+      { once: true },
+    );
+  });
+  await page.mouse.down();
+  const recordedPointer = await opener.getAttribute("data-test-pointer-id");
+  expect(recordedPointer).not.toBeNull();
+  const pointerId = Number(recordedPointer);
+  await page.clock.fastForward(250);
+  await expect(opener).toHaveAttribute("data-quick-action-phase", "holding");
+  await expect(opener).not.toHaveCSS("box-shadow", "none");
+  await page.clock.fastForward(200);
+  await expect(opener).toHaveAttribute("data-quick-action-phase", "menu-open");
+  await expect(opener).not.toHaveCSS("box-shadow", "none");
+  await opener.dispatchEvent("pointercancel", { pointerId });
+  await page.mouse.up();
+  await expect(opener).toHaveAttribute("data-quick-action-phase", "idle");
+  await expect(opener).toHaveCSS("box-shadow", "none");
+  await expect(page).not.toHaveURL((url) => url.hash === "#detail");
 });
 
 test("reading keeps the selected work and position through Detail, collection and history", async ({
@@ -451,6 +690,9 @@ test("reading keeps the selected work and position through Detail, collection an
   await expect
     .poll(async () => Math.abs((await profileScroll(page)) - before))
     .toBeLessThanOrEqual(2);
+  await expect(
+    root.getByRole("button", { name: "个人资料", exact: true }),
+  ).toBeFocused();
   await root.getByRole("tab", { name: "收藏", exact: true }).click();
   await expect(
     root.getByText("暂无可显示的内容", { exact: true }),

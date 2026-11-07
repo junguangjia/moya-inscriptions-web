@@ -27,6 +27,12 @@ const profile = {
 };
 const coverId = `user-media-${"9".repeat(32)}`;
 async function fixture(page: Page, delayed = false, cover = false) {
+  // These cases audit the original cover/header, not the #356 reading shell.
+  // Seed both physical-device scopes before navigation, including PC windows.
+  await page.addInitScript(() => {
+    localStorage.setItem("yoyi.home-feed-layout.v2", "double");
+    localStorage.setItem("yoyi.desktop-feed-layout.v1", "double");
+  });
   let resolveProfile = () => {};
   const ready = new Promise<void>((resolve) => {
     resolveProfile = resolve;

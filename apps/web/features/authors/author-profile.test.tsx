@@ -6,6 +6,7 @@ import type { AuthorProfile, UserWork } from "@moya/contracts";
 import type { Root } from "react-dom/client";
 const {
   profileRead,
+  backgroundEditorProps,
   command,
   directEntry,
   comments,
@@ -36,9 +37,10 @@ const {
   navigatePrimary: vi.fn(),
   openTopic: vi.fn(),
   profileRead: vi.fn(),
+  backgroundEditorProps: vi.fn(),
   onViewChange: vi.fn(),
   shell: {
-    platform: "phone" as "phone" | "pc",
+    platform: "phone" as "phone" | "tablet" | "pc",
     activeDestination: "user" as "home" | "user",
     feedLayout: "double",
   },
@@ -173,7 +175,12 @@ vi.mock("./profile-editor", () => ({
   ),
 }));
 vi.mock("./profile-background-editor", () => ({
-  ProfileBackgroundEditor: () => <div data-background-editor="" />,
+  ProfileBackgroundEditor: (props: {
+    header?: import("react").RefObject<HTMLElement | null>;
+  }) => {
+    backgroundEditorProps(props);
+    return <div data-background-editor="" />;
+  },
 }));
 vi.mock("./profile-settings", () => ({
   ProfileSettings: ({
@@ -216,6 +223,7 @@ import {
   MyComments,
 } from "./author-profile";
 import presentation from "../user/user-presentation.module.css";
+import * as profileCoverColors from "./profile-cover-colors";
 import {
   readWorkSnapshot,
   recordWorkSnapshots,
@@ -279,6 +287,7 @@ const button = (node: HTMLElement, text: string) =>
   );
 beforeEach(() => {
   beforeCommit.mockReset();
+  backgroundEditorProps.mockReset();
   settingsDeparture.deferClose = false;
   settingsDeparture.pendingClose = null;
   settingsDeparture.completions = 0;
@@ -319,6 +328,7 @@ describe("Owner profile controls", () => {
       });
       const node = await render();
       const page = node.querySelector<HTMLElement>("[data-author-profile]")!;
+      const originalBackgroundAction = button(node, "编辑主页背景")!;
       expect(page.querySelector("header")?.getAttribute("data-theme")).toBe(
         "dark",
       );
@@ -337,11 +347,191 @@ describe("Owner profile controls", () => {
       expect(page.querySelector("header")?.hasAttribute("data-theme")).toBe(
         false,
       );
-      expect(button(node, "编辑主页背景")?.hasAttribute("inert")).toBe(false);
-      await act(async () => button(node, "编辑主页背景")!.click());
+      const readingBackgroundAction = button(node, "编辑主页背景")!;
+      expect(originalBackgroundAction.isConnected).toBe(false);
+      expect(readingBackgroundAction).not.toBe(originalBackgroundAction);
+      expect(readingBackgroundAction.closest("header")).toBe(
+        page.querySelector(":scope > header"),
+      );
+      await act(async () => readingBackgroundAction.click());
       expect(node.querySelector("[data-background-editor]")).not.toBeNull();
     },
   );
+  it.each([
+    ["phone", "single"],
+    ["pc", "single"],
+    ["phone", "double"],
+    ["pc", "double"],
+  ] as const)(
+    "uses the correct background-editor reference for %s / %s",
+    async (platform, layout) => {
+      shell.platform = platform;
+      shell.feedLayout = layout;
+      const node = await render();
+      const measuredHeader = node.querySelector<HTMLElement>(
+        "[data-profile-background-slot]",
+      )!;
+      await act(async () => button(node, "编辑主页背景")!.click());
+      expect(node.querySelector("[data-background-editor]")).not.toBeNull();
+      const props = backgroundEditorProps.mock.calls.at(-1)![0];
+      if (layout === "single") {
+        // Omitting the ref makes ProfileBackgroundEditor use REFERENCE_HEADERS;
+        // a compact identity must never become a crop reference.
+        expect(props).not.toHaveProperty("header");
+      } else {
+        expect(props.header.current).toBe(measuredHeader);
+      }
+    },
+  );
+
+  it.each(["phone", "tablet"] as const)(
+    "returns focus to the profile-info toggle after closing its %s dialog without scrolling",
+    async (platform) => {
+      shell.platform = platform;
+      shell.feedLayout = "single";
+      const node = await render();
+      const page = node.querySelector<HTMLElement>("[data-author-profile]")!;
+      page.scrollTop = 213;
+      const toggle = button(node, "个人资料")!;
+      toggle.focus();
+      await act(async () => toggle.click());
+      const dialog = node.querySelector<HTMLElement>(
+        '[role="dialog"][aria-label="个人资料"]',
+      )!;
+      const close = dialog.querySelector<HTMLButtonElement>("button")!;
+      close.focus();
+      expect(document.activeElement).toBe(close);
+      const restore = vi.spyOn(toggle, "focus");
+      try {
+        await act(async () => close.click());
+        expect(
+          node.querySelector('[role="dialog"][aria-label="个人资料"]'),
+        ).toBeNull();
+        expect(document.activeElement).toBe(toggle);
+        expect(restore).toHaveBeenCalledWith({ preventScroll: true });
+        expect(page.scrollTop).toBe(213);
+      } finally {
+        restore.mockRestore();
+      }
+    },
+  );
+
+  it("samples the remounted normal cover after its first load happened in reading mode", async () => {
+    shell.feedLayout = "single";
+    const mediaId = `user-media-${"a".repeat(32)}`;
+    profileRead.mockResolvedValue({
+      ...profile(true),
+      background: {
+        id: mediaId,
+        src: `/api/community/media/${mediaId}`,
+        width: 1600,
+        height: 1200,
+      },
+    });
+    const sampler = vi
+      .spyOn(profileCoverColors, "coverColors")
+      .mockReturnValue({
+        tint: "rgb(120 140 130)",
+        shade: "rgb(20 18 16)",
+      });
+    try {
+      const node = await render();
+      const page = node.querySelector<HTMLElement>("[data-author-profile]")!;
+      const readingImage = page.querySelector<HTMLImageElement>(
+        '[aria-label="主页背景"] img',
+      )!;
+      await act(async () => {
+        readingImage.dispatchEvent(new Event("load"));
+      });
+      expect(sampler).not.toHaveBeenCalled();
+      shell.feedLayout = "double";
+      await act(async () => root!.render(overlay()));
+      const normalImage = page.querySelector<HTMLImageElement>(
+        '[aria-label="主页背景"] img',
+      )!;
+      expect(normalImage).not.toBe(readingImage);
+      expect(readingImage.isConnected).toBe(false);
+      expect(normalImage.getAttribute("src")).toBe(
+        readingImage.getAttribute("src"),
+      );
+      await act(async () => {
+        normalImage.dispatchEvent(new Event("load"));
+        await Promise.resolve();
+      });
+      expect(sampler).toHaveBeenCalledWith(normalImage);
+      expect(page.style.getPropertyValue("--cover-tint")).toBe(
+        "rgb(120 140 130)",
+      );
+      expect(page.style.getPropertyValue("--cover-shade-photo")).toBe(
+        "rgb(20 18 16)",
+      );
+    } finally {
+      sampler.mockRestore();
+    }
+  });
+
+  it("remounts in both mode directions and resamples the normal cover after a round trip", async () => {
+    const mediaId = `user-media-${"a".repeat(32)}`;
+    profileRead.mockResolvedValue({
+      ...profile(true),
+      background: {
+        id: mediaId,
+        src: `/api/community/media/${mediaId}`,
+        width: 1600,
+        height: 1200,
+      },
+    });
+    const sampler = vi
+      .spyOn(profileCoverColors, "coverColors")
+      .mockReturnValue({
+        tint: "rgb(120 140 130)",
+        shade: "rgb(20 18 16)",
+      });
+    try {
+      const node = await render();
+      const page = node.querySelector<HTMLElement>("[data-author-profile]")!;
+      const original = page.querySelector<HTMLImageElement>(
+        '[aria-label="主页背景"] img',
+      )!;
+      await act(async () => {
+        original.dispatchEvent(new Event("load"));
+        await Promise.resolve();
+      });
+      expect(page.style.getPropertyValue("--cover-tint")).toBe(
+        "rgb(120 140 130)",
+      );
+      sampler.mockClear();
+      shell.feedLayout = "single";
+      await act(async () => root!.render(overlay()));
+      const reading = page.querySelector<HTMLImageElement>(
+        '[aria-label="主页背景"] img',
+      )!;
+      expect(reading).not.toBe(original);
+      await act(async () => {
+        reading.dispatchEvent(new Event("load"));
+      });
+      expect(sampler).not.toHaveBeenCalled();
+      sampler.mockReturnValue({ tint: "rgb(30 50 70)", shade: "rgb(3 5 7)" });
+      shell.feedLayout = "double";
+      await act(async () => root!.render(overlay()));
+      const final = page.querySelector<HTMLImageElement>(
+        '[aria-label="主页背景"] img',
+      )!;
+      expect(final).not.toBe(reading);
+      await act(async () => {
+        final.dispatchEvent(new Event("load"));
+        await Promise.resolve();
+      });
+      expect(sampler).toHaveBeenCalledWith(final);
+      expect(page.style.getPropertyValue("--cover-tint")).toBe("rgb(30 50 70)");
+      expect(page.style.getPropertyValue("--cover-shade-photo")).toBe(
+        "rgb(3 5 7)",
+      );
+    } finally {
+      sampler.mockRestore();
+    }
+  });
+
   it("uses a compact calligraphy profile with three public tabs and owner-only tools", async () => {
     shell.feedLayout = "single";
     profileRead.mockResolvedValue({

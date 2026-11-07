@@ -91,6 +91,20 @@ afterEach(() => {
 });
 
 describe("Profile reading content and activation", () => {
+  it("exposes the ordinal as screen-reader text and hides the padded decoration", () => {
+    const view = show(item());
+    const ordinal = Array.from(
+      view.querySelectorAll<HTMLElement>(".yoyi-visually-hidden"),
+    ).find((element) => element.textContent === "第 3 项");
+    expect(ordinal).toBeDefined();
+    expect(ordinal!.closest('[aria-hidden="true"]')).toBeNull();
+    expect(ordinal!.parentElement?.hasAttribute("aria-label")).toBe(false);
+    expect(
+      ordinal!.parentElement?.querySelector('[aria-hidden="true"]')
+        ?.textContent,
+    ).toBe("03");
+    expect(view.querySelector('[aria-label="第 3 项"]')).toBeNull();
+  });
   it("keeps an empty legacy work identifiable without inventing a preview", () => {
     show(item({ title: "", excerpt: undefined, media: null }));
     expect(host.textContent).toContain("暂无可预览的内容");
@@ -236,6 +250,66 @@ describe("Profile reading images", () => {
     act(() => open().click());
     expect(shell.openContent).toHaveBeenCalledWith(
       first.target,
+      expect.any(HTMLButtonElement),
+    );
+  });
+
+  it("keeps a sibling image intact when another card fails and retries the same source", () => {
+    const first = item();
+    // A shared image source must not couple independent cards' failure state.
+    const second = item({
+      target: { type: "work", id: `work-${"c".repeat(32)}` },
+      title: "另一件作品",
+    });
+    act(() =>
+      root.render(
+        <ProfileReadingGrid
+          items={[first, second]}
+          platform="phone"
+          active
+          label="作品展读"
+        />,
+      ),
+    );
+    const cards = host.querySelectorAll<HTMLElement>(
+      "[data-profile-reading-card]",
+    );
+    const failedImage = cards[0]!.querySelector("img")!;
+    const siblingImage = cards[1]!.querySelector("img")!;
+    const siblingSource = siblingImage.getAttribute("src");
+    expect(failedImage.getAttribute("src")).toBe(siblingSource);
+
+    act(() => failedImage.dispatchEvent(new Event("error")));
+    expect(
+      cards[0]!.querySelector('[data-reading-media-state="failed"]'),
+    ).not.toBeNull();
+    expect(cards[1]!.querySelector("img")).toBe(siblingImage);
+    expect(siblingImage.isConnected).toBe(true);
+    expect(siblingImage.getAttribute("data-reading-media-state")).toBe("valid");
+    expect(cards[1]!.querySelector('[aria-label^="重试图像"]')).toBeNull();
+
+    const retry = cards[0]!.querySelector<HTMLButtonElement>(
+      'button[aria-label^="重试图像"]',
+    )!;
+    act(() => retry.click());
+    const replacement = cards[0]!.querySelector("img")!;
+    expect(replacement).not.toBeNull();
+    expect(replacement).not.toBe(failedImage);
+    expect(replacement.getAttribute("src")).toBe(cover.src);
+    expect(failedImage.isConnected).toBe(false);
+    expect(cards[1]!.querySelector("img")).toBe(siblingImage);
+    expect(siblingImage.getAttribute("src")).toBe(siblingSource);
+    expect(siblingImage.getAttribute("data-reading-media-state")).toBe("valid");
+    expect(shell.openContent).not.toHaveBeenCalled();
+
+    act(() =>
+      cards[1]!
+        .querySelector<HTMLButtonElement>('button[aria-label^="打开"]')!
+        .click(),
+    );
+    expect(shell.openContent).toHaveBeenCalledOnce();
+    expect(shell.openContent).toHaveBeenCalledWith(
+      second.target,
       expect.any(HTMLButtonElement),
     );
   });

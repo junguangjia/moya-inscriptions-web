@@ -262,6 +262,8 @@ const ScopedAuthorProfile = ({
   const profile = preview?.profile ?? loadedProfile;
   const root = useRef<HTMLElement>(null),
     topBar = useRef<HTMLElement>(null),
+    detailsToggle = useRef<HTMLButtonElement>(null),
+    detailsWereOpen = useRef(false),
     profileHeader = useRef<HTMLElement>(null),
     identityPanel = useRef<HTMLDivElement>(null),
     identityHead = useRef<HTMLDivElement>(null),
@@ -409,10 +411,12 @@ const ScopedAuthorProfile = ({
     page?.setAttribute("data-profile-stage", "content");
     topBar.current?.removeAttribute("data-theme");
     topBar.current?.removeAttribute("data-cover-passed");
-    profileHeader.current
-      ?.querySelector(`.${styles.backgroundEdit}`)
-      ?.removeAttribute("inert");
   }, [readingProfile]);
+  useEffect(() => {
+    const closed = detailsWereOpen.current && !detailsOpen;
+    detailsWereOpen.current = detailsOpen;
+    if (closed) detailsToggle.current?.focus({ preventScroll: true });
+  }, [detailsOpen]);
   // The photo is its own sticky layer at the root (#237), not inside the
   // identity section, so the compositor keeps it at the top while scrolling.
   const hasPhoto = () =>
@@ -1031,6 +1035,7 @@ const ScopedAuthorProfile = ({
             }
           >
             <img
+              key={readingProfile ? "reading" : "cover"}
               src={coverSrc(profile.background)}
               alt=""
               onLoad={(event) => {
@@ -1088,6 +1093,7 @@ const ScopedAuthorProfile = ({
         {readingProfile && profile ? (
           <button
             type="button"
+            ref={detailsToggle}
             className={readingStyles.detailsToggle}
             aria-expanded={detailsOpen}
             aria-controls={
@@ -1505,7 +1511,7 @@ const ScopedAuthorProfile = ({
       {ownProfile && profile && modal === "background" && (
         <ProfileBackgroundEditor
           profile={profile}
-          header={profileHeader}
+          {...(readingProfile ? {} : { header: profileHeader })}
           onClose={() => setModal(null)}
           onSaved={save}
         />

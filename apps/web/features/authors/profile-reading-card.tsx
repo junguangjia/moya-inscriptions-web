@@ -229,8 +229,9 @@ export const ProfileReadingCard = ({
         ) : null}
       </div>
       <div className={styles.footer}>
-        <span className={styles.ordinal} aria-label={`第 ${position} 项`}>
-          {String(position).padStart(2, "0")}
+        <span className={styles.ordinal}>
+          <span className="yoyi-visually-hidden">第 {position} 项</span>
+          <span aria-hidden="true">{String(position).padStart(2, "0")}</span>
         </span>
         {item.target.type === "catalog" && kind !== "" ? (
           <span className={styles.kind}>{kind}</span>
