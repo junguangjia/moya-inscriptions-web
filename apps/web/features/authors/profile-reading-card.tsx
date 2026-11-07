@@ -8,6 +8,7 @@ import {
   localCatalogMediaSrc,
   localCatalogRenditions,
 } from "../detail/local-catalog-media";
+import { CatalogCardLiveBadge } from "../home/card-media-parts";
 import { desktopCardTitleParts } from "../home/desktop-card-frame";
 import { mediaLoading, responsiveImage } from "../media/responsive-media";
 import type { MediaPriority } from "../media/responsive-media";
@@ -151,14 +152,6 @@ export const ProfileReadingCard = ({
   const hasCaption = item.title !== "" || excerpt !== "";
   const count =
     item.mediaCount ?? item.gallery?.length ?? (item.media === null ? 0 : 1);
-  const kind =
-    item.target.type === "work"
-      ? "作品"
-      : item.kind === "calligraphy"
-        ? "书帖"
-        : item.kind === "inscription"
-          ? "碑刻"
-          : "";
   const display = (value: string) =>
     (!textOnly && verticalTitle) || verticalBody ? (
       <VerticalText text={value} />
@@ -228,39 +221,30 @@ export const ProfileReadingCard = ({
           </div>
         ) : null}
       </div>
-      <div className={styles.footer}>
-        <span className={styles.ordinal}>
-          <span className="yoyi-visually-hidden">第 {position} 项</span>
-          <span aria-hidden="true">{String(position).padStart(2, "0")}</span>
+      <span className="yoyi-visually-hidden">第 {position} 项</span>
+      {audienceLabel !== null ? (
+        <span
+          className={styles.audience}
+          title={audienceNote ?? undefined}
+          data-reading-audience=""
+        >
+          {audienceLabel}
         </span>
-        {item.target.type === "catalog" && kind !== "" ? (
-          <span className={styles.kind}>{kind}</span>
+      ) : null}
+      <div className={styles.badges}>
+        {item.media !== null && item.live === true ? (
+          <CatalogCardLiveBadge />
         ) : null}
-        {audienceLabel !== null ? (
+        {count > 1 ? (
           <span
-            className={styles.audience}
-            title={audienceNote ?? undefined}
-            data-reading-audience=""
+            className={styles.badge}
+            role="img"
+            aria-label={`${count} 张图像`}
           >
-            {audienceLabel}
+            <Icon name="image" aria-hidden="true" />
+            {count}
           </span>
         ) : null}
-        <div className={styles.badges}>
-          {item.media !== null && item.live === true ? (
-            <span className={styles.badge} role="img" aria-label="实况照片">
-              LIVE
-            </span>
-          ) : null}
-          {count > 1 ? (
-            <span
-              className={styles.badge}
-              role="img"
-              aria-label={`${count} 张图像`}
-            >
-              {count} 图
-            </span>
-          ) : null}
-        </div>
       </div>
       {shell.browseOnly === true ? (
         <button

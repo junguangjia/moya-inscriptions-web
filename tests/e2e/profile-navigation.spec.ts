@@ -26,13 +26,16 @@ const profile = {
   nextAvatarChangeAt: null,
 };
 const coverId = `user-media-${"9".repeat(32)}`;
-async function fixture(page: Page, delayed = false, cover = false) {
-  // These cases audit the original cover/header, not the #356 reading shell.
-  // Seed both physical-device scopes before navigation, including PC windows.
-  await page.addInitScript(() => {
-    localStorage.setItem("yoyi.home-feed-layout.v2", "double");
-    localStorage.setItem("yoyi.desktop-feed-layout.v1", "double");
-  });
+async function fixture(
+  page: Page,
+  delayed = false,
+  cover = false,
+  layout: "single" | "double" = "double",
+) {
+  await page.addInitScript((mode) => {
+    localStorage.setItem("yoyi.home-feed-layout.v2", mode);
+    localStorage.setItem("yoyi.desktop-feed-layout.v1", mode);
+  }, layout);
   let resolveProfile = () => {};
   const ready = new Promise<void>((resolve) => {
     resolveProfile = resolve;
@@ -405,104 +408,108 @@ async function difference(first: Buffer, second: Buffer) {
   return changed / pixels;
 }
 
-test("A photo profile rests on the photo or on the collections", async ({
-  page,
-}) => {
-  await fixture(page, false, true);
-  // The photo, then the compact cover with its frost and glass card.
-  await expect(
-    page.locator('[data-author-profile] [aria-label="主页背景"] img'),
-  ).toHaveCount(1);
-  await expect(
-    page.locator('[data-author-profile] [aria-label="主页背景"] + div > span'),
-  ).toHaveCount(2);
-  await expect.poll(async () => (await stage(page)).rest).toBeGreaterThan(60);
-  const { rest, second } = await stage(page);
-  expect(second).toBeGreaterThan(rest);
-  // The scroller snaps natively between the two resting places (#237).
-  expect(await stage(page)).toMatchObject({
-    stage: "cover",
-    theme: "dark",
-    glass: "0",
-    snap: "y mandatory",
+for (const layout of ["double"] as const) {
+  test(`A photo profile rests on the photo or on the collections in ${layout}`, async ({
+    page,
+  }) => {
+    await fixture(page, false, true, layout);
+    // The photo, then the compact cover with its frost and glass card.
+    await expect(
+      page.locator('[data-author-profile] [aria-label="主页背景"] img'),
+    ).toHaveCount(1);
+    await expect(
+      page.locator(
+        '[data-author-profile] [aria-label="主页背景"] + div > span',
+      ),
+    ).toHaveCount(2);
+    await expect.poll(async () => (await stage(page)).rest).toBeGreaterThan(60);
+    const { rest, second } = await stage(page);
+    expect(second).toBeGreaterThan(rest);
+    // The scroller snaps natively between the two resting places (#237).
+    expect(await stage(page)).toMatchObject({
+      stage: "cover",
+      theme: "dark",
+      glass: "0",
+      snap: "y mandatory",
+    });
+    const hint = page.getByRole("button", { name: "向下查看作品" });
+    await expect(hint).toHaveCSS("opacity", "1");
+    await expect(hint).not.toHaveAttribute("inert");
+    // Left short of half way, the page settles back on the whole photo…
+    await scrollTo(page, Math.round(second * 0.4));
+    await expect.poll(async () => (await geometry(page)).top).toBe(0);
+    // …and past it, on the collections: never in between.
+    await scrollTo(page, Math.round(second * 0.6));
+    await expect
+      .poll(async () => Math.abs((await geometry(page)).top - second))
+      .toBeLessThanOrEqual(1);
+    const rested = await stage(page);
+    expect(rested).toMatchObject({
+      stage: "content",
+      theme: "dark",
+      glass: "1",
+      belowTabs: "collections",
+      aboveTabs: "cover",
+    });
+    expect(rested.frosted).toMatch(/blur/u);
+    // The tabs pin right under the identity's actions.
+    expect(Math.abs(rested.tabsTop - rested.rowBottom)).toBeLessThanOrEqual(24);
+    // The identity rests just under the top bar, on a glass card that ends
+    // just above the tabs.
+    expect(rested.avatarTop - rested.barBottom).toBeGreaterThanOrEqual(8);
+    expect(rested.avatarTop - rested.barBottom).toBeLessThanOrEqual(16);
+    expect(rested.avatarTop - rested.cardTop).toBeCloseTo(10, 0);
+    expect(rested.tabsTop - rested.cardBottom).toBeGreaterThan(2);
+    expect(rested.tabsTop - rested.cardBottom).toBeLessThanOrEqual(10);
+    // The compact cover stays at the top and ends where the pinned tabs begin.
+    expect(Math.abs(rested.photoTop)).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(rested.photoTop + rested.photoHeight - rested.tabsTop),
+    ).toBeLessThanOrEqual(2);
+    await expect(hint).toHaveAttribute("inert", "");
+    await expect(hint).toHaveCSS("opacity", "0");
+    // Further down only the collections move, under the compact cover: it
+    // looks exactly as it did, and its taps never reach a hidden work (#237).
+    const viewport = page.viewportSize()!;
+    const cover = {
+      x: 0,
+      y: 0,
+      width: viewport.width - 24,
+      height: Math.floor(rested.tabsTop) - 3,
+    };
+    // Let the stage's colour transitions and the card's tint sampling settle.
+    await page.waitForTimeout(600);
+    const before = await page.screenshot({ clip: cover });
+    // To the collections' real end: a scroll past it is a distance, not a place.
+    const { max } = await geometry(page);
+    expect(max).toBeGreaterThan(second + 40);
+    await scrollTo(page, max);
+    await expect
+      .poll(async () => Math.abs((await geometry(page)).top - max))
+      .toBeLessThanOrEqual(1);
+    await page.waitForTimeout(300);
+    const deep = await stage(page);
+    expect(Math.abs(deep.nameTop - rested.nameTop)).toBeLessThan(1);
+    expect(deep.aboveTabs).toBe("cover");
+    // Text may re-rasterise; collections passing over it would change most of
+    // it.
+    expect(
+      await difference(before, await page.screenshot({ clip: cover })),
+    ).toBeLessThan(0.01);
+    // Back to the collections' top, then into the gap: short of half way from
+    // the collections it settles back on them, past it the whole photo returns
+    // with the hint.
+    await scrollTo(page, Math.round(second * 0.7));
+    await expect
+      .poll(async () => Math.abs((await geometry(page)).top - second))
+      .toBeLessThanOrEqual(1);
+    await scrollTo(page, Math.round(second * 0.3));
+    await expect.poll(async () => (await geometry(page)).top).toBe(0);
+    expect(await stage(page)).toMatchObject({ stage: "cover", theme: "dark" });
+    await expect(hint).toHaveCSS("opacity", "1");
+    await expect(hint).not.toHaveAttribute("inert");
   });
-  const hint = page.getByRole("button", { name: "向下查看作品" });
-  await expect(hint).toHaveCSS("opacity", "1");
-  await expect(hint).not.toHaveAttribute("inert");
-  // Left short of half way, the page settles back on the whole photo…
-  await scrollTo(page, Math.round(second * 0.4));
-  await expect.poll(async () => (await geometry(page)).top).toBe(0);
-  // …and past it, on the collections: never in between.
-  await scrollTo(page, Math.round(second * 0.6));
-  await expect
-    .poll(async () => Math.abs((await geometry(page)).top - second))
-    .toBeLessThanOrEqual(1);
-  const rested = await stage(page);
-  expect(rested).toMatchObject({
-    stage: "content",
-    theme: "dark",
-    glass: "1",
-    belowTabs: "collections",
-    aboveTabs: "cover",
-  });
-  expect(rested.frosted).toMatch(/blur/u);
-  // The tabs pin right under the identity's actions.
-  expect(Math.abs(rested.tabsTop - rested.rowBottom)).toBeLessThanOrEqual(24);
-  // The identity rests just under the top bar, on a glass card that ends
-  // just above the tabs.
-  expect(rested.avatarTop - rested.barBottom).toBeGreaterThanOrEqual(8);
-  expect(rested.avatarTop - rested.barBottom).toBeLessThanOrEqual(16);
-  expect(rested.avatarTop - rested.cardTop).toBeCloseTo(10, 0);
-  expect(rested.tabsTop - rested.cardBottom).toBeGreaterThan(2);
-  expect(rested.tabsTop - rested.cardBottom).toBeLessThanOrEqual(10);
-  // The compact cover stays at the top and ends where the pinned tabs begin.
-  expect(Math.abs(rested.photoTop)).toBeLessThanOrEqual(1);
-  expect(
-    Math.abs(rested.photoTop + rested.photoHeight - rested.tabsTop),
-  ).toBeLessThanOrEqual(2);
-  await expect(hint).toHaveAttribute("inert", "");
-  await expect(hint).toHaveCSS("opacity", "0");
-  // Further down only the collections move, under the compact cover: it
-  // looks exactly as it did, and its taps never reach a hidden work (#237).
-  const viewport = page.viewportSize()!;
-  const cover = {
-    x: 0,
-    y: 0,
-    width: viewport.width - 24,
-    height: Math.floor(rested.tabsTop) - 3,
-  };
-  // Let the stage's colour transitions and the card's tint sampling settle.
-  await page.waitForTimeout(600);
-  const before = await page.screenshot({ clip: cover });
-  // To the collections' real end: a scroll past it is a distance, not a place.
-  const { max } = await geometry(page);
-  expect(max).toBeGreaterThan(second + 40);
-  await scrollTo(page, max);
-  await expect
-    .poll(async () => Math.abs((await geometry(page)).top - max))
-    .toBeLessThanOrEqual(1);
-  await page.waitForTimeout(300);
-  const deep = await stage(page);
-  expect(Math.abs(deep.nameTop - rested.nameTop)).toBeLessThan(1);
-  expect(deep.aboveTabs).toBe("cover");
-  // Text may re-rasterise; collections passing over it would change most of
-  // it.
-  expect(
-    await difference(before, await page.screenshot({ clip: cover })),
-  ).toBeLessThan(0.01);
-  // Back to the collections' top, then into the gap: short of half way from
-  // the collections it settles back on them, past it the whole photo returns
-  // with the hint.
-  await scrollTo(page, Math.round(second * 0.7));
-  await expect
-    .poll(async () => Math.abs((await geometry(page)).top - second))
-    .toBeLessThanOrEqual(1);
-  await scrollTo(page, Math.round(second * 0.3));
-  await expect.poll(async () => (await geometry(page)).top).toBe(0);
-  expect(await stage(page)).toMatchObject({ stage: "cover", theme: "dark" });
-  await expect(hint).toHaveCSS("opacity", "1");
-  await expect(hint).not.toHaveAttribute("inert");
-});
+}
 
 /** The photo layer's top edge on screen (the page's own sticky layer). */
 async function photoTop(page: Page) {

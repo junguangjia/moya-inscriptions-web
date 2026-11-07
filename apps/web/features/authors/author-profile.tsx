@@ -20,13 +20,12 @@ import { HorizontalPager } from "../shell/horizontal-pager";
 import type { HorizontalPagerHandle } from "../shell/horizontal-pager";
 import { authorClient } from "./author-data";
 import { useAuthors } from "./author-context";
-import { avatarImage, coverSrc } from "../media/profile-image";
+import { avatarImage, avatarThumbSrc, coverSrc } from "../media/profile-image";
 import { useDirectMessageEntry } from "../messages/direct-message-entry";
 import { AvatarEntry } from "./avatar-editor";
 import { ProfileEditor } from "./profile-editor";
 import { ProfileSettings } from "./profile-settings";
 import { ProfileList } from "./profile-list";
-import { AuthorDialog } from "./author-dialog";
 import { DraftsCard } from "../publishing/ui/drafts/drafts-card";
 import { PeopleList } from "./people-list";
 import { ProfileBackgroundEditor } from "./profile-background-editor";
@@ -36,7 +35,6 @@ import { forgetAuthorWorkSnapshots } from "./work-snapshots";
 import { requestIdentity } from "../shell/request-identity";
 import media from "../publishing/ui/media/media.module.css";
 import styles from "../user/user-presentation.module.css";
-import readingStyles from "./profile-reading-shell.module.css";
 const tabs = ["works", "favorites", "likes", "history"] as const;
 const publicTabs = tabs.slice(0, 3);
 const labels = {
@@ -214,7 +212,7 @@ const ScopedAuthorProfile = ({
   const directEntry = useDirectMessageEntry();
   const author = useAuthors(),
     shell = useProductShell(),
-    readingProfile = shell.feedLayout === "single",
+    compactProfile = shell.feedLayout === "single",
     isPreview = preview !== undefined,
     viewerId = isPreview ? null : author.viewer?.id,
     checking = isPreview ? false : author.checking,
@@ -238,7 +236,6 @@ const ScopedAuthorProfile = ({
         : ((author.cache.get(cacheKey) as AuthorProfile | undefined) ?? null),
     ),
     [error, setError] = useState(""),
-    [detailsOpen, setDetailsOpen] = useState(false),
     [modal, setModal] = useState<"edit" | "settings" | "background" | null>(
       authReturnView?.open ? "settings" : null,
     ),
@@ -262,8 +259,8 @@ const ScopedAuthorProfile = ({
   const profile = preview?.profile ?? loadedProfile;
   const root = useRef<HTMLElement>(null),
     topBar = useRef<HTMLElement>(null),
-    detailsToggle = useRef<HTMLButtonElement>(null),
-    detailsWereOpen = useRef(false),
+    authorSummary = useRef<HTMLButtonElement>(null),
+    collectionReturn = useRef<{ tab: string; bodyOffset: number } | null>(null),
     profileHeader = useRef<HTMLElement>(null),
     identityPanel = useRef<HTMLDivElement>(null),
     identityHead = useRef<HTMLDivElement>(null),
@@ -276,7 +273,13 @@ const ScopedAuthorProfile = ({
     cardSampled = useRef(""),
     pendingScrollTop = useRef<number | null>(null),
     collapseHeight = useRef(0),
-    coverLayout = useRef({ photo: false, free: false, rest: 0, passedAt: 0 }),
+    coverLayout = useRef({
+      photo: false,
+      free: false,
+      rest: 0,
+      passedAt: 0,
+      collapse: 0,
+    }),
     pager = useRef<HorizontalPagerHandle<(typeof tabs)[number]>>(null),
     tabId = useId(),
     currentTab = state.tab === "comments" ? "works" : state.tab;
@@ -284,8 +287,6 @@ const ScopedAuthorProfile = ({
     viewTab = visibleTabs.includes(currentTab as (typeof tabs)[number])
       ? currentTab
       : "works";
-  const navigationTabs = readingProfile ? publicTabs : visibleTabs;
-  const detailsId = `${tabId}-details`;
   const ownProfile =
     !isPreview && !!profile?.isOwner && profile.id === viewerId;
   useEffect(() => {
@@ -380,43 +381,6 @@ const ScopedAuthorProfile = ({
   };
   const scrollTab = viewTab;
   const departingTab = useRef<string | null>(null);
-  useLayoutEffect(() => {
-    if (!readingProfile) return;
-    // A Settings change keeps these DOM nodes. Retire photo-stage state
-    // without replacing the shell's vertical scroller or section offsets.
-    window.clearTimeout(chinTimer.current);
-    window.clearTimeout(cardTimer.current);
-    cardRun.current++;
-    collapseHeight.current = 0;
-    coverLayout.current = { photo: false, free: false, rest: 0, passedAt: 0 };
-    stage.current = "content";
-    const page = root.current;
-    for (const attribute of [
-      "data-cover-snap",
-      "data-cover-free",
-      "data-cover-instant",
-    ])
-      page?.removeAttribute(attribute);
-    for (const property of [
-      "--cover-rest",
-      "--cover-pinned",
-      "--cover-height",
-      "--cover-progress",
-      "--cover-card-top",
-      "--cover-card-left",
-      "--cover-card-right",
-      "--cover-card-height",
-    ])
-      page?.style.removeProperty(property);
-    page?.setAttribute("data-profile-stage", "content");
-    topBar.current?.removeAttribute("data-theme");
-    topBar.current?.removeAttribute("data-cover-passed");
-  }, [readingProfile]);
-  useEffect(() => {
-    const closed = detailsWereOpen.current && !detailsOpen;
-    detailsWereOpen.current = detailsOpen;
-    if (closed) detailsToggle.current?.focus({ preventScroll: true });
-  }, [detailsOpen]);
   // The photo is its own sticky layer at the root (#237), not inside the
   // identity section, so the compositor keeps it at the top while scrolling.
   const hasPhoto = () =>
@@ -446,7 +410,7 @@ const ScopedAuthorProfile = ({
   // A photo cover pins (compact cover, identity, tabs) only when the
   // collections still get room below; a taller identity (a long bio, a
   // landscape phone) scrolls freely instead.
-  const coverFree = () => {
+  const coverTooTall = () => {
     const cover = profileHeader.current?.getBoundingClientRect().height ?? 0,
       tabs =
         root.current?.querySelector<HTMLElement>('[role="tablist"]')
@@ -457,6 +421,10 @@ const ScopedAuthorProfile = ({
       cover - restTop() - pinShift() + tabs + COVER_MIN_COLLECTIONS > port
     );
   };
+  // Reading lets the complete identity leave the viewport; only the existing
+  // top bar and classification tabs remain above the works. Its geometry never
+  // changes on scroll, so native snapping and saved offsets stay stable.
+  const coverFree = () => compactProfile || coverTooTall();
   const pinned = () => hasPhoto() && !coverFree();
   // The glass card at the collections stage, in the photo box (which then
   // spans the screen from the top down to the tabs): around the identity by
@@ -545,7 +513,6 @@ const ScopedAuthorProfile = ({
   // draw nothing in WebKit); the stylesheet's default tint holds until then.
   // Only the latest request counts, and a layout already sampled is skipped.
   const sampleCard = () => {
-    if (readingProfile) return;
     const image = root.current?.querySelector<HTMLImageElement>(
       `:scope > .${styles.profileCover} img`,
     );
@@ -584,22 +551,19 @@ const ScopedAuthorProfile = ({
   // collections scroll). Otherwise the cover runs up under the top bar, so the
   // tabs pin once it has scrolled by its own height less the bar's.
   const coverCollapse = () =>
-    readingProfile
-      ? 0
-      : pinned()
-        ? restStage()
-        : Math.max(
-            0,
-            (profileHeader.current?.getBoundingClientRect().height ?? 0) -
-              (topBar.current?.offsetHeight ?? 0),
-          );
+    pinned()
+      ? restStage()
+      : Math.max(
+          0,
+          (profileHeader.current?.getBoundingClientRect().height ?? 0) -
+            (topBar.current?.offsetHeight ?? 0),
+        );
   // Layout-dependent cover geometry, measured when the layout changes (load,
   // resize, a bio, a tab's height) and never on scroll (#237): while
   // scrolling, only the compositor moves the photo, the identity and the
   // tabs (all sticky), so nothing can lag behind the finger. A pinned photo
   // also turns on native snapping between the two resting places.
   const layoutCover = () => {
-    if (readingProfile) return;
     const bar = topBar.current,
       panel = identityPanel.current,
       page = root.current;
@@ -607,14 +571,27 @@ const ScopedAuthorProfile = ({
     const photo = hasPhoto(),
       free = photo && coverFree();
     page.toggleAttribute("data-cover-free", free);
-    page.toggleAttribute("data-cover-snap", photo && !free);
     const rest = restTop(),
       shift = pinShift();
     const cover = profileHeader.current?.getBoundingClientRect().height ?? 0;
+    // A reading cover must also let every biography line and action be read
+    // before it leaves. The existing foot gap may extend past the viewport;
+    // longer complete identities scroll freely instead of snapping over text.
+    const port = scrollElement()?.clientHeight ?? 0;
+    const footGap =
+      Number.parseFloat(
+        getComputedStyle(panel).getPropertyValue("--yoyi-space-9"),
+      ) || 0;
+    const readingCoverFits =
+      !compactProfile || port <= 0 || cover <= port + footGap;
+    page.toggleAttribute(
+      "data-cover-snap",
+      photo && !coverTooTall() && readingCoverFits,
+    );
     page.style.setProperty("--cover-rest", `${rest}px`);
     page.style.setProperty(
       "--cover-pinned",
-      `${Math.max(0, cover - rest - shift)}px`,
+      `${compactProfile ? bar.offsetHeight : Math.max(0, cover - rest - shift)}px`,
     );
     // The photo layer keeps the full cover's size: the compact cover shows
     // its top part, and the tabs and collections cover the rest.
@@ -630,11 +607,15 @@ const ScopedAuthorProfile = ({
         ["height", card.height],
       ] as const)
         page.style.setProperty(`--cover-card-${name}`, `${value}px`);
+    const collapse = coverCollapse();
     coverLayout.current = {
       photo,
       free,
-      rest,
-      passedAt: panel.offsetTop - bar.offsetHeight - 1,
+      rest: compactProfile ? collapse : rest,
+      passedAt: compactProfile
+        ? collapse - 1
+        : panel.offsetTop - bar.offsetHeight - 1,
+      collapse,
     };
   };
   // Scroll-linked paint values only (no geometry writes; a pinned cover reads
@@ -645,7 +626,6 @@ const ScopedAuthorProfile = ({
   // a pinned photo it turns solid, in the page theme, once the identity panel
   // reaches it.
   const markCover = (top: number, instant = true) => {
-    if (readingProfile) return;
     const bar = topBar.current,
       panel = identityPanel.current,
       page = root.current;
@@ -694,6 +674,38 @@ const ScopedAuthorProfile = ({
         160,
       );
     }
+    const condensed =
+      compactProfile &&
+      profile !== null &&
+      coverLayout.current.collapse > 0 &&
+      top >= coverLayout.current.collapse - 1;
+    const readingReturn =
+      compactProfile && collectionReturn.current?.tab === viewTab && !condensed;
+    page.toggleAttribute("data-profile-condensed", condensed);
+    page.toggleAttribute("data-profile-reading-return", readingReturn);
+    const summary = authorSummary.current,
+      full = profileHeader.current,
+      active = document.activeElement;
+    summary?.toggleAttribute("inert", !condensed && !readingReturn);
+    summary?.setAttribute("aria-hidden", String(!condensed && !readingReturn));
+    if (summary)
+      summary.setAttribute(
+        "aria-label",
+        readingReturn
+          ? `返回${labels[viewTab]}展读`
+          : `查看${summary.querySelector("strong")?.textContent ?? ""}的完整资料`,
+      );
+    // The full identity is offscreen in Works. Keep keyboard navigation in the
+    // visible header; the explicit author button restores the complete cover.
+    if (condensed && active && full?.contains(active))
+      summary?.focus({ preventScroll: true });
+    full?.toggleAttribute("inert", condensed);
+    if (condensed) full?.setAttribute("aria-hidden", "true");
+    else full?.removeAttribute("aria-hidden");
+    if (!condensed && !readingReturn && active && summary?.contains(active))
+      identityHead.current
+        ?.querySelector<HTMLElement>("h1")
+        ?.focus({ preventScroll: true });
     const hint = scrollHint.current;
     // A passed bar is solid in the reader's page colour, in their theme.
     for (const [element, dark] of [
@@ -732,9 +744,8 @@ const ScopedAuthorProfile = ({
     const collapse = coverCollapse();
     // All collections share the cover expansion. Once pinned, each collection
     // keeps its own body offset without bringing the cover back on a switch.
-    const next = readingProfile
-      ? (positions.current[tab] ?? 0)
-      : top < collapse - 1
+    const next =
+      top < collapse - 1
         ? top
         : Math.max(collapse, positions.current[tab] ?? 0);
     pendingScrollTop.current = next;
@@ -774,9 +785,9 @@ const ScopedAuthorProfile = ({
     scrollTab,
     state.entryId,
     profile?.isOwner,
+    compactProfile,
     shell.activeDestination,
     shell.platform,
-    readingProfile,
   ]);
   // The cover and the collections are two resting places. The scroller snaps
   // between them natively (scroll-snap-type: y mandatory on the profile with
@@ -786,7 +797,6 @@ const ScopedAuthorProfile = ({
   // (their snap area is taller than the screen). This replaced a JavaScript
   // glide that waited for momentum to end and could rest in between (#237).
   useLayoutEffect(() => {
-    if (readingProfile) return;
     if (embedded && shell.activeDestination !== "user") return;
     const header = profileHeader.current;
     const node = scrollElement();
@@ -843,14 +853,66 @@ const ScopedAuthorProfile = ({
     isPreview,
     scrollTab,
     state.entryId,
+    compactProfile,
     shell.activeDestination,
     shell.platform,
-    readingProfile,
   ]);
+  const showCompleteProfile = () => {
+    const node = scrollElement();
+    if (!node) return;
+    collectionReturn.current = {
+      tab: viewTab,
+      bodyOffset: Math.max(0, node.scrollTop - coverCollapse()),
+    };
+    node.scrollTop = 0;
+    positions.current[viewTab] = 0;
+    markCover(0);
+    if (!isPreview)
+      author.cache.set(`profile-scroll:${state.entryId}`, positions.current);
+    if (!embedded) onViewChange(viewTab, 0);
+    identityHead.current
+      ?.querySelector<HTMLElement>("h1")
+      ?.focus({ preventScroll: true });
+  };
+  const enterCollection = () => {
+    const node = scrollElement(),
+      remembered = collectionReturn.current;
+    const top = compactProfile
+      ? coverCollapse() +
+        (remembered?.tab === viewTab ? remembered.bodyOffset : 0)
+      : restStage();
+    collectionReturn.current = null;
+    if (!node || top <= 0) return;
+    node.scrollTo?.({
+      top,
+      behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth",
+    });
+    root.current
+      ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+      ?.focus({ preventScroll: true });
+  };
   const panels = Object.fromEntries(
     tabs.map((tab) => [
       tab,
       <div className={styles.panelContent}>
+        {!isPreview &&
+          shell.feedLayout === "single" &&
+          ownProfile &&
+          profile &&
+          tab === "works" && (
+            <div className={styles.profileCollectionTools}>
+              <DraftsCard
+                accountId={profile.id}
+                active={
+                  viewTab === "works" &&
+                  (!embedded || shell.activeDestination === "user")
+                }
+                presentation="tool"
+              />
+            </div>
+          )}
         {isPreview ? (
           <div>
             <p>暂无可显示的内容</p>
@@ -881,11 +943,10 @@ const ScopedAuthorProfile = ({
   // Over a photo the identity's text and the owner's pencil wear the dark
   // theme. The avatar does not: the avatar editor opens inside it, in the
   // reader's own theme.
-  const coverTheme =
-    !readingProfile && profile?.background ? "dark" : undefined;
+  const coverTheme = profile?.background ? "dark" : undefined;
   // The frost and the glass card, drawn in whichever photo layer the identity
   // rests over: the compact cover when pinned, the photo when free.
-  const coverGlassCard = !readingProfile && profile?.background && (
+  const coverGlassCard = profile?.background && (
     <>
       <span
         aria-hidden="true"
@@ -897,109 +958,13 @@ const ScopedAuthorProfile = ({
       <span aria-hidden="true" className={styles.coverCard} />
     </>
   );
-  const biography = profile ? (
-    <>
-      {profile.bio && (
-        <p
-          className={styles.coverBio}
-          data-theme={coverTheme}
-          tabIndex={readingProfile && shell.platform === "pc" ? 0 : undefined}
-        >
-          {profile.bio}
-        </p>
-      )}
-      {!isPreview && (
-        <p
-          className={styles.coverBio}
-          data-theme={coverTheme}
-          data-profile-ip-location=""
-        >
-          IP 属地：{profile.ipLocation ?? "属地暂不可用"}
-        </p>
-      )}
-    </>
-  ) : null;
-  const navigation = (
-    <div
-      className={readingProfile ? readingStyles.tabList : styles.tabs}
-      role="tablist"
-      aria-label="用户内容分类"
-      hidden={readingProfile && viewTab === "history"}
-    >
-      {navigationTabs.map((tab) => (
-        <button
-          type="button"
-          key={tab}
-          role="tab"
-          id={`${tabId}-${tab}`}
-          aria-controls={`${tabId}-panel-${tab}`}
-          aria-selected={viewTab === tab}
-          tabIndex={viewTab === tab ? 0 : -1}
-          onClick={() => pager.current?.scrollToKey(tab)}
-          onKeyDown={(event) => {
-            const index = navigationTabs.indexOf(tab);
-            const next =
-              event.key === "ArrowRight"
-                ? navigationTabs[Math.min(index + 1, navigationTabs.length - 1)]
-                : event.key === "ArrowLeft"
-                  ? navigationTabs[Math.max(0, index - 1)]
-                  : undefined;
-            if (next) {
-              event.preventDefault();
-              pager.current?.scrollToKey(next);
-              root.current
-                ?.querySelector<HTMLElement>(`[id="${tabId}-${next}"]`)
-                ?.focus({ preventScroll: true });
-            }
-          }}
-        >
-          {labels[tab]}
-        </button>
-      ))}
-      <span
-        aria-hidden
-        className={styles.tabIndicator}
-        style={{
-          width: `${100 / navigationTabs.length}%`,
-          transform: `translateX(${progress * 100}%)`,
-        }}
-      />
-    </div>
-  );
-  const readingTools = (
-    <div className={readingStyles.toolbar}>
-      <h2 id={`${tabId}-history-heading`} className={readingStyles.heading}>
-        {viewTab === "history" ? "浏览历史" : `${labels[viewTab]}展读`}
-      </h2>
-      {ownProfile && profile && (
-        <DraftsCard
-          accountId={profile.id}
-          active={!embedded || shell.activeDestination === "user"}
-          presentation="tool"
-        />
-      )}
-      {owner && !isPreview && (
-        <button
-          type="button"
-          aria-pressed={viewTab === "history"}
-          onClick={() =>
-            pager.current?.scrollToKey(
-              viewTab === "history" ? "works" : "history",
-            )
-          }
-        >
-          {viewTab === "history" ? "返回作品" : "历史"}
-        </button>
-      )}
-    </div>
-  );
   return (
     <section
       ref={root}
       role={embedded || insideDialog ? "region" : "dialog"}
       aria-modal={embedded || insideDialog ? undefined : true}
       aria-label={embedded ? "用户主页" : "作者主页"}
-      className={`${embedded ? styles.page : styles.overlay} ${readingProfile ? readingStyles.root : styles.coverRoot}`}
+      className={`${embedded ? styles.page : styles.overlay} ${styles.coverRoot}`}
       style={
         {
           ...(coverTint && {
@@ -1014,32 +979,22 @@ const ScopedAuthorProfile = ({
         } as CSSProperties
       }
       data-author-profile={id ?? "guest"}
-      data-profile-reading={readingProfile ? "" : undefined}
-      data-reading-platform={readingProfile ? shell.platform : undefined}
+      data-compact-author={compactProfile ? "" : undefined}
       data-cover-photo={profile?.background ? "" : undefined}
     >
-      {!readingProfile && profile?.background && (
+      {profile?.background && (
         // The first resting place for native snapping: the page's top (#237).
         <span aria-hidden="true" className={styles.coverSnapTop} />
       )}
       {/* The photo: a sticky layer behind the identity, the tabs and the
           collections, so the compositor holds it at the top (#237). */}
-      <div
-        className={`${styles.profileCover} ${readingProfile ? readingStyles.background : ""}`}
-        aria-label="主页背景"
-      >
+      <div className={styles.profileCover} aria-label="主页背景">
         {profile?.background && (
-          <div
-            className={
-              readingProfile ? readingStyles.coverPhoto : styles.coverPhoto
-            }
-          >
+          <div className={styles.coverPhoto}>
             <img
-              key={readingProfile ? "reading" : "cover"}
               src={coverSrc(profile.background)}
               alt=""
               onLoad={(event) => {
-                if (readingProfile) return;
                 const image = event.currentTarget;
                 const src = image.getAttribute("src") ?? "";
                 void decoded(image).then(() => {
@@ -1059,7 +1014,7 @@ const ScopedAuthorProfile = ({
           </div>
         )}
       </div>
-      {!readingProfile && profile?.background && (
+      {profile?.background && (
         // The compact cover: the photo's top part again, sticky over the
         // collections, so they pass under it rather than over the photo. A
         // pinned cover's frost and glass card are here.
@@ -1073,10 +1028,7 @@ const ScopedAuthorProfile = ({
           {coverGlassCard}
         </div>
       )}
-      <header
-        ref={topBar}
-        className={`${styles.header} ${readingProfile ? readingStyles.header : styles.coverHeader}`}
-      >
+      <header ref={topBar} className={`${styles.header} ${styles.coverHeader}`}>
         {embedded && headerStart ? (
           headerStart
         ) : (
@@ -1090,51 +1042,67 @@ const ScopedAuthorProfile = ({
             <Icon name="back" />
           </button>
         )}
-        {readingProfile && profile ? (
+        {compactProfile && profile ? (
           <button
+            ref={authorSummary}
             type="button"
-            ref={detailsToggle}
-            className={readingStyles.detailsToggle}
-            aria-expanded={detailsOpen}
-            aria-controls={
-              shell.platform === "pc" || detailsOpen ? detailsId : undefined
+            className={styles.profileSummary}
+            aria-label={`查看${name}的完整资料`}
+            aria-hidden="true"
+            inert
+            onClick={() =>
+              root.current?.hasAttribute("data-profile-condensed")
+                ? showCompleteProfile()
+                : enterCollection()
             }
-            aria-haspopup={shell.platform === "pc" ? undefined : "dialog"}
-            onClick={() => setDetailsOpen((open) => !open)}
+            data-profile-summary=""
           >
-            {detailsOpen ? "收起资料" : "个人资料"}
+            <span className={styles.summaryAvatar} aria-hidden="true">
+              {profile.avatar ? (
+                <img
+                  src={avatarThumbSrc(profile.avatar)}
+                  alt=""
+                  width={32}
+                  height={32}
+                />
+              ) : (
+                name.slice(0, 1)
+              )}
+            </span>
+            <span className={styles.summaryCopy}>
+              <strong>{name}</strong>
+              <span>{profile.studioName || `@${profile.handle}`}</span>
+            </span>
+            <span className={styles.summaryDisclosure} aria-hidden="true">
+              资料
+              <svg viewBox="0 0 24 24">
+                <path d="m6 14 6-6 6 6" />
+              </svg>
+            </span>
+            <span className={styles.summaryReturn}>
+              返回{labels[viewTab]}展读
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m6 9.5 6 6 6-6" />
+              </svg>
+            </span>
           </button>
         ) : (
           <span />
         )}
-        {owner &&
-        (!(embedded && shell.desktop) || (readingProfile && ownProfile)) ? (
+        {owner && !(embedded && shell.desktop) ? (
           <nav className={styles.profileActions} aria-label="主页管理">
-            {readingProfile && ownProfile && (
-              <button
-                type="button"
-                aria-label="编辑主页背景"
-                title="编辑主页背景"
-                className="yoyi-icon-button"
-                onClick={() => setModal("background")}
-              >
-                <Icon name="edit" />
-              </button>
-            )}
-            {!(embedded && shell.desktop) && (
-              <button
-                type="button"
-                aria-label="设置"
-                className="yoyi-icon-button"
-                onClick={(event) =>
-                  onOpenSettings
-                    ? shell.requestSettings(event.currentTarget, onOpenSettings)
-                    : setModal("settings")
-                }
-              >
-                <Icon name="settings" />
-              </button>
-            )}
+            <button
+              type="button"
+              aria-label="设置"
+              className="yoyi-icon-button"
+              onClick={(event) =>
+                onOpenSettings
+                  ? shell.requestSettings(event.currentTarget, onOpenSettings)
+                  : setModal("settings")
+              }
+            >
+              <Icon name="settings" />
+            </button>
           </nav>
         ) : (
           <span />
@@ -1142,11 +1110,11 @@ const ScopedAuthorProfile = ({
       </header>
       <section
         ref={profileHeader}
-        className={`${styles.profile} ${readingProfile ? readingStyles.identity : styles.coverProfile}`}
+        className={`${styles.profile} ${styles.coverProfile}`}
         aria-label="用户资料"
         data-profile-background-slot=""
       >
-        {ownProfile && !readingProfile && (
+        {ownProfile && (
           <button
             type="button"
             data-theme={coverTheme}
@@ -1159,12 +1127,9 @@ const ScopedAuthorProfile = ({
         )}
         <div
           ref={identityPanel}
-          className={`${styles.profileIdentity} ${styles.coverIdentity} ${readingProfile ? readingStyles.identityPanel : ""}`}
+          className={`${styles.profileIdentity} ${styles.coverIdentity}`}
         >
-          <div
-            ref={identityHead}
-            className={`${styles.coverHead} ${readingProfile ? readingStyles.identityHead : ""}`}
-          >
+          <div ref={identityHead} className={styles.coverHead}>
             {ownProfile && profile ? (
               <AvatarEntry profile={profile} className={styles.avatar}>
                 {profile.avatar ? (
@@ -1176,14 +1141,6 @@ const ScopedAuthorProfile = ({
                   />
                 ) : (
                   <span>{name.slice(0, 1)}</span>
-                )}
-                {readingProfile && (
-                  <span
-                    className={readingStyles.avatarEditHint}
-                    aria-hidden="true"
-                  >
-                    <Icon name="edit" />
-                  </span>
                 )}
               </AvatarEntry>
             ) : (
@@ -1205,10 +1162,10 @@ const ScopedAuthorProfile = ({
               </div>
             )}
             <div
-              className={`${styles.identity} ${styles.coverNames} ${readingProfile ? readingStyles.identityNames : ""}`}
+              className={`${styles.identity} ${styles.coverNames}`}
               data-theme={coverTheme}
             >
-              <h1>{name}</h1>
+              <h1 tabIndex={-1}>{name}</h1>
               {profile && (
                 <p className={styles.coverMeta}>
                   {profile.studioName && (
@@ -1221,23 +1178,30 @@ const ScopedAuthorProfile = ({
           </div>
           {profile ? (
             <>
-              {readingProfile ? (
-                shell.platform === "pc" ? (
-                  <div
-                    id={detailsId}
-                    hidden={!detailsOpen}
-                    className={readingStyles.details}
-                  >
-                    {biography}
-                  </div>
-                ) : null
-              ) : (
-                biography
+              {profile.bio && (
+                <p className={styles.coverBio} data-theme={coverTheme}>
+                  {profile.bio}
+                </p>
               )}
-              <div
-                className={`${styles.coverBar} ${readingProfile ? readingStyles.bar : ""}`}
-                data-theme={coverTheme}
-              >
+              {!isPreview && (
+                <p
+                  className={styles.coverBio}
+                  data-theme={coverTheme}
+                  data-profile-ip-location=""
+                >
+                  IP 属地：{profile.ipLocation ?? "属地暂不可用"}
+                </p>
+              )}
+              <div className={styles.coverBar} data-theme={coverTheme}>
+                {compactProfile && !profile.background && (
+                  <button
+                    type="button"
+                    className={styles.collectionEntry}
+                    onClick={enterCollection}
+                  >
+                    查看{labels[viewTab]}
+                  </button>
+                )}
                 {!isPreview &&
                   (profile.totals.following !== null ||
                     profile.totals.followers !== null) && (
@@ -1399,7 +1363,7 @@ const ScopedAuthorProfile = ({
             </p>
           )}
         </div>
-        {!readingProfile && profile?.background && (
+        {profile?.background && (
           <span
             key={chin === "cover" ? `cover:${coverTint?.shade ?? ""}` : chin}
             aria-hidden="true"
@@ -1407,31 +1371,13 @@ const ScopedAuthorProfile = ({
             data-chin={chin}
           />
         )}
-        {!readingProfile && profile?.background && (
+        {profile?.background && (
           <button
             ref={scrollHint}
             type="button"
             className={styles.scrollHint}
             aria-label={`向下查看${labels[viewTab as (typeof tabs)[number]] ?? "内容"}`}
-            onClick={() => {
-              const node = scrollElement(),
-                top = restStage();
-              if (!node || top <= 0) return;
-              node.scrollTo?.({
-                top,
-                behavior: window.matchMedia?.(
-                  "(prefers-reduced-motion: reduce)",
-                ).matches
-                  ? "auto"
-                  : "smooth",
-              });
-              // The hint leaves; focus goes on to the collection reached.
-              root.current
-                ?.querySelector<HTMLElement>(
-                  '[role="tab"][aria-selected="true"]',
-                )
-                ?.focus({ preventScroll: true });
-            }}
+            onClick={enterCollection}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
               <path d="M6 9.5l6 6 6-6" />
@@ -1439,18 +1385,47 @@ const ScopedAuthorProfile = ({
           </button>
         )}
       </section>
-      <section
-        className={`${styles.userContent} ${readingProfile ? readingStyles.content : ""}`}
-        aria-label="用户内容"
-      >
-        {readingProfile ? (
-          <div className={readingStyles.tabs}>
-            {navigation}
-            {readingTools}
-          </div>
-        ) : (
-          navigation
-        )}
+      <section className={styles.userContent} aria-label="用户内容">
+        <div className={styles.tabs} role="tablist" aria-label="用户内容分类">
+          {visibleTabs.map((tab) => (
+            <button
+              type="button"
+              key={tab}
+              role="tab"
+              id={`${tabId}-${tab}`}
+              aria-controls={`${tabId}-panel-${tab}`}
+              aria-selected={viewTab === tab}
+              tabIndex={viewTab === tab ? 0 : -1}
+              onClick={() => pager.current?.scrollToKey(tab)}
+              onKeyDown={(event) => {
+                const index = visibleTabs.indexOf(tab);
+                const next =
+                  event.key === "ArrowRight"
+                    ? visibleTabs[Math.min(index + 1, visibleTabs.length - 1)]
+                    : event.key === "ArrowLeft"
+                      ? visibleTabs[Math.max(0, index - 1)]
+                      : undefined;
+                if (next) {
+                  event.preventDefault();
+                  pager.current?.scrollToKey(next);
+                  root.current
+                    ?.querySelector<HTMLElement>(`[id="${tabId}-${next}"]`)
+                    ?.focus({ preventScroll: true });
+                }
+              }}
+            >
+              {labels[tab]}
+            </button>
+          ))}
+          <span
+            aria-hidden
+            className={styles.tabIndicator}
+            style={{
+              width: `${100 / visibleTabs.length}%`,
+              transform: `translateX(${progress * 100}%)`,
+            }}
+          />
+        </div>
         <HorizontalPager
           ref={pager}
           frameAttributes={{ "data-profile-tab-pager": "" }}
@@ -1469,38 +1444,15 @@ const ScopedAuthorProfile = ({
           visible={
             (!embedded || shell.activeDestination === "user") &&
             modal === null &&
-            people === null &&
-            !(readingProfile && detailsOpen && shell.platform !== "pc")
+            people === null
           }
           frameClassName={styles.pager}
           panelClassName={styles.panel}
           panelAttributes={(tab) => ({ "data-author-panel": tab })}
           panelId={(tab) => `${tabId}-panel-${tab}`}
-          panelLabelledBy={(tab) =>
-            readingProfile && tab === "history"
-              ? `${tabId}-history-heading`
-              : `${tabId}-${tab}`
-          }
+          panelLabelledBy={(tab) => `${tabId}-${tab}`}
         />
       </section>
-      {readingProfile && detailsOpen && shell.platform !== "pc" && profile && (
-        <AuthorDialog
-          title="个人资料"
-          className={readingStyles.infoDialog}
-          onClose={() => setDetailsOpen(false)}
-        >
-          <div id={detailsId} className={readingStyles.infoBody}>
-            <h3>{name}</h3>
-            <p className={readingStyles.infoMeta}>
-              {profile.studioName && (
-                <StudioName value={profile.studioName} prominent />
-              )}
-              <span>@{profile.handle}</span>
-            </p>
-            {biography}
-          </div>
-        </AuthorDialog>
-      )}
       {ownProfile && profile && modal === "edit" && (
         <ProfileEditor
           profile={profile}
@@ -1511,7 +1463,7 @@ const ScopedAuthorProfile = ({
       {ownProfile && profile && modal === "background" && (
         <ProfileBackgroundEditor
           profile={profile}
-          {...(readingProfile ? {} : { header: profileHeader })}
+          header={profileHeader}
           onClose={() => setModal(null)}
           onSaved={save}
         />
