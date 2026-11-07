@@ -1348,14 +1348,12 @@
   );
   top: var(--yoyi-space-7);
 }
-/* The normal personal profile's tabs and cover measure the root's bar.
-   Keep this dependency out of the #356 fixed reading shell. */
-:global(html[data-device-class="desktop"][data-platform="pc"])
-  .coverRoot:not([data-profile-reading]) {
+/* Both collection layouts share the canonical profile's bar and cover. */
+:global(html[data-device-class="desktop"][data-platform="pc"]) .coverRoot {
   --profile-header-height: 76px;
 }
 :global(html[data-device-class="desktop"][data-platform="pc"])
-  .coverRoot:not([data-profile-reading])
+  .coverRoot
   > .header {
   grid-template-columns: auto minmax(48px, 1fr) auto;
 }
@@ -1370,13 +1368,11 @@
   margin-inline: auto;
 }
 /* A photo's measurement/identity slot must use the same 960px window as
-   its actual sticky cover. Photo-less normal profiles keep workspace width. */
+   its actual sticky cover. Photo-less profiles keep workspace width. */
 :global(html[data-device-class="desktop"][data-platform="pc"])
   :is(
-    .coverRoot:not([data-profile-reading])[data-cover-photo]
-      > .profile.coverProfile,
-    .coverRoot:not([data-profile-reading])
-      > .profile.coverProfile[data-cover-measure]
+    .coverRoot[data-cover-photo] > .profile.coverProfile,
+    .coverRoot > .profile.coverProfile[data-cover-measure]
   ) {
   width: min(100%, 960px);
 }
@@ -1387,7 +1383,7 @@
 /* The outer desktop gutter is part of the compact content viewport,
    not an extra scroll tail after its already viewport-sized pager. */
 :global(html[data-device-class="desktop"][data-platform="pc"])
-  .coverRoot:not([data-profile-reading])
+  .coverRoot
   > .userContent
   .panelContent {
   min-height: calc(
@@ -1404,4 +1400,23 @@
   .header {
   max-width: var(--yoyi-desktop-workspace-max);
   margin-inline: auto;
+}
+
+/* Owner utilities belong to the collection, outside the native tablist and
+   reading grid, so the cover's measurements and published-work density agree. */
+.profileCollectionTools {
+  display: flex;
+  justify-content: flex-end;
+  margin-block-end: var(--yoyi-space-3);
+}
+
+/* A pinned photo can be slightly taller than a short phone viewport. Keep
+   its real tap target above the floating dock, relative to the visible photo. */
+:global(html[data-platform="phone"])
+  .page.coverRoot[data-cover-snap]
+  .scrollHint {
+  bottom: calc(
+    var(--cover-bottom-inset, 0px) + var(--yoyi-space-5) +
+      max(0px, 100% - 100svh)
+  );
 }

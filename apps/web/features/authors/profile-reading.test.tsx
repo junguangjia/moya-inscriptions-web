@@ -91,7 +91,7 @@ afterEach(() => {
 });
 
 describe("Profile reading content and activation", () => {
-  it("exposes the ordinal as screen-reader text and hides the padded decoration", () => {
+  it("preserves accessible work order without a decorative numbered footer", () => {
     const view = show(item());
     const ordinal = Array.from(
       view.querySelectorAll<HTMLElement>(".yoyi-visually-hidden"),
@@ -99,10 +99,7 @@ describe("Profile reading content and activation", () => {
     expect(ordinal).toBeDefined();
     expect(ordinal!.closest('[aria-hidden="true"]')).toBeNull();
     expect(ordinal!.parentElement?.hasAttribute("aria-label")).toBe(false);
-    expect(
-      ordinal!.parentElement?.querySelector('[aria-hidden="true"]')
-        ?.textContent,
-    ).toBe("03");
+    expect(view.textContent).not.toContain("03");
     expect(view.querySelector('[aria-label="第 3 项"]')).toBeNull();
   });
   it("keeps an empty legacy work identifiable without inventing a preview", () => {
@@ -174,7 +171,7 @@ describe("Profile reading content and activation", () => {
       }),
     );
     expect(view.querySelector('[aria-label="7 张图像"]')?.textContent).toBe(
-      "7 图",
+      "7",
     );
     expect(view.querySelector('[aria-label="实况照片"]')?.textContent).toBe(
       "LIVE",

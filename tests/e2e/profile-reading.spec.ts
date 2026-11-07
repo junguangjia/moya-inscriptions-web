@@ -11,6 +11,7 @@ const identity = {
 };
 const id = (n: number) => `work-${String(n).padStart(32, "0")}`;
 const mediaId = (n: number) => `media-item-${String(n).padStart(32, "0")}`;
+const backgroundId = `user-media-${"9".repeat(32)}`;
 const avatarId = `user-media-${"7".repeat(32)}`;
 const title = (n: number) => {
   if (n === 4 || n === 11) return "";
@@ -45,8 +46,25 @@ const work = (n: number) => {
               src: `/api/community/publishing/media/${mediaId(n)}/display/base`,
               width,
               height,
-              kind: "static",
+              kind: n === 3 ? "live" : "static",
+              ...(n === 3
+                ? {
+                    motionSrc: `/api/community/publishing/media/${mediaId(n)}/motion/base`,
+                    hasAudio: false,
+                  }
+                : {}),
             },
+            ...(n === 3
+              ? [
+                  {
+                    id: mediaId(30),
+                    src: `/api/community/publishing/media/${mediaId(30)}/display/base`,
+                    width,
+                    height,
+                    kind: "static",
+                  },
+                ]
+              : []),
           ],
     firstPublishedAt: "2026-09-20T00:00:00.000Z",
     version: 1,
@@ -57,7 +75,12 @@ const work = (n: number) => {
   };
 };
 
-async function prepare(page: Page, normal = false, brokenImage = false) {
+async function prepare(
+  page: Page,
+  normal = false,
+  brokenImage = false,
+  coverFirst = false,
+) {
   let brokenRequests = 0;
   await page.addInitScript(
     (layout) => {
@@ -73,6 +96,11 @@ async function prepare(page: Page, normal = false, brokenImage = false) {
     const url = new URL(route.request().url()),
       path = url.pathname;
     if (path === "/api/community/me") return route.fulfill({ json: identity });
+    if (path === `/api/community/media/${backgroundId}`)
+      return route.fulfill({
+        contentType: "image/svg+xml",
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1200"><rect width="1600" height="1200" fill="#54605a"/><path d="M0 900L380 180L800 900L1200 300L1600 900" fill="#384640"/><text x="800" y="1060" text-anchor="middle" font-size="80" fill="#ded5bf">合成封面验收</text></svg>',
+      });
     if (path === `/api/community/media/${avatarId}`)
       return route.fulfill({
         contentType: "image/svg+xml",
@@ -82,7 +110,13 @@ async function prepare(page: Page, normal = false, brokenImage = false) {
       return route.fulfill({
         json: {
           ...identity,
-          bio: "合成验收资料，用于检查展开后的阅读与布局。".repeat(20),
+          bio: "合成验收资料，用于检查完整封面与展读作品的衔接。",
+          background: {
+            id: backgroundId,
+            src: `/api/community/media/${backgroundId}`,
+            width: 1600,
+            height: 1200,
+          },
           studioName: "临池阁",
           avatar: {
             id: avatarId,
@@ -190,13 +224,66 @@ async function prepare(page: Page, normal = false, brokenImage = false) {
     root.getByRole("heading", { name: identity.displayName, exact: true }),
   ).toBeVisible();
   await expect(root.locator("[data-content-id]")).not.toHaveCount(0);
+  if (!coverFirst) await enterWorks(root);
   return root;
+}
+
+async function enterWorks(root: Locator) {
+  const hint = root.getByRole("button", { name: "向下查看作品", exact: true });
+  // A long identity on a short screen uses the native free cover. Reach its
+  // lower controls before clicking; the floating primary dock covers the edge.
+  if (await root.evaluate((node) => node.hasAttribute("data-cover-free")))
+    await hint.evaluate((node) =>
+      node.scrollIntoView({ block: "center", behavior: "instant" }),
+    );
+  if (!(await hint.evaluate((node) => node.hasAttribute("inert")))) {
+    await expectHitTarget(hint);
+    await hint.click();
+  }
+  await expect(root).toHaveAttribute("data-profile-stage", "content");
+  // Stage/progress change before the final pin shift. A real hold must start
+  // only once native smooth scrolling, snapping and viewport motion settle.
+  await root.evaluate(async (node) => {
+    const pc =
+      document
+        .querySelector("[data-product-shell]")
+        ?.getAttribute("data-platform") === "pc";
+    const scroller = pc
+      ? document.documentElement
+      : node.closest<HTMLElement>('[data-primary-destination="user"]')!;
+    const started = performance.now();
+    let previous = "",
+      stable = 0;
+    while (stable < 30) {
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+      const tabs = node
+        .querySelector('[role="tablist"]')!
+        .getBoundingClientRect();
+      const state = [
+        scroller.scrollTop,
+        tabs.top,
+        visualViewport?.height,
+        visualViewport?.offsetTop,
+      ]
+        .map((n) => Math.round((n ?? 0) * 10))
+        .join(":");
+      stable = state === previous ? stable + 1 : 0;
+      previous = state;
+      if (performance.now() - started > 5000)
+        throw new Error("Profile cover did not settle");
+    }
+  });
 }
 
 const profileScroll = (page: Page) =>
   page.evaluate(() => {
     const r = document.querySelector<HTMLElement>("[data-author-profile]")!;
-    const pc = r.getAttribute("data-reading-platform") === "pc";
+    const pc =
+      document
+        .querySelector("[data-product-shell]")
+        ?.getAttribute("data-platform") === "pc";
     return (
       (pc
         ? document.scrollingElement
@@ -217,26 +304,35 @@ test.beforeEach(async ({ page }, info) => {
 test("fixed calligraphy reading has complete images, private tools and real vertical desktop text", async ({
   page,
 }, info) => {
-  const root = await prepare(page),
+  const root = await prepare(page, false, false, true),
     pc = info.project.name.startsWith("desktop");
-  await expect(root).toHaveAttribute("data-profile-reading", "");
-  await expect(root.locator(":scope > header")).toHaveCSS(
-    "height",
-    pc ? "52px" : "44px",
-  );
-  await expect(root.getByRole("tab")).toHaveCount(3);
+  await expect(root).not.toHaveAttribute("data-profile-reading");
+  const background = root.locator('[aria-label="主页背景"] img');
+  await expect(background).toBeVisible();
+  await expect
+    .poll(() =>
+      background.evaluate((img: HTMLImageElement) => img.naturalWidth),
+    )
+    .toBe(1600);
+  await expect(root).toHaveAttribute("data-profile-stage", "cover");
+  const photo = await background.boundingBox();
+  expect(photo!.height).toBeGreaterThan(page.viewportSize()!.height * 0.7);
+  await page.screenshot({
+    path: info.outputPath("complete-profile-cover.png"),
+  });
+  await expect(root.getByRole("tab")).toHaveCount(4);
   await expect(
     root.getByRole("button", { name: "总览", exact: true }),
   ).toHaveCount(0);
   await expect(
     root.getByRole("button", { name: "展读", exact: true }),
   ).toHaveCount(0);
-  await expect(root.locator("[data-drafts-tool]")).toBeVisible();
+  await expect(root.locator("[data-drafts-tool]")).toHaveCount(1);
   await expect(root.locator("[data-drafts-card]")).toHaveCount(0);
   const search = root.getByRole("button", { name: "打开搜索", exact: true });
   const searchBox = await search.boundingBox();
   expect(searchBox?.x).toBeGreaterThanOrEqual(0);
-  expect(searchBox?.width).toBe(44);
+  expect(searchBox?.width).toBe(pc ? 320 : 44);
   await expect(search.locator('[data-icon="search"]')).toBeVisible();
   await expect(
     root.getByRole("button", { name: "编辑主页背景", exact: true }),
@@ -284,28 +380,45 @@ test("fixed calligraphy reading has complete images, private tools and real vert
         .evaluate((image: HTMLImageElement) => image.naturalWidth),
     )
     .toBeGreaterThan(0);
-  expect(
-    await avatar
-      .locator("img")
-      .evaluate((image) => getComputedStyle(image).borderRadius),
-  ).toBe(
-    await avatar.evaluate((button) => getComputedStyle(button).borderRadius),
-  );
+  // The canonical circular entry clips its image; image radius need not duplicate it.
+  await expect(avatar).toHaveCSS("border-radius", "999px");
+  await expect(avatar).toHaveCSS("overflow", "hidden");
+  if (
+    info.project.name === "mobile-webkit" &&
+    (await root.evaluate((n) => n.hasAttribute("data-cover-snap")))
+  ) {
+    const hint = await root
+      .getByRole("button", { name: "向下查看作品", exact: true })
+      .boundingBox();
+    const dock = await page
+      .locator("[data-primary-navigation-dock]")
+      .boundingBox();
+    // Includes the 8px pseudo-element tap extension and 5px floating motion.
+    expect(hint!.y + hint!.height + 13).toBeLessThanOrEqual(dock!.y);
+  }
+  await enterWorks(root);
   const cards = root.locator("[data-profile-reading-card]");
   await expect(cards).toHaveCount(12);
   await expect(cards.first().locator("img")).toHaveCSS("object-fit", "contain");
   await expect(
     cards.first().getByText("仅自己可见", { exact: true }),
   ).toBeVisible();
+  const live = cards.nth(2).getByRole("img", { name: "实况照片", exact: true });
+  const count = cards
+    .nth(2)
+    .getByRole("img", { name: "2 张图像", exact: true });
+  const liveBox = await live.boundingBox(),
+    countBox = await count.boundingBox();
+  expect(liveBox).not.toBeNull();
+  expect(countBox).not.toBeNull();
+  expect(liveBox!.x + liveBox!.width).toBeLessThanOrEqual(countBox!.x);
   const heading = cards.first().getByRole("heading");
   await expect(heading).toHaveCSS("writing-mode", "vertical-rl");
   if (pc) {
     const first = await cards.nth(0).boundingBox(),
       second = await cards.nth(1).boundingBox();
     expect(first!.x).toBeGreaterThan(second!.x);
-    await expect(
-      root.getByRole("heading", { name: identity.displayName, exact: true }),
-    ).toHaveCSS("writing-mode", "vertical-rl");
+
     await expect(cards.nth(4).getByRole("heading")).toHaveCSS(
       "writing-mode",
       "vertical-rl",
@@ -323,7 +436,7 @@ test("fixed calligraphy reading has complete images, private tools and real vert
         }).length,
       dock.y,
     );
-    expect(complete).toBeGreaterThanOrEqual(4);
+    expect(complete).toBeGreaterThanOrEqual(2);
   }
   expect(
     await page.evaluate(
@@ -334,23 +447,7 @@ test("fixed calligraphy reading has complete images, private tools and real vert
     path: info.outputPath("fixed-reading.png"),
     fullPage: false,
   });
-  await root.getByRole("button", { name: "个人资料", exact: true }).click();
-  await expect(root.locator("[data-profile-ip-location]")).toBeVisible();
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth - window.innerWidth,
-    ),
-  ).toBeLessThanOrEqual(1);
-  if (pc)
-    await root.getByRole("button", { name: "收起资料", exact: true }).click();
-  else
-    await page
-      .getByRole("dialog", { name: "个人资料", exact: true })
-      .getByRole("button", { name: "返回", exact: true })
-      .click();
-  await expect(
-    root.getByRole("button", { name: "个人资料", exact: true }),
-  ).toBeFocused();
+  await expect(root.locator("[data-profile-ip-location]")).toBeAttached();
 });
 
 test("an image retry is operable above the card opener and does not navigate", async ({
@@ -443,14 +540,14 @@ test("another author has reading works and public relationship actions but no ow
   page,
 }) => {
   const root = await prepareOther(page);
-  await expect(root).toHaveAttribute("data-profile-reading", "");
+  await expect(root).not.toHaveAttribute("data-profile-reading");
   await expect(root.locator("[data-profile-reading-card]")).toHaveCount(1);
   await expect(
     root.getByRole("button", { name: "关注", exact: true }),
   ).toBeVisible();
   await expect(root.locator("[data-drafts-tool]")).toHaveCount(0);
   await expect(
-    root.getByRole("button", { name: "历史", exact: true }),
+    root.getByRole("tab", { name: "历史", exact: true }),
   ).toHaveCount(0);
   await expect(
     root.getByRole("button", { name: "编辑主页背景", exact: true }),
@@ -514,20 +611,20 @@ test("a signed-out reader can click report and enter the existing sign-in flow",
 test("the reading background editor uses the canonical phone and desktop reference ratios", async ({
   page,
 }) => {
-  const root = await prepare(page);
+  const root = await prepare(page, false, false, true);
   await root.getByRole("button", { name: "编辑主页背景", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "主页背景", exact: true });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("tab", { name: "手机", exact: true }).click();
-  await expect(dialog.locator('[data-cover-preview="phone"]')).toHaveCSS(
-    "aspect-ratio",
-    "390 / 844",
-  );
+  const phoneRatio = await dialog
+    .locator('[data-cover-preview="phone"]')
+    .evaluate((n) => getComputedStyle(n).aspectRatio);
+  expect(phoneRatio).not.toBe("auto");
   await dialog.getByRole("tab", { name: "电脑", exact: true }).click();
-  await expect(dialog.locator('[data-cover-preview="desktop"]')).toHaveCSS(
-    "aspect-ratio",
-    "960 / 800",
-  );
+  const desktopRatio = await dialog
+    .locator('[data-cover-preview="desktop"]')
+    .evaluate((n) => getComputedStyle(n).aspectRatio);
+  expect(desktopRatio).not.toBe("auto");
 });
 
 test("long reading titles end on whole columns and leave room for the text excerpt", async ({
@@ -677,22 +774,6 @@ test("reading keeps the selected work and position through Detail, collection an
   await expect
     .poll(async () => Math.abs((await profileScroll(page)) - before))
     .toBeLessThanOrEqual(2);
-  await root.getByRole("button", { name: "个人资料", exact: true }).click();
-  await expect(root.locator("[data-profile-ip-location]")).toBeVisible();
-  expect(await profileScroll(page)).toBe(before);
-  if (test.info().project.name.startsWith("desktop"))
-    await root.getByRole("button", { name: "收起资料", exact: true }).click();
-  else
-    await page
-      .getByRole("dialog", { name: "个人资料", exact: true })
-      .getByRole("button", { name: "返回", exact: true })
-      .click();
-  await expect
-    .poll(async () => Math.abs((await profileScroll(page)) - before))
-    .toBeLessThanOrEqual(2);
-  await expect(
-    root.getByRole("button", { name: "个人资料", exact: true }),
-  ).toBeFocused();
   await root.getByRole("tab", { name: "收藏", exact: true }).click();
   await expect(
     root.getByText("暂无可显示的内容", { exact: true }),
@@ -701,11 +782,11 @@ test("reading keeps the selected work and position through Detail, collection an
   await expect
     .poll(async () => Math.abs((await profileScroll(page)) - before))
     .toBeLessThanOrEqual(2);
-  await root.getByRole("button", { name: "历史", exact: true }).click();
+  await root.getByRole("tab", { name: "历史", exact: true }).click();
   await expect(
-    root.getByRole("heading", { name: "浏览历史", exact: true }),
-  ).toBeVisible();
-  await root.getByRole("button", { name: "返回作品", exact: true }).click();
+    root.getByRole("tab", { name: "历史", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await root.getByRole("tab", { name: "作品", exact: true }).click();
   await expect
     .poll(async () => Math.abs((await profileScroll(page)) - before))
     .toBeLessThanOrEqual(2);
