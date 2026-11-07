@@ -9,7 +9,7 @@ test.beforeAll(async ({ request }) => {
   await prepareFormalRoutes(request);
 });
 
-type HomeFeed = "discover" | "nearby" | "inscriptions" | "calligraphy";
+type HomeFeed = "discover" | "timeline" | "inscriptions" | "calligraphy";
 
 const productShell = (surface: Locator) =>
   surface.locator("[data-product-shell]");
@@ -361,7 +361,7 @@ test("MIG-C1 keeps runtime all-Calligraphy truthful and QA metadata isolated", a
   ).toHaveCount(0);
   await expect(homeSurface(runtime.surface).getByRole("tab")).toHaveText([
     "发现",
-    "附近",
+    "时间轴",
     "碑刻",
     "书帖",
   ]);
@@ -448,7 +448,7 @@ test("MIG-C1 card actions preserve trusted touch paging with local horizontal co
   await trustedHorizontalCardDrag(page, session, homePager, homeCard);
   await expect(surface.locator("[data-home-surface]")).toHaveAttribute(
     "data-active-home-feed",
-    "nearby",
+    "timeline",
   );
   const homeEvidence = await trustedDragEvidence(homePager);
   expect(homeEvidence.trustedTouchEvents).toBeGreaterThan(0);
@@ -561,7 +561,7 @@ test("MIG-C1 pager follows progress and commits only on release", async ({
   const indicator = home.locator("[data-top-tab-indicator]");
   await expect(home.getByRole("tab")).toHaveText([
     "发现",
-    "附近",
+    "时间轴",
     "碑刻",
     "书帖",
   ]);
@@ -592,7 +592,7 @@ test("MIG-C1 pager follows progress and commits only on release", async ({
       deltaX: 70,
       deltaY: 3,
     });
-    await expect(home).toHaveAttribute("data-active-home-feed", "nearby");
+    await expect(home).toHaveAttribute("data-active-home-feed", "timeline");
     return;
   }
 
@@ -637,7 +637,7 @@ test("MIG-C1 pager follows progress and commits only on release", async ({
           .querySelector<HTMLElement>('[data-tab-key="discover"]')!
           .getBoundingClientRect();
         const second = track
-          .querySelector<HTMLElement>('[data-tab-key="nearby"]')!
+          .querySelector<HTMLElement>('[data-tab-key="timeline"]')!
           .getBoundingClientRect();
         return (
           (node.getBoundingClientRect().left - first.left) /
@@ -680,31 +680,31 @@ test("MIG-C1 pager follows progress and commits only on release", async ({
     const discover = frame.querySelector<HTMLElement>(
       '[data-home-feed-panel="discover"]',
     )!;
-    const nearby = frame.querySelector<HTMLElement>(
-      '[data-home-feed-panel="nearby"]',
+    const timeline = frame.querySelector<HTMLElement>(
+      '[data-home-feed-panel="timeline"]',
     )!;
     return {
       active: frame.closest<HTMLElement>("[data-home-surface]")!.dataset
         .activeHomeFeed,
       discoverInert: discover.inert,
       discoverHidden: discover.getAttribute("aria-hidden"),
-      nearbyInert: nearby.inert,
-      nearbyHidden: nearby.getAttribute("aria-hidden"),
+      timelineInert: timeline.inert,
+      timelineHidden: timeline.getAttribute("aria-hidden"),
     };
   });
   expect(release).toEqual({
-    active: "nearby",
+    active: "timeline",
     discoverInert: true,
     discoverHidden: "true",
-    nearbyInert: false,
-    nearbyHidden: "false",
+    timelineInert: false,
+    timelineHidden: "false",
   });
-  await expect(home).toHaveAttribute("data-active-home-feed", "nearby");
+  await expect(home).toHaveAttribute("data-active-home-feed", "timeline");
 
   const beforeCancelledDrag = await pager.evaluate((node) => {
     const frame = node as HTMLElement;
     const panel = frame.querySelector<HTMLElement>(
-      '[data-home-feed-panel="nearby"]',
+      '[data-home-feed-panel="timeline"]',
     )!;
     const before =
       panel.getBoundingClientRect().left - frame.getBoundingClientRect().left;
@@ -733,7 +733,7 @@ test("MIG-C1 pager follows progress and commits only on release", async ({
     .poll(() =>
       pager.evaluate((node) => {
         const panel = node.querySelector<HTMLElement>(
-          '[data-home-feed-panel="nearby"]',
+          '[data-home-feed-panel="timeline"]',
         )!;
         return (
           panel.getBoundingClientRect().left - node.getBoundingClientRect().left
@@ -741,7 +741,7 @@ test("MIG-C1 pager follows progress and commits only on release", async ({
       }),
     )
     .toBeLessThan(beforeCancelledDrag - 40);
-  await expect(home).toHaveAttribute("data-active-home-feed", "nearby");
+  await expect(home).toHaveAttribute("data-active-home-feed", "timeline");
   await pager.evaluate((node) => {
     const point = {
       identifier: 1,
@@ -756,11 +756,11 @@ test("MIG-C1 pager follows progress and commits only on release", async ({
     });
     node.dispatchEvent(event);
   });
-  await expect(home).toHaveAttribute("data-active-home-feed", "nearby");
+  await expect(home).toHaveAttribute("data-active-home-feed", "timeline");
   expect(
     await pager.evaluate((node) => {
       const panel = node.querySelector<HTMLElement>(
-        '[data-home-feed-panel="nearby"]',
+        '[data-home-feed-panel="timeline"]',
       )!;
       return Math.abs(
         panel.getBoundingClientRect().left - node.getBoundingClientRect().left,

@@ -21,7 +21,7 @@ const states: T02pDevelopmentCatalogDestinationStates = {
   },
   home: {
     discover: { state: "unavailable" },
-    nearby: { state: "unavailable" },
+    timeline: { state: "loading" },
     topics: { state: "unavailable" },
   },
 };

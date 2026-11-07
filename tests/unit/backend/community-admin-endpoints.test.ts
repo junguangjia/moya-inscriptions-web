@@ -639,6 +639,291 @@ describe("Production Thread and direct-message administration", () => {
   );
 });
 
+// home-timeline-v1 (Issue #384 r3): the Owner's timeline routes are the same
+// definitions AI runs, so each is held to its Backend route and its answer.
+describe("Home timeline Owner routes", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  const requestId = "00000000-0000-4000-8000-0000000000aa";
+  const entry = {
+    id: "synthetic-entry",
+    title: "Synthetic stele",
+    fullTitle: "Synthetic stele, full title",
+    startYear: 148,
+    endYear: 148,
+    precision: "year",
+    dateLabel: null,
+    onAxis: true,
+    chapter: "东汉",
+    polity: null,
+    disputed: false,
+    groupId: null,
+    groupTitle: null,
+    province: null,
+    holder: null,
+    catalogId: null,
+    position: 0,
+    version: 1,
+    hidden: false,
+    linkState: "unlinked",
+    createdBy: "owner",
+    updatedBy: "owner",
+    createdAt: "2026-11-06T00:00:00.000Z",
+    updatedAt: "2026-11-06T00:00:00.000Z",
+  };
+  const summary = {
+    entries: {
+      total: 1,
+      visible: 1,
+      hidden: 0,
+      onAxis: 1,
+      shelf: 0,
+      disputed: 0,
+    },
+    chapters: [{ chapter: "东汉", total: 1, hidden: 0, onAxis: 1, shelf: 0 }],
+    links: { unlinked: 1, published: 0, notPublished: 0 },
+    groups: { total: 0, folding: 0 },
+    updatedBy: { import: 0, owner: 1, "ai-admin": 0 },
+    issues: { contract: 0, group: 0, chapterYear: 0, notPublished: 0 },
+    limits: {
+      entries: 1,
+      entriesMaximum: 5000,
+      responseBytes: 400,
+      responseBytesMaximum: 4000000,
+    },
+    lastUpdatedAt: "2026-11-06T00:00:00.000Z",
+  };
+  const created = {
+    requestId,
+    id: entry.id,
+    title: entry.title,
+    fullTitle: entry.fullTitle,
+    startYear: 148,
+    endYear: 148,
+    precision: "year",
+    onAxis: true,
+    chapter: "东汉",
+  };
+
+  it.each([
+    {
+      name: "read-timeline-summary",
+      input: {},
+      method: "GET",
+      path: "timeline-summary",
+      forwarded: undefined,
+      answer: summary,
+    },
+    {
+      name: "create-timeline-entry",
+      input: created,
+      method: "POST",
+      path: "timeline-entries",
+      // Parsed, so every nullable field the Owner left out goes as null.
+      forwarded: {
+        ...created,
+        dateLabel: null,
+        polity: null,
+        disputed: false,
+        groupId: null,
+        groupTitle: null,
+        province: null,
+        holder: null,
+        catalogId: null,
+      },
+      answer: entry,
+    },
+    {
+      name: "update-timeline-entry",
+      input: { id: entry.id, requestId, expectedVersion: 1, hidden: true },
+      method: "POST",
+      path: `timeline-entries/${entry.id}`,
+      forwarded: { requestId, expectedVersion: 1, hidden: true },
+      answer: { ...entry, version: 2, hidden: true },
+    },
+    {
+      name: "reorder-timeline",
+      input: {
+        requestId,
+        startYear: 148,
+        entries: [{ id: entry.id, expectedVersion: 2 }],
+      },
+      method: "POST",
+      path: "timeline-order",
+      forwarded: {
+        requestId,
+        startYear: 148,
+        entries: [{ id: entry.id, expectedVersion: 2 }],
+      },
+      answer: { startYear: 148, count: 1 },
+    },
+  ])(
+    "forwards $name only for the Owner, and checks its answer",
+    async ({ name, input, method, path, forwarded, answer }) => {
+      vi.stubEnv("NODE_ENV", "production");
+      const { call, calls } = recorder();
+      const answered = vi.fn(async (...args: Parameters<OperatorCall>) => {
+        await call(...args);
+        return answer;
+      }) as unknown as OperatorCall;
+      const endpoints = createCommunityEndpoints(answered);
+      for (const role of ["automation", null] as const)
+        expect(
+          (await invoke(endpoints, name, request(input, role))).status,
+        ).toBe(403);
+      expect(
+        (await invoke(endpoints, name, request({ ...input, actor: "owner" })))
+          .status,
+      ).toBe(400);
+      expect(calls).toEqual([]);
+      expect(await invoke(endpoints, name, request(input))).toEqual({
+        status: 200,
+        body: { ok: true, result: answer },
+      });
+      expect(calls).toEqual([
+        {
+          method,
+          path,
+          ...(forwarded === undefined ? {} : { body: forwarded }),
+        },
+      ]);
+      // An answer the contract refuses never reaches the Owner's view.
+      const odd = vi.fn(async () => ({
+        ...answer,
+        extra: true,
+      })) as unknown as OperatorCall;
+      expect(
+        await invoke(createCommunityEndpoints(odd), name, request(input)),
+      ).toEqual({
+        status: 502,
+        body: { ok: false, error: { code: "OPERATOR_RESPONSE_INVALID" } },
+      });
+    },
+  );
+
+  // The Backend answers a refusal by rule with 422 so that this transport keeps
+  // its code; a 409 still narrows to STATE_CONFLICT.
+  it("shows the Owner a timeline refusal by its code, as AI sees it", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("COMMUNITY_OPERATOR_BASE_URL", "http://127.0.0.1:3999");
+    vi.stubEnv("COMMUNITY_OPERATOR_TOKEN", "t".repeat(40));
+    try {
+      for (const [status, code, shown] of [
+        [422, "ENTRY_EXISTS", "ENTRY_EXISTS"],
+        [422, "SET_CHANGED", "SET_CHANGED"],
+        [409, "STATE_CONFLICT", "STATE_CONFLICT"],
+        [409, "IDEMPOTENCY_CONFLICT", "STATE_CONFLICT"],
+      ] as const) {
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async () =>
+            Response.json({ error: { status, code } }, { status }),
+          ),
+        );
+        expect(
+          await invoke(
+            createCommunityEndpoints(),
+            "create-timeline-entry",
+            request(created),
+          ),
+          code,
+        ).toEqual({ status, body: { ok: false, error: { code: shown } } });
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("sends a read's ids comma-joined and its flags as text, and never a view", async () => {
+    const page = { items: [entry], total: 1, page: 1, pageSize: 20 };
+    const { calls } = recorder();
+    const call = vi.fn(async (method: string, path: string) => {
+      calls.push({ method, path });
+      return page;
+    }) as unknown as OperatorCall;
+    const endpoints = createCommunityEndpoints(call);
+    for (const ids of [
+      ["synthetic-entry", "other-entry"],
+      "synthetic-entry,other-entry",
+    ])
+      expect(
+        await invoke(
+          endpoints,
+          "read-timeline",
+          request({ ids, onAxis: false, disputed: true, hidden: "only" }),
+        ),
+      ).toEqual({ status: 200, body: { ok: true, result: page } });
+    expect(calls).toHaveLength(2);
+    for (const { method, path } of calls) {
+      expect(method).toBe("GET");
+      const url = new URL(path, "http://route.invalid/");
+      expect(url.pathname).toBe("/timeline-entries");
+      expect(Object.fromEntries(url.searchParams)).toEqual({
+        page: "1",
+        pageSize: "20",
+        ids: "synthetic-entry,other-entry",
+        onAxis: "false",
+        disputed: "true",
+        linked: "any",
+        hidden: "only",
+      });
+    }
+    for (const body of [
+      { view: "full" },
+      { pageSize: 51 },
+      { ids: ["Not A Slug"] },
+      { yearFrom: 0.5 },
+    ])
+      expect(
+        await invoke(endpoints, "read-timeline", request(body)),
+        JSON.stringify(body),
+      ).toEqual({
+        status: 400,
+        body: { ok: false, error: { code: "COMMAND_INVALID" } },
+      });
+    expect(calls).toHaveLength(2);
+  });
+
+  it.each([
+    ["read-timeline-summary", { page: 1 }],
+    ["create-timeline-entry", { ...created, requestId: undefined }],
+    ["create-timeline-entry", { ...created, version: 1 }],
+    [
+      "update-timeline-entry",
+      { id: "Not A Slug", requestId, expectedVersion: 1 },
+    ],
+    ["update-timeline-entry", { id: entry.id, requestId, expectedVersion: 0 }],
+    [
+      "update-timeline-entry",
+      { id: entry.id, requestId, expectedVersion: 1, createdBy: "owner" },
+    ],
+    [
+      "reorder-timeline",
+      {
+        requestId,
+        startYear: 148,
+        entries: [
+          { id: entry.id, expectedVersion: 1 },
+          { id: entry.id, expectedVersion: 1 },
+        ],
+      },
+    ],
+    ["reorder-timeline", { requestId, startYear: 148, entries: [] }],
+  ])(
+    "rejects a malformed %s envelope before any Backend call",
+    async (name, body) => {
+      const { call, calls } = recorder();
+      expect(
+        await invoke(createCommunityEndpoints(call), name, request(body)),
+      ).toEqual({
+        status: 400,
+        body: { ok: false, error: { code: "COMMAND_INVALID" } },
+      });
+      expect(calls).toEqual([]);
+    },
+  );
+});
+
 describe("Work publishing Owner envelopes", () => {
   afterEach(() => vi.unstubAllEnvs());
   const receipt = "7c1d7f0e-5b8a-4a51-9d0c-2f3e4a5b6c7d";

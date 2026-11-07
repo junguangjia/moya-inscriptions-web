@@ -56,6 +56,7 @@ import {
   PostgresCommunityAuthAdapter,
   PostgresCommunityIdentityAdapter,
   PostgresThreadAdapter,
+  PostgresTimelineOperatorAdapter,
   PostgresFeedbackAdapter,
   PostgresDirectMessageAdapter,
   PostgresPublishingOperatorAdapter,
@@ -991,6 +992,12 @@ export const prepareProductionBackend = async (
             new PostgresThreadAdapter(communityPool),
             ["listThreadPosts"],
             deliveryOptions,
+          ),
+          // Rows on the App connection; link state on the published Catalog
+          // read connection, as the public timeline read takes it.
+          timelineOperatorPort: new PostgresTimelineOperatorAdapter(
+            communityPool,
+            { catalogPool: pool },
           ),
           directMessagePort: new PostgresDirectMessageAdapter(communityPool),
           feedbackPort: new PostgresFeedbackAdapter(communityPool),

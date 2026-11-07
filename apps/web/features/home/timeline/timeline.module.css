@@ -1,0 +1,1809 @@
+/*
+ * The Home timeline, from Figma v0.3 (TL/* components). Raw px below are the
+ * spec's row geometry; colors, spacing and families come from --yoyi tokens.
+ * All geometry that differs between layouts is a custom property on .root so a
+ * row reads the same in all of them. The wide chrome repeats these on .wide
+ * because a PC portals it out of .root.
+ */
+.root,
+.wide {
+  --timeline-start: var(--yoyi-space-5);
+  --timeline-gutter: 44px;
+  --timeline-slot: 18px;
+  --timeline-rail-width: 36px;
+  --timeline-rail-top: 15px;
+  --timeline-end: calc(var(--yoyi-space-3) + var(--timeline-rail-width));
+  --timeline-bar-height: 36px;
+  --timeline-sticky-top: var(--timeline-bar-height);
+  --timeline-spine-x: 8.5px;
+  --timeline-mark-x: 9px;
+  --timeline-mark-y: 22px;
+  --timeline-spine: var(--yoyi-color-border-default);
+  --timeline-year-size: var(--yoyi-type-label-size);
+  --timeline-year-line: 18px;
+  --timeline-year-top: 13px;
+  --timeline-group-title-size: var(--yoyi-type-button-size);
+  --timeline-era-empty-size: var(--yoyi-type-card-title-size);
+  --timeline-sheet-title-size: var(--yoyi-type-section-title-size);
+  --timeline-small-size: var(--yoyi-type-caption-size);
+  --timeline-col-place: 120px;
+  --timeline-col-holder: 150px;
+  /* 时代尺 152, a gap of 8, the strip 52 and 16 before the table. */
+  --timeline-wide-table-x: 228px;
+  /* Air 8, bar 40 and column heads 28. */
+  --timeline-wide-chrome: 76px;
+}
+
+.root {
+  position: relative;
+  display: flex;
+  /* The panel's padding belongs to card feeds; this feed runs edge to edge.
+     A sticky box stops at the panel's padding edge, so it offsets by the same
+     inset to reach the panel's top. */
+  --timeline-panel-inset: var(--yoyi-space-4);
+  margin: calc(var(--timeline-panel-inset) * -1) calc(var(--yoyi-space-3) * -1)
+    0;
+  min-height: 100%;
+  flex-direction: column;
+  color: var(--yoyi-color-text-primary);
+  font-family: var(--yoyi-font-interface);
+}
+
+.root:not([data-timeline-layout="phone"]),
+.wide {
+  --timeline-gutter: 56px;
+  --timeline-slot: 24px;
+  --timeline-rail-width: 44px;
+  --timeline-rail-top: 13px;
+  --timeline-end: calc(var(--yoyi-space-5) + var(--timeline-rail-width));
+  --timeline-sticky-top: calc(var(--timeline-bar-height) + 28px);
+  --timeline-spine-x: 11.5px;
+  --timeline-mark-x: 12px;
+  --timeline-mark-y: 20px;
+  --timeline-year-size: var(--yoyi-type-body-small-size);
+  --timeline-year-line: 20px;
+  --timeline-year-top: 11px;
+}
+
+.root:not([data-timeline-layout="phone"]) {
+  --timeline-panel-inset: var(--yoyi-space-5);
+  margin: calc(var(--timeline-panel-inset) * -1) calc(var(--yoyi-space-5) * -1)
+    0;
+}
+
+/* Wide: the list is the table, with nothing outside its columns. */
+.root[data-timeline-layout="wide"],
+.wide {
+  --timeline-start: 0px;
+  --timeline-end: 0px;
+  --timeline-sticky-top: var(--timeline-wide-chrome);
+}
+
+.root[data-timeline-layout="wide"] {
+  --timeline-wide-drawer-end: var(--yoyi-space-7);
+
+  padding-inline: var(--yoyi-space-9);
+}
+
+/* A PC's panel keeps its side padding; the fixed chrome covers the top one. */
+.root[data-timeline-platform="pc"] {
+  margin: calc(var(--timeline-panel-top, 0px) * -1) 0 0;
+  padding-inline: 0;
+}
+
+/* Position bar and tablet column heads: sticky at the top of the panel. */
+.bar {
+  position: sticky;
+  top: calc(var(--timeline-panel-inset, 0px) * -1);
+  z-index: var(--yoyi-z-index-sticky);
+  display: flex;
+  flex: none;
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--timeline-bar-height);
+  align-items: center;
+  gap: var(--yoyi-space-2);
+  padding: 0 var(--timeline-start);
+  border: 0;
+  border-bottom: 1px solid var(--yoyi-color-border-subtle);
+  background: var(--yoyi-color-background-page);
+  color: var(--yoyi-color-text-primary);
+  font: 500 var(--yoyi-type-label-size) / 20px var(--yoyi-font-interface);
+  text-align: start;
+  cursor: pointer;
+}
+
+.bar:disabled {
+  color: var(--yoyi-color-text-primary);
+  cursor: default;
+}
+
+.bar:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: -2px;
+}
+
+.columnHeads {
+  position: sticky;
+  top: calc(var(--timeline-bar-height) - var(--timeline-panel-inset, 0px));
+  z-index: var(--yoyi-z-index-sticky);
+  display: grid;
+  flex: none;
+  box-sizing: border-box;
+  height: 28px;
+  grid-template-columns:
+    var(--timeline-gutter) var(--timeline-slot) minmax(0, 1fr)
+    var(--timeline-col-place) var(--timeline-col-holder);
+  align-items: center;
+  padding: 0 var(--timeline-end) 0 var(--timeline-start);
+  background: var(--yoyi-color-background-page);
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-metadata-size);
+  line-height: 18px;
+}
+
+.columnHeads::after {
+  position: absolute;
+  right: var(--timeline-end);
+  bottom: 0;
+  left: var(--timeline-start);
+  height: 1px;
+  background: var(--yoyi-color-border-subtle);
+  content: "";
+}
+
+.columnHeads > :first-child {
+  text-align: right;
+}
+
+/* The arrow icon, sized past .yoyi-icon's own 24 px whatever the sheet order. */
+.root .chevronDown,
+.root .chevronRight {
+  width: 16px;
+  height: 16px;
+  color: var(--yoyi-color-text-secondary);
+}
+
+.root .chevronDown {
+  transform: rotate(90deg);
+}
+
+.root .bar .chevronDown {
+  width: 14px;
+  height: 14px;
+}
+
+/* The rail stays inside the panel so it moves with a page swipe. */
+.railAnchor {
+  position: sticky;
+  top: calc(var(--timeline-sticky-top) - var(--timeline-panel-inset, 0px));
+  z-index: calc(var(--yoyi-z-index-sticky) + 1);
+  flex: none;
+  height: 0;
+}
+
+.rail {
+  position: absolute;
+  top: var(--timeline-rail-top);
+  right: 0;
+  display: flex;
+  width: var(--timeline-rail-width);
+  flex-direction: column;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: pan-y pinch-zoom;
+}
+
+.railCell {
+  display: grid;
+  width: 100%;
+  height: var(--timeline-rail-cell);
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: var(--yoyi-radius-md) 0 0 var(--yoyi-radius-md);
+  background: transparent;
+  color: var(--yoyi-color-text-disabled);
+  font: 400 var(--yoyi-type-label-size) / 18px var(--yoyi-font-editorial);
+  cursor: default;
+  touch-action: pan-y pinch-zoom;
+}
+
+.railCell[data-has-count] {
+  color: var(--yoyi-color-text-secondary);
+  cursor: pointer;
+}
+
+.railCell[aria-current="true"] {
+  color: var(--yoyi-color-seal-red);
+}
+
+.rail[data-dragging] .railCell[aria-current="true"] {
+  background: var(--yoyi-color-seal-red-muted);
+  color: var(--yoyi-color-text-primary);
+}
+
+.railCell:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: -2px;
+}
+
+.bubble {
+  position: absolute;
+  right: calc(100% + var(--yoyi-space-3));
+  display: flex;
+  box-sizing: border-box;
+  min-width: 72px;
+  height: 56px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding-inline: var(--yoyi-space-3);
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-inverse);
+  box-shadow: var(--yoyi-shadow-dialog);
+  color: var(--yoyi-color-text-inverse);
+  transform: translateY(-50%);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.bubbleName {
+  font: 500 var(--timeline-era-empty-size) / 24px var(--yoyi-font-editorial);
+}
+
+.bubbleYear {
+  font: 500 var(--yoyi-type-label-size) / 18px var(--yoyi-font-interface);
+}
+
+/* The wide chrome adds no height; the list below leaves room for it. */
+.wide {
+  position: sticky;
+  top: calc(var(--timeline-panel-inset, 0px) * -1);
+  z-index: var(--yoyi-z-index-sticky);
+  flex: none;
+  height: 0;
+  color: var(--yoyi-color-text-primary);
+  font-family: var(--yoyi-font-interface);
+}
+
+/* A PC scrolls the document: see timeline-wide.tsx. */
+.wide[data-timeline-wide="fixed"] {
+  position: fixed;
+  top: var(--timeline-wide-top);
+  left: var(--timeline-wide-left);
+  width: var(--timeline-wide-width);
+}
+
+.wideRuler {
+  position: absolute;
+  top: var(--yoyi-space-3);
+  left: 0;
+  display: flex;
+  width: 212px;
+  height: var(--timeline-wide-ruler);
+  gap: var(--yoyi-space-3);
+}
+
+.wideEras {
+  display: flex;
+  width: 152px;
+  max-height: 100%;
+  flex: none;
+  flex-direction: column;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.wideEras::-webkit-scrollbar {
+  display: none;
+}
+
+.wideEra {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--timeline-wide-era);
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 var(--yoyi-space-3);
+  border: 0;
+  border-radius: var(--yoyi-radius-md);
+  background: none;
+  color: var(--yoyi-color-text-primary);
+  font-family: var(--yoyi-font-interface);
+  cursor: pointer;
+}
+
+.wideEra:disabled {
+  color: var(--yoyi-color-text-tertiary);
+  cursor: default;
+}
+
+.wideEra:not(:disabled):hover {
+  background: var(--yoyi-color-background-surface);
+}
+
+.wideEra[aria-current="true"],
+.wideEra[aria-current="true"]:not(:disabled):hover {
+  background: var(--yoyi-color-seal-red-muted);
+}
+
+.wideEra:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: -2px;
+}
+
+.wideEraName {
+  font: 400 var(--yoyi-type-body-small-size) / 20px var(--yoyi-font-editorial);
+  white-space: nowrap;
+}
+
+.wideEra[aria-current="true"] .wideEraName {
+  font-weight: 500;
+}
+
+.wideEraCount {
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-metadata-size);
+  line-height: 16px;
+}
+
+.wideEra[aria-current="true"] .wideEraCount {
+  color: var(--yoyi-color-text-primary);
+}
+
+/* The true-scale strip, with time running down it. */
+.wideScale {
+  position: relative;
+  width: 52px;
+  flex: none;
+}
+
+.wideScaleAxis {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 12px;
+  width: 1px;
+  background: var(--timeline-spine);
+}
+
+.wideScaleSegment {
+  position: absolute;
+  left: 3px;
+  width: 8px;
+  background: var(--yoyi-color-background-muted);
+}
+
+.wideScaleBars {
+  position: absolute;
+  top: 0;
+  left: 14px;
+  width: 32px;
+  height: 100%;
+  fill: var(--yoyi-color-text-primary);
+}
+
+.wideScaleCurrent {
+  position: absolute;
+  left: 2px;
+  width: 44px;
+  height: 1.5px;
+  background: var(--yoyi-color-seal-red);
+}
+
+.wideScaleLabel {
+  position: absolute;
+  left: 15px;
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--timeline-small-size);
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+/* The bar and heads hide the rows that scroll under them. */
+.wideTop {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: var(--timeline-wide-table-x);
+  padding-top: var(--yoyi-space-3);
+  background: var(--yoyi-color-background-page);
+}
+
+.wideBar {
+  display: flex;
+  height: 40px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--yoyi-space-3);
+}
+
+.widePosition {
+  margin-right: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--yoyi-color-text-primary);
+  font: 500 var(--yoyi-type-body-small-size) / 20px var(--yoyi-font-interface);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.widePosition:disabled {
+  color: var(--yoyi-color-text-primary);
+  cursor: default;
+}
+
+.wideAction,
+.wideJump {
+  box-sizing: border-box;
+  height: 32px;
+  flex: none;
+  border-radius: var(--yoyi-radius-md);
+  background: var(--yoyi-color-background-surface);
+  font-size: var(--yoyi-type-label-size);
+  line-height: 20px;
+}
+
+.wideAction {
+  padding: 0 var(--yoyi-space-4);
+  border: 0;
+  color: var(--yoyi-color-text-secondary);
+  font-family: var(--yoyi-font-interface);
+  cursor: pointer;
+}
+
+.widePosition:focus-visible,
+.wideAction:focus-visible,
+.wideJump:focus-within {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: -2px;
+}
+
+.wideJump {
+  display: flex;
+  width: 90px;
+  align-items: center;
+  gap: var(--yoyi-space-3);
+  padding: 0 var(--yoyi-space-4);
+  cursor: text;
+}
+
+/* Room for 前1250 and a caret once the reader is typing. */
+.wideJump:focus-within {
+  width: 124px;
+}
+
+.wideJumpInput {
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--yoyi-color-text-primary);
+  font: inherit;
+  font-family: var(--yoyi-font-interface);
+}
+
+.wideJumpInput::placeholder {
+  color: var(--yoyi-color-text-secondary);
+  opacity: 1;
+}
+
+/* Frame T3 has no key hint on a tablet. */
+.wide[data-timeline-wide="sticky"] .wideJump:not(:focus-within) {
+  width: 76px;
+}
+
+/* 16 px keeps iOS from zooming the page when the field takes focus. */
+.wide[data-timeline-wide="sticky"] .wideJumpInput {
+  font-size: var(--yoyi-type-input-size);
+}
+
+.wide[data-timeline-wide="sticky"] .wideJumpInput::placeholder {
+  font-size: var(--yoyi-type-label-size);
+}
+
+.wideJumpKey {
+  flex: none;
+  color: var(--yoyi-color-text-tertiary);
+  font: 500 var(--yoyi-type-label-size) / 20px var(--yoyi-font-interface);
+}
+
+.wideJump:focus-within .wideJumpKey {
+  display: none;
+}
+
+.wide .columnHeads {
+  position: relative;
+  top: auto;
+  z-index: auto;
+  padding: 0;
+}
+
+/* A PC's opened group: the head its row cannot keep sticky. */
+.wide .group[data-expanded] {
+  padding-block: 0;
+}
+
+.wide .group[data-expanded] .groupToggle {
+  position: static;
+}
+
+/* The window: a spacer of the total height, with rows placed inside it. */
+.list {
+  position: relative;
+  flex: 1 0 auto;
+  min-height: 240px;
+  overflow-anchor: none;
+}
+
+.root[data-timeline-layout="wide"] .list {
+  margin-top: var(--timeline-wide-chrome);
+  margin-left: var(--timeline-wide-table-x);
+}
+
+/* A PC's chrome is fixed over the panel's top, so a notice drawn above the feed
+   takes the table's column under the chrome and the room the list kept for it.
+   The two values repeat --timeline-wide-chrome and --timeline-wide-table-x,
+   which are set on .root and do not reach this sibling. */
+@supports selector(:has(*)) {
+  [data-home-feed-panel]:has(> .root[data-timeline-platform="pc"])
+    > [data-panel-preface] {
+    margin-top: 76px;
+    margin-left: 228px;
+  }
+
+  [data-panel-preface]
+    + .root[data-timeline-layout="wide"][data-timeline-platform="pc"]
+    .list {
+    margin-top: 0;
+  }
+}
+
+/* Loading, failed and not yet activated: the spine alone. */
+.list:empty::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(
+    var(--timeline-start) + var(--timeline-gutter) + var(--timeline-spine-x)
+  );
+  width: 1px;
+  background: var(--timeline-spine);
+  content: "";
+}
+
+.row {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+}
+
+/* Shared row columns. */
+.entry,
+.head,
+.gap,
+.more,
+.groupToggle {
+  display: grid;
+  box-sizing: border-box;
+  width: 100%;
+  grid-template-columns: var(--timeline-gutter) var(--timeline-slot) minmax(
+      0,
+      1fr
+    );
+  padding: 0 var(--timeline-end) 0 var(--timeline-start);
+}
+
+.entry,
+.more,
+.groupToggle,
+.shelfPill,
+.member {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.entry:focus-visible,
+.more:focus-visible,
+.groupToggle:focus-visible,
+.shelfPill:focus-visible,
+.member:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: -2px;
+}
+
+.entry:active .title,
+.member:active {
+  color: var(--yoyi-color-text-secondary);
+}
+
+.root:not([data-timeline-layout="phone"]) .entry {
+  grid-template-columns:
+    var(--timeline-gutter) var(--timeline-slot) minmax(0, 1fr)
+    var(--timeline-col-place) var(--timeline-col-holder);
+}
+
+.gutter {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  padding-top: var(--timeline-year-top);
+  font: 500 var(--timeline-year-size) / var(--timeline-year-line)
+    var(--yoyi-font-interface);
+  white-space: nowrap;
+}
+
+.slot {
+  position: relative;
+  align-self: stretch;
+}
+
+.slot::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--timeline-spine-x);
+  width: 1px;
+  background: var(--timeline-spine);
+  content: "";
+}
+
+.slot[data-spine="dotted"]::before {
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--timeline-spine) 0 3px,
+    transparent 3px 6px
+  );
+}
+
+/* Marks on the spine. */
+.mark {
+  position: absolute;
+  top: var(--timeline-mark-y);
+  left: var(--timeline-mark-x);
+  display: block;
+  transform: translate(-50%, -50%);
+}
+
+.mark[data-mark="dot"] {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--yoyi-color-text-primary);
+}
+
+.mark[data-mark="bar"] {
+  width: 3px;
+  height: 16px;
+  border-radius: 1.5px;
+  background: var(--yoyi-color-text-primary);
+}
+
+.mark[data-mark="multi"] {
+  width: 3px;
+  height: 16px;
+  border-radius: 1.5px 1.5px 0 0;
+  background: var(--yoyi-color-text-primary);
+}
+
+.mark[data-mark="multi"] i {
+  position: absolute;
+  left: 0;
+  width: 3px;
+  height: 2px;
+  background: var(--yoyi-color-text-primary);
+}
+
+.mark[data-mark="multi"] i:nth-child(1) {
+  top: 18px;
+  opacity: 0.8;
+}
+
+.mark[data-mark="multi"] i:nth-child(2) {
+  top: 22px;
+  opacity: 0.55;
+}
+
+.mark[data-mark="multi"] i:nth-child(3) {
+  top: 26px;
+  opacity: 0.3;
+}
+
+.mark[data-mark="ring"] {
+  box-sizing: border-box;
+  width: 8px;
+  height: 8px;
+  border: 1.6px solid var(--yoyi-color-seal-red);
+  border-radius: 50%;
+  background: var(--yoyi-color-background-page);
+}
+
+/* Entry row. */
+.content {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--yoyi-space-3);
+  padding-block: 10px;
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--yoyi-space-1);
+}
+
+.title {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font: 500 var(--yoyi-type-list-title-size) / 24px var(--yoyi-font-editorial);
+  word-break: break-word;
+}
+
+.metaRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: var(--yoyi-type-metadata-size);
+  line-height: 18px;
+}
+
+.tag {
+  flex: none;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.tag[data-tag="disputed"] {
+  color: var(--yoyi-color-seal-red);
+}
+
+.tag[data-tag="multi"] {
+  color: var(--yoyi-color-text-secondary);
+}
+
+.metaText {
+  overflow: hidden;
+  min-width: 0;
+  flex: 1 1 0;
+  color: var(--yoyi-color-text-tertiary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Frames A1 and C1: a dispute or period note wraps under its tag. */
+.metaText[data-wraps] {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.media {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  max-width: 100%;
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-surface);
+}
+
+.media img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.media [data-catalog-media-state] {
+  width: 100%;
+  height: 100%;
+}
+
+.root:not([data-timeline-layout="phone"]) .content {
+  padding: var(--yoyi-space-3) var(--yoyi-space-5) var(--yoyi-space-3) 0;
+}
+
+.root:not([data-timeline-layout="phone"]) .text {
+  gap: 0;
+}
+
+.column {
+  min-width: 0;
+  padding: var(--timeline-year-top) 0 var(--yoyi-space-3);
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-label-size);
+  line-height: 20px;
+  word-break: break-word;
+}
+
+/* Chapter head. */
+.headBody {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: var(--yoyi-space-3);
+  padding: 14px 0 10px;
+  border-top: 1px solid var(--yoyi-color-border-subtle);
+}
+
+.headName {
+  flex: none;
+  font: 500 var(--yoyi-type-section-title-size) / 30px
+    var(--yoyi-font-editorial);
+}
+
+.headRange {
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-metadata-size);
+  line-height: 18px;
+}
+
+/* An empty chapter: text only, a dotted spine and no tap. */
+.empty {
+  display: grid;
+  box-sizing: border-box;
+  grid-template-columns:
+    calc(var(--timeline-gutter) + var(--yoyi-space-3)) var(--timeline-slot)
+    minmax(0, 1fr);
+  padding: 0 var(--timeline-end) 0 var(--yoyi-space-3);
+}
+
+.emptyYear {
+  padding-top: 15px;
+  font: 500 var(--yoyi-type-metadata-size) / 18px var(--yoyi-font-interface);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.emptyBody {
+  display: flex;
+  flex-direction: column;
+  padding-block: 10px;
+  color: var(--yoyi-color-text-tertiary);
+}
+
+.emptyName {
+  font: 500 var(--timeline-era-empty-size) / 26px var(--yoyi-font-editorial);
+}
+
+.emptyNote {
+  font-size: var(--yoyi-type-metadata-size);
+  line-height: 18px;
+}
+
+/* The phone's year sits 8 left of the start; a wide table has none to give. */
+.root[data-timeline-layout="wide"] .empty {
+  grid-template-columns:
+    var(--timeline-gutter) var(--timeline-slot)
+    minmax(0, 1fr);
+  padding: 0;
+}
+
+/* Gap, 另 N 条. */
+.gapText {
+  padding-block: 3px;
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-metadata-size);
+  line-height: 18px;
+}
+
+.moreText {
+  padding-block: 10px;
+  color: var(--yoyi-color-text-secondary);
+  font: 500 var(--yoyi-type-label-size) / 20px var(--yoyi-font-interface);
+}
+
+/* Shelf: covers the spine and opens the 书架 sheet. */
+.shelf {
+  padding: var(--yoyi-space-3) var(--timeline-end) var(--yoyi-space-3)
+    var(--timeline-start);
+}
+
+.shelfPill {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--yoyi-space-3);
+  padding: 9px 10px 9px var(--yoyi-space-4);
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-muted);
+  font: 500 var(--yoyi-type-body-small-size) / 20px var(--yoyi-font-interface);
+}
+
+/* Group: the fold row, its stacked page edges, the pinned head and members. */
+.group {
+  position: relative;
+}
+
+.group[data-expanded] {
+  padding-top: var(--yoyi-space-2);
+  padding-bottom: var(--yoyi-space-3);
+}
+
+.group[data-expanded]::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(
+    var(--timeline-start) + var(--timeline-gutter) + var(--timeline-spine-x)
+  );
+  width: 1px;
+  background: var(--timeline-spine);
+  content: "";
+}
+
+.group:not([data-expanded]) .gutter {
+  padding-top: 17px;
+}
+
+.group:not([data-expanded]) .mark {
+  --timeline-mark-y: 26px;
+}
+
+.group[data-expanded] .gutter {
+  padding-top: 13px;
+}
+
+.group[data-expanded] .mark {
+  --timeline-mark-y: 22px;
+}
+
+.group[data-expanded] .groupToggle {
+  position: sticky;
+  top: calc(var(--timeline-sticky-top) - var(--timeline-panel-inset, 0px));
+  z-index: 1;
+  background: var(--yoyi-color-background-page);
+}
+
+.groupBody {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  padding: 6px 0 var(--yoyi-space-3);
+}
+
+.group[data-expanded] .groupBody {
+  padding: 0;
+}
+
+.groupCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--yoyi-space-1);
+  padding: var(--yoyi-space-3) var(--yoyi-space-3) 10px var(--yoyi-space-4);
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-surface);
+}
+
+.group[data-expanded] .groupCard {
+  padding: 11px var(--yoyi-space-3) 11px var(--yoyi-space-4);
+  border-radius: var(--yoyi-radius-lg) var(--yoyi-radius-lg) 0 0;
+}
+
+.groupTop {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.groupTitle {
+  overflow: hidden;
+  min-width: 0;
+  flex: 1 1 0;
+  font: 500 var(--timeline-group-title-size) / 22px var(--yoyi-font-editorial);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.groupCount {
+  flex: none;
+  color: var(--yoyi-color-text-secondary);
+  font: 500 var(--yoyi-type-metadata-size) / 18px var(--yoyi-font-interface);
+  white-space: nowrap;
+}
+
+.groupCollapse {
+  flex: none;
+  color: var(--yoyi-color-seal-red);
+  font: 500 var(--yoyi-type-metadata-size) / 18px var(--yoyi-font-interface);
+  white-space: nowrap;
+}
+
+.groupSummary {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-metadata-size);
+  line-height: 18px;
+}
+
+.groupEdge {
+  display: block;
+  border-radius: 0 0 6px 6px;
+  background: var(--yoyi-color-background-surface);
+}
+
+.groupEdge[data-edge="near"] {
+  height: 4px;
+  margin-inline: 10px;
+}
+
+.groupEdge[data-edge="far"] {
+  height: 3px;
+  margin-inline: 20px;
+}
+
+.members {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  margin: 0 var(--timeline-end) 0
+    calc(var(--timeline-start) + var(--timeline-gutter) + var(--timeline-slot));
+  padding: 0 0 var(--yoyi-space-3);
+  border-radius: 0 0 var(--yoyi-radius-lg) var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-surface);
+  list-style: none;
+}
+
+.member {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: 48px;
+  overflow: hidden;
+  padding: 13px var(--yoyi-space-4);
+  font: 400 var(--timeline-group-title-size) / 22px var(--yoyi-font-editorial);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.root:not([data-timeline-layout="phone"]) .members {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding-bottom: var(--yoyi-space-4);
+}
+
+.root:not([data-timeline-layout="phone"]) .member {
+  height: 42px;
+  padding-block: 10px;
+}
+
+/* Frame P2: two columns at 36, the group flush with the rows around it. */
+.root[data-timeline-layout="wide"] .group[data-expanded] {
+  padding-block: 0;
+}
+
+.root[data-timeline-layout="wide"] .members {
+  padding: var(--yoyi-space-2) 44px var(--yoyi-space-4) var(--yoyi-space-4);
+}
+
+.root[data-timeline-layout="wide"] .member {
+  height: 36px;
+  padding: 7px 0;
+}
+
+/* Sticky has no scrollport on a PC; the chrome holds a copy of this head. */
+.root[data-timeline-platform="pc"] .group[data-expanded] .groupToggle {
+  position: static;
+}
+
+/* Failure: the spine stays and the message sits over it. */
+.failure {
+  position: absolute;
+  top: 40%;
+  right: 0;
+  left: 0;
+  display: grid;
+  justify-items: center;
+  gap: var(--yoyi-space-3);
+  padding-inline: var(--yoyi-space-5);
+  text-align: center;
+}
+
+.root[data-timeline-layout="wide"] .failure {
+  left: var(--timeline-wide-table-x);
+}
+
+.failure h2,
+.failure p {
+  margin: 0;
+}
+
+.failure h2 {
+  font: 500 var(--yoyi-type-list-title-size) / 24px var(--yoyi-font-interface);
+}
+
+.failure p {
+  color: var(--yoyi-color-text-secondary);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 20px;
+}
+
+.failureMark {
+  color: var(--yoyi-color-text-tertiary);
+  font: 500 var(--yoyi-type-page-title-size) / 1 var(--yoyi-font-editorial);
+}
+
+/* Sheets over AuthorDialog: specificity beats its full-page frame. */
+.sheetDialog.sheetDialog {
+  padding: 0;
+  overflow: hidden;
+  background: var(--yoyi-color-overlay);
+  animation: sheetDim var(--yoyi-duration-normal) var(--yoyi-easing-standard);
+}
+
+.sheetDialog.sheetDialog::backdrop {
+  background: transparent;
+}
+
+.sheetDialog.sheetDialog > div {
+  position: relative;
+  display: flex;
+  box-sizing: border-box;
+  height: 100%;
+  max-width: none;
+  flex-direction: column;
+  justify-content: flex-end;
+  margin: 0;
+}
+
+.sheetDialog.sheetDialog > div > :global(.phase4-actions) {
+  display: none;
+}
+
+.sheetScrim {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  outline: none;
+  cursor: default;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.sheetPanel {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  box-sizing: border-box;
+  max-height: calc(100% - var(--yoyi-space-10));
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 20px 20px 0 0;
+  background: var(--yoyi-color-background-elevated);
+  color: var(--yoyi-color-text-primary);
+  font-family: var(--yoyi-font-interface);
+  transition: transform var(--yoyi-duration-fast) var(--yoyi-easing-standard);
+  animation: sheetRise var(--yoyi-duration-normal) var(--yoyi-easing-emphasized);
+  overscroll-behavior: contain;
+}
+
+.sheetPanel[data-sheet-swiping] {
+  transition: none;
+}
+
+.sheetPanel[data-sheet-variant="full"] {
+  height: 100%;
+  max-height: 100%;
+  border-radius: 0;
+}
+
+/* Tablet: a 360 side panel. */
+.root:not([data-timeline-layout="phone"]) .sheetDialog.sheetDialog > div {
+  align-items: flex-end;
+  justify-content: stretch;
+}
+
+.root:not([data-timeline-layout="phone"]) .sheetPanel {
+  width: 360px;
+  height: 100%;
+  max-height: 100%;
+  border-radius: 20px 0 0 20px;
+  animation-name: sheetSlide;
+}
+
+.root:not([data-timeline-layout="phone"]) .sheetGrip {
+  display: none;
+}
+
+.root:not([data-timeline-layout="phone"]) .card,
+.root:not([data-timeline-layout="phone"]) .legend {
+  padding-top: var(--yoyi-space-7);
+}
+
+.root:not([data-timeline-layout="phone"]) .eraHeader {
+  height: 64px;
+}
+
+/*
+ * Wide (frames P4, P5): a 400 drawer over the table's right edge. Nothing dims,
+ * so the rows stay readable beside it; a click outside still closes it.
+ */
+.root[data-timeline-layout="wide"] .sheetDialog.sheetDialog {
+  background: transparent;
+  animation: none;
+}
+
+.root[data-timeline-layout="wide"] .sheetPanel {
+  width: 400px;
+  max-width: calc(100% - var(--yoyi-space-10));
+  height: calc(100% - var(--yoyi-space-10));
+  max-height: none;
+  margin: var(--yoyi-space-7) var(--timeline-wide-drawer-end)
+    var(--yoyi-space-7) 0;
+  border-radius: 16px;
+  box-shadow: var(--yoyi-shadow-dialog);
+  animation-name: drawerIn;
+}
+
+.sheetPanel > .sheetClose {
+  position: absolute;
+  z-index: 1;
+  top: 14px;
+  right: 14px;
+  display: none;
+}
+
+.root[data-timeline-layout="wide"] .sheetPanel > .sheetClose {
+  display: grid;
+}
+
+.root[data-timeline-layout="wide"] .card {
+  gap: var(--yoyi-space-5);
+  padding: var(--yoyi-space-7);
+}
+
+/* Clear of the close button. */
+.root[data-timeline-layout="wide"] .cardTitle {
+  padding-right: var(--yoyi-space-8);
+  line-height: 30px;
+}
+
+.root[data-timeline-layout="wide"] .eraHeader {
+  padding-right: var(--yoyi-space-9);
+}
+
+.root[data-timeline-layout="wide"] .shelfHeader {
+  padding: 6px 2px 0 var(--yoyi-space-6);
+}
+
+.root[data-timeline-layout="wide"] .shelfTabs {
+  padding: 6px var(--yoyi-space-6) var(--yoyi-space-4);
+}
+
+.root[data-timeline-layout="wide"] .shelfSectionHead,
+.root[data-timeline-layout="wide"] .shelfEntry {
+  padding-inline: var(--yoyi-space-6);
+}
+
+.root[data-timeline-layout="wide"] .shelfGroup {
+  margin-inline: var(--yoyi-space-6);
+}
+
+.root[data-timeline-layout="wide"] .shelfGroup .shelfEntry {
+  padding-inline: var(--yoyi-space-4);
+}
+
+@keyframes sheetDim {
+  from {
+    background-color: transparent;
+  }
+}
+
+@keyframes sheetRise {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes sheetSlide {
+  from {
+    transform: translateX(100%);
+  }
+}
+
+/* The drawer stops short of the screen edge, so it arrives from close by. */
+@keyframes drawerIn {
+  from {
+    opacity: 0;
+    transform: translateX(var(--yoyi-space-7));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sheetDialog.sheetDialog,
+  .sheetPanel {
+    animation: none;
+  }
+}
+
+.sheetGrip {
+  display: flex;
+  flex: none;
+  height: 24px;
+  justify-content: center;
+  padding-top: var(--yoyi-space-3);
+  touch-action: none;
+  cursor: grab;
+}
+
+.sheetGrip span {
+  width: 36px;
+  height: 4px;
+  border-radius: var(--yoyi-radius-full);
+  background: var(--yoyi-color-border-default);
+}
+
+.sheetTitle {
+  margin: 0;
+  font: 500 var(--timeline-sheet-title-size) / 28px var(--yoyi-font-editorial);
+}
+
+.sheetIconButton {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  background: none;
+  color: var(--yoyi-color-text-primary);
+  cursor: pointer;
+}
+
+/* 词条卡. */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--yoyi-space-5);
+  padding: var(--yoyi-space-3) var(--yoyi-space-6)
+    calc(var(--yoyi-space-8) + env(safe-area-inset-bottom));
+  overflow-y: auto;
+}
+
+.cardTitle {
+  margin: 0;
+  font: 500 var(--timeline-sheet-title-size) / 28px var(--yoyi-font-editorial);
+}
+
+.cardFacts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--yoyi-space-4);
+  margin: 0;
+}
+
+.cardFact {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+}
+
+.cardFact dt {
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-label-size);
+  line-height: 22px;
+}
+
+.cardFact dd {
+  margin: 0;
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 22px;
+}
+
+/* 纪年. */
+.era {
+  display: flex;
+  flex-direction: column;
+  gap: var(--yoyi-space-4);
+  padding: 0 var(--yoyi-space-6)
+    calc(var(--yoyi-space-6) + env(safe-area-inset-bottom));
+  overflow-y: auto;
+}
+
+/* Frame A4 leaves this much air above the 总尺. */
+.eraHeader {
+  display: flex;
+  height: 100px;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.eraLegendButton {
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--yoyi-color-text-primary);
+  font: 500 var(--yoyi-type-label-size) / 20px var(--yoyi-font-interface);
+  cursor: pointer;
+}
+
+.scale {
+  position: relative;
+  flex: none;
+  height: 62px;
+}
+
+.scaleBars {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 34px;
+  fill: var(--yoyi-color-text-primary);
+}
+
+.scaleBaseline {
+  position: absolute;
+  top: 34px;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: var(--yoyi-color-border-strong);
+}
+
+.scaleSegment {
+  position: absolute;
+  top: 35px;
+  height: 6px;
+  background: var(--yoyi-color-background-muted);
+}
+
+.scaleCurrent {
+  position: absolute;
+  top: 0;
+  width: 1.5px;
+  height: 42px;
+  background: var(--yoyi-color-seal-red);
+}
+
+.scaleLabel {
+  position: absolute;
+  top: 46px;
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--timeline-small-size);
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.eraInputs {
+  display: grid;
+  flex: none;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--yoyi-space-3);
+}
+
+.eraToggle,
+.eraInput {
+  box-sizing: border-box;
+  height: 40px;
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-surface);
+  color: var(--yoyi-color-text-primary);
+  font-family: var(--yoyi-font-interface);
+}
+
+.eraToggle {
+  padding: 0 var(--yoyi-space-4);
+  font-size: var(--yoyi-type-label-size);
+  cursor: pointer;
+}
+
+.eraToggle[aria-pressed="true"] {
+  border-color: transparent;
+  background: var(--yoyi-color-seal-red-muted);
+}
+
+/* 16 px keeps iOS from zooming the page when the field takes focus. */
+.eraInput {
+  width: 100%;
+  padding: 0 var(--yoyi-space-4);
+  font-size: var(--yoyi-type-input-size);
+}
+
+.eraInput::placeholder {
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-label-size);
+}
+
+.eraNote {
+  margin: 0;
+  color: var(--yoyi-color-seal-red);
+  font-size: var(--yoyi-type-label-size);
+  line-height: 20px;
+}
+
+.eraChoices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--yoyi-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.eraChoice {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--yoyi-space-3);
+  padding: 0 var(--yoyi-space-4);
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-surface);
+  color: var(--yoyi-color-text-primary);
+  font-family: var(--yoyi-font-interface);
+  font-size: var(--yoyi-type-label-size);
+  text-align: start;
+  cursor: pointer;
+}
+
+.eraChoiceLabel {
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-metadata-size);
+}
+
+.eraGrid {
+  display: grid;
+  flex: none;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.eraCell {
+  display: flex;
+  box-sizing: border-box;
+  min-width: 0;
+  height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--yoyi-space-1);
+  padding: 0 6px 0 var(--yoyi-space-3);
+  border: 0;
+  border-radius: var(--yoyi-radius-md);
+  background: var(--yoyi-color-background-surface);
+  color: var(--yoyi-color-text-primary);
+  font-family: var(--yoyi-font-interface);
+  cursor: pointer;
+}
+
+.eraCell:disabled {
+  color: var(--yoyi-color-text-tertiary);
+  cursor: default;
+}
+
+.eraCell[aria-current="true"] {
+  background: var(--yoyi-color-seal-red-muted);
+}
+
+.eraCellName {
+  overflow: hidden;
+  font: 400 var(--yoyi-type-label-size) / 18px var(--yoyi-font-editorial);
+  white-space: nowrap;
+}
+
+.eraCellCount {
+  flex: none;
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--timeline-small-size);
+  line-height: 14px;
+}
+
+.eraCell[aria-current="true"] .eraCellCount {
+  color: var(--yoyi-color-text-primary);
+}
+
+/* 凡例. */
+.legend {
+  display: flex;
+  flex-direction: column;
+  gap: var(--yoyi-space-4);
+  padding: 0 var(--yoyi-space-6)
+    calc(var(--yoyi-space-6) + env(safe-area-inset-bottom));
+  overflow-y: auto;
+}
+
+.legendList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--yoyi-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.legendList li {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: var(--yoyi-space-4);
+  min-height: 48px;
+}
+
+.legendMark {
+  --timeline-mark-x: 9px;
+  --timeline-mark-y: 16px;
+
+  position: relative;
+}
+
+.legendMark::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 8.5px;
+  width: 1px;
+  background: var(--yoyi-color-border-default);
+  content: "";
+}
+
+.legendText {
+  display: flex;
+  flex-direction: column;
+  padding-block: var(--yoyi-space-1);
+}
+
+.legendText strong {
+  font-size: var(--yoyi-type-body-small-size);
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.legendText span {
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-metadata-size);
+  line-height: 18px;
+}
+
+.legendNote {
+  margin: 0;
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-metadata-size);
+  line-height: 20px;
+}
+
+/* 书架. */
+.shelfSheet {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  padding-top: env(safe-area-inset-top);
+}
+
+.shelfHeader {
+  display: flex;
+  flex: none;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--yoyi-space-2) var(--yoyi-space-2) 0 var(--yoyi-space-5);
+}
+
+.shelfTabs {
+  display: flex;
+  flex: none;
+  gap: var(--yoyi-space-3);
+  padding: var(--yoyi-space-2) var(--yoyi-space-5) var(--yoyi-space-3);
+}
+
+.shelfTab {
+  height: 32px;
+  padding: 0 var(--yoyi-space-4);
+  border: 0;
+  border-radius: var(--yoyi-radius-full);
+  background: var(--yoyi-color-background-surface);
+  color: var(--yoyi-color-text-secondary);
+  font-family: var(--yoyi-font-interface);
+  font-size: var(--yoyi-type-label-size);
+  cursor: pointer;
+}
+
+.shelfTab[aria-selected="true"] {
+  background: var(--yoyi-color-seal-red-muted);
+  color: var(--yoyi-color-text-primary);
+}
+
+.shelfList {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding-bottom: calc(var(--yoyi-space-5) + env(safe-area-inset-bottom));
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.shelfSectionHead {
+  display: flex;
+  height: 32px;
+  align-items: center;
+  gap: var(--yoyi-space-3);
+  margin: 0;
+  padding: 0 var(--yoyi-space-5);
+  background: var(--yoyi-color-background-surface);
+  font: 500 var(--yoyi-type-label-size) / 18px var(--yoyi-font-interface);
+}
+
+.shelfSectionHead span:last-child {
+  color: var(--yoyi-color-text-tertiary);
+  font-weight: 400;
+}
+
+.shelfEntry {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 40px;
+  flex-direction: column;
+  justify-content: center;
+  padding: var(--yoyi-space-3) var(--yoyi-space-5);
+  border: 0;
+  background: none;
+  color: var(--yoyi-color-text-primary);
+  font-family: var(--yoyi-font-interface);
+  text-align: start;
+  cursor: pointer;
+}
+
+.shelfEntryTitle {
+  font: 500 var(--timeline-group-title-size) / 22px var(--yoyi-font-editorial);
+}
+
+.shelfEntryMeta {
+  color: var(--yoyi-color-text-tertiary);
+  font-size: var(--yoyi-type-metadata-size);
+  line-height: 18px;
+}
+
+.shelfGroup {
+  margin: var(--yoyi-space-2) var(--yoyi-space-5);
+  border-radius: var(--yoyi-radius-lg);
+  background: var(--yoyi-color-background-surface);
+}
+
+.shelfGroup .shelfEntry {
+  padding-inline: var(--yoyi-space-4);
+}
+
+.shelfGroupToggle {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 11px var(--yoyi-space-3) 11px var(--yoyi-space-4);
+  border: 0;
+  background: none;
+  color: var(--yoyi-color-text-primary);
+  text-align: start;
+  cursor: pointer;
+}

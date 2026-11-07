@@ -5,6 +5,9 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { MEDIA_SIZES } from "../media/responsive-media";
+import { ContentQuickActionsProvider } from "../quick-actions/content-quick-actions";
+import { quickActionContentKey } from "../quick-actions/quick-action-types";
 import { TopicCard } from "./topic-card";
 import { TopicDetail } from "./topic-detail";
 
@@ -61,6 +64,73 @@ const renderDetail = (topic: Topic | null) =>
       topic={topic}
     />,
   );
+
+describe("Topic card media and quick actions", () => {
+  it("offers card candidates with the anchor as src and paints the asset colour", () => {
+    const origin = "https://media.example.invalid/topic";
+    const cover = {
+      id: "topic-cover" as MediaId,
+      kind: "image" as const,
+      alt: "专题图像",
+      src: `${origin}/1200.webp`,
+      width: 1200,
+      height: 900,
+      placeholderColor: "#5f6f58",
+      renditions: [
+        {
+          src: `${origin}/480.webp`,
+          width: 480,
+          height: 360,
+          contentType: "image/webp" as const,
+        },
+        {
+          src: `${origin}/1200.webp`,
+          width: 1200,
+          height: 900,
+          contentType: "image/webp" as const,
+        },
+      ],
+    };
+    const html = renderToStaticMarkup(
+      <TopicCard topic={{ ...editorial, cover }} onOpen={() => undefined} />,
+    );
+    expect(html).toContain(
+      `srcSet="${origin}/480.webp 480w, ${origin}/1200.webp 1200w"`,
+    );
+    expect(html).toContain(`sizes="${MEDIA_SIZES.topicCard(null)}"`);
+    expect(html).toContain("background-color:#5f6f58");
+  });
+
+  it("uses one QA button and never presents a fake Catalog opener", () => {
+    const html = renderToStaticMarkup(
+      <ContentQuickActionsProvider
+        environment={{
+          likedIds: [],
+          favoriteIds: [],
+          onAction: () => undefined,
+        }}
+      >
+        <TopicCard topic={editorial} onOpen={() => undefined} />
+      </ContentQuickActionsProvider>,
+    );
+    expect(html.match(/<button/g)).toHaveLength(1);
+    expect(html).toContain('data-quick-actions="enabled"');
+    expect(html).not.toContain("data-open-catalog");
+    expect(html).toContain('data-quick-action-content-kind="topic"');
+  });
+
+  it("separates feedback by type and ID without delimiter collisions", () => {
+    const keys = (["catalog", "work", "topic"] as const).map((kind) =>
+      quickActionContentKey({ kind, id: "same-id", title: "" }),
+    );
+    expect(new Set(keys).size).toBe(3);
+    expect(
+      quickActionContentKey({ kind: "catalog", id: "topic:x", title: "" }),
+    ).not.toBe(
+      quickActionContentKey({ kind: "topic", id: "catalog:x", title: "" }),
+    );
+  });
+});
 
 describe("Topic components", () => {
   afterEach(() => {

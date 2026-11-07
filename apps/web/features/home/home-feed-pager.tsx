@@ -31,6 +31,7 @@ const withFilingFooter = (content: ReactNode) => (
 
 export interface HomeFeedPagerProps {
   readonly activeFeed: HomeFeed;
+  readonly onBeforeCommit?: () => void;
   readonly onCommit: (feed: HomeFeed) => void;
   readonly onProgress?: (progress: number) => void;
   readonly primaryVisible?: boolean;
@@ -65,7 +66,7 @@ export const HomeFeedPager = forwardRef<
       {...props}
       panels={{
         discover: withFilingFooter(props.panels.discover),
-        nearby: withFilingFooter(props.panels.nearby),
+        timeline: withFilingFooter(props.panels.timeline),
         inscriptions: withFilingFooter(props.panels.inscriptions),
         calligraphy: withFilingFooter(props.panels.calligraphy),
       }}

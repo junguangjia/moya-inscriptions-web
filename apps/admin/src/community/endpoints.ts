@@ -73,6 +73,14 @@ import {
   operatorReportReviewRequestSchema,
   operatorReportMetadataRequestSchema,
   operatorReportForwardRequestSchema,
+  adminUpdateTimelineEntryRequestSchema,
+  createTimelineEntryCommandSchema,
+  operatorTimelineEntrySchema,
+  operatorTimelinePageSchema,
+  operatorTimelineQuerySchema,
+  operatorTimelineSummarySchema,
+  reorderTimelineCommandSchema,
+  timelineReorderResultSchema,
 } from "@moya/contracts/internal/community-operator";
 import { z } from "zod";
 import {
@@ -615,6 +623,43 @@ export const communityOperationDefinitions = {
     output: { owner: operatorPublishingJobSchema },
     run: ({ id, ...command }, call) =>
       call("POST", `publishing/jobs/${segment(id)}/abandon`, command),
+  }),
+  // home-timeline-v1 (Issue #384 r3): the Home timeline's rows, which the
+  // database holds. The Backend checks every write against the whole set.
+  "read-timeline": define({
+    input: operatorTimelineQuerySchema,
+    output: { owner: operatorTimelinePageSchema },
+    run: ({ ids, onAxis, disputed, ...query }, call) =>
+      call(
+        "GET",
+        `timeline-entries${toQuery({
+          ...query,
+          ids: ids?.join(","),
+          onAxis: onAxis === undefined ? undefined : String(onAxis),
+          disputed: disputed === undefined ? undefined : String(disputed),
+        })}`,
+      ),
+  }),
+  "read-timeline-summary": define({
+    input: noParameters,
+    output: { owner: operatorTimelineSummarySchema },
+    run: (_query, call) => call("GET", "timeline-summary"),
+  }),
+  "create-timeline-entry": define({
+    input: createTimelineEntryCommandSchema,
+    output: { owner: operatorTimelineEntrySchema },
+    run: (command, call) => call("POST", "timeline-entries", command),
+  }),
+  "update-timeline-entry": define({
+    input: adminUpdateTimelineEntryRequestSchema,
+    output: { owner: operatorTimelineEntrySchema },
+    run: ({ id, ...command }, call) =>
+      call("POST", `timeline-entries/${segment(id)}`, command),
+  }),
+  "reorder-timeline": define({
+    input: reorderTimelineCommandSchema,
+    output: { owner: timelineReorderResultSchema },
+    run: (command, call) => call("POST", "timeline-order", command),
   }),
 };
 

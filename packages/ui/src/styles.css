@@ -174,6 +174,10 @@
   --yoyi-icon-mask: url("./assets/icons/nearby.svg");
 }
 
+.yoyi-icon[data-icon="timeline"] {
+  --yoyi-icon-mask: url("./assets/icons/timeline.svg");
+}
+
 .yoyi-icon[data-icon="image"] {
   --yoyi-icon-mask: url("./assets/icons/image.svg");
 }
@@ -1580,6 +1584,76 @@ html[data-theme="dark"]
 [data-motion="reduced"] .yoyi-tab-item::after,
 [data-motion="reduced"] .yoyi-loading-screen .yoyi-logo {
   transform: none !important;
+}
+
+/* home-timeline-v1. The timeline icon builds with its tab's activation: axis,
+   then each branch and its node. The tab keeps its linear slot width. */
+[data-icon="timeline"] {
+  --timeline-activation: var(--top-tab-activation, 1);
+}
+[data-icon="timeline"] [data-timeline-part^="branch"],
+[data-icon="timeline"] [data-timeline-part="axis"] {
+  stroke-dasharray: 1;
+  stroke-dashoffset: calc(1 - var(--timeline-part-progress));
+}
+[data-icon="timeline"] [data-timeline-part^="node"] {
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scale(var(--timeline-part-progress));
+}
+[data-icon="timeline"] [data-timeline-part="axis"] {
+  --timeline-part-progress: clamp(
+    0,
+    (var(--timeline-activation) - 0.1) / 0.4,
+    1
+  );
+}
+[data-icon="timeline"] [data-timeline-part="branch-1"] {
+  --timeline-part-progress: clamp(
+    0,
+    (var(--timeline-activation) - 0.35) / 0.2,
+    1
+  );
+}
+[data-icon="timeline"] [data-timeline-part="node-1"] {
+  --timeline-part-progress: clamp(
+    0,
+    (var(--timeline-activation) - 0.5) / 0.15,
+    1
+  );
+}
+[data-icon="timeline"] [data-timeline-part="branch-2"] {
+  --timeline-part-progress: clamp(
+    0,
+    (var(--timeline-activation) - 0.5) / 0.2,
+    1
+  );
+}
+[data-icon="timeline"] [data-timeline-part="node-2"] {
+  --timeline-part-progress: clamp(
+    0,
+    (var(--timeline-activation) - 0.65) / 0.15,
+    1
+  );
+}
+[data-icon="timeline"] [data-timeline-part="branch-3"] {
+  --timeline-part-progress: clamp(
+    0,
+    (var(--timeline-activation) - 0.65) / 0.2,
+    1
+  );
+}
+[data-icon="timeline"] [data-timeline-part="node-3"] {
+  --timeline-part-progress: clamp(
+    0,
+    (var(--timeline-activation) - 0.8) / 0.2,
+    1
+  );
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-icon="timeline"] {
+    --timeline-activation: 1;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -506,7 +506,7 @@ for (const chrome of ["default", "hidden"] as const) {
             surface === "home" ? "right" : "left",
           );
           await touch(session, "touchStart", [{ ...pageStart, id: 1 }]);
-          // Discover advances to Nearby; the last Home tab, Calligraphy, returns
+          // Discover advances to the Timeline; the last Home tab, Calligraphy, returns
           // to Inscriptions with a rightward swipe instead of a removed category.
           await drag(session, pageStart, {
             x: surface === "home" ? 5 : page.viewportSize()!.width - 5,
@@ -528,7 +528,7 @@ for (const chrome of ["default", "hidden"] as const) {
           await touch(session, "touchEnd", []);
           await expect(page.locator("[data-home-feed-pager]")).toHaveAttribute(
             "data-horizontal-pager-active-key",
-            surface === "home" ? "nearby" : "inscriptions",
+            surface === "home" ? "timeline" : "inscriptions",
           );
           await expect(page.locator("[data-quick-action-menu]")).toHaveCount(0);
         } finally {
@@ -587,7 +587,7 @@ for (const surface of ["home", "calligraphy"] as const) {
       await touch(session, "touchEnd", []);
       await expect(pager).toHaveAttribute(
         "data-horizontal-pager-active-key",
-        surface === "home" ? "nearby" : "inscriptions",
+        surface === "home" ? "timeline" : "inscriptions",
       );
       await expect(page.locator("[data-quick-action-menu]")).toHaveCount(0);
       await ready(page);
@@ -894,169 +894,139 @@ for (const surface of ["home", "calligraphy"] as const) {
 }
 
 for (const chrome of ["default", "hidden"] as const) {
-  test(`Nearby and Topic QA actions retain layout and activation, chrome ${chrome}`, async ({
+  test(`Topic QA actions retain layout and activation, chrome ${chrome}`, async ({
     page,
   }) => {
-    // Nearby retains its Home deep link; topics use their Discussion tab in both QA chrome modes.
-    for (const [feed, kind] of [
-      ["附近", "nearby"],
-      ["专题", "topic"],
-    ] as const) {
-      await ready(
-        page,
-        `/dev/t02p/qa?feed=${kind === "nearby" ? "nearby" : "discover"}${chrome === "hidden" ? "&qaChrome=hidden" : ""}`,
-      );
-      if (kind === "topic") await selectDiscussionTopics(page);
-      await expect(
-        page.getByRole("tab", { name: feed, exact: true }),
-      ).toHaveAttribute("aria-selected", "true");
-      const activePanel = page.locator(
-        kind === "nearby"
-          ? '[data-home-feed-panel="nearby"]'
-          : '[data-discussion-surface] [data-horizontal-panel-key="topics"]',
-      );
-      await expect
-        .poll(() =>
-          activePanel.evaluate((panel) => {
-            const frame = panel.closest<HTMLElement>("[data-horizontal-pager]");
-            if (frame === null) throw new Error("Missing QA action pager");
-            return (
-              frame.dataset.horizontalPagerScrolling === "false" &&
-              Math.abs(
-                panel.getBoundingClientRect().left -
-                  frame.getBoundingClientRect().left,
-              ) <= 2
-            );
-          }),
-        )
-        .toBe(true);
-      const buttons = page.locator(
-        `[data-quick-action-content-kind="${kind}"]`,
-      );
-      const exposedPoint = () =>
-        buttons.evaluateAll((nodes) => {
-          for (const [index, node] of nodes.entries()) {
-            const box = node.getBoundingClientRect();
-            // The visible QA controls may cover a card's centre while its
-            // side remains exposed. Hit-test actual points inside that card.
-            for (const x of [
-              box.x + box.width / 2,
-              box.right - 12,
-              box.left + 12,
-            ]) {
-              for (
-                let y = Math.max(box.top + 12, 24);
-                y < Math.min(box.bottom - 12, innerHeight - 110);
-                y += 20
-              ) {
-                const hit = document.elementFromPoint(x, y);
-                if (hit && node.contains(hit))
-                  return { index, point: { x, y } };
-              }
+    // Topics use their Discussion tab in both QA chrome modes.
+    await ready(
+      page,
+      `/dev/t02p/qa?feed=discover${chrome === "hidden" ? "&qaChrome=hidden" : ""}`,
+    );
+    await selectDiscussionTopics(page);
+    await expect(
+      page.getByRole("tab", { name: "专题", exact: true }),
+    ).toHaveAttribute("aria-selected", "true");
+    const activePanel = page.locator(
+      '[data-discussion-surface] [data-horizontal-panel-key="topics"]',
+    );
+    await expect
+      .poll(() =>
+        activePanel.evaluate((panel) => {
+          const frame = panel.closest<HTMLElement>("[data-horizontal-pager]");
+          if (frame === null) throw new Error("Missing QA action pager");
+          return (
+            frame.dataset.horizontalPagerScrolling === "false" &&
+            Math.abs(
+              panel.getBoundingClientRect().left -
+                frame.getBoundingClientRect().left,
+            ) <= 2
+          );
+        }),
+      )
+      .toBe(true);
+    const buttons = page.locator('[data-quick-action-content-kind="topic"]');
+    const exposedPoint = () =>
+      buttons.evaluateAll((nodes) => {
+        for (const [index, node] of nodes.entries()) {
+          const box = node.getBoundingClientRect();
+          // The visible QA controls may cover a card's centre while its
+          // side remains exposed. Hit-test actual points inside that card.
+          for (const x of [
+            box.x + box.width / 2,
+            box.right - 12,
+            box.left + 12,
+          ]) {
+            for (
+              let y = Math.max(box.top + 12, 24);
+              y < Math.min(box.bottom - 12, innerHeight - 110);
+              y += 20
+            ) {
+              const hit = document.elementFromPoint(x, y);
+              if (hit && node.contains(hit)) return { index, point: { x, y } };
             }
           }
-          return null;
-        });
-      await expect.poll(exposedPoint).not.toBeNull();
-      const exposed = await exposedPoint();
-      if (exposed === null) throw new Error("No exposed settled QA card");
-      const button = buttons.nth(exposed.index);
-      const card = button.locator("..");
-      // Compare the same settled hover state; existing desktop cards translate -2px on hover.
+        }
+        return null;
+      });
+    await expect.poll(exposedPoint).not.toBeNull();
+    const exposed = await exposedPoint();
+    if (exposed === null) throw new Error("No exposed settled QA card");
+    const button = buttons.nth(exposed.index);
+    const card = button.locator("..");
+    // Compare the same settled hover state; existing desktop cards translate -2px on hover.
+    await page.mouse.move(exposed.point.x, exposed.point.y);
+    await card.evaluate(async (node) => {
+      await Promise.all(
+        node.getAnimations().map((animation) => animation.finished),
+      );
+    });
+    const before = await card.boundingBox();
+    const nodes = await card.locator("button button").count();
+    expect(nodes).toBe(0);
+    for (const action of ["like", "favorite", "share"] as const) {
+      const point = exposed.point;
+      await page.mouse.move(point.x, point.y);
+      await page.mouse.down();
+      await expect(page.locator("[data-quick-action-menu]")).toBeVisible();
+      const target = await targetFor(page, action);
+      await page.mouse.move(target.x, target.y, { steps: 6 });
+      await expect(
+        page.locator(`[data-quick-action="${action}"]`),
+      ).toHaveAttribute("data-candidate", "true");
+      await page.mouse.up();
+      await expect(page.locator("[data-quick-action-menu]")).toHaveCount(0);
+      await expect(page.locator("[data-topic-detail]")).toHaveCount(0);
+      await expect(page.locator("[data-product-shell]")).toHaveAttribute(
+        "data-detail-open",
+        "false",
+      );
       await page.mouse.move(exposed.point.x, exposed.point.y);
       await card.evaluate(async (node) => {
         await Promise.all(
           node.getAnimations().map((animation) => animation.finished),
         );
       });
-      const before = await card.boundingBox();
-      const nodes = await card.locator("button button").count();
-      expect(nodes).toBe(0);
-      for (const action of ["like", "favorite", "share"] as const) {
-        const point = exposed.point;
+      expect(await card.boundingBox()).toEqual(before);
+      if (action === "share")
+        await expect(card.getByRole("status")).toHaveText(
+          "QA：分享动作已触发（未分享）",
+        );
+      else {
         await page.mouse.move(point.x, point.y);
         await page.mouse.down();
-        await expect(page.locator("[data-quick-action-menu]")).toBeVisible();
-        const target = await targetFor(page, action);
-        await page.mouse.move(target.x, target.y, { steps: 6 });
         await expect(
           page.locator(`[data-quick-action="${action}"]`),
-        ).toHaveAttribute("data-candidate", "true");
+        ).toHaveAttribute("data-state-active", "true");
+        const again = await targetFor(page, action);
+        await page.mouse.move(again.x, again.y);
         await page.mouse.up();
-        await expect(page.locator("[data-quick-action-menu]")).toHaveCount(0);
-        await expect(page.locator("[data-topic-detail]")).toHaveCount(0);
-        await expect(page.locator("[data-product-shell]")).toHaveAttribute(
-          "data-detail-open",
-          "false",
-        );
-        await page.mouse.move(exposed.point.x, exposed.point.y);
-        await card.evaluate(async (node) => {
-          await Promise.all(
-            node.getAnimations().map((animation) => animation.finished),
-          );
-        });
-        expect(await card.boundingBox()).toEqual(before);
-        if (action === "share")
-          await expect(card.getByRole("status")).toHaveText(
-            "QA：分享动作已触发（未分享）",
-          );
-        else {
-          await page.mouse.move(point.x, point.y);
-          await page.mouse.down();
-          await expect(
-            page.locator(`[data-quick-action="${action}"]`),
-          ).toHaveAttribute("data-state-active", "true");
-          const again = await targetFor(page, action);
-          await page.mouse.move(again.x, again.y);
-          await page.mouse.up();
-          await page.mouse.move(point.x, point.y);
-          await page.mouse.down();
-          await expect(
-            page.locator(`[data-quick-action="${action}"]`),
-          ).toHaveAttribute("data-state-active", "false");
-          await page.mouse.up();
-        }
-      }
-      await page.mouse.click(exposed.point.x, exposed.point.y);
-      if (kind === "topic") {
-        const detail = page.locator("[data-topic-detail]");
-        await expect(detail).toBeVisible();
-        await detail
-          .getByRole("button", { name: "返回专题", exact: true })
-          .focus();
-        await page.keyboard.press("Enter");
-        await expect(detail).toHaveCount(0);
-      } else {
-        await expect(page.locator("[data-topic-detail]")).toHaveCount(0);
-        await expect(page.locator("[data-product-shell]")).toHaveAttribute(
-          "data-detail-open",
-          "false",
-        );
-      }
-      await button.focus();
-      await page.keyboard.press("Enter");
-      if (kind === "nearby") {
-        await expect(page.locator("[data-topic-detail]")).toHaveCount(0);
-        await expect(page.locator("[data-product-shell]")).toHaveAttribute(
-          "data-detail-open",
-          "false",
-        );
-      } else {
-        const topic = page.locator("[data-topic-detail]");
-        await expect(topic).toBeVisible();
-        await topic
-          .getByRole("button", { name: "返回专题", exact: true })
-          .focus();
-        await page.keyboard.press("Enter");
-        await expect(topic).toHaveCount(0);
-        await expect(button).toBeFocused();
+        await page.mouse.move(point.x, point.y);
+        await page.mouse.down();
+        await expect(
+          page.locator(`[data-quick-action="${action}"]`),
+        ).toHaveAttribute("data-state-active", "false");
+        await page.mouse.up();
       }
     }
+    await page.mouse.click(exposed.point.x, exposed.point.y);
+    const detail = page.locator("[data-topic-detail]");
+    await expect(detail).toBeVisible();
+    await detail.getByRole("button", { name: "返回专题", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await expect(detail).toHaveCount(0);
+    await button.focus();
+    await page.keyboard.press("Enter");
+    const topic = page.locator("[data-topic-detail]");
+    await expect(topic).toBeVisible();
+    await topic.getByRole("button", { name: "返回专题", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await expect(topic).toHaveCount(0);
+    await expect(button).toBeFocused();
   });
 }
 
 for (const chrome of ["default", "hidden"] as const) {
-  test(`Chromium nearby and topic continuous touch cancels for native pinch, ${chrome}`, async ({
+  test(`Chromium topic continuous touch cancels for native pinch, ${chrome}`, async ({
     browser,
   }, testInfo) => {
     test.skip(
@@ -1073,166 +1043,156 @@ for (const chrome of ["default", "hidden"] as const) {
     try {
       const page = await context.newPage();
       const session = await context.newCDPSession(page);
-      for (const kind of ["nearby", "topic"] as const) {
-        for (const phase of ["pending", "open"] as const) {
-          await ready(
-            page,
-            `/dev/t02p/qa?feed=${kind === "nearby" ? "nearby" : "discover"}${chrome === "hidden" ? "&qaChrome=hidden" : ""}`,
-          );
-          if (kind === "topic") await selectDiscussionTopics(page);
-          const buttons = page.locator(
-            `[data-quick-action-content-kind="${kind}"]`,
-          );
-          // The visible QA aside covers the first Topic cards. Reveal later
-          // real content through its existing scroll owner before hit testing.
-          if (chrome === "default" && kind === "topic")
-            await buttons.last().scrollIntoViewIfNeeded();
-          const findHit = () =>
-            buttons.evaluateAll((nodes) => {
-              for (const [index, node] of nodes.entries()) {
-                const box = node.getBoundingClientRect();
-                const left = Math.max(box.left + 12, 36);
-                const right = Math.min(box.right - 12, innerWidth - 201);
-                if (left > right) continue;
-                for (const x of [
-                  Math.max(left, Math.min(right, box.x + box.width / 2)),
-                  right,
-                  left,
-                ]) {
-                  // Keep the existing reserve and the full twelve-step span:
-                  // the first finger moves -36px and the second reaches +200px.
-                  if (x > innerWidth - 130 || x < 36 || x + 200 >= innerWidth)
-                    continue;
-                  for (
-                    let y = Math.max(30, box.top + 12);
-                    y < Math.min(innerHeight - 110, box.bottom - 12);
-                    y += 20
-                  ) {
-                    const target = document.elementFromPoint(x, y);
-                    if (target && node.contains(target)) return { index, x, y };
-                  }
+      for (const phase of ["pending", "open"] as const) {
+        await ready(
+          page,
+          `/dev/t02p/qa?feed=discover${chrome === "hidden" ? "&qaChrome=hidden" : ""}`,
+        );
+        await selectDiscussionTopics(page);
+        const buttons = page.locator(
+          '[data-quick-action-content-kind="topic"]',
+        );
+        // The visible QA aside covers the first Topic cards. Reveal later
+        // real content through its existing scroll owner before hit testing.
+        if (chrome === "default") await buttons.last().scrollIntoViewIfNeeded();
+        const findHit = () =>
+          buttons.evaluateAll((nodes) => {
+            for (const [index, node] of nodes.entries()) {
+              const box = node.getBoundingClientRect();
+              const left = Math.max(box.left + 12, 36);
+              const right = Math.min(box.right - 12, innerWidth - 201);
+              if (left > right) continue;
+              for (const x of [
+                Math.max(left, Math.min(right, box.x + box.width / 2)),
+                right,
+                left,
+              ]) {
+                // Keep the existing reserve and the full twelve-step span:
+                // the first finger moves -36px and the second reaches +200px.
+                if (x > innerWidth - 130 || x < 36 || x + 200 >= innerWidth)
+                  continue;
+                for (
+                  let y = Math.max(30, box.top + 12);
+                  y < Math.min(innerHeight - 110, box.bottom - 12);
+                  y += 20
+                ) {
+                  const target = document.elementFromPoint(x, y);
+                  if (target && node.contains(target)) return { index, x, y };
                 }
               }
-              return null;
+            }
+            return null;
+          });
+        await expect
+          .poll(async () => {
+            const hit = await findHit();
+            if (hit === null && chrome === "default") {
+              // The last visible card can leave the panel at its scroll end.
+              // Shift the real card sampling grid into the narrow exposed
+              // band while retaining the full native pinch span and hit test.
+              await page
+                .locator(
+                  '[data-discussion-surface] [data-horizontal-pager-scroll-owner="panel"] [data-horizontal-panel-key="topics"]',
+                )
+                .evaluate((panel) => {
+                  panel.scrollTop = Math.max(0, panel.scrollTop - 4);
+                });
+            }
+            return hit;
+          })
+          .not.toBeNull();
+        const hit = await findHit();
+        if (hit === null)
+          throw new Error(
+            `Missing exposed native topic card (${phase}, ${chrome})`,
+          );
+        const button = buttons.nth(hit.index);
+        const ancestors = await button.evaluate((node) => {
+          const result: { tag: string; touchAction: string }[] = [];
+          for (let e: Element | null = node; e; e = e.parentElement)
+            result.push({
+              tag: e.tagName,
+              touchAction: getComputedStyle(e).touchAction,
             });
-          await expect
-            .poll(async () => {
-              const hit = await findHit();
-              if (hit === null && chrome === "default" && kind === "topic") {
-                // The last visible card can leave the panel at its scroll end.
-                // Shift the real card sampling grid into the narrow exposed
-                // band while retaining the full native pinch span and hit test.
-                await page
-                  .locator(
-                    '[data-discussion-surface] [data-horizontal-pager-scroll-owner="panel"] [data-horizontal-panel-key="topics"]',
-                  )
-                  .evaluate((panel) => {
-                    panel.scrollTop = Math.max(0, panel.scrollTop - 4);
-                  });
-              }
-              return hit;
-            })
-            .not.toBeNull();
-          const hit = await findHit();
-          if (hit === null)
-            throw new Error(
-              `Missing exposed native ${kind} card (${phase}, ${chrome})`,
-            );
-          const button = buttons.nth(hit.index);
-          const ancestors = await button.evaluate((node) => {
-            const result: { tag: string; touchAction: string }[] = [];
-            for (let e: Element | null = node; e; e = e.parentElement)
-              result.push({
-                tag: e.tagName,
-                touchAction: getComputedStyle(e).touchAction,
-              });
-            return result;
-          });
-          for (const ancestor of ancestors)
-            expect(ancestor.touchAction).toMatch(
-              /^(?:auto|manipulation|.*pinch-zoom.*)$/,
-            );
-          const first = { id: 1, x: hit.x, y: hit.y };
-          await touch(session, "touchStart", [first]);
-          if (phase === "open")
-            await expect(
-              page.locator("[data-quick-action-menu]"),
-            ).toBeVisible();
-          const beforeScale = await page.evaluate(() => visualViewport!.scale);
-          await touch(session, "touchStart", [
-            first,
-            { id: 2, x: first.x + 80, y: first.y },
+          return result;
+        });
+        for (const ancestor of ancestors)
+          expect(ancestor.touchAction).toMatch(
+            /^(?:auto|manipulation|.*pinch-zoom.*)$/,
+          );
+        const first = { id: 1, x: hit.x, y: hit.y };
+        await touch(session, "touchStart", [first]);
+        if (phase === "open")
+          await expect(page.locator("[data-quick-action-menu]")).toBeVisible();
+        const beforeScale = await page.evaluate(() => visualViewport!.scale);
+        await touch(session, "touchStart", [
+          first,
+          { id: 2, x: first.x + 80, y: first.y },
+        ]);
+        await expect(page.locator("[data-quick-action-menu]")).toHaveCount(0);
+        const pager = page.locator(
+          "[data-discussion-surface] [data-horizontal-pager]",
+        );
+        await expect(pager).toHaveAttribute(
+          "data-horizontal-pager-scrolling",
+          "false",
+        );
+        await expect(pager).toHaveAttribute(
+          "data-horizontal-pager-active-key",
+          "topics",
+        );
+        for (let step = 1; step <= 12; step++) {
+          await touch(session, "touchMove", [
+            { id: 1, x: first.x - step * 3, y: first.y },
+            { id: 2, x: first.x + 80 + step * 10, y: first.y },
           ]);
-          await expect(page.locator("[data-quick-action-menu]")).toHaveCount(0);
-          const pager = page.locator(
-            kind === "nearby"
-              ? "[data-home-feed-pager]"
-              : "[data-discussion-surface] [data-horizontal-pager]",
-          );
-          await expect(pager).toHaveAttribute(
-            "data-horizontal-pager-scrolling",
-            "false",
-          );
-          await expect(pager).toHaveAttribute(
-            "data-horizontal-pager-active-key",
-            kind === "nearby" ? "nearby" : "topics",
-          );
-          for (let step = 1; step <= 12; step++) {
-            await touch(session, "touchMove", [
-              { id: 1, x: first.x - step * 3, y: first.y },
-              { id: 2, x: first.x + 80 + step * 10, y: first.y },
-            ]);
-            await pause(30);
-          }
-          await expect
-            .poll(() => page.evaluate(() => visualViewport!.scale))
-            .toBeGreaterThan(beforeScale + 0.2);
-          const afterScale = await page.evaluate(() => visualViewport!.scale);
-          await touch(session, "touchEnd", []);
-          await touch(session, "touchStart", [
-            { id: 1, x: 60, y: 300 },
-            { id: 2, x: 330, y: 300 },
-          ]);
-          for (let step = 1; step <= 12; step++) {
-            await touch(session, "touchMove", [
-              { id: 1, x: 60 + (125 * step) / 12, y: 300 },
-              { id: 2, x: 330 - (125 * step) / 12, y: 300 },
-            ]);
-            await pause(30);
-          }
-          await touch(session, "touchEnd", []);
-          await expect
-            .poll(() => page.evaluate(() => visualViewport!.scale))
-            .toBeCloseTo(beforeScale, 1);
-          await touch(session, "touchStart", [first]);
-          for (const action of ["like", "favorite"])
-            await expect(
-              page.locator(`[data-quick-action="${action}"]`),
-            ).toHaveAttribute("data-state-active", "false");
-          await touch(session, "touchEnd", []);
-          await expect(
-            page.locator("[data-quick-action-feedback]"),
-          ).toHaveCount(0);
-          await page.touchscreen.tap(first.x, first.y);
-          await expect(page.locator("[data-product-shell]")).toHaveAttribute(
-            "data-detail-open",
-            "false",
-          );
-          if (kind === "topic")
-            await expect(page.locator("[data-topic-detail]")).toBeVisible();
-          else await expect(page.locator("[data-topic-detail]")).toHaveCount(0);
-          evidence.push({
-            chrome,
-            kind,
-            phase,
-            ancestors,
-            beforeScale,
-            afterScale,
-          });
+          await pause(30);
         }
+        await expect
+          .poll(() => page.evaluate(() => visualViewport!.scale))
+          .toBeGreaterThan(beforeScale + 0.2);
+        const afterScale = await page.evaluate(() => visualViewport!.scale);
+        await touch(session, "touchEnd", []);
+        await touch(session, "touchStart", [
+          { id: 1, x: 60, y: 300 },
+          { id: 2, x: 330, y: 300 },
+        ]);
+        for (let step = 1; step <= 12; step++) {
+          await touch(session, "touchMove", [
+            { id: 1, x: 60 + (125 * step) / 12, y: 300 },
+            { id: 2, x: 330 - (125 * step) / 12, y: 300 },
+          ]);
+          await pause(30);
+        }
+        await touch(session, "touchEnd", []);
+        await expect
+          .poll(() => page.evaluate(() => visualViewport!.scale))
+          .toBeCloseTo(beforeScale, 1);
+        await touch(session, "touchStart", [first]);
+        for (const action of ["like", "favorite"])
+          await expect(
+            page.locator(`[data-quick-action="${action}"]`),
+          ).toHaveAttribute("data-state-active", "false");
+        await touch(session, "touchEnd", []);
+        await expect(page.locator("[data-quick-action-feedback]")).toHaveCount(
+          0,
+        );
+        await page.touchscreen.tap(first.x, first.y);
+        await expect(page.locator("[data-product-shell]")).toHaveAttribute(
+          "data-detail-open",
+          "false",
+        );
+        await expect(page.locator("[data-topic-detail]")).toBeVisible();
+        evidence.push({
+          chrome,
+          phase,
+          ancestors,
+          beforeScale,
+          afterScale,
+        });
       }
     } finally {
-      await testInfo.attach("nearby-topic-native-pinch", {
+      await testInfo.attach("topic-native-pinch", {
         body: JSON.stringify(evidence, null, 2),
         contentType: "application/json",
       });

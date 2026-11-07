@@ -25,7 +25,7 @@ index has an alarm: the registry test fails past 7200 bytes, 80% of the cap.
 | tools/list, profile `read`    | 9578  | 12000   | 80%  | 2422 |
 | tools/list, profile `operate` | 11046 | 12000   | 92%  | 954  |
 | tools/list, profile `full`    | 11046 | 12000   | 92%  | 954  |
-| `admin_actions` index         | 5307  | 9000    | 59%  | 3693 |
+| `admin_actions` index         | 5566  | 9000    | 62%  | 3434 |
 
 | Tool               | Bytes listed |
 | ------------------ | ------------ |
@@ -39,9 +39,9 @@ index has an alarm: the registry test fails past 7200 bytes, 80% of the cap.
 | `admin_job`        | 736          |
 | `admin_execute`    | 1467         |
 
-## Ops (133)
+## Ops (138)
 
-### community (44)
+### community (49)
 
 | Op                                        | Class                                                   | Tool                         | Completion | Recovery         | Credential | Switch | Built |
 | ----------------------------------------- | ------------------------------------------------------- | ---------------------------- | ---------- | ---------------- | ---------- | ------ | ----- |
@@ -89,6 +89,11 @@ index has an alarm: the registry test fails past 7200 bytes, 80% of the cap.
 | `community.read-publishing-jobs`          | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
 | `community.retry-publishing-job`          | reversible                                              | `admin_execute`              | async      | receipt          | community  |        | yes   |
 | `community.abandon-publishing-job`        | irreversible                                            | `admin_execute_irreversible` | sync       | receipt          | community  |        | no    |
+| `community.read-timeline`                 | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
+| `community.read-timeline-summary`         | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
+| `community.create-timeline-entry`         | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | yes   |
+| `community.update-timeline-entry`         | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | yes   |
+| `community.reorder-timeline`              | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | yes   |
 
 ### editorial (17)
 

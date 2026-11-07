@@ -173,7 +173,35 @@ describe("the route table's community rows", () => {
       ["PUT", "publishing/accounts/:id/capacity", "write", undefined],
       ["POST", "publishing/jobs/:id/retry", "write", "publishing_job"],
       ["POST", "articles/:id/moderation", "write", "article"],
+      ["POST", "timeline-entries", "write", undefined],
+      ["POST", "timeline-entries/:id", "write", undefined],
+      ["POST", "timeline-order", "write", undefined],
     ]);
+  });
+
+  it("keeps the timeline's paths apart, so no entry id reaches another row", () => {
+    const none = new URLSearchParams();
+    const timeline = "/internal/community/timeline";
+    // home-timeline-v1: an id that spells another route is still an entry id.
+    for (const slug of ["summary", "order", "entries", "reorder"])
+      expect(
+        aiOperatorRouteFor("POST", `${timeline}-entries/${slug}`, none)?.path,
+        slug,
+      ).toBe(`${timeline}-entries/:id`);
+    expect(aiOperatorRouteFor("GET", `${timeline}-summary`, none)?.klass).toBe(
+      "read",
+    );
+    for (const [method, pathname] of [
+      ["GET", `${timeline}-entries/tang-a`],
+      ["POST", `${timeline}-entries/tang-a/hide`],
+      ["POST", `${timeline}-summary`],
+      ["GET", `${timeline}-order`],
+      ["PUT", `${timeline}-entries/tang-a`],
+    ] as const)
+      expect(
+        aiOperatorRouteFor(method, pathname, none),
+        `${method} ${pathname}`,
+      ).toBeUndefined();
   });
 
   it("matches a :name on a whole non-empty segment only", () => {

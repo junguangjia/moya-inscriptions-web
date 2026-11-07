@@ -1,4 +1,6 @@
+import { isCatalogQueryUnavailableError } from "../../../catalog/application/errors/catalog-query-unavailable-error.js";
 import { CommunityNotFoundError } from "../errors/community-request-errors.js";
+import { isCommunityStoreUnavailableError } from "../errors/community-store-unavailable-error.js";
 import {
   catalogMediaDelivery,
   catalogMediaRenditionKeys,
@@ -27,11 +29,20 @@ import type {
   ContentIdentity,
   ContentRelationUpdate,
   DiscussionTarget,
+  Timeline,
 } from "@moya/contracts";
+import { mapTimeline } from "../mappers/timeline-contract-mapper.js";
 
 const noRenditionUrls: CatalogRenditionUrls = new Map();
 
 /** Public application boundary; the adapter enforces transactional ownership. */
+const TIMELINE_OUTAGE_FAILED_RECORDS = 3;
+const TIMELINE_ISOLATION_READS = 32;
+
+const isCardAvailabilityFailure = (error: unknown) =>
+  isCatalogQueryUnavailableError(error) ||
+  isCommunityStoreUnavailableError(error);
+
 export class AuthorCommunityService {
   constructor(
     readonly port: AuthorCommunityPort,
@@ -189,6 +200,80 @@ export class AuthorCommunityService {
       await this.discovery.card(target, viewer),
     ]);
     return item!;
+  }
+  /**
+   * Linked rows take their image through the card path, so its delivery rules
+   * hold here too; a row without an eligible link reaches none of it.
+   */
+  async timeline(): Promise<Timeline> {
+    if (!this.discovery) throw new CommunityNotFoundError();
+    const { entries, cards } = await this.discovery.timeline();
+    return mapTimeline(entries, await this.timelineCards(cards));
+  }
+  /**
+   * One record's unresolvable image leaves that row text-only instead of
+   * failing every other row. An availability failure fails the read at once.
+   */
+  private async timelineCards(
+    cards: readonly DiscoveryCardRecord[],
+  ): Promise<ContentCard[]> {
+    if (cards.length === 0) return [];
+    try {
+      return await this.cards(cards);
+    } catch (batchError) {
+      if (isCardAvailabilityFailure(batchError)) throw batchError;
+      const resolved = await this.isolateCards(cards, batchError, {
+        reads: 0,
+        failedRecords: 0,
+        imageResolved: false,
+      });
+      console.warn("[timeline] linked_image_fallback");
+      return resolved;
+    }
+  }
+  /**
+   * Halves a failed batch, so one bad record costs a few reads, not one a row.
+   * Several records failing with no image resolved is an outage that arrived as
+   * a plain error, such as expired storage credentials, so it stops the walk.
+   */
+  private async isolateCards(
+    cards: readonly DiscoveryCardRecord[],
+    failure: unknown,
+    walk: { reads: number; failedRecords: number; imageResolved: boolean },
+  ): Promise<ContentCard[]> {
+    if (cards.length === 1) {
+      walk.failedRecords += 1;
+      if (
+        walk.failedRecords >= TIMELINE_OUTAGE_FAILED_RECORDS &&
+        !walk.imageResolved
+      )
+        throw failure;
+      return [];
+    }
+    const middle = cards.length >> 1;
+    const resolved: ContentCard[] = [];
+    const failed: { part: readonly DiscoveryCardRecord[]; error: unknown }[] =
+      [];
+    // Both halves first: a good half is cheap to keep, and it decides outage.
+    for (const part of [cards.slice(0, middle), cards.slice(middle)]) {
+      if (walk.reads >= TIMELINE_ISOLATION_READS) {
+        // Past the budget the remaining rows stay text-only for this read.
+        console.warn("[timeline] linked_image_budget");
+        break;
+      }
+      walk.reads += 1;
+      try {
+        const read = await this.cards(part);
+        walk.imageResolved ||= read.some(({ media }) => media !== null);
+        resolved.push(...read);
+      } catch (error) {
+        if (isCardAvailabilityFailure(error)) throw error;
+        failed.push({ part, error });
+      }
+    }
+    for (const { part, error } of failed)
+      resolved.push(...(await this.isolateCards(part, error, walk)));
+    return resolved;
   }
   /** The adapter computes every total in one snapshot with the lists' own rules. */
   async profile(id: string, viewer: string | null) {

@@ -36,6 +36,7 @@ import {
   EditorialContentReadService,
   PublishingOperatorService,
   ThreadService,
+  TimelineOperatorService,
   FeedbackService,
   PublishingTransferRegistry,
   WorkPublishingService,
@@ -61,6 +62,7 @@ import type {
   DirectMessagePort,
   EditorialContentReadPort,
   ThreadPort,
+  TimelineOperatorPort,
   FeedbackPort,
   PublishingMediaProcessorPort,
   PublishingMediaStorePort,
@@ -173,6 +175,12 @@ export interface BackendApplicationOptions {
   readonly editorialContentPort?: EditorialContentReadPort;
   /** Threads over Works. */
   readonly threadPort?: ThreadPort;
+  /**
+   * The operator side of the Home timeline (home-timeline-v1); the public read
+   * stays on the discovery port. Absent leaves the timeline operator routes
+   * unrouted.
+   */
+  readonly timelineOperatorPort?: TimelineOperatorPort;
   /** Private settings feedback. */
   readonly feedbackPort?: FeedbackPort;
   /** Direct messages. */
@@ -462,6 +470,13 @@ const resolveCommunity = (
         }
       : {}),
     ...(threadService === undefined ? {} : { threadService }),
+    ...(options.timelineOperatorPort === undefined
+      ? {}
+      : {
+          timelineService: new TimelineOperatorService(
+            options.timelineOperatorPort,
+          ),
+        }),
     ...(feedbackService === undefined ? {} : { feedbackService }),
     ...(directMessageService === undefined ? {} : { directMessageService }),
     // Publishing reuses the existing services and their access checks.

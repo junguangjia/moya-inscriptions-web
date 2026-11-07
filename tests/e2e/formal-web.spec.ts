@@ -78,8 +78,8 @@ const expectBrowseOnly = async (page: Page, browseOnly: boolean) => {
 
 const selectHomeFeed = async (
   page: Page,
-  name: "发现" | "附近" | "碑刻" | "书帖",
-  feed: "discover" | "nearby" | "inscriptions" | "calligraphy",
+  name: "发现" | "时间轴" | "碑刻" | "书帖",
+  feed: "discover" | "timeline" | "inscriptions" | "calligraphy",
 ) => {
   // Reading may minimize navigation while Home is already selected. Re-clicking
   // its hidden label adds no navigation behavior and blocks the actual tab.
@@ -280,9 +280,15 @@ test("Formal root composes truthful runtime list states", async ({ page }) => {
       ),
     )
     .toBe(true);
-  await expect(home.locator('[data-home-feed-panel="nearby"]')).toContainText(
-    "附近内容尚未接入",
-  );
+
+  // The timeline asks for its rows only once its feed has opened.
+  await selectHomeFeed(page, "时间轴", "timeline");
+  const timeline = home.locator('[data-home-feed-panel="timeline"]');
+  await expect(timeline.locator("[data-timeline-feed]")).toBeVisible();
+  await expect(
+    timeline.locator(`[data-catalog-id="${runtimeIds.multiMedia}"]`).first(),
+  ).toContainText("运行时多图碑刻");
+  await expect(timeline).not.toContainText("时间轴暂时不可用");
 
   await selectPrimaryDestination(page, "讨论", "discussion");
   const discussion = shell.locator("[data-discussion-surface]");
@@ -331,6 +337,84 @@ test("Formal root composes truthful runtime list states", async ({ page }) => {
     calligraphy.locator("[data-calligraphy-category-panel]"),
   ).toHaveCount(0);
   await expect(calligraphy).not.toContainText("视觉 QA 合成");
+});
+
+test("Formal PC feeds keep their scroll across a shorter feed", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "desktop-chromium",
+    "The document scroller belongs to the PC presentation.",
+  );
+  // Short enough that Discover scrolls: the timeline panel, not yet activated
+  // and so without height, clamps the document when the pager sizes it.
+  await page.setViewportSize({ width: 1280, height: 420 });
+  const { shell } = await openFormalRoot(page);
+  const discover = shell.locator('[data-home-feed-panel="discover"]');
+  await expect(discover.locator("[data-catalog-id]").first()).toBeVisible();
+  const scrollY = () => page.evaluate(() => window.scrollY);
+  const room = await page.evaluate(
+    () => document.documentElement.scrollHeight - window.innerHeight,
+  );
+  expect(room).toBeGreaterThan(100);
+  await page.evaluate((top) => window.scrollTo(0, top), room);
+  await expect.poll(scrollY).toBe(room);
+  await selectHomeFeed(page, "时间轴", "timeline");
+  // The case guards the save only while the switch really clamps the page.
+  await expect.poll(scrollY).toBeLessThan(room);
+  await selectHomeFeed(page, "发现", "discover");
+  await expect.poll(scrollY).toBe(room);
+});
+
+test("Formal timeline keeps the policy notice readable and closable", async ({
+  page,
+}) => {
+  // The notice ends itself on 2026-12-05, so this case stays inside its window.
+  // It shifts Date.now and leaves time running: a frozen clock never lets the
+  // pager's motion settle, so the click would wait for ever on WebKit.
+  await page.addInitScript(() => {
+    const realNow = Date.now.bind(Date);
+    const offset = Date.parse("2026-11-10T00:00:00+08:00") - realNow();
+    Date.now = () => realNow() + offset;
+  });
+  const { shell } = await openFormalRoot(page);
+  await selectHomeFeed(page, "时间轴", "timeline");
+  const timeline = shell.locator('[data-home-feed-panel="timeline"]');
+  const notice = timeline.locator("[data-policy-update-notice]");
+  await expect(notice).toBeVisible();
+  // A PC's fixed chrome must not cover it; the click checks the real hit target.
+  await notice.getByRole("button", { name: "关闭提示" }).click();
+  await expect(notice).toHaveCount(0);
+  await expect(timeline.locator("[data-timeline-feed]")).toBeVisible();
+});
+
+test("Formal timeline says it is unavailable when its rows cannot load", async ({
+  page,
+}) => {
+  await page.route("**/api/community/timeline", (route) =>
+    route.fulfill({ status: 503 }),
+  );
+  const { shell } = await openFormalRoot(page);
+  await selectHomeFeed(page, "时间轴", "timeline");
+  const timeline = shell.locator('[data-home-feed-panel="timeline"]');
+  await expect(timeline).toContainText("时间轴暂时不可用");
+  await expect(timeline).toContainText("请稍后再试。");
+  await selectHomeFeed(page, "发现", "discover");
+  await expect(
+    shell.locator(
+      `[data-home-feed-panel="discover"] [data-catalog-id="${runtimeIds.multiMedia}"]`,
+    ),
+  ).toContainText("运行时多图碑刻");
+});
+
+test("Formal links shared before the timeline replaced 附近 open the timeline", async ({
+  page,
+}) => {
+  const { shell } = await openFormalRoot(page, "/?feed=nearby");
+  await expect(shell.locator("[data-home-surface]")).toHaveAttribute(
+    "data-active-home-feed",
+    "timeline",
+  );
 });
 
 test("Formal Home, Inscriptions, and Calligraphy reuse one Detail and Viewer journey", async ({

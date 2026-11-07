@@ -5,7 +5,6 @@ import {
 } from "../home/load-home-catalog";
 import {
   loadDiscoverFeed,
-  unavailableNearbySource,
   unavailableTopicsSource,
 } from "../../sources/home/home-sources";
 
@@ -16,24 +15,23 @@ export const loadProductionProductStates = async (
   token?: string,
 ): Promise<T02pDevelopmentCatalogDestinationStates> => {
   const source = token === undefined ? undefined : visitorCatalogSource(token);
-  const [discover, nearby, topics, inscriptions, calligraphy] =
-    await Promise.all([
-      loadDiscoverFeed(source),
-      unavailableNearbySource(),
-      unavailableTopicsSource(),
-      loadHomeCatalogState(
-        { kind: "inscription", page: "1", pageSize: "24" },
-        source,
-      ),
-      loadHomeCatalogState(
-        { kind: "calligraphy", page: "1", pageSize: "24" },
-        source,
-      ),
-    ]);
+  const [discover, topics, inscriptions, calligraphy] = await Promise.all([
+    loadDiscoverFeed(source),
+    unavailableTopicsSource(),
+    loadHomeCatalogState(
+      { kind: "inscription", page: "1", pageSize: "24" },
+      source,
+    ),
+    loadHomeCatalogState(
+      { kind: "calligraphy", page: "1", pageSize: "24" },
+      source,
+    ),
+  ]);
 
   return {
     calligraphy: createRuntimeCalligraphyCategorySurface(calligraphy),
-    home: { discover, nearby, topics },
+    // The timeline loads its rows in the client when its feed first opens.
+    home: { discover, timeline: { state: "loading" }, topics },
     inscriptions,
   };
 };

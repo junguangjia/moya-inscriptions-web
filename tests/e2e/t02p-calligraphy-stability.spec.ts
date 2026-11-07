@@ -88,7 +88,7 @@ test.afterEach(async ({ page }, testInfo) => {
 
 const selectFeed = async (
   shell: Locator,
-  feed: "discover" | "nearby" | "inscriptions" | "calligraphy",
+  feed: "discover" | "timeline" | "inscriptions" | "calligraphy",
 ) => {
   const home = shell.locator("[data-home-surface]");
   // This setup selection must also work beneath visible QA overlay controls;
@@ -324,7 +324,7 @@ test("hidden QA all-Calligraphy survives native reading resize and reveal withou
 
   // Both neighboring feeds can be visited without filtering or replacing the
   // all-items Calligraphy feed or creating a second reading owner.
-  for (const feed of ["inscriptions", "nearby", "discover"] as const) {
+  for (const feed of ["inscriptions", "timeline", "discover"] as const) {
     const before = await readScroll(shell);
     await selectFeed(shell, feed);
     await selectFeed(shell, "calligraphy");

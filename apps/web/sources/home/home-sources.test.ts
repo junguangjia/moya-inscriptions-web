@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  loadDiscoverFeed,
-  unavailableNearbySource,
-  unavailableTopicsSource,
-} from "./home-sources";
+import { loadDiscoverFeed, unavailableTopicsSource } from "./home-sources";
 
 import type { CatalogId, CatalogPage } from "@moya/contracts";
 import type { HomeCatalogSource } from "../../features/home/load-home-catalog";
@@ -58,10 +54,7 @@ describe("Home sources", () => {
     });
   });
 
-  it("keeps Production Nearby and Topics explicitly unavailable", async () => {
-    await expect(unavailableNearbySource()).resolves.toEqual({
-      state: "unavailable",
-    });
+  it("keeps Production Topics explicitly unavailable", async () => {
     await expect(unavailableTopicsSource()).resolves.toEqual({
       state: "unavailable",
     });

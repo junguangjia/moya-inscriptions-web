@@ -10,7 +10,7 @@ app/page.tsx
   ├── readFormalRequestContext()
   └── loadProductionProductStates()
         ├── Home Discover
-        ├── truthful unavailable Nearby
+        ├── Timeline loading（feed 首次激活时由 client 读取）
         ├── truthful unavailable Topics
         ├── kind=inscription page 1
         └── kind=calligraphy page 1

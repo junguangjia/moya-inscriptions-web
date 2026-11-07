@@ -25,6 +25,7 @@ import {
   discoveryPageSchema,
   contentCollectionPageSchema,
   inscriptionFilterOptionsSchema,
+  timelineSchema,
   contentStateSchema,
   articlePageSchema,
   articleDetailSchema,
@@ -326,6 +327,8 @@ export const authorClient = {
       { ...(signal ? { signal } : {}) },
     ),
   filters: () => request("filter-options", inscriptionFilterOptionsSchema),
+  timeline: (signal?: AbortSignal) =>
+    request("timeline", timelineSchema, { ...(signal ? { signal } : {}) }),
   collection: (
     id: string,
     list: "favorites" | "likes",

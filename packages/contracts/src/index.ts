@@ -71,6 +71,10 @@ export type {
   DiscoveryPage,
   InscriptionFilters,
   InscriptionFilterOptions,
+  Timeline,
+  TimelineChapter,
+  TimelineEntry,
+  TimelinePrecision,
 } from "./schemas.js";
 export type {
   CreatePublishingDraftCommand,

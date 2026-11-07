@@ -1,11 +1,11 @@
 import { resolveCatalogCollection } from "../../features/topics/topic";
 import { homeScenarioNames } from "../../features/qa/home-scenario-contract";
+import { createTimelineFixture } from "./timeline-fixture";
 
 import type { CatalogSummary, MediaId, PublicMedia } from "@moya/contracts";
 import type {
   HomeFeedState,
   HomeSurfaceData,
-  NearbyCard,
 } from "../../features/home/home-feed";
 import type {
   DevelopmentHomeScenario,
@@ -47,139 +47,6 @@ const demoMedia = (
   src: new URL(`/docs/design-system/assets/demo/${fileName}`, origin).href,
   width,
 });
-
-const nearbyFixture = (origin: string): readonly NearbyCard[] => [
-  {
-    id: "nearby-demo-temple",
-    media: demoMedia(
-      origin,
-      "stele-shadow.svg",
-      "nearby-temple-media",
-      "虚构南寺碑廊图",
-      360,
-      400,
-    ),
-    metadata: "演示地点：南寺碑廊",
-    title: "南寺碑廊",
-  },
-  {
-    id: "nearby-demo-stream",
-    media: demoMedia(
-      origin,
-      "valley-wall.svg",
-      "nearby-stream-media",
-      "虚构东涧题名图",
-      360,
-      430,
-    ),
-    metadata: "演示地点：东涧",
-    title: "东涧题名",
-  },
-  {
-    id: "nearby-demo-pass",
-    media: demoMedia(
-      origin,
-      "cliff-gate.svg",
-      "nearby-pass-media",
-      "虚构山口残刻图",
-      360,
-      520,
-    ),
-    metadata: "演示地点：山口",
-    title: "山口残刻",
-  },
-  {
-    id: "nearby-demo-fragment",
-    media: demoMedia(
-      origin,
-      "stone-detail.svg",
-      "nearby-fragment-media",
-      "虚构桥北断碑图",
-      360,
-      610,
-    ),
-    metadata: "演示地点：桥北",
-    title: "桥北断碑",
-  },
-  {
-    id: "nearby-demo-ultrawide",
-    media: demoMedia(
-      origin,
-      "qa-visual-ultrawide.svg",
-      "nearby-wide-media",
-      "虚构近郊横幅拓影",
-      960,
-      280,
-    ),
-    metadata: "演示地点：近郊",
-    title: "近郊拓影",
-  },
-  {
-    id: "nearby-demo-pavilion",
-    media: demoMedia(
-      origin,
-      "discovery-stone.svg",
-      "nearby-pavilion-media",
-      "虚构西亭石刻图",
-      600,
-      760,
-    ),
-    metadata: "演示地点：西亭",
-    title: "西亭石刻",
-  },
-  {
-    id: "nearby-demo-terrace",
-    media: demoMedia(
-      origin,
-      "rubbing-fragment.svg",
-      "nearby-terrace-media",
-      "虚构石台拓片图",
-      360,
-      480,
-    ),
-    metadata: "演示地点：石台",
-    title: "石台拓片",
-  },
-  {
-    id: "nearby-demo-ridge",
-    media: demoMedia(
-      origin,
-      "cliff-gate.svg",
-      "nearby-ridge-media",
-      "虚构北岭题刻图",
-      360,
-      520,
-    ),
-    metadata: "演示地点：北岭",
-    title: "北岭题刻",
-  },
-  {
-    id: "nearby-demo-courtyard",
-    media: demoMedia(
-      origin,
-      "stele-shadow.svg",
-      "nearby-courtyard-media",
-      "虚构东院碑影图",
-      360,
-      400,
-    ),
-    metadata: "演示地点：东院",
-    title: "东院碑影",
-  },
-  {
-    id: "nearby-demo-slope",
-    media: demoMedia(
-      origin,
-      "stone-detail.svg",
-      "nearby-slope-media",
-      "虚构南坡残字图",
-      360,
-      610,
-    ),
-    metadata: "演示地点：南坡",
-    title: "南坡残字",
-  },
-];
 
 const editorialTopics = (origin: string): readonly EditorialTopic[] => [
   {
@@ -361,7 +228,7 @@ export const createDevelopmentHomeData = (
   ];
   return {
     discover,
-    nearby: populated(nearbyFixture(origin)),
+    timeline: populated(createTimelineFixture(origin)),
     topics: populated(topics),
   };
 };
@@ -373,7 +240,7 @@ export const createDevelopmentHomeScenario = (
 ): DevelopmentHomeScenario => {
   const origin = normalizeOrigin(mediaOrigin);
   const discover = populated(visualRecords);
-  const nearby = populated(nearbyFixture(origin));
+  const timeline = populated(createTimelineFixture(origin, visualRecords));
   const editorial = editorialTopics(origin);
   const collection = resolveCatalogCollection(
     collectionDefinition(origin, visualRecords),
@@ -381,7 +248,7 @@ export const createDevelopmentHomeScenario = (
   );
   const baseline: HomeSurfaceData = {
     discover,
-    nearby,
+    timeline,
     topics: populated([...editorial, collection]),
   };
 
@@ -391,12 +258,12 @@ export const createDevelopmentHomeScenario = (
         data: { ...baseline, discover: { state: "empty" } },
         initialFeed: "discover",
       };
-    case "nearby-demo":
-      return { data: baseline, initialFeed: "nearby" };
-    case "nearby-unavailable":
+    case "timeline-demo":
+      return { data: baseline, initialFeed: "timeline" };
+    case "timeline-unavailable":
       return {
-        data: { ...baseline, nearby: { state: "unavailable" } },
-        initialFeed: "nearby",
+        data: { ...baseline, timeline: { state: "unavailable" } },
+        initialFeed: "timeline",
       };
     case "topics-editorial":
       return {

@@ -129,7 +129,7 @@ describe("SVG assets", () => {
     const icons = (await collectSvgFiles(iconDirectory)).filter(
       (file) => !file.pathname.endsWith("README.md"),
     );
-    expect(icons).toHaveLength(30);
+    expect(icons).toHaveLength(31);
     for (const icon of icons) {
       expect(await readFile(icon, "utf8"), icon.pathname).toContain(
         "currentColor",

@@ -634,7 +634,12 @@ tests/cms/admin-mcp-settlement.test.ts:
 
 Release record, App-role preflight, read-only, for the Owner to run on
 Production before `COMMUNITY_OPERATOR_AI_TOKEN` is placed. Every row must be
-true:
+true. The `community.timeline_entries` row (Issue #384 r3) reads null, not an
+error, on a database that the timeline migration `20261105235900` has not
+reached; the timeline reads wait for that migration. This preflight checks reads
+only. The timeline writes also need column `INSERT` and `UPDATE` and no
+`DELETE`, which the preflight in
+[`home-timeline-v1.md`](home-timeline-v1.md#production-order) checks:
 
 ```sql
 SELECT rel, priv, has_table_privilege(:'app_role', rel, priv) AS granted
@@ -661,6 +666,10 @@ FROM (VALUES
   ('community.work_draft_snapshots','SELECT'), ('community.work_edit_drafts','SELECT'),
   ('community.discussion_command_receipts','INSERT')
 ) AS needed(rel, priv)
+UNION ALL
+SELECT rel, priv, CASE WHEN to_regclass(rel) IS NOT NULL
+  THEN has_table_privilege(:'app_role', rel, priv) END
+FROM (VALUES ('community.timeline_entries','SELECT')) AS needed(rel, priv)
 UNION ALL
 SELECT fn, 'EXECUTE', has_function_privilege(:'app_role', fn, 'EXECUTE')
 FROM (VALUES ('community.work_is_public(community.works)')) AS needed(fn);

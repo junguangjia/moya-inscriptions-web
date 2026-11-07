@@ -102,3 +102,24 @@ export const isCommunityIdempotencyConflictError = (
   error: unknown,
 ): error is CommunityIdempotencyConflictError =>
   error instanceof CommunityIdempotencyConflictError;
+
+/**
+ * A refusal the caller can act on by name (home-timeline-v1: ENTRY_EXISTS,
+ * TIMELINE_FULL, ...): a rule over the stored set refused the command, and
+ * nothing was written. It is a conflict, so every existing caller keeps
+ * treating it as one; `refusal` is a fixed upper-case code from a contract,
+ * never content, so the operator boundary may pass it on.
+ */
+export class CommunityNamedConflictError extends CommunityConflictError {
+  constructor(
+    readonly refusal: string,
+    message = "Community command was refused",
+  ) {
+    super(message);
+  }
+}
+
+export const isCommunityNamedConflictError = (
+  error: unknown,
+): error is CommunityNamedConflictError =>
+  error instanceof CommunityNamedConflictError;
