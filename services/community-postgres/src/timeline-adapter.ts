@@ -40,8 +40,10 @@ import type { Pool, PoolClient, QueryResultRow } from "pg";
  * receipt, the change, one content_operator_events row and the receipt row.
  * Inside the lock each write reads the stored set, applies its change and runs
  * the contract's write check over the set before and after it: a write is
- * refused only for what it makes worse, so a row that fails the contract after
- * direct SQL or a contract change can always be fixed or hidden. Ids and
+ * refused only for what it makes worse, so a row that fails a text or length
+ * rule after direct SQL or a contract change can always be fixed or hidden. A
+ * change to the chapter or precision values ships with a data migration, since
+ * the table's checks list the same values. Ids and
  * Catalog links stay unique by the table's keys, named below. The public read
  * itself lives in the discovery adapter.
  *

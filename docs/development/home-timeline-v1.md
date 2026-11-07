@@ -107,7 +107,8 @@ Each row records who wrote it. `created_by` and `updated_by` hold `import`,
 check allows only those. A new label needs a migration. `version` rises by one
 on each change, and `created_at` and `updated_at` record the times. An import
 brings a replaced id back one version past the row it replaces, so a version
-read before an import never matches after it.
+read before an import never matches the row that replaces it. An id the import
+drops and a later import or create brings back starts again at version 1.
 
 ## Admin MCP ops
 
@@ -139,8 +140,8 @@ fields, `version`, `hidden`, `linkState`, its writers and times. `admin_read`'s
 compact view shows the main columns and `full` shows the rest. There is no count
 view: the summary is the count. On the Backend a number is read only from its
 decimal digits, so an empty or blank `page`, `pageSize`, `yearFrom` or `yearTo`
-answers 400 `INVALID_QUERY` and is never read as 0; so does a query key that an
-object inherits, such as `constructor`.
+answers 400 and is never read as 0; so does a query key that an object inherits,
+such as `constructor`.
 
 **`read-timeline-summary`.** Counts over every stored row: visible and hidden,
 on the axis and on the shelf, per chapter, by link state, by last writer and by
@@ -228,7 +229,9 @@ A stored row that fails the contract never refuses another write; read
 feed shows as unavailable. Hide it at once with `update-timeline-entry`, which
 passes although the row fails, then fix it with the same op. Until it passes,
 showing it, a change that still fails, and a reorder of its year while it is
-visible each answer `ENTRY_INVALID`.
+visible each answer `ENTRY_INVALID`. This holds for the text and length rules. A
+change to the chapter or precision values ships with a data migration, because
+the table's checks list the same values and the operator read parses them.
 
 ### Not built, and why
 
@@ -318,8 +321,9 @@ already applied. Once merged, the migration only adds.
    apply records one `content_operator_events` row with label `import`, action
    `timeline.import` and counts only. Imported rows are labelled `import` and
    visible. An id the import replaces comes back one version past the row it
-   replaces, so a version read before the import never matches after it; a new
-   id starts at version 1.
+   replaces, so a version read before the import never matches the row that
+   replaces it; a new id, including one an earlier import dropped, starts at
+   version 1.
 4. **Restart.** Restart Backend, Web and Admin on the tagged release. A Backend
    restarted before step 1 fails closed on its community ledger check. The Owner
    routes work from here.

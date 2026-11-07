@@ -10,8 +10,9 @@
 -- (grant-runtime.sql), run the import, then start the release. The previous
 -- release starts with this applied: it reads no new relation.
 --
--- Every writer validates each row and the whole set against packages/contracts;
--- that is the guard for the response schema of GET /v1/community/timeline.
+-- Every writer validates against packages/contracts: the import checks its whole
+-- file, and each Backend write checks the set before and after it. That is the
+-- guard for the response schema of GET /v1/community/timeline.
 -- These checks repeat its shape as a coarser backstop: they count code points
 -- and trim spaces only.
 --

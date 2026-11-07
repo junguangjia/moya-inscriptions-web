@@ -1675,8 +1675,7 @@ export type TimelineEntrySetIssue =
   | { readonly code: "CATALOG_ALREADY_LINKED"; readonly index: number }
   | { readonly code: "TIMELINE_TOO_LARGE" };
 /**
- * The import's check over the whole file it is about to store, inside the shared
- * lock: each row parses as an import row, the set holds at most
+ * The import's check over the whole file it is about to store: each row parses as an import row, the set holds at most
  * TIMELINE_ENTRIES_MAXIMUM rows with distinct ids and distinct Catalog links,
  * and its response estimate stays within the limit. A file must be wholly
  * valid. Operator writes run `checkTimelineEntryWrite` instead. Group and

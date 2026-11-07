@@ -160,8 +160,9 @@ export const insertStatements = (
  * created, edited or hid stay unless `replaceOperatorEdits`; the refusal names
  * counts only. New rows take the column defaults: 'import' as creator and
  * editor, visible. A replaced id comes back one version past the row it
- * replaces, so a version read before the import never matches after it; a new
- * id starts at version 1. One content-operator event records the counts.
+ * replaces, so a version read before the import never matches the row that
+ * replaces it; a new id, including one an earlier import dropped, starts at
+ * version 1. One content-operator event records the counts.
  */
 export async function applyImport(
   pool,
