@@ -352,20 +352,23 @@ describe("rows", () => {
     shell.readActiveScrollTop.mockReturnValue(0);
   });
 
-  it("opens a crowded year in place from 另 N 条", () => {
+  it("shows every row of a crowded year at once", () => {
     render(
       true,
       small(
-        Array.from({ length: 9 }, () =>
-          entry({ startYear: 720, endYear: 720 }),
+        Array.from({ length: 9 }, (_, at) =>
+          entry({ startYear: 720, endYear: 720, title: `虚构同年碑${at}` }),
         ),
       ),
     );
-    expect(queryAll("[data-timeline-row='entry']")).toHaveLength(5);
-    const more = query("[data-timeline-row='more'] button");
-    expect(more?.textContent).toContain("另 4 条");
-    click(more);
-    expect(queryAll("[data-timeline-row='entry']")).toHaveLength(9);
+    expect(
+      queryAll("[data-timeline-row='entry']").map((row) => row.textContent),
+    ).toEqual(
+      Array.from({ length: 9 }, (_, at) =>
+        expect.stringContaining(`虚构同年碑${at}`),
+      ),
+    );
+    expect(text()).not.toMatch(/另 \d+ 条/u);
   });
 });
 

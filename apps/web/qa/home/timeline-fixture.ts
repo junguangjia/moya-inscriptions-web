@@ -316,7 +316,7 @@ const createRows = (): MutableEntry[] => {
   addShelf("隋", 581, 618, 2);
 
   addYears("唐", spread(620, 719, 30));
-  // Past the fallback fold: five rows and 另 4 条.
+  // A crowded year: all nine rows show, since only groups fold.
   addYears("唐", repeat(720, 9));
   addYears("唐", spread(721, 905, 40));
   addShelf("唐", 618, 907, 14);

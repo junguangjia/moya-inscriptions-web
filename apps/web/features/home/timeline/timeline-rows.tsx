@@ -39,7 +39,6 @@ export interface TimelineRowActions {
   readonly openEntry: (entry: TimelineEntry, opener: HTMLElement) => void;
   readonly openShelf: (chapter: TimelineChapter, opener: HTMLElement) => void;
   readonly toggleGroup: (row: TimelineGroupRow) => void;
-  readonly expandMore: (key: string) => void;
 }
 
 export const TimelineMarkGlyph = ({ mark }: { readonly mark: TimelineMark }) =>
@@ -376,18 +375,6 @@ const TimelineRowBody = ({
           <span className={styles.slot} data-spine="dotted" />
           <span className={styles.gapText}>{formatGap(row.years)}</span>
         </div>
-      );
-    case "more":
-      return (
-        <button
-          className={styles.more}
-          onClick={() => actions.expandMore(row.moreKey)}
-          type="button"
-        >
-          <span className={styles.gutter} />
-          <span className={styles.slot} />
-          <span className={styles.moreText}>另 {row.count} 条</span>
-        </button>
       );
     case "shelf":
       return (
