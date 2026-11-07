@@ -44,62 +44,91 @@ const freePort = async () => {
   return port;
 };
 
-/** The entry point under the operator profile, stopped once it says it is ready. */
+/** The real entry point; health proves startup has returned to its event loop. */
 const start = async () => {
   const port = await freePort();
-  return new Promise<{ code: number | null; out: string; err: string }>(
-    (done, reject) => {
-      const child = spawn(process.execPath, [main], {
-        stdio: "pipe",
-        env: {
-          NODE_ENV: "development",
-          AGENT_AUTHORIZATION_ENABLED: "true",
-          AGENT_AUTHORIZATION_PROFILE: "operator",
-          AGENT_AUTHORIZATION_ISSUER: `http://127.0.0.1:${port}`,
-          AGENT_AUTHORIZATION_RESOURCE: "http://admin.localhost:3442/api/mcp",
-          AGENT_AUTHORIZATION_CONSENT_URL: "http://admin.localhost:3442",
-          AGENT_AUTHORIZATION_PORT: String(port),
-          AGENT_AUTHORIZATION_ENVIRONMENT: "development",
-          AGENT_AUTHORIZATION_CLIENTS: JSON.stringify([
-            {
-              clientId: "synthetic-loopback",
-              family: "codex",
-              label: "Local synthetic tool",
-              redirectUris: ["http://127.0.0.1:44563/callback"],
-            },
-          ]),
-          AGENT_AUTHORIZATION_DATABASE_URL: url.toString(),
-          AGENT_AUTHORIZATION_COOKIE_KEY: randomBytes(32).toString("base64url"),
-          AGENT_CONNECTION_PROVIDER_INDEX_KEY:
-            randomBytes(32).toString("base64"),
-          AGENT_CONNECTION_PROVIDER_SEAL_KEY:
-            randomBytes(32).toString("base64"),
-          AGENT_CONNECTION_WRAPPER_INDEX_KEY:
-            randomBytes(32).toString("base64"),
-          AGENT_CONNECTION_WRAPPER_SEAL_KEY: randomBytes(32).toString("base64"),
-        },
-      });
-      let out = "";
-      let err = "";
-      const deadline = setTimeout(() => {
-        child.kill("SIGKILL");
-        reject(new Error(`TEST_DEADLINE: ${err}`));
-      }, 20_000);
-      child.stderr.setEncoding("utf8");
-      child.stderr.on("data", (chunk) => {
-        err += String(chunk);
-      });
-      child.stdout.setEncoding("utf8");
-      child.stdout.on("data", (chunk) => {
-        out += String(chunk);
-        if (out.includes("listeners ready")) child.kill("SIGTERM");
-      });
-      child.on("close", (code) => {
-        clearTimeout(deadline);
-        done({ code, out, err });
-      });
-    },
-  );
+  return new Promise<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    healthy: boolean;
+    out: string;
+    err: string;
+  }>((done, reject) => {
+    const child = spawn(process.execPath, [main], {
+      stdio: "pipe",
+      env: {
+        NODE_ENV: "development",
+        AGENT_AUTHORIZATION_ENABLED: "true",
+        AGENT_AUTHORIZATION_PROFILE: "operator",
+        AGENT_AUTHORIZATION_ISSUER: `http://127.0.0.1:${port}`,
+        AGENT_AUTHORIZATION_RESOURCE: "http://admin.localhost:3442/api/mcp",
+        AGENT_AUTHORIZATION_CONSENT_URL: "http://admin.localhost:3442",
+        AGENT_AUTHORIZATION_PORT: String(port),
+        AGENT_AUTHORIZATION_ENVIRONMENT: "development",
+        AGENT_AUTHORIZATION_CLIENTS: JSON.stringify([
+          {
+            clientId: "synthetic-loopback",
+            family: "codex",
+            label: "Local synthetic tool",
+            redirectUris: ["http://127.0.0.1:44563/callback"],
+          },
+        ]),
+        AGENT_AUTHORIZATION_DATABASE_URL: url.toString(),
+        AGENT_AUTHORIZATION_COOKIE_KEY: randomBytes(32).toString("base64url"),
+        AGENT_CONNECTION_PROVIDER_INDEX_KEY: randomBytes(32).toString("base64"),
+        AGENT_CONNECTION_PROVIDER_SEAL_KEY: randomBytes(32).toString("base64"),
+        AGENT_CONNECTION_WRAPPER_INDEX_KEY: randomBytes(32).toString("base64"),
+        AGENT_CONNECTION_WRAPPER_SEAL_KEY: randomBytes(32).toString("base64"),
+      },
+    });
+    let out = "";
+    let err = "";
+    let checkingHealth = false;
+    let healthy = false;
+    let failure: unknown;
+    const deadline = setTimeout(() => {
+      failure = new Error(`TEST_DEADLINE: ${err}`);
+      child.kill("SIGKILL");
+    }, 20_000);
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      err += String(chunk);
+    });
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      out += String(chunk);
+      if (checkingHealth || !out.includes("listeners ready")) return;
+      checkingHealth = true;
+      // The ready log is written just before shutdown handlers are installed.
+      // A real HTTP response is an event-loop barrier, not a scheduler delay.
+      void fetch(`http://127.0.0.1:${port}/healthz`, {
+        signal: AbortSignal.timeout(5_000),
+      })
+        .then(async (response) => {
+          const body: unknown = await response.json();
+          if (
+            response.status !== 200 ||
+            typeof body !== "object" ||
+            body === null ||
+            !("status" in body) ||
+            body.status !== "ok"
+          )
+            throw new Error("ISSUER_TEST_HEALTH_NOT_READY");
+          healthy = true;
+          child.kill("SIGTERM");
+        })
+        .catch((error) => {
+          failure = error;
+          child.kill("SIGKILL");
+        });
+    });
+    child.on("close", (code, signal) => {
+      clearTimeout(deadline);
+      // Teardown must wait until this child has released its DB connections.
+      if (failure !== undefined) reject(failure);
+      else done({ code, signal, healthy, out, err });
+    });
+  });
 };
 
 beforeAll(async () => {
@@ -137,5 +166,7 @@ it("refuses by name until every migration has run, and then starts", async () =>
   const ready = await start();
   expect(ready.err).not.toContain("refused");
   expect(ready.out).toContain("listeners ready");
+  expect(ready.healthy).toBe(true);
+  expect(ready.signal).toBeNull();
   expect(ready.code).toBe(0);
 }, 60_000);

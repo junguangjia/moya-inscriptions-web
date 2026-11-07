@@ -1,3 +1,7 @@
+import process from "node:process";
+import console from "node:console";
+import { Buffer } from "node:buffer";
+import { stripVTControlCharacters } from "node:util";
 import {
   closeSync,
   existsSync,
@@ -6,7 +10,8 @@ import {
   writeFileSync,
   realpathSync,
   readdirSync,
-  readFileSync,
+  fstatSync,
+  readSync,
 } from "node:fs";
 import {
   resolve,
@@ -135,7 +140,9 @@ export function taskChecks(plan, output) {
       // enumerated so a missing suite fails instead of passing vacuously.
       name: "script-tests",
       ...declared(VALIDATION_PROFILES.scriptTests),
-      commands: [[process.execPath, "--test", ...scriptTests()]],
+      commands: [
+        [process.execPath, "--test", "--test-reporter=tap", ...scriptTests()],
+      ],
     },
   ];
   // The full Web test invocation already covers the focused contract and HTTP
@@ -993,6 +1000,125 @@ export function isFullAcceptance(summary) {
   );
 }
 
+const SCRIPT_DIAGNOSTIC_BYTES = 2 * 1024 * 1024;
+
+/** Keep assertion bodies, values and stacks private; publish only case metadata. */
+export function scriptFailureDiagnostics(text, root = process.cwd()) {
+  if (!/^TAP version 13$/mu.test(text))
+    return { available: false, reason: "TAP_NOT_PRESENT", failures: [] };
+  const failures = [];
+  const codes = new Set([
+    "ERR_ASSERTION",
+    "ERR_TEST_FAILURE",
+    "ABORT_ERR",
+    "ERR_SCRIPT_EXECUTION_TIMEOUT",
+    "ERR_MODULE_NOT_FOUND",
+    "ENOENT",
+    "EACCES",
+    "ETIMEDOUT",
+  ]);
+  let current = null;
+  let omitted = 0;
+  const scriptFile = (value) => {
+    if (/^[a-z]+:/iu.test(value) || value.split(/[\\/]/u).includes(".."))
+      return null;
+    const file = relative(root, resolve(root, value));
+    return /^scripts\/(?:analytics\/)?[a-z-]+\.test\.mjs$/u.test(file)
+      ? file
+      : null;
+  };
+  const location = (value) => {
+    const match = /^(.+?):([1-9]\d*):([1-9]\d*)$/u.exec(value);
+    const file = match && scriptFile(match[1]);
+    return file
+      ? { file, line: Number(match[2]), column: Number(match[3]) }
+      : {};
+  };
+  const caseName = (value) => {
+    const name = Array.from(stripVTControlCharacters(value))
+      .filter((char) => char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127)
+      .join("")
+      .slice(0, 200);
+    return /^(?:[a-z]+:|[\\/]|\.\.?[\\/])|\.test\.mjs$/iu.test(name)
+      ? (scriptFile(name) ?? "(external test file)")
+      : name;
+  };
+  for (const line of text.split(/\r?\n/u)) {
+    if (current && !current.opened) {
+      if (line === `${current.indent}  ---`) {
+        current.opened = true;
+        continue;
+      }
+      // A case without a YAML block must not absorb the following case.
+      current = null;
+    }
+    if (current) {
+      if (line === `${current.indent}  ...`) {
+        if (
+          current.failed &&
+          !current.excluded &&
+          current.type !== "subtestsFailed"
+        ) {
+          if (failures.length < 20) failures.push(current.failure);
+          else omitted++;
+        }
+        current = null;
+      } else {
+        const field = new RegExp(
+          `^${current.indent}  (location|code|failureType): (.*)$`,
+          "u",
+        ).exec(line);
+        if (!field) continue;
+        const value = field[2].replace(/^['"]|['"]$/gu, "");
+        if (field[1] === "location")
+          Object.assign(current.failure, location(value));
+        else if (field[1] === "failureType") current.type = value;
+        else if (codes.has(value)) current.failure.code = value;
+      }
+      // Consume ALL diagnostics, including TODO/SKIP and successful cases.
+      // TAP-looking assertion text is never a new test event.
+      continue;
+    }
+    const result = /^( *)(not ok|ok) \d+ - (.+)$/u.exec(line);
+    if (!result) continue;
+    current = {
+      indent: result[1],
+      failed: result[2] === "not ok",
+      excluded: /\s+# (?:TODO|SKIP)\b/iu.test(result[3]),
+      failure: { name: caseName(result[3]) },
+      type: null,
+      opened: false,
+    };
+  }
+  return failures.length
+    ? {
+        available: true,
+        complete: /^# fail \d+$/mu.test(text),
+        failures,
+        ...(omitted ? { omitted } : {}),
+      }
+    : { available: false, reason: "NO_COMPLETE_FAILURE_DETAILS", failures: [] };
+}
+
+export function readScriptFailureDiagnostics(file, root = process.cwd()) {
+  let fd;
+  try {
+    fd = openSync(file, "r");
+    const size = fstatSync(fd).size;
+    if (size > SCRIPT_DIAGNOSTIC_BYTES)
+      return { available: false, reason: "LOG_TOO_LARGE", failures: [] };
+    const bytes = Buffer.alloc(size);
+    const read = readSync(fd, bytes, 0, size, 0);
+    if (read !== size)
+      return { available: false, reason: "LOG_READ_INCOMPLETE", failures: [] };
+    return scriptFailureDiagnostics(bytes.toString("utf8"), root);
+  } catch {
+    return { available: false, reason: "LOG_UNAVAILABLE", failures: [] };
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
 /**
  * Run the selected commands under the plan's declared profile. `budget` is the
  * object from taskValidationBudget() or feedbackValidationBudget(); the runner
@@ -1095,7 +1221,19 @@ export async function validate(
   );
   const executed = result.executed.map((record, position) => {
     const index = selectedIndices[record.index ?? position];
-    return { ...record, index, check: checkNames[index] ?? null };
+    const check = checkNames[index] ?? null;
+    return {
+      ...record,
+      index,
+      check,
+      ...(check === "script-tests" && record.code !== 0
+        ? {
+            diagnostics: readScriptFailureDiagnostics(
+              join(output, "validation.private.log"),
+            ),
+          }
+        : {}),
+    };
   });
   const elapsedMs = Math.round(performance.now() - started);
   const testedBase =
@@ -1159,12 +1297,13 @@ export async function validate(
     ceilingMs: originalBudgetMs,
     sourceFingerprint: summary.sourceFingerprint,
     checks: executed.map(
-      ({ check, command, durationMs, remainingMs, code }) => ({
+      ({ check, command, durationMs, remainingMs, code, diagnostics }) => ({
         check,
         command: command.join(" "),
         remainingMs,
         durationMs,
         code,
+        ...(diagnostics ? { diagnostics } : {}),
       }),
     ),
     output,

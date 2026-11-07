@@ -1,10 +1,11 @@
+import process from "node:process";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, URL } from "node:url";
 import { classifyTask } from "./ci-task-scope.mjs";
 import { assertTaskGate } from "./ci-task-gate.mjs";
 import {
@@ -461,7 +462,12 @@ describe("feedback command selection", () => {
   it("keeps default, lightweight and contracts command selection unchanged", () => {
     const output = "/private/synthetic-output";
     const web = taskCommands(classifyTask(["apps/web/app/page.tsx"]), output);
-    assert.deepEqual(web[0], [process.execPath, "--test", ...scriptTests()]);
+    assert.deepEqual(web[0], [
+      process.execPath,
+      "--test",
+      "--test-reporter=tap",
+      ...scriptTests(),
+    ]);
     assert.ok(web.some(isBareVerify));
     assert.equal(
       web.filter((command) => command.includes("test:cms")).length,
@@ -469,14 +475,14 @@ describe("feedback command selection", () => {
     );
     const lightweight = taskCommands({ lightweight: true }, output);
     assert.deepEqual(lightweight, [
-      [process.execPath, "--test", ...scriptTests()],
+      [process.execPath, "--test", "--test-reporter=tap", ...scriptTests()],
     ]);
     const contracts = taskCommands(
       { lightweight: true, contracts: true },
       output,
     );
     assert.deepEqual(contracts, [
-      [process.execPath, "--test", ...scriptTests()],
+      [process.execPath, "--test", "--test-reporter=tap", ...scriptTests()],
       ...contractCommands(),
     ]);
     assert.deepEqual(
