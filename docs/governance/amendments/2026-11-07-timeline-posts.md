@@ -5,7 +5,7 @@
   this text.
 - Effective date: at the merge of the `timeline-posts-v1` PR.
 - Authority: the Owner's decisions of 2026-11-07, quoted in section 1, recorded
-  as the `timeline-posts-v1` Issue, r1.
+  as the `timeline-posts-v1` Issue (#418), r1.
 - Applies to: Web, Backend, the media worker's purges, Admin and the timeline
   import, in Development and Production, for posts attached to the rows of
   `community.timeline_entries`. This amendment authorizes code, one migration
