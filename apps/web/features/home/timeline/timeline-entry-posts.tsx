@@ -140,7 +140,7 @@ export const TimelineEntryPosts = ({
   readonly actions: TimelineEntryPostsActions;
   readonly browseOnly?: boolean;
   readonly entryId: string;
-  /** The entry's short title, named when a post moves here. */
+  /** The entry's full title (with its dynasty), named when a post moves here. */
   readonly entryTitle: string;
   /** Catalog Detail names the section; the 词条卡 does not. */
   readonly heading?: string | null;

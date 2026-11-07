@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -285,6 +285,150 @@ describe("a work's 收录于", () => {
       { type: "new", timelineEntryId: "row-yongping" },
       line,
     );
+  });
+});
+
+describe("a work's 关联词条 sheet", () => {
+  const type = (input: HTMLInputElement, value: string) => {
+    act(() => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
+
+  /** As the work page hosts it: the sheet goes when it reports closed. */
+  const host = (
+    Sheet: typeof import("./timeline-detail").TimelineEntryPickerSheet,
+    props: {
+      onChoose: (entry: TimelineEntry | null) => void;
+      onClose: () => void;
+      selectedId: string | null;
+    },
+  ) => {
+    const Host = () => {
+      const [open, setOpen] = useState(true);
+      return open ? (
+        <Sheet
+          {...props}
+          onClose={() => {
+            props.onClose();
+            setOpen(false);
+          }}
+        />
+      ) : null;
+    };
+    return <Host />;
+  };
+
+  it("closes first, then hands over the choice", async () => {
+    const { detail } = await load();
+    client.timeline.mockResolvedValue({ entries: [fullEntry] });
+    const order: string[] = [];
+    const onClose = vi.fn(() => order.push("close"));
+    const onChoose = vi.fn((entry: TimelineEntry | null) =>
+      order.push(`choose:${entry?.id ?? "none"}`),
+    );
+    act(() =>
+      root.render(
+        host(detail.TimelineEntryPickerSheet, {
+          onChoose,
+          onClose,
+          selectedId: null,
+        }),
+      ),
+    );
+    await flush();
+    const dialog = container.querySelector("dialog")!;
+    expect(dialog.querySelector("h2")?.textContent).toBe("关联词条");
+    type(
+      dialog.querySelector<HTMLInputElement>('input[type="search"]')!,
+      "永平",
+    );
+    await flush();
+    click(dialog.querySelector('[data-timeline-entry-option="row-yongping"]'));
+    // The choice waits for the sheet to go.
+    expect(onChoose).not.toHaveBeenCalled();
+    await vi.waitFor(
+      () => expect(container.querySelector("dialog")).toBeNull(),
+      { timeout: 5000 },
+    );
+    expect(order).toEqual(["close", "choose:row-yongping"]);
+    expect(onChoose).toHaveBeenCalledWith(fullEntry);
+  });
+
+  it("only closes on 取消", async () => {
+    const { detail } = await load();
+    client.timeline.mockResolvedValue({ entries: [fullEntry] });
+    const onClose = vi.fn();
+    const onChoose = vi.fn();
+    act(() =>
+      root.render(
+        host(detail.TimelineEntryPickerSheet, {
+          onChoose,
+          onClose,
+          selectedId: "row-yongping",
+        }),
+      ),
+    );
+    await flush();
+    const dialog = container.querySelector("dialog")!;
+    const cancel = [...dialog.querySelectorAll("button")].find(
+      (button) => button.textContent === "取消",
+    );
+    click(cancel);
+    await vi.waitFor(
+      () => expect(container.querySelector("dialog")).toBeNull(),
+      { timeout: 5000 },
+    );
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onChoose).not.toHaveBeenCalled();
+  });
+});
+
+describe("a late 收录于 answer", () => {
+  it("does not stack the 词条卡 on a modal opened while the timeline was read", async () => {
+    const { detail } = await load();
+    let answer: (value: { entries: TimelineEntry[] }) => void = () => {};
+    client.timeline.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    act(() => root.render(<detail.WorkTimelineEntryLine entry={yongping} />));
+    click(container.querySelector("[data-work-timeline-entry]"));
+    // The author opens 关联词条 meanwhile.
+    const other = document.createElement("dialog");
+    other.setAttribute("open", "");
+    document.body.append(other);
+    await act(async () => answer({ entries: [fullEntry] }));
+    await flush();
+    expect(container.querySelector("[data-timeline-card]")).toBeNull();
+    other.remove();
+    // A later tap, with nothing open, shows the card from the session list.
+    click(container.querySelector("[data-work-timeline-entry]"));
+    await flush();
+    expect(container.querySelector("[data-timeline-card]")).not.toBeNull();
+  });
+});
+
+describe("useTimelineEntryName", () => {
+  it("names an entry by its full title from the session's list", async () => {
+    const { session } = await load();
+    client.timeline.mockResolvedValue({ entries: [fullEntry] });
+    await act(async () => {
+      await session.loadTimeline();
+    });
+    let named: ReturnType<typeof session.useTimelineEntryName> | null = null;
+    const Probe = () => {
+      named = session.useTimelineEntryName("row-yongping");
+      return null;
+    };
+    act(() => root.render(<Probe />));
+    expect(named!.name).toEqual({ state: "named", name: "北魏虚构永平碑" });
+    expect(client.timeline).toHaveBeenCalledOnce();
   });
 });
 

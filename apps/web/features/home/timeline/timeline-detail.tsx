@@ -316,7 +316,11 @@ export const WorkTimelineEntryLine = ({
     setBusy(true);
     try {
       const found = find(await loadTimeline());
-      if (mounted.current && found !== null) setCard({ entry: found, opener });
+      // A late answer never stacks the card on a modal opened meanwhile
+      // (the author's 关联词条, for one): the reader has moved on.
+      const moved = document.querySelector("dialog[open]") !== null;
+      if (mounted.current && found !== null && !moved)
+        setCard({ entry: found, opener });
     } catch {
       /* The line stays; a later tap reads again. */
     } finally {

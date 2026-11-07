@@ -217,6 +217,15 @@
   max-height: none;
 }
 
+/*
+ * The phone's bottom sheet otherwise sizes to its content and would jump as
+ * results arrive: it takes its full height at once, the search stays put.
+ * (Tablet and wide sheets already have a height; theirs wins.)
+ */
+[data-sheet-variant="bottom"]:has(> .sheetPicker) {
+  height: calc(100% - var(--yoyi-space-10));
+}
+
 /* The native clear control is off the palette; deleting the words clears. */
 .search::-webkit-search-cancel-button {
   display: none;
@@ -373,7 +382,7 @@
  * own width instead of the whole column.
  */
 .detailSection[data-detail-band-section] {
-  max-width: 960px;
+  max-width: var(--yoyi-desktop-reader-media-max);
   padding-block: 0;
 }
 

@@ -95,6 +95,8 @@ export const CatalogDetailExperience = ({
     readonly y: number;
   } | null>(null);
   const desiredScrollTopRef = useRef(initialScrollTop);
+  // A saved place not reached yet: content that loads later may let it be.
+  const restorePendingRef = useRef(initialScrollTop > 0);
   const restoredCatalogIdRef = useRef(catalogId);
   const viewerOpenerRef = useRef<HTMLElement | null>(null);
   const viewerWasOpenRef = useRef(false);
@@ -174,6 +176,7 @@ export const CatalogDetailExperience = ({
     // Verified vertical input takes over immediately, including the two frames
     // after a tab restore. Automatic layout clamps still keep the desired top.
     suppressScrollRef.current = false;
+    restorePendingRef.current = false;
     if (scrollSuppressionFrameRef.current !== null) {
       window.cancelAnimationFrame(scrollSuppressionFrameRef.current);
       scrollSuppressionFrameRef.current = null;
@@ -193,6 +196,8 @@ export const CatalogDetailExperience = ({
     if (scroller === null) return;
     suppressScrollRef.current = true;
     scroller.scrollTop = Math.max(0, desiredScrollTopRef.current);
+    if (scroller.scrollTop >= desiredScrollTopRef.current - 1)
+      restorePendingRef.current = false;
     if (scrollSuppressionFrameRef.current !== null) {
       window.cancelAnimationFrame(scrollSuppressionFrameRef.current);
     }
@@ -209,7 +214,20 @@ export const CatalogDetailExperience = ({
       read: () => desiredScrollTopRef.current,
       restore: (top: number) => {
         clearUserScrollIntent();
+        restorePendingRef.current = false;
         desiredScrollTopRef.current = Math.max(0, top);
+        restoreDesiredScroll();
+        onScrollTopChange(desiredScrollTopRef.current);
+      },
+      shift: (below: number, delta: number) => {
+        if (delta === 0) return;
+        if (!restorePendingRef.current) {
+          if (desiredScrollTopRef.current < below - 1) return;
+          desiredScrollTopRef.current = Math.max(
+            0,
+            desiredScrollTopRef.current + delta,
+          );
+        }
         restoreDesiredScroll();
         onScrollTopChange(desiredScrollTopRef.current);
       },
@@ -235,6 +253,7 @@ export const CatalogDetailExperience = ({
     if (restoredCatalogIdRef.current !== catalogId) {
       restoredCatalogIdRef.current = catalogId;
       desiredScrollTopRef.current = initialScrollTop;
+      restorePendingRef.current = initialScrollTop > 0;
     }
     restoreDesiredScroll();
     restoreFrameRef.current = window.requestAnimationFrame(() => {

@@ -111,8 +111,11 @@ export const useTimelineEntries = (
  */
 const knownNames = new Map<string, string>();
 
-export const rememberTimelineEntryName = (id: string, title: string): void => {
-  knownNames.set(id, title);
+export const rememberTimelineEntryName = (
+  id: string,
+  fullTitle: string,
+): void => {
+  knownNames.set(id, fullTitle);
 };
 
 export type TimelineEntryName =

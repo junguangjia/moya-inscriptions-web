@@ -142,7 +142,7 @@ vi.mock("../../../home/timeline/timeline-session", () => ({
           ? { state: "none" }
           : found === undefined
             ? { state: "missing" }
-            : { state: "named", name: found.title },
+            : { state: "named", name: found.fullTitle },
       retry: () => undefined,
     };
   },
@@ -783,7 +783,7 @@ describe("PublishScreen", () => {
     ).toBeTruthy();
     expect(section.querySelector("h3")!.textContent).toBe("关联词条");
     const line = section.querySelector("[data-publish-timeline-entry]")!;
-    expect(line.textContent).toBe("永平碑发布后会出现在这个词条下。");
+    expect(line.textContent).toBe("北魏虚构永平碑发布后会出现在这个词条下。");
     act(() =>
       section
         .querySelector<HTMLButtonElement>(

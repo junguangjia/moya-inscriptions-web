@@ -53,7 +53,7 @@ vi.mock("../../../home/timeline/timeline-session", () => ({
           ? { state: "none" }
           : found === undefined
             ? { state: "missing" }
-            : { state: "named", name: found.title },
+            : { state: "named", name: found.fullTitle },
       retry: () => undefined,
     };
   },
@@ -123,7 +123,7 @@ describe("关联词条 in the desktop text settings (timeline-posts-v1)", () => 
     expect(field()!.querySelector("[data-timeline-entry-picker]")).toBe(null);
     expect(
       field()!.querySelector("[data-editor-timeline-entry]")!.textContent,
-    ).toBe("永平碑");
+    ).toBe("北魏虚构永平碑");
     click(field()!.querySelector("[data-editor-timeline-entry-clear]"));
     expect(store.get().timelineEntryId).toBe(null);
     expect(field()!.querySelector("[data-editor-timeline-entry]")).toBe(null);
@@ -173,7 +173,7 @@ describe("关联词条 in the desktop text settings (timeline-posts-v1)", () => 
       render({ type: "new", timelineEntryId: "row-yongping" })
         .field()!
         .querySelector("[data-editor-timeline-entry]")!.textContent,
-    ).toBe("永平碑");
+    ).toBe("北魏虚构永平碑");
     expect(
       render({ type: "new", timelineEntryId: "row-hidden" })
         .field()!

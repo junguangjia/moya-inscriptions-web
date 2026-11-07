@@ -3,6 +3,7 @@
 import {
   useCallback,
   useContext,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -104,6 +105,23 @@ export const DesktopCalligraphyDetailLayout = ({
       node.removeEventListener("scroll", measure);
     };
   }, [detail.id, hasColophon]);
+  // timeline-posts-v1: the band fills after paint; when it grows above the
+  // reader, the reader keeps their place (CatalogDetailScrollContext.shift).
+  useEffect(() => {
+    if (band === null || typeof ResizeObserver === "undefined") return;
+    let height = band.offsetHeight;
+    let top: number | null = null;
+    const observer = new ResizeObserver(() => {
+      const next = band.offsetHeight;
+      // An empty band is not displayed and has no position of its own.
+      if (next > 0 && scroll !== null) top = scroll.collapseTop(band);
+      if (next !== height && top !== null)
+        scroll?.shift?.(top + height, next - height);
+      height = next;
+    });
+    observer.observe(band);
+    return () => observer.disconnect();
+  }, [band, scroll]);
   const reveal = useCallback(
     (node: HTMLElement | null) => {
       if (!node) return;
