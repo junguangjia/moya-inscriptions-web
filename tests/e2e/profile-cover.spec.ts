@@ -63,6 +63,12 @@ const pngInfo = (bytes: Buffer) => {
 };
 
 async function fixture(page: Page, background: Media | null = null) {
+  // These cases audit the original cover/header, not the #356 reading shell.
+  // Seed both physical-device scopes before navigation, including PC windows.
+  await page.addInitScript(() => {
+    localStorage.setItem("yoyi.home-feed-layout.v2", "double");
+    localStorage.setItem("yoyi.desktop-feed-layout.v1", "double");
+  });
   const state: State = {
     background,
     uploads: [],

@@ -12,6 +12,7 @@ import { resolveLocalContent } from "./local-content-list";
 import { CatalogMasonry } from "../home/catalog-masonry";
 import { useProductShell } from "../product-shell/product-shell";
 import { ContentCard } from "./content-card";
+import { ProfileReadingGrid } from "./profile-reading-grid";
 import { recordWorkSnapshots, workSnapshotToken } from "./work-snapshots";
 import { DraftsCard } from "../publishing/ui/drafts/drafts-card";
 import {
@@ -247,7 +248,7 @@ export const ProfileList = ({
         failed.current = q;
         if (
           e instanceof AuthorRequestError &&
-          (e.status === 404 || e.status === 401)
+          (e.status === 404 || e.status === 401 || e.status === 403)
         )
           setList((old) => ({ ...old, items: [], total: 0 }));
         setError(e instanceof Error ? e.message : "列表加载失败");
@@ -338,32 +339,48 @@ export const ProfileList = ({
           收藏保存在此浏览器；登录后可合并到账户。清除浏览器数据可能移除本机收藏。
         </p>
       )}
-      <CatalogMasonry<ListEntry>
-        items={entries}
-        getKey={(i) =>
-          isDraftsEntry(i) ? "drafts" : `${i.target.type}:${i.target.id}`
-        }
-        isFullSpan={(i) =>
-          !isDraftsEntry(i) &&
-          !!i.media &&
-          i.media.width / i.media.height >= 2.4
-        }
-        platform={shell.platform}
-        feedLayout={shell.feedLayout}
-        renderItem={(item, onMediaSettled) =>
-          isDraftsEntry(item) ? (
-            draftsOwner === null ? null : (
-              <DraftsCard
-                accountId={draftsOwner}
-                active={active}
-                onSettled={onMediaSettled}
-              />
+      {shell.feedLayout === "single" ? (
+        <ProfileReadingGrid
+          items={list.items}
+          platform={shell.platform}
+          active={active}
+          label={
+            {
+              works: "作品展读",
+              favorites: "收藏展读",
+              likes: "喜欢的作品",
+              history: "浏览历史",
+            }[tab]
+          }
+        />
+      ) : (
+        <CatalogMasonry<ListEntry>
+          items={entries}
+          getKey={(i) =>
+            isDraftsEntry(i) ? "drafts" : `${i.target.type}:${i.target.id}`
+          }
+          isFullSpan={(i) =>
+            !isDraftsEntry(i) &&
+            !!i.media &&
+            i.media.width / i.media.height >= 2.4
+          }
+          platform={shell.platform}
+          feedLayout={shell.feedLayout}
+          renderItem={(item, onMediaSettled) =>
+            isDraftsEntry(item) ? (
+              draftsOwner === null ? null : (
+                <DraftsCard
+                  accountId={draftsOwner}
+                  active={active}
+                  onSettled={onMediaSettled}
+                />
+              )
+            ) : (
+              <ContentCard item={item} onMediaSettled={onMediaSettled} />
             )
-          ) : (
-            <ContentCard item={item} onMediaSettled={onMediaSettled} />
-          )
-        }
-      />
+          }
+        />
+      )}
       {error ? (
         <div role="alert">
           <p>{error}</p>
@@ -376,11 +393,14 @@ export const ProfileList = ({
             重试
           </button>
         </div>
-      ) : !busy && !list.items.length ? (
+      ) : !busy &&
+        !list.items.length &&
+        (shell.feedLayout !== "single" || list.page > 0) ? (
         <p>暂无可显示的内容</p>
       ) : null}
       <div ref={sentinel} className="phase4-load">
-        {busy ? (
+        {busy ||
+        (shell.feedLayout === "single" && list.page === 0 && !error) ? (
           <span role="status">正在加载…</span>
         ) : !error && list.page * 12 < list.total ? (
           <button className="phase4-button" onClick={next}>
