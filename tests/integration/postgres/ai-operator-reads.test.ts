@@ -50,6 +50,7 @@ import {
   operatorReportAiSchema,
   operatorReportSchema,
   operatorTimelinePageSchema,
+  operatorTimelinePostPageSchema,
   operatorTimelineSummarySchema,
   operatorUserAiPageSchema,
   operatorUserPageSchema,
@@ -701,6 +702,12 @@ const readSweep = (): Readonly<Record<string, readonly string[]>> => {
       "timeline-entries?issue=not_published&hidden=include",
     ],
     "timeline-summary": ["timeline-summary"],
+    // timeline-posts-v1: a self-only work is left out of every page and total.
+    "timeline-posts": [
+      "timeline-posts?pageSize=50",
+      `timeline-posts?${query({ workId: ids.selfWork })}`,
+      "timeline-posts?state=attached",
+    ],
   };
 };
 
@@ -1857,6 +1864,11 @@ describe("a bad input on the AI path", () => {
     ],
     ["a timeline view the read has not", "timeline-entries?view=compact"],
     ["a query on the timeline summary", "timeline-summary?range=30d"],
+    ["a post state the rows have not", "timeline-posts?state=hidden"],
+    [
+      "a post range ending before it starts",
+      `timeline-posts?${query({ from: "2026-11-07T00:00:00Z", to: "2026-11-01T00:00:00Z" })}`,
+    ],
   ])("answers a named refusal for %s", async (_, route) => {
     const read = await ai(route);
     expect(read.status, route).toBe(400);
@@ -1935,6 +1947,57 @@ describe("the timeline as AI reads it", () => {
         status: 403,
         code: "AI_ROUTE_FORBIDDEN",
       });
+  });
+
+  // timeline-posts-v1: the self-only work sits on the row too, and only the Owner sees it.
+  it("leaves a self-only post out of AI's post rows and of every row's count", async () => {
+    await setup.query(
+      "INSERT INTO community.timeline_entry_posts(work_id,entry_id,attached_by,updated_by) VALUES($1,$3,'author','author'),($2,$3,'author','author')",
+      [ids.publicWork, ids.selfWork, entryId],
+    );
+    try {
+      const route = `timeline-posts?${query({ entryId, pageSize: "50" })}`;
+      const asAi = await ai(route);
+      expectNoCanary(asAi.text, route);
+      expect(asAi.text).not.toContain(ids.selfWork);
+      const aiPage = operatorTimelinePostPageSchema.parse(asAi.json);
+      expect(aiPage.items.map(({ workId }) => workId)).toEqual([
+        ids.publicWork,
+      ]);
+      expect(aiPage.total).toBe(1);
+      const owners = operatorTimelinePostPageSchema.parse(
+        (await owner(route)).json,
+      );
+      expect(owners.total).toBe(2);
+      expect(owners.items.map(({ workId }) => workId).sort()).toEqual(
+        [ids.publicWork, ids.selfWork].sort(),
+      );
+      expect(owners.items.map(({ title }) => title)).toContain(
+        CANARY.selfTitle,
+      );
+      // The count is the public one for both: it never says a self-only post exists.
+      for (const read of [ai, owner]) {
+        const page = operatorTimelinePageSchema.parse(
+          (await read(`timeline-entries?${query({ id: entryId })}`)).json,
+        );
+        expect(page.items[0]?.postCount).toBe(1);
+        expect(
+          operatorTimelineSummarySchema.parse(
+            (await read("timeline-summary")).json,
+          ).posts,
+        ).toEqual({ total: 1, entries: 1 });
+      }
+      expect(await get(baseToken, route)).toMatchObject({
+        status: 403,
+        code: "AI_ROUTE_FORBIDDEN",
+      });
+    } finally {
+      // Rows of this table are never deleted by the runtime; the setup role may.
+      await setup.query(
+        "DELETE FROM community.timeline_entry_posts WHERE work_id=ANY($1::text[])",
+        [[ids.publicWork, ids.selfWork]],
+      );
+    }
   });
 });
 

@@ -26,6 +26,8 @@ import {
   contentCollectionPageSchema,
   inscriptionFilterOptionsSchema,
   timelineSchema,
+  timelinePostCountsSchema,
+  contentTimelineEntrySchema,
   contentStateSchema,
   articlePageSchema,
   articleDetailSchema,
@@ -329,6 +331,30 @@ export const authorClient = {
   filters: () => request("filter-options", inscriptionFilterOptionsSchema),
   timeline: (signal?: AbortSignal) =>
     request("timeline", timelineSchema, { ...(signal ? { signal } : {}) }),
+  // timeline-posts-v1: posts attached to timeline rows, read per viewer (the
+  // viewer's own self-only posts count for them alone), so the answers of one
+  // account never stand for another's.
+  timelinePostCounts: (signal?: AbortSignal) =>
+    request("timeline/post-counts", timelinePostCountsSchema, {
+      ...(signal ? { signal } : {}),
+    }),
+  timelinePosts: (
+    entryId: string,
+    q: { readonly page: number; readonly pageSize: number },
+    signal?: AbortSignal,
+  ) =>
+    request(
+      `timeline/${encodeURIComponent(entryId)}/posts?${query(q)}`,
+      workPageSchema,
+      { ...(signal ? { signal } : {}) },
+    ),
+  /** The visible timeline row a work is attached to, or the row of a Catalog record. */
+  timelineEntryOf: (target: ContentIdentity, signal?: AbortSignal) =>
+    request(
+      `content/${targetPath(target)}/timeline-entry`,
+      contentTimelineEntrySchema,
+      { ...(signal ? { signal } : {}) },
+    ),
   collection: (
     id: string,
     list: "favorites" | "likes",

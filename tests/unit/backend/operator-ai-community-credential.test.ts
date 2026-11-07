@@ -177,6 +177,7 @@ describe("the route table's community rows", () => {
       ["POST", "timeline-entries", "write", undefined],
       ["POST", "timeline-entries/:id", "write", undefined],
       ["POST", "timeline-order", "write", undefined],
+      ["POST", "timeline-posts/:id", "write", "work"],
     ]);
   });
 
@@ -192,12 +193,26 @@ describe("the route table's community rows", () => {
     expect(aiOperatorRouteFor("GET", `${timeline}-summary`, none)?.klass).toBe(
       "read",
     );
+    // timeline-posts-v1: a post's write names its work, which is withheld while self-only.
+    const work = `work-${"a".repeat(32)}`;
+    expect(
+      aiOperatorRouteFor("POST", `${timeline}-posts/${work}`, none),
+    ).toMatchObject({ path: `${timeline}-posts/:id`, selfOnly: "work" });
+    expect(aiOperatorRouteFor("GET", `${timeline}-posts`, none)).toMatchObject({
+      klass: "read",
+    });
+    expect(
+      aiOperatorRouteFor("GET", `${timeline}-posts`, none)?.selfOnly,
+    ).toBeUndefined();
     for (const [method, pathname] of [
       ["GET", `${timeline}-entries/tang-a`],
       ["POST", `${timeline}-entries/tang-a/hide`],
       ["POST", `${timeline}-summary`],
       ["GET", `${timeline}-order`],
       ["PUT", `${timeline}-entries/tang-a`],
+      ["GET", `${timeline}-posts/${work}`],
+      ["POST", `${timeline}-posts`],
+      ["POST", `${timeline}-posts/${work}/withhold`],
     ] as const)
       expect(
         aiOperatorRouteFor(method, pathname, none),

@@ -322,6 +322,18 @@ const timelineEcho: Echo = (entry) => ({
 
 const onTimelineEntry = onField("timeline_entry", "id");
 
+/**
+ * timeline-posts-v1: the post's work by its id, which is of a fixed shape. The row it
+ * sits on is the Owner's own text, so the echo leaves the entry out.
+ */
+const timelinePostEcho: Echo = (post) => ({
+  id: post.workId,
+  title: shortOrFacts(post.title),
+  state: post.state,
+  version: post.version,
+  publiclyVisible: post.publiclyVisible,
+});
+
 const onReport = onField("report", "id");
 
 /** These change no one's media: a warning, or comments restricted for the future. */
@@ -656,6 +668,17 @@ export const COMMUNITY_WRITE_FACTS: Readonly<
       count,
     })),
   ),
+  "set-timeline-post": {
+    ...write(
+      "set-timeline-post",
+      onField("work", "id"),
+      written("set-timeline-post", timelinePostEcho),
+      TITLE,
+    ),
+    // It names a work, so a preview freezes that work's state; an operator withhold
+    // does not notify the author (home-timeline-v1.md).
+    ...previewOf("works"),
+  },
   // Irreversible: preview, then admin_execute_irreversible, with the run engine. Their
   // routes have no AI row until then.
   "forward-report": notBuilt("S8"),

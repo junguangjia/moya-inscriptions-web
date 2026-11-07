@@ -929,3 +929,9 @@ button.publishButton[aria-disabled="true"]:active {
     animation: none;
   }
 }
+
+/* timeline-posts-v1: the 关联词条 picker inside 发布's bottom sheet. */
+.entrySheetBody {
+  padding: 0 max(var(--yoyi-space-6), env(safe-area-inset-right)) 0
+    max(var(--yoyi-space-6), env(safe-area-inset-left));
+}

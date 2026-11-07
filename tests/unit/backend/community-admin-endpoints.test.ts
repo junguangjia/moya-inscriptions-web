@@ -682,6 +682,7 @@ describe("Home timeline Owner routes", () => {
     chapters: [{ chapter: "东汉", total: 1, hidden: 0, onAxis: 1, shelf: 0 }],
     links: { unlinked: 1, published: 0, notPublished: 0 },
     groups: { total: 0, folding: 0 },
+    posts: { total: 2, entries: 1 },
     updatedBy: { import: 0, owner: 1, "ai-admin": 0 },
     issues: { contract: 0, group: 0, chapterYear: 0, notPublished: 0 },
     limits: {
@@ -702,6 +703,23 @@ describe("Home timeline Owner routes", () => {
     precision: "year",
     onAxis: true,
     chapter: "东汉",
+  };
+  // timeline-posts-v1: one post's row, attached by its author.
+  const workId = `work-${"0f".repeat(16)}`;
+  const post = {
+    workId,
+    title: "Synthetic post",
+    authorId: userId,
+    workState: "visible",
+    publiclyVisible: true,
+    entryId: entry.id,
+    withheldEntryId: null,
+    state: "attached",
+    attachedBy: "author",
+    updatedBy: "author",
+    version: 1,
+    attachedAt: "2026-11-07T00:00:00.000Z",
+    updatedAt: "2026-11-07T00:00:00.000Z",
   };
 
   it.each([
@@ -755,6 +773,40 @@ describe("Home timeline Owner routes", () => {
         entries: [{ id: entry.id, expectedVersion: 2 }],
       },
       answer: { startYear: 148, count: 1 },
+    },
+    {
+      name: "read-timeline-posts",
+      input: { entryId: entry.id, state: "attached" },
+      method: "GET",
+      path: `timeline-posts?page=1&pageSize=20&entryId=${entry.id}&state=attached`,
+      forwarded: undefined,
+      answer: { items: [post], total: 1, page: 1, pageSize: 20 },
+    },
+    {
+      name: "set-timeline-post",
+      input: {
+        id: workId,
+        requestId,
+        expectedVersion: 1,
+        entryId: null,
+        state: "withheld",
+      },
+      method: "POST",
+      path: `timeline-posts/${workId}`,
+      forwarded: {
+        requestId,
+        expectedVersion: 1,
+        entryId: null,
+        state: "withheld",
+      },
+      answer: {
+        ...post,
+        entryId: null,
+        withheldEntryId: entry.id,
+        state: "withheld",
+        updatedBy: "owner",
+        version: 2,
+      },
     },
   ])(
     "forwards $name only for the Owner, and checks its answer",
@@ -835,7 +887,12 @@ describe("Home timeline Owner routes", () => {
   });
 
   it("sends a read's ids comma-joined and its flags as text, and never a view", async () => {
-    const page = { items: [entry], total: 1, page: 1, pageSize: 20 };
+    const page = {
+      items: [{ ...entry, postCount: 0 }],
+      total: 1,
+      page: 1,
+      pageSize: 20,
+    };
     const { calls } = recorder();
     const call = vi.fn(async (method: string, path: string) => {
       calls.push({ method, path });
@@ -884,8 +941,136 @@ describe("Home timeline Owner routes", () => {
     expect(calls).toHaveLength(2);
   });
 
+  // timeline-posts-v1: a Backend before it knows no `posts` key, so `any` stays home.
+  it("sends a row's post filter only when it narrows, and reads each row's count", async () => {
+    const page = {
+      items: [{ ...entry, postCount: 3 }],
+      total: 1,
+      page: 1,
+      pageSize: 20,
+    };
+    const { calls } = recorder();
+    const call = vi.fn(async (method: string, path: string) => {
+      calls.push({ method, path });
+      return page;
+    }) as unknown as OperatorCall;
+    const endpoints = createCommunityEndpoints(call);
+    for (const posts of [undefined, "any", "with", "without"])
+      expect(
+        await invoke(
+          endpoints,
+          "read-timeline",
+          request(posts === undefined ? {} : { posts }),
+        ),
+      ).toEqual({ status: 200, body: { ok: true, result: page } });
+    expect(
+      calls.map(({ path }) =>
+        new URL(path, "http://route.invalid/").searchParams.get("posts"),
+      ),
+    ).toEqual([null, null, "with", "without"]);
+    expect(
+      await invoke(endpoints, "read-timeline", request({ posts: "some" })),
+    ).toEqual({
+      status: 400,
+      body: { ok: false, error: { code: "COMMAND_INVALID" } },
+    });
+    // A row without its count is not this contract's.
+    const countless = vi.fn(async () => ({
+      ...page,
+      items: [entry],
+    })) as unknown as OperatorCall;
+    expect(
+      await invoke(
+        createCommunityEndpoints(countless),
+        "read-timeline",
+        request({}),
+      ),
+    ).toEqual({
+      status: 502,
+      body: { ok: false, error: { code: "OPERATOR_RESPONSE_INVALID" } },
+    });
+  });
+
+  it("sends every post filter by name, and only the ones given", async () => {
+    const { calls } = recorder();
+    const call = vi.fn(async (method: string, path: string) => {
+      calls.push({ method, path });
+      return { items: [], total: 0, page: 2, pageSize: 5 };
+    }) as unknown as OperatorCall;
+    const filters = {
+      page: 2,
+      pageSize: 5,
+      entryId: entry.id,
+      workId,
+      authorId: userId,
+      state: "withheld",
+      attachedBy: "ai-admin",
+      from: "2026-11-01T00:00:00.000Z",
+      to: "2026-11-07T00:00:00.000Z",
+    };
+    expect(
+      (
+        await invoke(
+          createCommunityEndpoints(call),
+          "read-timeline-posts",
+          request(filters),
+        )
+      ).status,
+    ).toBe(200);
+    const url = new URL(calls[0]!.path, "http://route.invalid/");
+    expect(url.pathname).toBe("/timeline-posts");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      ...filters,
+      page: "2",
+      pageSize: "5",
+    });
+  });
+
   it.each([
     ["read-timeline-summary", { page: 1 }],
+    ["read-timeline-posts", { pageSize: 51 }],
+    ["read-timeline-posts", { entryId: "Not A Slug" }],
+    ["read-timeline-posts", { workId: "work-1" }],
+    ["read-timeline-posts", { state: "hidden" }],
+    ["read-timeline-posts", { attachedBy: "import" }],
+    [
+      "read-timeline-posts",
+      { from: "2026-11-07T00:00:00.000Z", to: "2026-11-01T00:00:00.000Z" },
+    ],
+    ["read-timeline-posts", { view: "full" }],
+    [
+      "set-timeline-post",
+      { id: "work-1", requestId, expectedVersion: 0, entryId: entry.id },
+    ],
+    [
+      "set-timeline-post",
+      { id: workId, requestId, expectedVersion: -1, entryId: entry.id },
+    ],
+    ["set-timeline-post", { id: workId, requestId, expectedVersion: 0 }],
+    [
+      "set-timeline-post",
+      { id: workId, expectedVersion: 0, entryId: entry.id },
+    ],
+    [
+      "set-timeline-post",
+      {
+        id: workId,
+        requestId,
+        expectedVersion: 0,
+        entryId: null,
+        state: "detached",
+      },
+    ],
+    [
+      "set-timeline-post",
+      {
+        id: workId,
+        requestId,
+        expectedVersion: 0,
+        entryId: entry.id,
+        reason: "Synthetic",
+      },
+    ],
     ["create-timeline-entry", { ...created, requestId: undefined }],
     ["create-timeline-entry", { ...created, version: 1 }],
     [

@@ -4,7 +4,11 @@ import { act, createRef } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { useContext } from "react";
+import type { ContextType } from "react";
+
 import { CatalogDetailExperience } from "./catalog-detail-experience";
+import { CatalogDetailScrollContext } from "./catalog-detail-scroll";
 import { useCatalogDetailWithdrawal } from "./catalog-detail-withdrawal";
 
 import type { Root } from "react-dom/client";
@@ -293,6 +297,366 @@ describe("CatalogDetailExperience", () => {
       ),
     );
     expect(onCloseViewer).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the reader's place when content above grows, and applies a saved place once the content arrives (timeline-posts-v1)", () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(performance.now());
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    let scroll: ContextType<typeof CatalogDetailScrollContext> = null;
+    const Actions = () => {
+      scroll = useContext(CatalogDetailScrollContext);
+      return null;
+    };
+    const onScrollTopChange = vi.fn();
+    const loaded = (id: string) =>
+      ({
+        detail: {
+          aliases: [],
+          authorId: `user-${"a".repeat(32)}`,
+          authorName: "临帖人",
+          available: true,
+          canEdit: false,
+          contentType: "work",
+          facts: [],
+          id,
+          media: [],
+          source: "runtime",
+          sourceCitations: [],
+          title: "春日临帖",
+        },
+        state: "loaded",
+      }) as const;
+    // The scroller clamps like a browser: never past its content.
+    let contentHeight = 4000;
+    const clamp = (scroller: HTMLElement) => {
+      let top = 0;
+      Object.defineProperty(scroller, "scrollTop", {
+        configurable: true,
+        get: () => top,
+        set: (value: number) => {
+          top = Math.max(0, Math.min(value, contentHeight - 800));
+        },
+      });
+      Object.defineProperties(scroller, {
+        clientHeight: { configurable: true, get: () => 800 },
+        scrollHeight: { configurable: true, get: () => contentHeight },
+      });
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    roots.push(root);
+    const render = (catalogId: string, initialScrollTop: number) =>
+      act(() =>
+        root.render(
+          <CatalogDetailExperience
+            activeViewerMediaId={null}
+            backButtonRef={createRef<HTMLButtonElement>()}
+            catalogId={catalogId}
+            detailActions={<Actions />}
+            initialScrollTop={initialScrollTop}
+            onBack={vi.fn()}
+            onCloseViewer={vi.fn()}
+            onOpenViewer={vi.fn()}
+            onScrollTopChange={onScrollTopChange}
+            onViewerMediaChange={vi.fn()}
+            orientation="landscape"
+            platform="pc"
+            state={loaded(catalogId)}
+          />,
+        ),
+      );
+    render("work-reader", 0);
+    const scroller = container.querySelector<HTMLElement>(
+      "[data-detail-scroll]",
+    )!;
+    clamp(scroller);
+    // The reader goes down to 900 (below a band ending at 700).
+    scroller.scrollTop = 900;
+    act(() => scroller.dispatchEvent(new Event("scroll", { bubbles: true })));
+    expect(onScrollTopChange).toHaveBeenLastCalledWith(900);
+    act(() => scroll!.shift!(700, 300));
+    expect(scroller.scrollTop).toBe(1200);
+    expect(onScrollTopChange).toHaveBeenLastCalledWith(1200);
+    // A change that ends below the reader moves nothing.
+    onScrollTopChange.mockClear();
+    act(() => scroll!.shift!(1500, 300));
+    expect(scroller.scrollTop).toBe(1200);
+    expect(onScrollTopChange).not.toHaveBeenCalled();
+
+    // Back to a place saved with the band present: the page is too short
+    // until the band arrives, then the saved place applies as it was.
+    contentHeight = 1800;
+    render("work-saved", 1500);
+    expect(scroller.scrollTop).toBe(1000);
+    contentHeight = 2400;
+    act(() => scroll!.shift!(800, 400));
+    expect(scroller.scrollTop).toBe(1500);
+    expect(onScrollTopChange).toHaveBeenLastCalledWith(1500);
+    // Until the reader moves, the saved place stays what is applied.
+    act(() => scroll!.shift!(800, 100));
+    expect(scroller.scrollTop).toBe(1500);
+    // Once they scroll, a change above them keeps their place again.
+    contentHeight = 3000;
+    scroller.scrollTop = 1520;
+    act(() => scroller.dispatchEvent(new Event("scroll", { bubbles: true })));
+    act(() => scroll!.shift!(800, 100));
+    expect(scroller.scrollTop).toBe(1620);
+    // A reader above the change, or inside it, does not move: the test is
+    // where they are, not a place the page clamped them away from.
+    scroller.scrollTop = 600;
+    act(() =>
+      scroller.dispatchEvent(
+        new WheelEvent("wheel", { bubbles: true, deltaY: 120 }),
+      ),
+    );
+    act(() => scroller.dispatchEvent(new Event("scroll", { bubbles: true })));
+    act(() => scroll!.shift!(900, 200));
+    expect(scroller.scrollTop).toBe(600);
+  });
+
+  it("brings back a section the reader asked for, lets a press release a saved place, and leaves a shrink the page clamped (timeline-posts-v1)", () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(performance.now());
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    let scroll: ContextType<typeof CatalogDetailScrollContext> = null;
+    const Actions = () => {
+      scroll = useContext(CatalogDetailScrollContext);
+      return null;
+    };
+    let contentHeight = 1500;
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    roots.push(root);
+    const render = (catalogId: string, initialScrollTop: number) =>
+      act(() =>
+        root.render(
+          <CatalogDetailExperience
+            activeViewerMediaId={null}
+            backButtonRef={createRef<HTMLButtonElement>()}
+            catalogId={catalogId}
+            detailActions={<Actions />}
+            initialScrollTop={initialScrollTop}
+            onBack={vi.fn()}
+            onCloseViewer={vi.fn()}
+            onOpenViewer={vi.fn()}
+            onScrollTopChange={vi.fn()}
+            onViewerMediaChange={vi.fn()}
+            orientation="landscape"
+            platform="pc"
+            state={{
+              detail: {
+                aliases: [],
+                authorId: `user-${"a".repeat(32)}`,
+                authorName: "临帖人",
+                available: true,
+                canEdit: false,
+                contentType: "work",
+                facts: [],
+                id: catalogId,
+                media: [],
+                source: "runtime",
+                sourceCitations: [],
+                title: "春日临帖",
+              },
+              state: "loaded",
+            }}
+          />,
+        ),
+      );
+    render("work-anchor", 0);
+    const scroller = container.querySelector<HTMLElement>(
+      "[data-detail-scroll]",
+    )!;
+    let top = 0;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (value: number) => {
+        top = Math.max(0, Math.min(value, contentHeight - 800));
+      },
+    });
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, get: () => 800 },
+      scrollHeight: { configurable: true, get: () => contentHeight },
+    });
+    // 题跋 at 1200 on a page that ends at 1500: the reveal stops at the
+    // bottom (700), 题跋 in view near the bottom.
+    let sectionTop = 1200;
+    const section = document.createElement("section");
+    scroller.append(section);
+    section.getBoundingClientRect = () =>
+      ({ top: sectionTop - scroller.scrollTop }) as DOMRect;
+    act(() => scroll!.restore(scroll!.collapseTop(section), section));
+    expect(scroller.scrollTop).toBe(700);
+    // The band fills above it (330): the page and 题跋 move down together,
+    // and the reader is brought along, 题跋 still in view.
+    sectionTop = 1530;
+    contentHeight = 1830;
+    act(() => scroll!.shift!(844, 330));
+    expect(scroller.scrollTop).toBe(1030);
+
+    // Back to a saved place the page cannot reach yet; the reader presses
+    // the scrollbar and drags up before the band arrives.
+    contentHeight = 1800;
+    render("work-press", 1500);
+    expect(scroller.scrollTop).toBe(1000);
+    const press = new Event("pointerdown", { bubbles: true });
+    Object.defineProperties(press, {
+      isPrimary: { value: true },
+      pointerId: { value: 1 },
+      clientX: { value: 0 },
+      clientY: { value: 0 },
+    });
+    act(() => scroller.dispatchEvent(press));
+    scroller.scrollTop = 300;
+    act(() => scroller.dispatchEvent(new Event("scroll", { bubbles: true })));
+    contentHeight = 2400;
+    act(() => scroll!.shift!(800, 400));
+    // Above the band: not pulled back to the saved place.
+    expect(scroller.scrollTop).toBe(300);
+
+    // A reader below the band near the bottom when it shrinks: the page
+    // clamps them first, and nothing moves them further.
+    scroller.scrollTop = 1290;
+    act(() => scroller.dispatchEvent(new Event("scroll", { bubbles: true })));
+    contentHeight = 1970;
+    // The browser clamps and reports it; that is not the reader moving.
+    const before = scroller.scrollTop;
+    scroller.scrollTop = before;
+    act(() => scroller.dispatchEvent(new Event("scroll", { bubbles: true })));
+    expect(scroller.scrollTop).toBe(1170);
+    act(() => scroll!.shift!(1000, -166));
+    expect(scroller.scrollTop).toBe(1170);
+    // Not clamped: a shrink above the reader keeps their place.
+    contentHeight = 2600;
+    act(() =>
+      scroller.dispatchEvent(
+        new WheelEvent("wheel", { bubbles: true, deltaY: 120 }),
+      ),
+    );
+    scroller.scrollTop = 1400;
+    act(() => scroller.dispatchEvent(new Event("scroll", { bubbles: true })));
+    act(() => scroll!.shift!(1000, -166));
+    expect(scroller.scrollTop).toBe(1234);
+  });
+
+  it("lets a quiet move away (Tab, a focus scroll, find in page) release an asked-for section, but not a clamp (timeline-posts-v1)", () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(performance.now());
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    let scroll: ContextType<typeof CatalogDetailScrollContext> = null;
+    const Actions = () => {
+      scroll = useContext(CatalogDetailScrollContext);
+      return null;
+    };
+    let contentHeight = 2400;
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    roots.push(root);
+    act(() =>
+      root.render(
+        <CatalogDetailExperience
+          activeViewerMediaId={null}
+          backButtonRef={createRef<HTMLButtonElement>()}
+          catalogId="work-quiet"
+          detailActions={<Actions />}
+          initialScrollTop={0}
+          onBack={vi.fn()}
+          onCloseViewer={vi.fn()}
+          onOpenViewer={vi.fn()}
+          onScrollTopChange={vi.fn()}
+          onViewerMediaChange={vi.fn()}
+          orientation="landscape"
+          platform="pc"
+          state={{
+            detail: {
+              aliases: [],
+              authorId: `user-${"a".repeat(32)}`,
+              authorName: "临帖人",
+              available: true,
+              canEdit: false,
+              contentType: "work",
+              facts: [],
+              id: "work-quiet",
+              media: [],
+              source: "runtime",
+              sourceCitations: [],
+              title: "春日临帖",
+            },
+            state: "loaded",
+          }}
+        />,
+      ),
+    );
+    const scroller = container.querySelector<HTMLElement>(
+      "[data-detail-scroll]",
+    )!;
+    let top = 0;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (value: number) => {
+        top = Math.max(0, Math.min(value, contentHeight - 800));
+      },
+    });
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, get: () => 800 },
+      scrollHeight: { configurable: true, get: () => contentHeight },
+    });
+    let sectionTop = 1280;
+    const section = document.createElement("section");
+    scroller.append(section);
+    section.getBoundingClientRect = () =>
+      ({ top: sectionTop - scroller.scrollTop }) as DOMRect;
+    const reveal = () =>
+      act(() => scroll!.restore(scroll!.collapseTop(section), section));
+    const quietScroll = (to: number) => {
+      scroller.scrollTop = to;
+      act(() => scroller.dispatchEvent(new Event("scroll", { bubbles: true })));
+    };
+
+    // A clamp (the page got shorter, the reader at its end) keeps the hold.
+    reveal();
+    expect(scroller.scrollTop).toBe(1280);
+    contentHeight = 1900;
+    quietScroll(scroller.scrollTop);
+    expect(scroller.scrollTop).toBe(1100);
+    contentHeight = 2300;
+    sectionTop = 1480;
+    act(() => scroll!.shift!(900, 200));
+    expect(scroller.scrollTop).toBe(1480);
+
+    // A focus scroll up into the band releases it: the band then grows
+    // below the reader's top and nothing moves them.
+    quietScroll(1214);
+    sectionTop = 1684;
+    contentHeight = 2504;
+    act(() => scroll!.shift!(1300, 204));
+    expect(scroller.scrollTop).toBe(1214);
+
+    // Tab releases it before any scroll.
+    contentHeight = 2504;
+    reveal();
+    expect(scroller.scrollTop).toBe(1684);
+    act(() =>
+      scroller.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, key: "Tab" }),
+      ),
+    );
+    sectionTop = 1884;
+    contentHeight = 2704;
+    act(() => scroll!.shift!(1800, 200));
+    expect(scroller.scrollTop).toBe(1684);
   });
 
   it("withdraws a Detail in place: the Viewer closes, the notice is read from the top with focus", () => {

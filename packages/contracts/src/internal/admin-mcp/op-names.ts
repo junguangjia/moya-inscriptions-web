@@ -86,6 +86,8 @@ export const ADMIN_OP_NAMES = [
   "community.create-timeline-entry",
   "community.update-timeline-entry",
   "community.reorder-timeline",
+  "community.read-timeline-posts",
+  "community.set-timeline-post",
   // editorial/endpoints.ts, every route.
   "editorial.owner-drafts",
   "editorial.owner-history",

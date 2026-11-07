@@ -592,7 +592,6 @@
 .entry,
 .head,
 .gap,
-.more,
 .groupToggle {
   display: grid;
   box-sizing: border-box;
@@ -605,7 +604,6 @@
 }
 
 .entry,
-.more,
 .groupToggle,
 .shelfPill,
 .member {
@@ -619,7 +617,6 @@
 }
 
 .entry:focus-visible,
-.more:focus-visible,
 .groupToggle:focus-visible,
 .shelfPill:focus-visible,
 .member:focus-visible {
@@ -755,6 +752,17 @@
   -webkit-line-clamp: 2;
   font: 500 var(--yoyi-type-list-title-size) / 24px var(--yoyi-font-editorial);
   word-break: break-word;
+}
+
+/*
+ * timeline-posts-v1: 「N 篇帖子」 after the name on tablet and wide rows, in the
+ * metadata style; the model measures it with the name (6 px gap).
+ */
+.titleCount {
+  margin-left: 6px;
+  color: var(--yoyi-color-text-tertiary);
+  font: 400 var(--yoyi-type-metadata-size) / 18px var(--yoyi-font-interface);
+  white-space: nowrap;
 }
 
 .metaRow {
@@ -898,18 +906,12 @@
   padding: 0;
 }
 
-/* Gap, 另 N 条. */
+/* Gap. */
 .gapText {
   padding-block: 3px;
   color: var(--yoyi-color-text-tertiary);
   font-size: var(--yoyi-type-metadata-size);
   line-height: 18px;
-}
-
-.moreText {
-  padding-block: 10px;
-  color: var(--yoyi-color-text-secondary);
-  font: 500 var(--yoyi-type-label-size) / 20px var(--yoyi-font-interface);
 }
 
 /* Shelf: covers the spine and opens the 书架 sheet. */
@@ -1272,15 +1274,31 @@
   display: grid;
 }
 
+/* The title carries the top padding itself (below), so it can stick at the edge. */
 .root[data-timeline-layout="wide"] .card {
   gap: var(--yoyi-space-5);
-  padding: var(--yoyi-space-7);
+  padding: 0 var(--yoyi-space-7) var(--yoyi-space-7);
 }
 
 /* Clear of the close button. */
 .root[data-timeline-layout="wide"] .cardTitle {
   padding-right: var(--yoyi-space-8);
   line-height: 30px;
+}
+
+/*
+ * timeline-posts-v1: a card with posts scrolls, so on wide its title is the
+ * drawer's header: it sticks at the drawer's top edge, under the close
+ * button, and the rest scrolls beneath it. At rest it sits where it did.
+ */
+.root[data-timeline-layout="wide"] .card > .cardTitle {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  flex: none;
+  margin-bottom: calc(var(--yoyi-space-3) * -1);
+  padding-block: var(--yoyi-space-7) var(--yoyi-space-3);
+  background: var(--yoyi-color-background-elevated);
 }
 
 .root[data-timeline-layout="wide"] .eraHeader {

@@ -106,8 +106,6 @@ export const TIMELINE_NOW_YEAR = new Date().getFullYear();
 const SCALE_START_YEAR = -1250;
 const GROUP_FOLD_MINIMUM = 3;
 const GAP_MINIMUM_YEARS = 20;
-const YEAR_FOLD_MINIMUM = 8;
-const YEAR_FOLD_VISIBLE = 5;
 const GROUP_SUMMARY_LENGTH = 40;
 
 export type TimelineMark = "dot" | "bar" | "multi" | "ring" | "none";
@@ -149,12 +147,6 @@ export type TimelineRow =
   | TimelineEntryRow
   | TimelineGroupRow
   | (RowBase & { readonly kind: "gap"; readonly years: number })
-  | (RowBase & {
-      readonly kind: "more";
-      readonly moreKey: string;
-      readonly year: number;
-      readonly count: number;
-    })
   | (RowBase & { readonly kind: "shelf"; readonly count: number });
 
 export interface TimelineIndex {
@@ -259,11 +251,9 @@ const pushYearCluster = (
   cluster: readonly TimelineFoldItem[],
   expanded: ReadonlySet<string>,
 ) => {
+  // Every item of a year shows; only a group folds (Owner, 2026-11-07).
   // Array.prototype.sort is stable: equal ranks keep the API's position order.
   const ordered = [...cluster].sort((a, b) => itemRank(a) - itemRank(b));
-  const moreKey = `more:${chapter}:${year}`;
-  const folded = ordered.length >= YEAR_FOLD_MINIMUM && !expanded.has(moreKey);
-  const visible = folded ? ordered.slice(0, YEAR_FOLD_VISIBLE) : ordered;
   const printed = new Set<string>();
   const yearText = (start: number, end: number) => {
     const label = formatYearRange(start, end);
@@ -271,7 +261,7 @@ const pushYearCluster = (
     printed.add(label);
     return formatYearLines(start, end);
   };
-  for (const item of visible) {
+  for (const item of ordered) {
     if (item.type === "entry") {
       const { entry } = item;
       const yearLines = yearText(entry.startYear, entry.endYear);
@@ -307,20 +297,11 @@ const pushYearCluster = (
       expanded: isExpanded,
     });
   }
-  if (folded)
-    rows.push({
-      kind: "more",
-      key: moreKey,
-      moreKey,
-      chapter,
-      year,
-      count: ordered.length - YEAR_FOLD_VISIBLE,
-    });
 };
 
 /**
- * Every row in display order. `expanded` holds the opened group keys and any
- * opened 另 N 条 key; a row's position only ever depends on earlier rows.
+ * Every row in display order. `expanded` holds the opened group keys; a row's
+ * position only ever depends on earlier rows.
  */
 export const buildTimelineRows = (
   index: TimelineIndex,
@@ -379,13 +360,29 @@ export const timelineEntryTag = (
 
 export type TimelineRowLayout = "phone" | "tablet" | "wide";
 
-/** Phone meta carries the columns tablet and wide print on their own. */
+/**
+ * timeline-posts-v1: 「N 篇帖子」 for a row with posts, null for none (a row
+ * never says it has none).
+ */
+export const timelinePostCountText = (count: number): string | null =>
+  Number.isInteger(count) && count > 0 ? `${count} 篇帖子` : null;
+
+/**
+ * Phone meta carries the columns tablet and wide print on their own. A phone
+ * row with posts ends on their count instead of 保管 (Figma C2), so the meta
+ * stays one line; tablet and wide print the count after the name.
+ */
 export const timelineEntryMeta = (
   entry: TimelineEntry,
   layout: TimelineRowLayout,
+  postCount = 0,
 ): string =>
   (layout === "phone"
-    ? [entry.dateLabel, entry.province, entry.holder]
+    ? [
+        entry.dateLabel,
+        entry.province,
+        timelinePostCountText(postCount) ?? entry.holder,
+      ]
     : [entry.dateLabel]
   )
     .filter((part) => part !== null)
@@ -455,9 +452,8 @@ export const timelinePositionAt = (
   if (row === undefined) return null;
   const own = positionOf(row);
   if (own !== null) return own;
-  // A head or a gap reads as the row it introduces, 另 N 条 as the row before.
-  const step = row.kind === "more" ? -1 : 1;
-  for (let at = index + step; at >= 0 && at < rows.length; at += step) {
+  // A head or a gap reads as the row it introduces.
+  for (let at = index + 1; at < rows.length; at += 1) {
     const candidate = rows[at]!;
     if (candidate.chapter !== row.chapter) break;
     const position = positionOf(candidate);
@@ -827,17 +823,44 @@ export interface TimelineRowMetrics {
   readonly layout: TimelineRowLayout;
   readonly listWidth: number;
   readonly measure: TimelineTextMeasure;
+  /**
+   * timeline-posts-v1: the viewer's post count per entry id. The rows print
+   * the same counts, so an estimate and a rendered row agree.
+   */
+  readonly postCounts?: ReadonlyMap<string, number> | undefined;
 }
+
+/** The gap before the count that follows the name on tablet and wide rows. */
+export const TIMELINE_TITLE_COUNT_GAP = 6;
+
+/** The width the name takes on its lines, the count after it included. */
+export const timelineTitleWidth = (
+  entry: TimelineEntry,
+  layout: TimelineRowLayout,
+  measure: TimelineTextMeasure,
+  postCount = 0,
+): number => {
+  const title = entry.onAxis ? entry.title : entry.fullTitle;
+  const count = layout === "phone" ? null : timelinePostCountText(postCount);
+  return (
+    measure(title, "title") +
+    (count === null ? 0 : TIMELINE_TITLE_COUNT_GAP + measure(count, "meta"))
+  );
+};
 
 const entryRowHeight = (
   row: TimelineEntryRow,
-  { layout, listWidth, measure }: TimelineRowMetrics,
+  { layout, listWidth, measure, postCounts }: TimelineRowMetrics,
 ): number => {
   const { entry } = row;
+  const postCount = postCounts?.get(entry.id) ?? 0;
   const content = timelineContentWidth(layout, listWidth);
-  const title = entry.onAxis ? entry.title : entry.fullTitle;
-  const titleLines = lineCount(measure(title, "title"), content, 2);
-  const meta = timelineEntryMeta(entry, layout);
+  const titleLines = lineCount(
+    timelineTitleWidth(entry, layout, measure, postCount),
+    content,
+    2,
+  );
+  const meta = timelineEntryMeta(entry, layout, postCount);
   const tag = timelineEntryTag(entry);
   const metaLines =
     tag !== null
@@ -904,8 +927,6 @@ export const estimateRowHeight = (
       return 46;
     case "gap":
       return 24;
-    case "more":
-      return 40;
     case "shelf":
       return 54;
     case "entry":

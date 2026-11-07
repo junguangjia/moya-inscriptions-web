@@ -41,6 +41,8 @@ const pathSchema = (name: string) => {
   if (opaque !== undefined)
     return { type: "string", pattern: `^${opaque}-[0-9a-f]{32}$` };
   if (name === "requestId") return { type: "string", format: "uuid" };
+  if (name === "entryId")
+    return { type: "string", pattern: "^[a-z0-9-]{1,64}$" };
   if (name === "role")
     return { type: "string", enum: ["still", "motion", "package"] };
   // The relay serves every media variant, the `viewer` zoom still included.
@@ -130,6 +132,18 @@ const discoveryParameters = [
     },
   },
 ];
+/** Routes served in Production too carry their own description. */
+const routeDescriptions: Readonly<Record<string, string>> = {
+  "/v1/community/timeline":
+    "Read-only reference rows of the Home timeline, the same for every viewer; a row links a Catalog record and its image only while that record is published. Private and no-store.",
+  // timeline-posts-v1: per-viewer reads of posts attached to timeline rows.
+  "/v1/community/timeline/post-counts":
+    "How many posts each visible Home timeline row shows this viewer; rows with none are left out. A count always equals the total of that row's post list for the same viewer. Private and no-store.",
+  "/v1/community/timeline/{entryId}/posts":
+    "The posts attached to a visible Home timeline row that this viewer may see, newest attachment first: public works with active, unblocked authors, plus the viewer's own works outside the recycle bin. A hidden or unknown row answers 404. Private and no-store.",
+  "/v1/community/content/{type}/{id}/timeline-entry":
+    "The visible Home timeline row a work is attached to, or the row that links a published Catalog record, by id and titles; entry is null when there is none. A target this viewer may not see answers 404. Private and no-store.",
+};
 const operation = (
   name: string,
   path: string,
@@ -140,9 +154,8 @@ const operation = (
 ) => ({
   operationId: name,
   description:
-    path === "/v1/community/timeline"
-      ? "Read-only reference rows of the Home timeline, the same for every viewer; a row links a Catalog record and its image only while that record is published. Private and no-store."
-      : "Phase 4 Development only; absent in Production. Optional sessions personalize eligibility; malformed supplied credentials reject. All reads are private, no-store with Vary: Authorization. Unknown or duplicate query fields reject. JSON writes accept no query. RequestIdentity commands are replay-safe for their actor; comment submissions do not have a replay receipt. Removing an own work moves it to the recycle bin.",
+    routeDescriptions[path] ??
+    "Phase 4 Development only; absent in Production. Optional sessions personalize eligibility; malformed supplied credentials reject. All reads are private, no-store with Vary: Authorization. Unknown or duplicate query fields reject. JSON writes accept no query. RequestIdentity commands are replay-safe for their actor; comment submissions do not have a replay receipt. Removing an own work moves it to the recycle bin.",
   security: privateOnly ? [{ session: [] }] : [{}, { session: [] }],
   parameters: [
     ...[...path.matchAll(/\{([^}]+)\}/g)].map((m) => ({
@@ -236,6 +249,23 @@ const routes: readonly [
   ],
   ["/v1/community/timeline", "get", "readTimeline", "Timeline", null, false],
   [
+    "/v1/community/timeline/post-counts",
+    "get",
+    "readTimelinePostCounts",
+    "TimelinePostCounts",
+    null,
+    false,
+  ],
+  [
+    "/v1/community/timeline/{entryId}/posts",
+    "get",
+    "readTimelineEntryPosts",
+    "WorkPage",
+    null,
+    false,
+    true,
+  ],
+  [
     "/v1/community/content/{type}/{id}/card",
     "get",
     "readContentCard",
@@ -248,6 +278,14 @@ const routes: readonly [
     "get",
     "readOwnContentState",
     "ContentState",
+    null,
+    false,
+  ],
+  [
+    "/v1/community/content/{type}/{id}/timeline-entry",
+    "get",
+    "readContentTimelineEntry",
+    "ContentTimelineEntry",
     null,
     false,
   ],
@@ -1073,6 +1111,13 @@ const publishingRoutes: readonly [
     "setWorkVisibility",
     "WorkVisibilityResult",
     "WorkVisibilityCommand",
+  ],
+  [
+    "/v1/community/publishing/works/{workId}/timeline-entry",
+    "post",
+    "setWorkTimelineEntry",
+    "WorkTimelineEntryResult",
+    "WorkTimelineEntryCommand",
   ],
   [
     "/v1/community/publishing/sessions",

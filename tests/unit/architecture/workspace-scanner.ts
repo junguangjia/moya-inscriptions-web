@@ -1080,6 +1080,11 @@ const allowedClientContractTypes = new Set([
   "TimelineChapter",
   "TimelineEntry",
   "TimelinePrecision",
+  // timeline-posts-v1 per-viewer post reads and the author's attach command.
+  "TimelinePostCounts",
+  "ContentTimelineEntry",
+  "WorkTimelineEntryCommand",
+  "WorkTimelineEntryResult",
 
   // special-article-editor-v1 public authoring document and human-review DTOs.
   "ArticleApprovalCandidate",

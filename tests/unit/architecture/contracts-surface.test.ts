@@ -165,6 +165,9 @@ describe("contracts package surface", () => {
       "WorkSubmissionNotReady",
       "WorkSubmissionReceipt",
       "WorkSubmissionResult",
+      // timeline-posts-v1: attach, move or detach an own work's timeline entry.
+      "WorkTimelineEntryCommand",
+      "WorkTimelineEntryResult",
       "WorkVisibility",
       "WorkVisibilityCommand",
       "WorkVisibilityResult",

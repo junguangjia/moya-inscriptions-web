@@ -20,6 +20,7 @@ import type {
 import type { StorageUrlResolver } from "../../../catalog/application/ports/storage-url-resolver.js";
 import type { EditorialContentReadService } from "../../../editorial/application/services/editorial-content-read-service.js";
 import type { ThreadService } from "./thread-service.js";
+import type { TimelinePostsPort } from "../ports/timeline-posts-port.js";
 import type { DirectMessageService } from "./direct-message-service.js";
 import type {
   AuthorListQuery,
@@ -28,10 +29,16 @@ import type {
   CatalogId,
   ContentIdentity,
   ContentRelationUpdate,
+  ContentTimelineEntry,
   DiscussionTarget,
   Timeline,
+  TimelinePostCounts,
 } from "@moya/contracts";
 import { mapTimeline } from "../mappers/timeline-contract-mapper.js";
+import {
+  mapContentTimelineEntry,
+  mapTimelinePostCounts,
+} from "../mappers/timeline-posts-contract-mapper.js";
 
 const noRenditionUrls: CatalogRenditionUrls = new Map();
 
@@ -56,6 +63,8 @@ export class AuthorCommunityService {
     readonly threads?: ThreadService,
     /** content-community-completion-v1: direct messages, Development only. */
     readonly messages?: DirectMessageService,
+    /** timeline-posts-v1: posts attached to timeline rows. */
+    readonly timelinePostsPort?: TimelinePostsPort,
   ) {}
   private async cards(
     items: readonly DiscoveryCardRecord[],
@@ -274,6 +283,47 @@ export class AuthorCommunityService {
     for (const { part, error } of failed)
       resolved.push(...(await this.isolateCards(part, error, walk)));
     return resolved;
+  }
+  /**
+   * timeline-posts-v1: a visible entry's posts for this viewer. Each post is
+   * the viewer's Work read, so a page holds what the author's Works page
+   * would show of it.
+   */
+  async timelineEntryPosts(
+    entryId: string,
+    viewer: string | null,
+    query: AuthorListQuery,
+  ) {
+    if (!this.timelinePostsPort) throw new CommunityNotFoundError();
+    return this.timelinePostsPort.listTimelinePosts(entryId, viewer, query);
+  }
+  /** timeline-posts-v1: the per-row counts of those same lists for this viewer. */
+  async timelinePostCounts(viewer: string | null): Promise<TimelinePostCounts> {
+    if (!this.timelinePostsPort) throw new CommunityNotFoundError();
+    return mapTimelinePostCounts(
+      await this.timelinePostsPort.timelinePostCounts(viewer),
+    );
+  }
+  /**
+   * timeline-posts-v1: the timeline row of a work or a Catalog record. A
+   * target the viewer may not see is not found, as its card and state are.
+   * A work follows the posts list's own rule (workVisibleTo): its author
+   * reads the row of an own work that list shows them, one an operator hid
+   * or removed included, so they can take it off; a third party only while
+   * the work is public, as its card.
+   */
+  async contentTimelineEntry(
+    target: ContentIdentity,
+    viewer: string | null,
+  ): Promise<ContentTimelineEntry> {
+    if (!this.timelinePostsPort) throw new CommunityNotFoundError();
+    if (target.type === "work") {
+      const work = await this.port.readWork(target.id, viewer);
+      if (!work.available && !work.canEdit) throw new CommunityNotFoundError();
+    } else await this.assertTarget(target, viewer);
+    return mapContentTimelineEntry(
+      await this.timelinePostsPort.timelineEntryOf(target, viewer),
+    );
   }
   /** The adapter computes every total in one snapshot with the lists' own rules. */
   async profile(id: string, viewer: string | null) {

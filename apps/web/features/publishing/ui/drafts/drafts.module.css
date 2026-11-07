@@ -5,6 +5,37 @@
 
 /* -- Drafts card (first card of the owner's Works tab) ---------------------- */
 
+.toolHost {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.tool {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: var(--yoyi-space-2);
+  padding: 0 var(--yoyi-space-3);
+  color: var(--yoyi-color-text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--yoyi-radius-sm);
+  font: inherit;
+  font-size: var(--yoyi-type-body-small-size);
+  cursor: pointer;
+}
+
+.tool:focus-visible {
+  outline: 2px solid var(--yoyi-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.tool:hover {
+  color: var(--yoyi-color-seal-red);
+  background: var(--yoyi-color-background-muted);
+}
+
 .stack {
   position: relative;
   padding-top: 14px;

@@ -166,6 +166,71 @@ describe("work publishing client", () => {
     expect(JSON.parse(String(init?.body))).toEqual(command);
   });
 
+  it("attaches a work to a timeline entry with a validated command (timeline-posts-v1)", async () => {
+    const result = { workId, entryId: "row-yongping", version: 2 };
+    answer(result);
+    await expect(
+      publishingClient.setTimelineEntry(workId, {
+        requestId,
+        entryId: "row-yongping",
+      }),
+    ).resolves.toEqual(result);
+    const [path, init] = upstream.mock.calls[0]!;
+    expect(path).toBe(
+      `/api/community/publishing/works/${workId}/timeline-entry`,
+    );
+    expect(init).toMatchObject({
+      method: "POST",
+      headers: { "x-author-account": account },
+    });
+    expect(JSON.parse(String(init?.body))).toEqual({
+      requestId,
+      entryId: "row-yongping",
+    });
+    // Taking it off sends null; the answer is parsed strictly.
+    answer({ workId, entryId: null, version: 3, entry: null });
+    await refused(
+      publishingClient.setTimelineEntry(workId, { requestId, entryId: null }),
+    );
+    // A malformed entry id is never sent.
+    upstream.mockReset();
+    await refused(
+      publishingClient.setTimelineEntry(workId, {
+        requestId,
+        entryId: "Not An Id",
+      }),
+    );
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it("names a new work's timeline entry on the submission, never in its content", async () => {
+    answer(receipt);
+    await publishingClient.submit({
+      requestId,
+      holder: { draftId },
+      content: illustratedContent,
+      baseRevisionId: null,
+      timelineEntryId: "row-yongping",
+    });
+    expect(JSON.parse(String(upstream.mock.calls[0]![1]?.body))).toMatchObject({
+      timelineEntryId: "row-yongping",
+      content: illustratedContent,
+    });
+    upstream.mockReset();
+    await refused(
+      publishingClient.submit({
+        requestId,
+        holder: { draftId },
+        content: {
+          ...illustratedContent,
+          timelineEntryId: "row-yongping",
+        } as typeof illustratedContent,
+        baseRevisionId: null,
+      }),
+    );
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
   it("refuses a write before any account is confirmed", async () => {
     authorClient.setAccount(null);
     const error = await refused(

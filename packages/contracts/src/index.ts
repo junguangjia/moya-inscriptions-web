@@ -67,6 +67,7 @@ export type {
   CardGalleryEntry,
   ContentCard,
   ContentState,
+  ContentTimelineEntry,
   DiscoveryQuery,
   DiscoveryPage,
   InscriptionFilters,
@@ -74,6 +75,7 @@ export type {
   Timeline,
   TimelineChapter,
   TimelineEntry,
+  TimelinePostCounts,
   TimelinePrecision,
 } from "./schemas.js";
 export type {
@@ -145,6 +147,8 @@ export type {
   WorkSubmissionNotReady,
   WorkSubmissionReceipt,
   WorkSubmissionResult,
+  WorkTimelineEntryCommand,
+  WorkTimelineEntryResult,
   WorkVisibility,
   WorkVisibilityCommand,
   WorkVisibilityResult,

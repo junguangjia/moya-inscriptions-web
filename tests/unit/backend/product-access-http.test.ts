@@ -174,6 +174,10 @@ const protectedReads = [
   `/v1/community/content/catalog/${publishedCatalogId}/state`,
   "/v1/community/discover",
   "/v1/community/timeline",
+  // timeline-posts-v1: per-viewer post reads behind the same gate.
+  "/v1/community/timeline/post-counts",
+  "/v1/community/timeline/fictional-row/posts",
+  `/v1/community/content/catalog/${publishedCatalogId}/timeline-entry`,
   "/v1/community/authors/user-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f01",
   "/v1/community/works/work-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f01",
   "/v1/community/media/user-media-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f01",

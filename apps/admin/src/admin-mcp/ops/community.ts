@@ -395,6 +395,25 @@ const rows: Readonly<Record<CommunityOpRoute, AdminOpEntry>> = {
       },
     },
   ),
+  // timeline-posts-v1: users' posts on timeline rows, one row per work. A write
+  // names its work, so a self-only one answers its refusal.
+  "read-timeline-posts": readOp(
+    "Posts on Home timeline rows, by row or work.",
+    {
+      example: { entryId: timelineEntryExample.id, state: "attached" },
+    },
+  ),
+  "set-timeline-post": reversibleOp(
+    "Attach a public post to a timeline row, move it or take it off.",
+    "receipt",
+    {
+      example: {
+        id: example.work,
+        entryId: timelineEntryExample.id,
+        expectedVersion: 0,
+      },
+    },
+  ),
 };
 
 type CommunityOps = {

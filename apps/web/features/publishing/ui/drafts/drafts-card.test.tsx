@@ -118,6 +118,23 @@ afterEach(async () => {
 });
 
 describe("Drafts card", () => {
+  it("opens the real picker from the reading tool without creating a work-grid card", async () => {
+    client.listDrafts.mockResolvedValue(page([summary(1)], 3));
+    await render(<DraftsCard accountId={ACCOUNT} active presentation="tool" />);
+    await flush();
+    expect(card()).toBeNull();
+    const tool =
+      document.querySelector<HTMLButtonElement>("[data-drafts-tool]")!;
+    expect(tool.dataset.draftsCount).toBe("3");
+    expect(tool.getAttribute("aria-label")).toBe("草稿，3 份草稿");
+    await act(async () => tool.click());
+    await flush();
+    expect(document.querySelector("dialog")?.open).toBe(true);
+    expect(client.listDrafts).toHaveBeenCalledWith(
+      expect.objectContaining({ page: 1 }),
+      expect.any(AbortSignal),
+    );
+  });
   it("shows the account's true draft count from the first page total", async () => {
     let answer: (value: unknown) => void = () => undefined;
     client.listDrafts.mockReturnValue(

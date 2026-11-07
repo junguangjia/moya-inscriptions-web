@@ -86,6 +86,7 @@ export type {
 
 import {
   mediaFeedFramingSchema,
+  timelineEntryIdSchema,
   userWorkMediaSchema,
   workAuthorshipSchema,
   workCoverSrcSchema,
@@ -197,6 +198,7 @@ export {
   savePublishingDraftCommandSchema,
   standardComponentOutcomeSchema,
   storedPublishingTextSchema,
+  timelineEntryIdSchema,
   workAuthorshipKindSchema,
   workAuthorshipSchema,
   workCoverSrcSchema,
@@ -219,6 +221,8 @@ export {
   workSubmissionNotReadySchema,
   workSubmissionReceiptSchema,
   workSubmissionResultSchema,
+  workTimelineEntryCommandSchema,
+  workTimelineEntryResultSchema,
   workVisibilityCommandSchema,
   workVisibilityResultSchema,
   workVisibilitySchema,
@@ -290,6 +294,8 @@ export type {
   WorkSubmissionNotReady,
   WorkSubmissionReceipt,
   WorkSubmissionResult,
+  WorkTimelineEntryCommand,
+  WorkTimelineEntryResult,
   WorkVisibility,
   WorkVisibilityCommand,
   WorkVisibilityResult,
@@ -1563,7 +1569,7 @@ const timelineTextSchema = z
   .max(200)
   .refine(isWellFormedTimelineText);
 const timelineEntryFields = {
-  id: z.string().regex(/^[a-z0-9-]{1,64}$/),
+  id: timelineEntryIdSchema,
   title: timelineTextSchema,
   fullTitle: timelineTextSchema,
   startYear: timelineYearSchema,
@@ -1613,6 +1619,38 @@ export const timelineEntrySchema = z
   .superRefine(addTimelineEntryIssues);
 export const timelineSchema = z.strictObject({
   entries: z.array(timelineEntrySchema).max(TIMELINE_ENTRIES_MAXIMUM),
+});
+/**
+ * timeline-posts-v1: posts per timeline row for one viewer, only rows with at
+ * least one. A row counts the posts its post list shows that viewer (public
+ * works, plus the viewer's own works outside the recycle bin), so a count and
+ * its list always agree. A new route, so GET /v1/community/timeline keeps its
+ * response.
+ */
+export const timelinePostCountsSchema = z.strictObject({
+  counts: z
+    .record(
+      timelineEntryIdSchema,
+      z.number().int().positive().max(2_147_483_647),
+    )
+    .refine(
+      (counts) => Object.keys(counts).length <= TIMELINE_ENTRIES_MAXIMUM,
+      { message: "One count per timeline row at most" },
+    ),
+});
+/**
+ * timeline-posts-v1: the visible timeline row a work is attached to, or the
+ * row that links a published Catalog record; null when there is none. Enough
+ * to name the row ("收录于 · title") without loading the whole timeline.
+ */
+export const contentTimelineEntrySchema = z.strictObject({
+  entry: z
+    .strictObject({
+      id: timelineEntryIdSchema,
+      title: timelineTextSchema,
+      fullTitle: timelineTextSchema,
+    })
+    .nullable(),
 });
 /**
  * The validated bulk file behind `scripts/import-timeline.mjs`. `position`
@@ -1805,6 +1843,8 @@ export type TimelineChapter = z.infer<typeof timelineChapterSchema>;
 export type TimelinePrecision = z.infer<typeof timelinePrecisionSchema>;
 export type TimelineEntry = z.infer<typeof timelineEntrySchema>;
 export type Timeline = z.infer<typeof timelineSchema>;
+export type TimelinePostCounts = z.infer<typeof timelinePostCountsSchema>;
+export type ContentTimelineEntry = z.infer<typeof contentTimelineEntrySchema>;
 export type TimelineImportFile = z.infer<typeof timelineImportFileSchema>;
 export type TimelineImportEntry = z.infer<typeof timelineImportEntrySchema>;
 

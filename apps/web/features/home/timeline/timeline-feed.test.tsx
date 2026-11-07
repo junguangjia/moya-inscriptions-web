@@ -17,13 +17,38 @@ import type { HomeFeedState } from "../home-feed";
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
 const shell = vi.hoisted(() => ({
+  browseOnly: false,
   openCatalog: vi.fn(),
+  openContent: vi.fn(),
+  openEditor: vi.fn(() => true),
+  openProfile: vi.fn(),
   platform: "phone" as "phone" | "tablet" | "pc",
   readActiveScrollTop: vi.fn(() => 0),
   restoreActiveScrollTop: vi.fn(),
 }));
 vi.mock("../../product-shell/product-shell", () => ({
   useProductShell: () => shell,
+}));
+// timeline-posts-v1: the card's reads; no row has posts unless a case says.
+const posts = vi.hoisted(() => ({
+  readTimelinePosts: vi.fn(),
+}));
+vi.mock("./timeline-posts-data", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./timeline-posts-data")>()),
+  readTimelinePosts: posts.readTimelinePosts,
+}));
+const authors = vi.hoisted(() => ({
+  value: null as null | {
+    checking: boolean;
+    viewer: { id: string } | null;
+  },
+}));
+vi.mock("../../authors/author-context", () => ({
+  useOptionalAuthors: () => authors.value,
+  useAuthors: () => {
+    if (authors.value === null) throw Error("Author provider missing");
+    return authors.value;
+  },
 }));
 
 const origin = "http://localhost:3100";
@@ -99,7 +124,14 @@ const openedDialog = () => query("dialog");
 
 beforeEach(() => {
   shell.platform = "phone";
+  shell.browseOnly = false;
   shell.openCatalog.mockClear();
+  shell.openContent.mockClear();
+  shell.openEditor.mockClear();
+  shell.openProfile.mockClear();
+  authors.value = null;
+  posts.readTimelinePosts.mockReset();
+  posts.readTimelinePosts.mockResolvedValue({ items: [], total: 0, page: 1 });
   shell.restoreActiveScrollTop.mockClear();
   shell.readActiveScrollTop.mockClear();
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
@@ -283,7 +315,11 @@ describe("rows", () => {
     expect(dialog?.textContent).toContain("511 · 虚元八年");
     expect(dialog?.textContent).toContain("地点");
     expect(dialog?.textContent).not.toContain("保管");
-    expect(dialog?.textContent).not.toContain("上传");
+    // timeline-posts-v1 (Figma B5): the action and its line, which is also
+    // all a row without posts says.
+    expect(dialog?.textContent).toContain("上传这件碑帖");
+    expect(dialog?.textContent).toContain("发布后会出现在这个词条下。");
+    expect(dialog?.querySelector("[data-timeline-post-grid]")).toBeNull();
     expect(shell.openCatalog).not.toHaveBeenCalled();
     // The modal holds its own history entry; Back closes it.
     expect(window.history.state?.phase4Dialog).toBeTruthy();
@@ -352,20 +388,148 @@ describe("rows", () => {
     shell.readActiveScrollTop.mockReturnValue(0);
   });
 
-  it("opens a crowded year in place from 另 N 条", () => {
+  it("shows every row of a crowded year at once", () => {
     render(
       true,
       small(
-        Array.from({ length: 9 }, () =>
-          entry({ startYear: 720, endYear: 720 }),
+        Array.from({ length: 9 }, (_, at) =>
+          entry({ startYear: 720, endYear: 720, title: `虚构同年碑${at}` }),
         ),
       ),
     );
-    expect(queryAll("[data-timeline-row='entry']")).toHaveLength(5);
-    const more = query("[data-timeline-row='more'] button");
-    expect(more?.textContent).toContain("另 4 条");
-    click(more);
-    expect(queryAll("[data-timeline-row='entry']")).toHaveLength(9);
+    expect(
+      queryAll("[data-timeline-row='entry']").map((row) => row.textContent),
+    ).toEqual(
+      Array.from({ length: 9 }, (_, at) =>
+        expect.stringContaining(`虚构同年碑${at}`),
+      ),
+    );
+    expect(text()).not.toMatch(/另 \d+ 条/u);
+  });
+});
+
+describe("posts on the timeline (timeline-posts-v1)", () => {
+  const unlinked = () =>
+    entry({ id: "row-post", fullTitle: "北魏虚构永平碑", title: "永平碑" });
+  const openCard = () => {
+    render(true, small([unlinked()]));
+    const row = queryAll("[data-timeline-row='entry'] button")[0]!;
+    click(row);
+    return { dialog: openedDialog() as HTMLElement, row };
+  };
+
+  it("closes the card, then opens the editor on the entry from the row", async () => {
+    authors.value = {
+      checking: false,
+      viewer: { id: `user-${"a".repeat(32)}` },
+    };
+    const { dialog, row } = openCard();
+    click(dialog.querySelector("[data-timeline-upload]"));
+    expect(shell.openEditor).not.toHaveBeenCalled();
+    await waitForHistory(() => expect(openedDialog()).toBeNull());
+    expect(shell.openEditor).toHaveBeenCalledWith(
+      { type: "new", timelineEntryId: "row-post" },
+      row,
+    );
+  });
+
+  it("sends a guest's upload and attach to sign-in", async () => {
+    const { dialog, row } = openCard();
+    click(dialog.querySelector("[data-timeline-upload]"));
+    await waitForHistory(() => expect(openedDialog()).toBeNull());
+    expect(shell.openEditor).not.toHaveBeenCalled();
+    expect(shell.openProfile).toHaveBeenCalledWith(null, row);
+
+    shell.openProfile.mockClear();
+    const again = openCard();
+    click(again.dialog.querySelector("[data-timeline-attach]"));
+    await waitForHistory(() => expect(openedDialog()).toBeNull());
+    expect(shell.openProfile).toHaveBeenCalledWith(null, again.row);
+  });
+
+  it("opens a post's work from the card through the row", async () => {
+    posts.readTimelinePosts.mockResolvedValue({
+      items: [
+        {
+          id: `work-${"1".repeat(32)}`,
+          authorId: `user-${"a".repeat(32)}`,
+          authorName: "虚构作者",
+          title: "访碑记",
+          text: "",
+          media: [],
+          available: true,
+          canEdit: false,
+          firstPublishedAt: "2026-11-07T00:00:00.000Z",
+        },
+      ],
+      total: 1,
+      page: 1,
+    });
+    const { dialog, row } = openCard();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(posts.readTimelinePosts).toHaveBeenCalledWith(
+      "row-post",
+      1,
+      6,
+      expect.any(AbortSignal),
+    );
+    const cell = dialog.querySelector("[data-timeline-post]");
+    expect(cell?.getAttribute("aria-label")).toBe("访碑记");
+    click(cell);
+    await waitForHistory(() => expect(openedDialog()).toBeNull());
+    expect(shell.openContent).toHaveBeenCalledWith(
+      { type: "work", id: `work-${"1".repeat(32)}` },
+      row,
+    );
+  });
+
+  it("keeps the posts and drops both actions when browse-only", () => {
+    shell.browseOnly = true;
+    const { dialog } = openCard();
+    expect(dialog.querySelector("[data-timeline-upload]")).toBeNull();
+    expect(dialog.querySelector("[data-timeline-attach]")).toBeNull();
+    expect(dialog.querySelector("[data-timeline-posts]")).not.toBeNull();
+  });
+
+  it("ends a phone row on its count instead of 保管, and says nothing for none", () => {
+    act(() => {
+      root.render(
+        <TimelineFeed
+          active
+          postCounts={new Map([["row-post", 4]])}
+          state={small([
+            unlinked(),
+            entry({ id: "row-none", startYear: 701, endYear: 701 }),
+          ])}
+        />,
+      );
+    });
+    const [counted, none] = queryAll("[data-timeline-row='entry'] button");
+    expect(counted?.textContent).toContain("虚元八年 · 虚构西州 · 4 篇帖子");
+    expect(counted?.textContent).not.toContain("虚构碑林");
+    expect(none?.textContent).toContain("虚构碑林");
+    expect(none?.textContent).not.toContain("篇帖子");
+  });
+
+  it("prints the count after the name on a tablet, keeping 保管 in its column", () => {
+    shell.platform = "tablet";
+    vi.stubGlobal("innerWidth", 834);
+    act(() => {
+      root.render(
+        <TimelineFeed
+          active
+          postCounts={new Map([["row-post", 12]])}
+          state={small([unlinked()])}
+        />,
+      );
+    });
+    const button = queryAll("[data-timeline-row='entry'] button")[0];
+    expect(
+      button?.querySelector("[data-timeline-post-count]")?.textContent,
+    ).toBe("12 篇帖子");
+    expect(button?.textContent).toContain("虚构碑林");
   });
 });
 
@@ -463,6 +627,26 @@ describe("the shelf", () => {
     );
     // Back lands on the entry the reader opened, not the top of the list.
     expect(document.activeElement?.textContent).toContain("唐虚构西碑0");
+  });
+
+  it("closes the shelf, then opens the editor from its pill for a card's upload", async () => {
+    authors.value = {
+      checking: false,
+      viewer: { id: `user-${"a".repeat(32)}` },
+    };
+    const dialog = openShelf();
+    const pill = query("[data-timeline-row='shelf'] button");
+    click(
+      [...dialog.querySelectorAll("button")].find((button) =>
+        button.textContent?.includes("唐虚构西碑0"),
+      ),
+    );
+    click(dialog.querySelector("[data-timeline-upload]"));
+    await waitForHistory(() => expect(openedDialog()).toBeNull());
+    expect(shell.openEditor).toHaveBeenCalledWith(
+      { type: "new", timelineEntryId: expect.any(String) },
+      pill,
+    );
   });
 
   it("closes first, then opens Detail for a linked row", async () => {

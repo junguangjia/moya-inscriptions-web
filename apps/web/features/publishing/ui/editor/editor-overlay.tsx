@@ -120,6 +120,17 @@ const editorTitle = (target: EditorTarget, state: EditorSessionState | null) =>
       ? "参与话题"
       : "发布作品";
 
+/**
+ * A session's target without the entry a tap of 「上传这件碑帖」 brought
+ * (timeline-posts-v1); the same target when it carries none.
+ */
+const withoutTappedEntry = (target: EditorTarget): EditorTarget =>
+  target.type !== "new" || target.timelineEntryId === undefined
+    ? target
+    : target.threadId === undefined
+      ? { type: "new" }
+      : { type: "new", threadId: target.threadId };
+
 type UploadSessionApi = ReturnType<typeof useUploadSession>;
 
 /** Said when a new work leaves from 编辑 with its photos kept as a draft (r4 §2.3). */
@@ -376,6 +387,42 @@ const EditorSessionHost = ({
       );
     };
   }, [deps, registry, shown]);
+
+  // timeline-posts-v1: 「上传这件碑帖」 (the 词条卡, Catalog Detail, 收录于)
+  // opens a new work on its entry. When that reaches an unfinished new-work
+  // session, the tapped entry wins: it becomes the session's 关联词条 through
+  // the store's edit path, saved like any choice, and the rest of the draft
+  // stays. Once per tap, for the target this host opened with, after a local
+  // recovery has replaced the state. The tap is then spent: the history entry
+  // and the session's own target drop it, so a reload (or a phone tab the
+  // browser restored), Back then Forward, or 返回正在编辑的作品 never applies
+  // it again over the author's later choice.
+  const [openedWith] = useState(target);
+  const tappedEntry =
+    target === openedWith && target.type === "new"
+      ? (target.timelineEntryId ?? null)
+      : null;
+  const tappedEntryApplied = useRef(false);
+  const shownReady =
+    shown !== null &&
+    state !== null &&
+    state.key === shown.key &&
+    state.phase === "ready";
+  useEffect(() => {
+    if (
+      shown === null ||
+      !shownReady ||
+      tappedEntry === null ||
+      tappedEntryApplied.current
+    )
+      return;
+    tappedEntryApplied.current = true;
+    shown.setTimelineEntry(tappedEntry);
+    const sessionTarget = shown.get().target;
+    const spent = withoutTappedEntry(sessionTarget);
+    if (spent !== sessionTarget) shown.setTarget(spent);
+    controls.replaceTarget(spent);
+  }, [controls, shown, shownReady, tappedEntry]);
 
   if (resolution === null || resolution.kind === "create")
     return <ReturnBar controls={controls} title={title} />;

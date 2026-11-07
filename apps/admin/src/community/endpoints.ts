@@ -81,6 +81,10 @@ import {
   operatorTimelineSummarySchema,
   reorderTimelineCommandSchema,
   timelineReorderResultSchema,
+  adminSetTimelinePostRequestSchema,
+  operatorTimelinePostPageSchema,
+  operatorTimelinePostQuerySchema,
+  operatorTimelinePostSchema,
 } from "@moya/contracts/internal/community-operator";
 import { z } from "zod";
 import {
@@ -580,7 +584,9 @@ export const communityOperationDefinitions = {
   "read-timeline": define({
     input: operatorTimelineQuerySchema,
     output: { owner: operatorTimelinePageSchema },
-    run: ({ ids, onAxis, disputed, ...query }, call) =>
+    // `posts=any` is the default, and a Backend before timeline-posts-v1 knows
+    // no such key, so it is sent only when it narrows.
+    run: ({ ids, onAxis, disputed, posts, ...query }, call) =>
       call(
         "GET",
         `timeline-entries${toQuery({
@@ -588,6 +594,7 @@ export const communityOperationDefinitions = {
           ids: ids?.join(","),
           onAxis: onAxis === undefined ? undefined : String(onAxis),
           disputed: disputed === undefined ? undefined : String(disputed),
+          posts: posts === "any" ? undefined : posts,
         })}`,
       ),
   }),
@@ -611,6 +618,19 @@ export const communityOperationDefinitions = {
     input: reorderTimelineCommandSchema,
     output: { owner: timelineReorderResultSchema },
     run: (command, call) => call("POST", "timeline-order", command),
+  }),
+  // timeline-posts-v1: users' posts on the Home timeline's rows. AI never
+  // reads a self-only work here, and a write on one answers its refusal.
+  "read-timeline-posts": define({
+    input: operatorTimelinePostQuerySchema,
+    output: { owner: operatorTimelinePostPageSchema },
+    run: (query, call) => call("GET", `timeline-posts${toQuery(query)}`),
+  }),
+  "set-timeline-post": define({
+    input: adminSetTimelinePostRequestSchema,
+    output: { owner: operatorTimelinePostSchema },
+    run: ({ id, ...command }, call) =>
+      call("POST", `timeline-posts/${segment(id)}`, command),
   }),
 };
 

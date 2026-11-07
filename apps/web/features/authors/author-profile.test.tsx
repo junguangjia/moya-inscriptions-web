@@ -6,6 +6,7 @@ import type { AuthorProfile, UserWork } from "@moya/contracts";
 import type { Root } from "react-dom/client";
 const {
   profileRead,
+  backgroundEditorProps,
   command,
   directEntry,
   comments,
@@ -36,9 +37,10 @@ const {
   navigatePrimary: vi.fn(),
   openTopic: vi.fn(),
   profileRead: vi.fn(),
+  backgroundEditorProps: vi.fn(),
   onViewChange: vi.fn(),
   shell: {
-    platform: "phone" as "phone" | "pc",
+    platform: "phone" as "phone" | "tablet" | "pc",
     activeDestination: "user" as "home" | "user",
     feedLayout: "double",
   },
@@ -120,6 +122,36 @@ vi.mock("./avatar-editor", () => ({
   ),
 }));
 vi.mock("./profile-list", () => ({ ProfileList: () => null }));
+vi.mock("./author-dialog", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./author-dialog")>();
+  return {
+    ...actual,
+    AuthorDialog: (props: Parameters<typeof actual.AuthorDialog>[0]) =>
+      props.title === "个人资料" ? (
+        <div role="dialog" aria-label={props.title}>
+          <button aria-label="返回" onClick={props.onClose}>
+            返回
+          </button>
+          {props.children}
+        </div>
+      ) : (
+        <actual.AuthorDialog {...props} />
+      ),
+  };
+});
+vi.mock("../publishing/ui/drafts/drafts-card", () => ({
+  DraftsCard: ({
+    accountId,
+    presentation,
+  }: {
+    accountId: string;
+    presentation?: string;
+  }) => (
+    <button data-drafts-tool={presentation === "tool" ? accountId : undefined}>
+      草稿
+    </button>
+  ),
+}));
 vi.mock("./people-list", () => ({
   PeopleList: ({
     list,
@@ -143,7 +175,12 @@ vi.mock("./profile-editor", () => ({
   ),
 }));
 vi.mock("./profile-background-editor", () => ({
-  ProfileBackgroundEditor: () => <div data-background-editor="" />,
+  ProfileBackgroundEditor: (props: {
+    header?: import("react").RefObject<HTMLElement | null>;
+  }) => {
+    backgroundEditorProps(props);
+    return <div data-background-editor="" />;
+  },
 }));
 vi.mock("./profile-settings", () => ({
   ProfileSettings: ({
@@ -186,6 +223,7 @@ import {
   MyComments,
 } from "./author-profile";
 import presentation from "../user/user-presentation.module.css";
+import * as profileCoverColors from "./profile-cover-colors";
 import {
   readWorkSnapshot,
   recordWorkSnapshots,
@@ -249,10 +287,12 @@ const button = (node: HTMLElement, text: string) =>
   );
 beforeEach(() => {
   beforeCommit.mockReset();
+  backgroundEditorProps.mockReset();
   settingsDeparture.deferClose = false;
   settingsDeparture.pendingClose = null;
   settingsDeparture.completions = 0;
   shell.platform = "phone";
+  shell.feedLayout = "double";
   shell.activeDestination = "user";
   author.cache.clear();
   author.viewer = { id: OWNER };
@@ -273,6 +313,326 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 describe("Owner profile controls", () => {
+  it.each([0, 400])(
+    "retires photo-stage state when switching to reading at scroll %i",
+    async (top) => {
+      const mediaId = `user-media-${"a".repeat(32)}`;
+      profileRead.mockResolvedValue({
+        ...profile(true),
+        background: {
+          id: mediaId,
+          src: `/api/community/media/${mediaId}`,
+          width: 1600,
+          height: 1200,
+        },
+      });
+      const node = await render();
+      const page = node.querySelector<HTMLElement>("[data-author-profile]")!;
+      const originalBackgroundAction = button(node, "编辑主页背景")!;
+      expect(page.querySelector("header")?.getAttribute("data-theme")).toBe(
+        "dark",
+      );
+      if (top > 0) {
+        await act(async () => {
+          page.scrollTop = top;
+          page.dispatchEvent(new Event("scroll"));
+        });
+        expect(button(node, "编辑主页背景")?.hasAttribute("inert")).toBe(true);
+      }
+      shell.feedLayout = "single";
+      await act(async () => root!.render(overlay()));
+      expect(page.hasAttribute("data-profile-reading")).toBe(true);
+      expect(page.hasAttribute("data-cover-snap")).toBe(false);
+      expect(page.style.getPropertyValue("--cover-pinned")).toBe("");
+      expect(page.querySelector("header")?.hasAttribute("data-theme")).toBe(
+        false,
+      );
+      const readingBackgroundAction = button(node, "编辑主页背景")!;
+      expect(originalBackgroundAction.isConnected).toBe(false);
+      expect(readingBackgroundAction).not.toBe(originalBackgroundAction);
+      expect(readingBackgroundAction.closest("header")).toBe(
+        page.querySelector(":scope > header"),
+      );
+      await act(async () => readingBackgroundAction.click());
+      expect(node.querySelector("[data-background-editor]")).not.toBeNull();
+    },
+  );
+  it.each([
+    ["phone", "single"],
+    ["pc", "single"],
+    ["phone", "double"],
+    ["pc", "double"],
+  ] as const)(
+    "uses the correct background-editor reference for %s / %s",
+    async (platform, layout) => {
+      shell.platform = platform;
+      shell.feedLayout = layout;
+      const node = await render();
+      const measuredHeader = node.querySelector<HTMLElement>(
+        "[data-profile-background-slot]",
+      )!;
+      await act(async () => button(node, "编辑主页背景")!.click());
+      expect(node.querySelector("[data-background-editor]")).not.toBeNull();
+      const props = backgroundEditorProps.mock.calls.at(-1)![0];
+      if (layout === "single") {
+        // Omitting the ref makes ProfileBackgroundEditor use REFERENCE_HEADERS;
+        // a compact identity must never become a crop reference.
+        expect(props).not.toHaveProperty("header");
+      } else {
+        expect(props.header.current).toBe(measuredHeader);
+      }
+    },
+  );
+
+  it.each(["phone", "tablet"] as const)(
+    "returns focus to the profile-info toggle after closing its %s dialog without scrolling",
+    async (platform) => {
+      shell.platform = platform;
+      shell.feedLayout = "single";
+      const node = await render();
+      const page = node.querySelector<HTMLElement>("[data-author-profile]")!;
+      page.scrollTop = 213;
+      const toggle = button(node, "个人资料")!;
+      toggle.focus();
+      await act(async () => toggle.click());
+      const dialog = node.querySelector<HTMLElement>(
+        '[role="dialog"][aria-label="个人资料"]',
+      )!;
+      const close = dialog.querySelector<HTMLButtonElement>("button")!;
+      close.focus();
+      expect(document.activeElement).toBe(close);
+      const restore = vi.spyOn(toggle, "focus");
+      try {
+        await act(async () => close.click());
+        expect(
+          node.querySelector('[role="dialog"][aria-label="个人资料"]'),
+        ).toBeNull();
+        expect(document.activeElement).toBe(toggle);
+        expect(restore).toHaveBeenCalledWith({ preventScroll: true });
+        expect(page.scrollTop).toBe(213);
+      } finally {
+        restore.mockRestore();
+      }
+    },
+  );
+
+  it("samples the remounted normal cover after its first load happened in reading mode", async () => {
+    shell.feedLayout = "single";
+    const mediaId = `user-media-${"a".repeat(32)}`;
+    profileRead.mockResolvedValue({
+      ...profile(true),
+      background: {
+        id: mediaId,
+        src: `/api/community/media/${mediaId}`,
+        width: 1600,
+        height: 1200,
+      },
+    });
+    const sampler = vi
+      .spyOn(profileCoverColors, "coverColors")
+      .mockReturnValue({
+        tint: "rgb(120 140 130)",
+        shade: "rgb(20 18 16)",
+      });
+    try {
+      const node = await render();
+      const page = node.querySelector<HTMLElement>("[data-author-profile]")!;
+      const readingImage = page.querySelector<HTMLImageElement>(
+        '[aria-label="主页背景"] img',
+      )!;
+      await act(async () => {
+        readingImage.dispatchEvent(new Event("load"));
+      });
+      expect(sampler).not.toHaveBeenCalled();
+      shell.feedLayout = "double";
+      await act(async () => root!.render(overlay()));
+      const normalImage = page.querySelector<HTMLImageElement>(
+        '[aria-label="主页背景"] img',
+      )!;
+      expect(normalImage).not.toBe(readingImage);
+      expect(readingImage.isConnected).toBe(false);
+      expect(normalImage.getAttribute("src")).toBe(
+        readingImage.getAttribute("src"),
+      );
+      await act(async () => {
+        normalImage.dispatchEvent(new Event("load"));
+        await Promise.resolve();
+      });
+      expect(sampler).toHaveBeenCalledWith(normalImage);
+      expect(page.style.getPropertyValue("--cover-tint")).toBe(
+        "rgb(120 140 130)",
+      );
+      expect(page.style.getPropertyValue("--cover-shade-photo")).toBe(
+        "rgb(20 18 16)",
+      );
+    } finally {
+      sampler.mockRestore();
+    }
+  });
+
+  it("remounts in both mode directions and resamples the normal cover after a round trip", async () => {
+    const mediaId = `user-media-${"a".repeat(32)}`;
+    profileRead.mockResolvedValue({
+      ...profile(true),
+      background: {
+        id: mediaId,
+        src: `/api/community/media/${mediaId}`,
+        width: 1600,
+        height: 1200,
+      },
+    });
+    const sampler = vi
+      .spyOn(profileCoverColors, "coverColors")
+      .mockReturnValue({
+        tint: "rgb(120 140 130)",
+        shade: "rgb(20 18 16)",
+      });
+    try {
+      const node = await render();
+      const page = node.querySelector<HTMLElement>("[data-author-profile]")!;
+      const original = page.querySelector<HTMLImageElement>(
+        '[aria-label="主页背景"] img',
+      )!;
+      await act(async () => {
+        original.dispatchEvent(new Event("load"));
+        await Promise.resolve();
+      });
+      expect(page.style.getPropertyValue("--cover-tint")).toBe(
+        "rgb(120 140 130)",
+      );
+      sampler.mockClear();
+      shell.feedLayout = "single";
+      await act(async () => root!.render(overlay()));
+      const reading = page.querySelector<HTMLImageElement>(
+        '[aria-label="主页背景"] img',
+      )!;
+      expect(reading).not.toBe(original);
+      await act(async () => {
+        reading.dispatchEvent(new Event("load"));
+      });
+      expect(sampler).not.toHaveBeenCalled();
+      sampler.mockReturnValue({ tint: "rgb(30 50 70)", shade: "rgb(3 5 7)" });
+      shell.feedLayout = "double";
+      await act(async () => root!.render(overlay()));
+      const final = page.querySelector<HTMLImageElement>(
+        '[aria-label="主页背景"] img',
+      )!;
+      expect(final).not.toBe(reading);
+      await act(async () => {
+        final.dispatchEvent(new Event("load"));
+        await Promise.resolve();
+      });
+      expect(sampler).toHaveBeenCalledWith(final);
+      expect(page.style.getPropertyValue("--cover-tint")).toBe("rgb(30 50 70)");
+      expect(page.style.getPropertyValue("--cover-shade-photo")).toBe(
+        "rgb(3 5 7)",
+      );
+    } finally {
+      sampler.mockRestore();
+    }
+  });
+
+  it("uses a compact calligraphy profile with three public tabs and owner-only tools", async () => {
+    shell.feedLayout = "single";
+    profileRead.mockResolvedValue({
+      ...profile(true),
+      bio: "真实简介",
+      ipLocation: "中国",
+    });
+    const node = await render();
+    expect(
+      node.querySelector("[data-profile-reading][data-author-profile]"),
+    ).not.toBeNull();
+    expect(
+      Array.from(node.querySelectorAll('[role="tab"]')).map(
+        (n) => n.textContent,
+      ),
+    ).toEqual(["作品", "收藏", "喜欢"]);
+    expect(
+      node
+        .querySelector("[data-drafts-tool]")
+        ?.getAttribute("data-drafts-tool"),
+    ).toBe(OWNER);
+    expect(button(node, "总览")).toBeUndefined();
+    expect(button(node, "展读")).toBeUndefined();
+    const toggle = button(node, "个人资料")!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(node.querySelector("[data-profile-ip-location]")).toBeNull();
+    await act(async () => toggle.click());
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      node.querySelector('[role="dialog"][aria-label="个人资料"]'),
+    ).not.toBeNull();
+    expect(
+      node.querySelector("[data-profile-ip-location]")?.closest("[hidden]"),
+    ).toBeNull();
+    expect(
+      node.querySelector("[data-profile-ip-location]")?.textContent,
+    ).toContain("中国");
+    expect(
+      node
+        .querySelector("[data-author-profile]")
+        ?.getAttribute("data-cover-snap"),
+    ).toBeNull();
+  });
+
+  it("keeps separate reading offsets through collections and the private history tool", async () => {
+    shell.feedLayout = "single";
+    const node = await render(
+      <div data-primary-destination="user">
+        <AuthorProfilePage entryId="reading-scroll" onBack={vi.fn()} />
+      </div>,
+    );
+    const scroller = node.querySelector<HTMLElement>(
+      '[data-primary-destination="user"]',
+    )!;
+    await act(async () => {
+      scroller.scrollTop = 320;
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    await act(async () => button(node, "收藏")!.click());
+    expect(scroller.scrollTop).toBe(0);
+    await act(async () => {
+      scroller.scrollTop = 180;
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    await act(async () => button(node, "作品")!.click());
+    expect(scroller.scrollTop).toBe(320);
+    await act(async () => button(node, "个人资料")!.click());
+    expect(scroller.scrollTop).toBe(320);
+    await act(async () =>
+      node
+        .querySelector<HTMLButtonElement>(
+          '[role="dialog"][aria-label="个人资料"] button',
+        )!
+        .click(),
+    );
+    expect(scroller.scrollTop).toBe(320);
+    await act(async () => button(node, "历史")!.click());
+    expect(
+      node
+        .querySelector("[data-profile-pager]")
+        ?.getAttribute("data-profile-pager"),
+    ).toBe("history");
+    expect(node.querySelector('[role="tablist"]')?.hasAttribute("hidden")).toBe(
+      true,
+    );
+    await act(async () => button(node, "返回作品")!.click());
+    expect(scroller.scrollTop).toBe(320);
+    await act(async () => button(node, "收藏")!.click());
+    expect(scroller.scrollTop).toBe(180);
+  });
+
+  it("never gives the other reader the author's draft/history tools", async () => {
+    shell.feedLayout = "single";
+    author.viewer = { id: VISITOR };
+    profileRead.mockResolvedValue(profile(false));
+    const node = await render();
+    expect(node.querySelector("[data-drafts-tool]")).toBeNull();
+    expect(button(node, "历史")).toBeUndefined();
+    expect(button(node, "编辑主页背景")).toBeUndefined();
+    expect(node.querySelectorAll('[role="tab"]')).toHaveLength(3);
+  });
   it("keeps edit info in Settings and exposes only an icon button for the cover", async () => {
     const node = await render();
     expect(node.querySelector('[aria-label="主页背景"]')).not.toBeNull();

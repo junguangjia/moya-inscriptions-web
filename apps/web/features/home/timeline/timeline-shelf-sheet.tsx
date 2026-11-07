@@ -14,6 +14,7 @@ import styles from "./timeline.module.css";
 
 import type { TimelineChapter, TimelineEntry } from "@moya/contracts";
 import type { AuthorDialogNavigationHandle } from "../../authors/author-dialog";
+import type { TimelineEntryPostsActions } from "./timeline-entry-posts";
 import type { TimelineShelfMode } from "./timeline-model";
 
 const MODES: readonly {
@@ -59,12 +60,17 @@ const ShelfEntry = ({
  * a linked row closes the sheet first because Detail sits under the top layer.
  */
 export const TimelineShelfSheet = ({
+  browseOnly = false,
+  cardActions,
   chapter,
   closeRequested,
   entries,
   onClose,
   onOpenCatalog,
 }: {
+  readonly browseOnly?: boolean;
+  /** timeline-posts-v1: what an opened card's posts may do (they close the sheet first). */
+  readonly cardActions?: (entry: TimelineEntry) => TimelineEntryPostsActions;
   readonly chapter: TimelineChapter;
   readonly closeRequested: boolean;
   readonly entries: readonly TimelineEntry[];
@@ -142,7 +148,11 @@ export const TimelineShelfSheet = ({
           ) : null}
         </header>
         {card !== null ? (
-          <TimelineEntryCard entry={card} />
+          <TimelineEntryCard
+            actions={cardActions?.(card)}
+            browseOnly={browseOnly}
+            entry={card}
+          />
         ) : (
           <>
             <div className={styles.shelfTabs} role="tablist">

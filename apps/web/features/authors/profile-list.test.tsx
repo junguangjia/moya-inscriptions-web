@@ -5,21 +5,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Root } from "react-dom/client";
 
-const { works, collection, identity, author, draftsCard, cardItems } =
-  vi.hoisted(() => ({
-    works: vi.fn(),
-    collection: vi.fn(),
-    // Whom the author client reads for; an account change starts a new epoch.
-    identity: { account: null as string | null, epoch: 0 },
-    cardItems: [] as import("@moya/contracts").ContentCard[],
-    author: {
-      cache: new Map<string, unknown>(),
-      viewer: null as { id: string } | null,
-      revision: 1,
-      guestFavorites: [],
-    },
-    draftsCard: vi.fn(),
-  }));
+const {
+  works,
+  collection,
+  identity,
+  author,
+  draftsCard,
+  cardItems,
+  layout,
+  readingGrid,
+} = vi.hoisted(() => ({
+  works: vi.fn(),
+  collection: vi.fn(),
+  // Whom the author client reads for; an account change starts a new epoch.
+  identity: { account: null as string | null, epoch: 0 },
+  cardItems: [] as import("@moya/contracts").ContentCard[],
+  author: {
+    cache: new Map<string, unknown>(),
+    viewer: null as { id: string } | null,
+    revision: 1,
+    guestFavorites: [],
+  },
+  draftsCard: vi.fn(),
+  layout: { feedLayout: "double" as "single" | "double" },
+  readingGrid: vi.fn(),
+}));
 vi.mock("./author-data", async (original) => ({
   ...(await original<typeof import("./author-data")>()),
   authorClient: {
@@ -32,7 +42,25 @@ vi.mock("./author-data", async (original) => ({
 }));
 vi.mock("./author-context", () => ({ useAuthors: () => author }));
 vi.mock("../product-shell/product-shell", () => ({
-  useProductShell: () => ({ platform: "phone", feedLayout: "double" }),
+  useProductShell: () => ({ platform: "phone", feedLayout: layout.feedLayout }),
+}));
+vi.mock("./profile-reading-grid", () => ({
+  ProfileReadingGrid: (props: {
+    items: import("@moya/contracts").ContentCard[];
+  }) => {
+    readingGrid(props);
+    return (
+      <div data-fixed-reading="">
+        {props.items.map((item) => (
+          <article
+            key={item.target.id}
+            data-work-card={item.target.id}
+            role="listitem"
+          />
+        ))}
+      </div>
+    );
+  },
 }));
 vi.mock("./content-card", () => ({
   ContentCard: ({ item }: { item: import("@moya/contracts").ContentCard }) => {
@@ -48,6 +76,7 @@ vi.mock("../publishing/ui/drafts/drafts-card", () => ({
 }));
 
 import { ProfileList, workCard, workCardExcerpt } from "./profile-list";
+import { AuthorRequestError } from "./author-data";
 import { readWorkSnapshot, resetWorkSnapshots } from "./work-snapshots";
 
 import type { UserWork, WorkMedia } from "@moya/contracts";
@@ -124,6 +153,7 @@ const cards = (node: HTMLElement) =>
   );
 
 beforeEach(() => {
+  layout.feedLayout = "double";
   author.cache.clear();
   author.viewer = null;
   identity.account = null;
@@ -146,6 +176,107 @@ afterEach(async () => {
 });
 
 describe("Profile works drafts card", () => {
+  it("uses the fixed reading renderer with the owner's real works and keeps drafts out of its grid", async () => {
+    layout.feedLayout = "single";
+    author.viewer = { id: OWNER };
+    works.mockResolvedValue({
+      items: [work(1), work(2, { available: false })],
+      total: 2,
+      page: 1,
+      pageSize: 12,
+    });
+    const node = await render({ authorId: OWNER, owner: true });
+    expect(node.querySelector("[data-fixed-reading]")).not.toBeNull();
+    expect(cards(node)).toEqual([work(1).id, work(2).id]);
+    expect(draftsCard).not.toHaveBeenCalled();
+    expect(readingGrid.mock.lastCall?.[0]).toMatchObject({
+      platform: "phone",
+      active: true,
+      label: "作品展读",
+    });
+    expect(readWorkSnapshot(work(2).id)?.id).toBe(work(2).id);
+    expect(works).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits unavailable third-party works in reading mode", async () => {
+    layout.feedLayout = "single";
+    author.viewer = { id: VISITOR };
+    works.mockResolvedValue({
+      items: [work(1), work(2, { available: false })],
+      total: 2,
+      page: 1,
+      pageSize: 12,
+    });
+    const node = await render({ authorId: OWNER, owner: false });
+    expect(cards(node)).toEqual([work(1).id]);
+  });
+
+  it.each([
+    { feedLayout: "single", tab: "favorites" },
+    { feedLayout: "single", tab: "likes" },
+    { feedLayout: "double", tab: "favorites" },
+    { feedLayout: "double", tab: "likes" },
+  ] as const)(
+    "clears cached $tab after a deferred 403 and recovers on retry in $feedLayout layout",
+    async ({ feedLayout, tab }) => {
+      layout.feedLayout = feedLayout;
+      author.viewer = { id: VISITOR };
+      const cacheKey = `list:${VISITOR}:entry-1:${OWNER}:${tab}`;
+      const cached = workCard(work(1));
+      const refreshed = workCard(work(2));
+      author.cache.set(cacheKey, {
+        items: [cached],
+        page: 1,
+        total: 1,
+        search: "",
+        kind: "all",
+        revision: author.revision,
+      });
+      let refuse!: (reason: unknown) => void;
+      const pending = new Promise<never>((_, reject) => {
+        refuse = reject;
+      });
+      collection.mockReturnValueOnce(pending).mockResolvedValueOnce({
+        items: [refreshed],
+        total: 1,
+        page: 1,
+        pageSize: 12,
+      });
+
+      const node = await render({ authorId: OWNER, owner: false, tab });
+      expect(cards(node)).toEqual([cached.target.id]);
+      expect(node.querySelector('[role="alert"]')).toBeNull();
+      expect(node.querySelector('[role="status"]')?.textContent).toContain(
+        "正在加载",
+      );
+      expect(collection).toHaveBeenCalledOnce();
+      expect(collection).toHaveBeenLastCalledWith(OWNER, tab, 1, "", "all");
+
+      await act(async () => {
+        refuse(new AuthorRequestError(403, "该列表仅自己可见"));
+        await pending.catch(() => undefined);
+      });
+      expect(cards(node)).toEqual([]);
+      expect(author.cache.get(cacheKey)).toMatchObject({ items: [], total: 0 });
+      expect(node.querySelector('[role="alert"]')?.textContent).toContain(
+        "该列表仅自己可见",
+      );
+
+      const retry = node.querySelector<HTMLButtonElement>(
+        '[role="alert"] button',
+      )!;
+      expect(retry).not.toBeNull();
+      await act(async () => retry.click());
+      expect(collection).toHaveBeenCalledTimes(2);
+      expect(collection).toHaveBeenNthCalledWith(2, OWNER, tab, 1, "", "all");
+      expect(cards(node)).toEqual([refreshed.target.id]);
+      expect(node.querySelector('[role="alert"]')).toBeNull();
+      expect(author.cache.get(cacheKey)).toMatchObject({
+        items: [refreshed],
+        total: 1,
+      });
+    },
+  );
   it("finishes revalidating cached Works when StrictMode replays the mount", async () => {
     author.viewer = { id: OWNER };
     author.cache.set(`list:${OWNER}:entry-1:${OWNER}:works`, {

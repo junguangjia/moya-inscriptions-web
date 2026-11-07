@@ -29,7 +29,7 @@ fails past 7200 bytes, 80% of the cap.
 | tools/list, profile `operate`                                         | 9819  | 12000   | 82%  | 2181 |
 | tools/list, profile `full`                                            | 10626 | 12000   | 89%  | 1374 |
 | tools/list, profile `full` on the wire, with room for 1 tools to come | 11670 | 12000   | 97%  | 330  |
-| `admin_actions` index                                                 | 5573  | 9000    | 62%  | 3427 |
+| `admin_actions` index                                                 | 5663  | 9000    | 63%  | 3337 |
 
 | Tool                         | Bytes listed |
 | ---------------------------- | ------------ |
@@ -45,9 +45,9 @@ fails past 7200 bytes, 80% of the cap.
 | `admin_execute`              | 1200         |
 | `admin_execute_irreversible` | 806          |
 
-## Ops (138)
+## Ops (140)
 
-### community (49)
+### community (51)
 
 | Op                                        | Class                                                   | Tool                         | Completion | Recovery         | Credential | Switch | Built |
 | ----------------------------------------- | ------------------------------------------------------- | ---------------------------- | ---------- | ---------------- | ---------- | ------ | ----- |
@@ -100,6 +100,8 @@ fails past 7200 bytes, 80% of the cap.
 | `community.create-timeline-entry`         | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | yes   |
 | `community.update-timeline-entry`         | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | yes   |
 | `community.reorder-timeline`              | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | yes   |
+| `community.read-timeline-posts`           | read                                                    | `admin_read`                 | sync       | state_idempotent | community  |        | yes   |
+| `community.set-timeline-post`             | reversible                                              | `admin_execute`              | sync       | receipt          | community  |        | yes   |
 
 ### editorial (17)
 

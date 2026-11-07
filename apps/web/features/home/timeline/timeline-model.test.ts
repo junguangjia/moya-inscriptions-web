@@ -30,6 +30,9 @@ import {
   timelineEntryTag,
   timelineMediaBox,
   timelinePositionAt,
+  timelinePostCountText,
+  timelineTitleWidth,
+  TIMELINE_TITLE_COUNT_GAP,
   timelineShelfMeta,
   timelineWindowRange,
   timelineYearFraction,
@@ -461,55 +464,67 @@ describe("group folding", () => {
   });
 });
 
-describe("the year fold", () => {
+describe("a crowded year", () => {
   const crowded = (count: number) =>
     Array.from({ length: count }, () =>
       entry({ startYear: 720, endYear: 720 }),
     );
 
-  it("shows every row of a year below eight", () => {
-    const rows = inChapter(
-      buildTimelineRows(buildTimelineIndex(crowded(7))),
-      "唐",
-    );
-    expect(kinds(rows).filter((kind) => kind === "entry")).toHaveLength(7);
-    expect(kinds(rows)).not.toContain("more");
+  it("shows every row of a year, however many share it", () => {
+    for (const count of [7, 8, 9, 40]) {
+      const rows = inChapter(
+        buildTimelineRows(buildTimelineIndex(crowded(count))),
+        "唐",
+      );
+      expect(kinds(rows)).toEqual([
+        "head",
+        ...Array.from({ length: count }, () => "entry"),
+      ]);
+    }
   });
 
-  it("shows five plus 另 N 条 at eight or more, counted after group folding", () => {
-    const rows = inChapter(
-      buildTimelineRows(buildTimelineIndex(crowded(9))),
-      "唐",
-    );
-    expect(kinds(rows).filter((kind) => kind === "entry")).toHaveLength(5);
-    expect(rows.at(-1)).toMatchObject({
-      kind: "more",
-      count: 4,
-      moreKey: "more:唐:720",
+  it("folds only a group, in the media, group, text order", () => {
+    const withMedia = entry({
+      startYear: 720,
+      endYear: 720,
+      catalogId: "catalog-crowded" as never,
+      media: media(600, 400),
     });
-
-    const withGroup = inChapter(
+    const rows = inChapter(
       buildTimelineRows(
         buildTimelineIndex([
           ...crowded(6),
           ...groupMembers(3, "g4", { startYear: 720, endYear: 720 }),
+          ...groupMembers(2, "pair", { startYear: 720, endYear: 720 }),
+          withMedia,
         ]),
       ),
       "唐",
-    );
-    expect(kinds(withGroup)).not.toContain("more");
+    ).slice(1);
+    expect(kinds(rows)).toEqual([
+      "entry",
+      "group",
+      ...Array.from({ length: 8 }, () => "entry"),
+    ]);
+    expect(rows[0]).toMatchObject({ kind: "entry", entry: withMedia });
+    expect(rows[1]).toMatchObject({ kind: "group", groupKey: "axis:唐:g4" });
   });
 
-  it("opens in place", () => {
-    const rows = inChapter(
-      buildTimelineRows(
-        buildTimelineIndex(crowded(9)),
-        new Set(["more:唐:720"]),
-      ),
-      "唐",
+  it("reads each of its rows as that year, and jumps to its first row", () => {
+    const list = buildTimelineRows(
+      buildTimelineIndex([
+        ...crowded(12),
+        entry({ startYear: 730, endYear: 730 }),
+      ]),
     );
-    expect(kinds(rows).filter((kind) => kind === "entry")).toHaveLength(9);
-    expect(kinds(rows)).not.toContain("more");
+    const first = list.findIndex((row) => row.kind === "entry");
+    for (let at = first; at < first + 12; at += 1)
+      expect(timelinePositionAt(list, at)).toMatchObject({
+        label: "720 · 唐",
+        year: 720,
+      });
+    expect(rowIndexForYear(list, 720)).toBe(first);
+    expect(rowIndexForYear(list, 721)).toBe(first + 12);
   });
 });
 
@@ -520,16 +535,7 @@ describe("positions", () => {
 
   it("covers every row kind in the generated dataset", () => {
     expect(new Set(kinds(rows))).toEqual(
-      new Set([
-        "head",
-        "empty",
-        "marker",
-        "entry",
-        "group",
-        "gap",
-        "more",
-        "shelf",
-      ]),
+      new Set(["head", "empty", "marker", "entry", "group", "gap", "shelf"]),
     );
     expect(new Set(rows.map(({ key }) => key)).size).toBe(rows.length);
   });
@@ -592,18 +598,6 @@ describe("positions", () => {
     const head = list.findIndex((row) => row.key === "head:唐");
     expect(timelinePositionAt(list, head)?.label).toBe("唐");
     expect(timelinePositionAt(list, list.length)).toBeNull();
-  });
-
-  it("reads 另 N 条 as the row before it", () => {
-    const list = buildTimelineRows(
-      buildTimelineIndex(
-        Array.from({ length: 8 }, () =>
-          entry({ startYear: 720, endYear: 720, polity: "唐" }),
-        ),
-      ),
-    );
-    const more = list.findIndex((row) => row.kind === "more");
-    expect(timelinePositionAt(list, more)?.label).toBe("720 · 唐");
   });
 
   it("lands a year with no entry on the next entry", () => {
@@ -861,6 +855,93 @@ describe("row text", () => {
   });
 });
 
+describe("post counts on rows (timeline-posts-v1)", () => {
+  const row = (overrides: Partial<TimelineEntry>) => {
+    const found = buildTimelineRows(
+      buildTimelineIndex([entry(overrides)]),
+    ).find((candidate) => candidate.kind === "entry");
+    if (found === undefined || found.kind !== "entry")
+      throw new Error("No entry row");
+    return found;
+  };
+
+  it("says 「N 篇帖子」 for posts and nothing for none", () => {
+    expect(timelinePostCountText(1)).toBe("1 篇帖子");
+    expect(timelinePostCountText(128)).toBe("128 篇帖子");
+    expect(timelinePostCountText(0)).toBeNull();
+    expect(timelinePostCountText(-1)).toBeNull();
+    expect(timelinePostCountText(1.5)).toBeNull();
+  });
+
+  it("ends a phone meta on the count instead of 保管 (Figma C2)", () => {
+    expect(timelineEntryMeta(entry(), "phone", 3)).toBe(
+      "虚元八年 · 虚构西州 · 3 篇帖子",
+    );
+    expect(timelineEntryMeta(entry({ holder: null }), "phone", 2)).toBe(
+      "虚元八年 · 虚构西州 · 2 篇帖子",
+    );
+    expect(timelineEntryMeta(entry(), "phone", 0)).toBe(
+      "虚元八年 · 虚构西州 · 虚构碑林",
+    );
+    // Tablet and wide print the count after the name, not in the meta.
+    expect(timelineEntryMeta(entry(), "tablet", 3)).toBe("虚元八年");
+    expect(timelineEntryMeta(entry(), "wide", 3)).toBe("虚元八年");
+  });
+
+  it("estimates a phone row from the meta it renders with its count", () => {
+    // A tagged meta wraps; the count replaces 保管, so the estimate must
+    // measure the count's text, which the row then prints.
+    const tagged = row({
+      id: "row-tagged",
+      title: "虚构南寺碑",
+      disputed: true,
+      dateLabel: "虚构定年",
+      province: "虚构西州",
+      holder: "虚构".repeat(30),
+    });
+    const counts = new Map([["row-tagged", 3]]);
+    const metaWidth = (count: number) =>
+      estimateTextWidth(
+        timelineEntryMeta(tagged.entry, "phone", count),
+        "meta",
+      );
+    const column = timelineContentWidth("phone", 390) - 30;
+    const lines = (count: number) =>
+      Math.min(2, Math.max(1, Math.ceil(metaWidth(count) / column)));
+    expect(lines(0)).toBe(2);
+    expect(lines(3)).toBe(1);
+    expect(estimateRowHeight(tagged, metrics)).toBe(20 + 24 + 2 + 18 * 2);
+    expect(estimateRowHeight(tagged, { ...metrics, postCounts: counts })).toBe(
+      20 + 24 + 2 + 18 * lines(3),
+    );
+  });
+
+  it("measures a wide or tablet name with the count after it", () => {
+    const named = row({ id: "row-named", title: "虚构南寺碑".repeat(5) });
+    const title = estimateTextWidth(named.entry.title, "title");
+    expect(timelineTitleWidth(named.entry, "wide", estimateTextWidth, 0)).toBe(
+      title,
+    );
+    expect(timelineTitleWidth(named.entry, "wide", estimateTextWidth, 7)).toBe(
+      title + TIMELINE_TITLE_COUNT_GAP + estimateTextWidth("7 篇帖子", "meta"),
+    );
+    // A phone row carries its count in the meta, never after the name.
+    expect(timelineTitleWidth(named.entry, "phone", estimateTextWidth, 7)).toBe(
+      title,
+    );
+    // 400 of title in a 392 tablet column: two lines once the count follows.
+    const tablet = { ...metrics, layout: "tablet", listWidth: 834 } as const;
+    const fits = row({ id: "row-fits", title: "虚构南寺碑".repeat(4) + "碑" });
+    expect(estimateRowHeight(fits, tablet)).toBe(16 + 24 + 18);
+    expect(
+      estimateRowHeight(fits, {
+        ...tablet,
+        postCounts: new Map([["row-fits", 12]]),
+      }),
+    ).toBe(16 + 48 + 18);
+  });
+});
+
 describe("row heights", () => {
   const row = (overrides: Partial<TimelineEntry>) => {
     const found = buildTimelineRows(
@@ -920,19 +1001,6 @@ describe("row heights", () => {
     expect(
       estimateRowHeight({ kind: "marker", key: "m", chapter: "当代" }, metrics),
     ).toBe(46);
-    expect(
-      estimateRowHeight(
-        {
-          kind: "more",
-          key: "x",
-          moreKey: "x",
-          chapter: "唐",
-          year: 720,
-          count: 4,
-        },
-        metrics,
-      ),
-    ).toBe(40);
   });
 
   it("wraps a tagged meta to two lines and keeps a plain meta on one", () => {

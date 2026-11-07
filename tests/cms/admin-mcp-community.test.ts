@@ -378,6 +378,11 @@ const seed = async () => {
       ids.hiddenTimelineEntry,
     ],
   );
+  // timeline-posts-v1: a public post and a self-only one on the same row.
+  await db.query(
+    "INSERT INTO community.timeline_entry_posts(work_id,entry_id,attached_by,updated_by) VALUES($1,$3,'author','author'),($2,$3,'author','author')",
+    [ids.publicWork, ids.selfWork, ids.timelineEntry],
+  );
   const reporting = new PostgresCommunityReportingAdapter(setup);
   const standard = (id: string, description: string) =>
     reporting.create(ids.reporter, {
@@ -1011,6 +1016,12 @@ const inputsOf = (op: string): readonly Json[] => {
       { linked: "not_published", issue: "not_published" },
     ],
     "read-timeline-summary": [{}],
+    "read-timeline-posts": [
+      {},
+      { entryId: ids.timelineEntry },
+      { workId: ids.selfWork },
+      { state: "attached", attachedBy: "author" },
+    ],
   };
   const listed: Readonly<Record<string, string>> = {
     "list.comments": "read-comments",
@@ -1145,6 +1156,61 @@ describe("the canary sweep", () => {
     // No count in SQL: the summary is the timeline's count.
     expect(
       await read({ op: "community.read-timeline", view: "count" }),
+    ).toMatchObject({ ok: false, code: "INPUT_INVALID" });
+  });
+
+  // timeline-posts-v1: the row holds a public post and a self-only one.
+  it("reads a row's posts with no self-only one, names it withheld, and counts the public post alone", async () => {
+    const posts = await ok("admin_read", {
+      op: "community.read-timeline-posts",
+      view: "full",
+      input: { entryId: ids.timelineEntry },
+    });
+    expect(posts.data.total).toBe(1);
+    expect(posts.data.rows).toEqual([
+      {
+        id: ids.publicWork,
+        title: hostile("worktitle"),
+        state: "attached",
+        version: 1,
+        entryId: ids.timelineEntry,
+        publiclyVisible: true,
+        authorId: ids.author,
+        attachedBy: "author",
+        updatedAt: expect.any(String),
+        withheldEntryId: null,
+        workState: "visible",
+        attachedAt: expect.any(String),
+        updatedBy: "author",
+      },
+    ]);
+    expect(posts.meta.excluded).toEqual(["self_only"]);
+    expect(expectHostileMarked(posts)).toBe(1);
+    // Asked by its id, the self-only work is no row and no total.
+    const asked = await ok("admin_read", {
+      op: "community.read-timeline-posts",
+      input: { workId: ids.selfWork },
+    });
+    expect(asked.data).toMatchObject({ rows: [], total: 0 });
+    expect(asked.meta.excluded).toEqual(["self_only"]);
+    const row = await ok("admin_read", {
+      op: "community.read-timeline",
+      input: { id: ids.timelineEntry },
+    });
+    expect(row.data.rows[0].postCount).toBe(1);
+    expect(
+      (
+        await ok("admin_read", {
+          op: "community.read-timeline",
+          input: { posts: "without" },
+        })
+      ).data.rows.map(({ id }: Json) => id),
+    ).toEqual([ids.hiddenTimelineEntry]);
+    expect(
+      await ok("admin_read", { op: "community.read-timeline-summary" }),
+    ).toMatchObject({ data: { posts: { total: 1, entries: 1 } } });
+    expect(
+      await read({ op: "community.read-timeline-posts", view: "count" }),
     ).toMatchObject({ ok: false, code: "INPUT_INVALID" });
   });
 

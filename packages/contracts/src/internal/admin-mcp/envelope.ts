@@ -2,9 +2,10 @@ import { z } from "zod";
 
 /**
  * The contract the native path serves, as its serverInfo.version and in admin_whoami. A
- * date: raised on the day a release changes what a client sees, and only then.
+ * date: raised on the day a release changes what a client sees, and only then; a second
+ * such release on one day adds `.2` (then `.3`).
  */
-export const ADMIN_MCP_CONTRACT_VERSION = "2026-11-07";
+export const ADMIN_MCP_CONTRACT_VERSION = "2026-11-07.2";
 
 /**
  * Server-only result shape of the `admin_*` MCP tools (admin-mcp-completion-v1,

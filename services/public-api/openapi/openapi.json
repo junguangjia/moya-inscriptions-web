@@ -17851,6 +17851,42 @@
         ],
         "type": "object"
       },
+      "ContentTimelineEntry": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "entry": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "fullTitle": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "id": {
+                    "pattern": "^[a-z0-9-]{1,64}$",
+                    "type": "string"
+                  },
+                  "title": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": ["id", "title", "fullTitle"],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": ["entry"],
+        "type": "object"
+      },
       "CreateArticleAuthoringGrantCommand": {
         "$defs": {
           "__schema0": {
@@ -19498,6 +19534,10 @@
                 },
                 "maxItems": 20,
                 "type": "array"
+              },
+              "timelineEntryId": {
+                "pattern": "^[a-z0-9-]{1,64}$",
+                "type": "string"
               },
               "title": {
                 "maxLength": 4400,
@@ -22680,6 +22720,10 @@
                 "maxItems": 20,
                 "type": "array"
               },
+              "timelineEntryId": {
+                "pattern": "^[a-z0-9-]{1,64}$",
+                "type": "string"
+              },
               "title": {
                 "maxLength": 4400,
                 "type": "string"
@@ -24535,6 +24579,10 @@
                             "maxItems": 20,
                             "type": "array"
                           },
+                          "timelineEntryId": {
+                            "pattern": "^[a-z0-9-]{1,64}$",
+                            "type": "string"
+                          },
                           "title": {
                             "maxLength": 4400,
                             "type": "string"
@@ -24876,6 +24924,10 @@
                             "maxItems": 20,
                             "type": "array"
                           },
+                          "timelineEntryId": {
+                            "pattern": "^[a-z0-9-]{1,64}$",
+                            "type": "string"
+                          },
                           "title": {
                             "maxLength": 4400,
                             "type": "string"
@@ -25200,6 +25252,10 @@
                 },
                 "maxItems": 20,
                 "type": "array"
+              },
+              "timelineEntryId": {
+                "pattern": "^[a-z0-9-]{1,64}$",
+                "type": "string"
               },
               "title": {
                 "maxLength": 4400,
@@ -25966,6 +26022,10 @@
                                     "maxItems": 20,
                                     "type": "array"
                                   },
+                                  "timelineEntryId": {
+                                    "pattern": "^[a-z0-9-]{1,64}$",
+                                    "type": "string"
+                                  },
                                   "title": {
                                     "maxLength": 4400,
                                     "type": "string"
@@ -26321,6 +26381,10 @@
                                     "maxItems": 20,
                                     "type": "array"
                                   },
+                                  "timelineEntryId": {
+                                    "pattern": "^[a-z0-9-]{1,64}$",
+                                    "type": "string"
+                                  },
                                   "title": {
                                     "maxLength": 4400,
                                     "type": "string"
@@ -26651,6 +26715,10 @@
                         },
                         "maxItems": 20,
                         "type": "array"
+                      },
+                      "timelineEntryId": {
+                        "pattern": "^[a-z0-9-]{1,64}$",
+                        "type": "string"
                       },
                       "title": {
                         "maxLength": 4400,
@@ -27225,6 +27293,10 @@
                             "maxItems": 20,
                             "type": "array"
                           },
+                          "timelineEntryId": {
+                            "pattern": "^[a-z0-9-]{1,64}$",
+                            "type": "string"
+                          },
                           "title": {
                             "maxLength": 4400,
                             "type": "string"
@@ -27565,6 +27637,10 @@
                             },
                             "maxItems": 20,
                             "type": "array"
+                          },
+                          "timelineEntryId": {
+                            "pattern": "^[a-z0-9-]{1,64}$",
+                            "type": "string"
                           },
                           "title": {
                             "maxLength": 4400,
@@ -27933,6 +28009,10 @@
                                     "maxItems": 20,
                                     "type": "array"
                                   },
+                                  "timelineEntryId": {
+                                    "pattern": "^[a-z0-9-]{1,64}$",
+                                    "type": "string"
+                                  },
                                   "title": {
                                     "maxLength": 4400,
                                     "type": "string"
@@ -28288,6 +28368,10 @@
                                     "maxItems": 20,
                                     "type": "array"
                                   },
+                                  "timelineEntryId": {
+                                    "pattern": "^[a-z0-9-]{1,64}$",
+                                    "type": "string"
+                                  },
                                   "title": {
                                     "maxLength": 4400,
                                     "type": "string"
@@ -28618,6 +28702,10 @@
                         },
                         "maxItems": 20,
                         "type": "array"
+                      },
+                      "timelineEntryId": {
+                        "pattern": "^[a-z0-9-]{1,64}$",
+                        "type": "string"
                       },
                       "title": {
                         "maxLength": 4400,
@@ -29714,6 +29802,10 @@
                                 "maxItems": 20,
                                 "type": "array"
                               },
+                              "timelineEntryId": {
+                                "pattern": "^[a-z0-9-]{1,64}$",
+                                "type": "string"
+                              },
                               "title": {
                                 "maxLength": 4400,
                                 "type": "string"
@@ -30064,6 +30156,10 @@
                                 "maxItems": 20,
                                 "type": "array"
                               },
+                              "timelineEntryId": {
+                                "pattern": "^[a-z0-9-]{1,64}$",
+                                "type": "string"
+                              },
                               "title": {
                                 "maxLength": 4400,
                                 "type": "string"
@@ -30394,6 +30490,10 @@
                     },
                     "maxItems": 20,
                     "type": "array"
+                  },
+                  "timelineEntryId": {
+                    "pattern": "^[a-z0-9-]{1,64}$",
+                    "type": "string"
                   },
                   "title": {
                     "maxLength": 4400,
@@ -30986,6 +31086,10 @@
                 "maxItems": 20,
                 "type": "array"
               },
+              "timelineEntryId": {
+                "pattern": "^[a-z0-9-]{1,64}$",
+                "type": "string"
+              },
               "title": {
                 "maxLength": 4400,
                 "type": "string"
@@ -31333,6 +31437,10 @@
                       },
                       "maxItems": 20,
                       "type": "array"
+                    },
+                    "timelineEntryId": {
+                      "pattern": "^[a-z0-9-]{1,64}$",
+                      "type": "string"
                     },
                     "title": {
                       "maxLength": 4400,
@@ -32255,6 +32363,10 @@
                 "maxItems": 20,
                 "type": "array"
               },
+              "timelineEntryId": {
+                "pattern": "^[a-z0-9-]{1,64}$",
+                "type": "string"
+              },
               "title": {
                 "maxLength": 4400,
                 "type": "string"
@@ -32848,6 +32960,26 @@
           }
         },
         "required": ["entries"],
+        "type": "object"
+      },
+      "TimelinePostCounts": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "counts": {
+            "additionalProperties": {
+              "exclusiveMinimum": 0,
+              "maximum": 2147483647,
+              "type": "integer"
+            },
+            "propertyNames": {
+              "pattern": "^[a-z0-9-]{1,64}$",
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": ["counts"],
         "type": "object"
       },
       "UpdateArticleDraftCommand": {
@@ -34674,6 +34806,10 @@
             "maxItems": 20,
             "type": "array"
           },
+          "timelineEntryId": {
+            "pattern": "^[a-z0-9-]{1,64}$",
+            "type": "string"
+          },
           "title": {
             "maxLength": 4400,
             "type": "string"
@@ -35502,6 +35638,10 @@
           "threadId": {
             "pattern": "^thread-[0-9a-f]{32}$",
             "type": "string"
+          },
+          "timelineEntryId": {
+            "pattern": "^[a-z0-9-]{1,64}$",
+            "type": "string"
           }
         },
         "required": ["requestId", "holder", "content", "baseRevisionId"],
@@ -35612,6 +35752,58 @@
             "type": "object"
           }
         ]
+      },
+      "WorkTimelineEntryCommand": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "entryId": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z0-9-]{1,64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "requestId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          }
+        },
+        "required": ["requestId", "entryId"],
+        "type": "object"
+      },
+      "WorkTimelineEntryResult": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "entryId": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z0-9-]{1,64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "maximum": 2147483647,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "workId": {
+            "pattern": "^work-[0-9a-f]{32}$",
+            "type": "string"
+          }
+        },
+        "required": ["workId", "entryId", "version"],
+        "type": "object"
       },
       "WorkVisibilityCommand": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -39815,6 +40007,101 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ContentState"
+                }
+              }
+            },
+            "description": "Committed result; private responses are never cached."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "A valid session is required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unavailable or private subject"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Version or request identity conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Strict input validation failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Service unavailable; no success is claimed"
+          }
+        },
+        "security": [
+          {},
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/community/content/{type}/{id}/timeline-entry": {
+      "get": {
+        "description": "The visible Home timeline row a work is attached to, or the row that links a published Catalog record, by id and titles; entry is null when there is none. A target this viewer may not see answers 404. Private and no-store.",
+        "operationId": "readContentTimelineEntry",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "type",
+            "required": true,
+            "schema": {
+              "enum": ["catalog", "work"],
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Stored opaque identity; never derive a Catalog identity from a user work.",
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentTimelineEntry"
                 }
               }
             },
@@ -46773,6 +47060,110 @@
         ]
       }
     },
+    "/v1/community/publishing/works/{workId}/timeline-entry": {
+      "post": {
+        "description": "Work publishing, Development only; absent in Production. Requires the session credential; responses are private, no-store with Vary: Authorization. Commands require x-author-account equal to the session account and accept no query; list reads accept only page and pageSize, and other reads accept no query. A rule rejection answers INVALID_INPUT whose message is the rule code; a stale state answers CONFLICT; a conflicting draft save answers 200 with status conflict and keeps both versions. RequestIdentity commands are replay-safe for their actor. A readiness check names the holder's current content: the Backend starts any missing edit derivative at once and answers which item keys still wait or failed, plus the thumb edit key of ready edited items; it has no other effect and is not receipted.",
+        "operationId": "setWorkTimelineEntry",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workId",
+            "required": true,
+            "schema": {
+              "pattern": "^work-[0-9a-f]{32}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The authenticated account; a missing or different account rejects. Does not authorize a request.",
+            "in": "header",
+            "name": "x-author-account",
+            "required": true,
+            "schema": {
+              "pattern": "^user-[0-9a-f]{32}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkTimelineEntryCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkTimelineEntryResult"
+                }
+              }
+            },
+            "description": "Committed result; private responses are never cached."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "A valid session is required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unavailable, private, deleted or not owned subject; includes a late write to a deleted draft"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Stale state (for example a draft already submitted or an ended session), or a request identity reused with different content"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Strict input validation failed or a publishing rule rejected the command; the message carries the rule code"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Service or media unavailable; no success is claimed"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/v1/community/publishing/works/{workId}/visibility": {
       "post": {
         "description": "Work publishing, Development only; absent in Production. Requires the session credential; responses are private, no-store with Vary: Authorization. Commands require x-author-account equal to the session account and accept no query; list reads accept only page and pageSize, and other reads accept no query. A rule rejection answers INVALID_INPUT whose message is the rule code; a stale state answers CONFLICT; a conflicting draft save answers 200 with status conflict and keeps both versions. RequestIdentity commands are replay-safe for their actor. A readiness check names the holder's current content: the Backend starts any missing edit derivative at once and answers which item keys still wait or failed, plus the thumb edit key of ready edited items; it has no other effect and is not receipted.",
@@ -48210,6 +48601,186 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Timeline"
+                }
+              }
+            },
+            "description": "Committed result; private responses are never cached."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "A valid session is required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unavailable or private subject"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Version or request identity conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Strict input validation failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Service unavailable; no success is claimed"
+          }
+        },
+        "security": [
+          {},
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/community/timeline/{entryId}/posts": {
+      "get": {
+        "description": "The posts attached to a visible Home timeline row that this viewer may see, newest attachment first: public works with active, unblocked authors, plus the viewer's own works outside the recycle bin. A hidden or unknown row answers 404. Private and no-store.",
+        "operationId": "readTimelineEntryPosts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "entryId",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z0-9-]{1,64}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "default": 1,
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pageSize",
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkPage"
+                }
+              }
+            },
+            "description": "Committed result; private responses are never cached."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "A valid session is required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unavailable or private subject"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Version or request identity conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Strict input validation failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Service unavailable; no success is claimed"
+          }
+        },
+        "security": [
+          {},
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/community/timeline/post-counts": {
+      "get": {
+        "description": "How many posts each visible Home timeline row shows this viewer; rows with none are left out. A count always equals the total of that row's post list for the same viewer. Private and no-store.",
+        "operationId": "readTimelinePostCounts",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimelinePostCounts"
                 }
               }
             },
