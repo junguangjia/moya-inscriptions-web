@@ -32566,6 +32566,290 @@
         ],
         "type": "object"
       },
+      "Timeline": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "entries": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "catalogId": {
+                  "anyOf": [
+                    {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "pattern": "^\\S+$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "chapter": {
+                  "enum": [
+                    "商",
+                    "西周",
+                    "春秋",
+                    "战国",
+                    "秦",
+                    "西汉",
+                    "东汉",
+                    "三国",
+                    "两晋",
+                    "南北朝",
+                    "隋",
+                    "唐",
+                    "五代十国",
+                    "宋辽金夏",
+                    "元",
+                    "明",
+                    "清",
+                    "民国",
+                    "当代"
+                  ],
+                  "type": "string"
+                },
+                "dateLabel": {
+                  "anyOf": [
+                    {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "disputed": {
+                  "type": "boolean"
+                },
+                "endYear": {
+                  "maximum": 3000,
+                  "minimum": -3000,
+                  "type": "integer"
+                },
+                "fullTitle": {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "groupId": {
+                  "anyOf": [
+                    {
+                      "pattern": "^[a-z0-9-]{1,64}$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "groupTitle": {
+                  "anyOf": [
+                    {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "holder": {
+                  "anyOf": [
+                    {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "id": {
+                  "pattern": "^[a-z0-9-]{1,64}$",
+                  "type": "string"
+                },
+                "media": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "alt": {
+                          "maxLength": 2000,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "height": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
+                        "id": {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "pattern": "^\\S+$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "image",
+                          "type": "string"
+                        },
+                        "placeholderColor": {
+                          "pattern": "^#[0-9a-f]{6}$",
+                          "type": "string"
+                        },
+                        "renditions": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "contentType": {
+                                "enum": ["image/webp", "image/jpeg"],
+                                "type": "string"
+                              },
+                              "height": {
+                                "exclusiveMinimum": 0,
+                                "maximum": 65535,
+                                "type": "integer"
+                              },
+                              "src": {
+                                "allOf": [
+                                  {
+                                    "format": "uri",
+                                    "type": "string"
+                                  },
+                                  {
+                                    "pattern": "^[Hh][Tt][Tt][Pp][Ss]?:\\/\\/",
+                                    "type": "string"
+                                  }
+                                ]
+                              },
+                              "width": {
+                                "exclusiveMinimum": 0,
+                                "maximum": 65535,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "src",
+                              "width",
+                              "height",
+                              "contentType"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 8,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "src": {
+                          "allOf": [
+                            {
+                              "format": "uri",
+                              "type": "string"
+                            },
+                            {
+                              "pattern": "^[Hh][Tt][Tt][Pp][Ss]?:\\/\\/",
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        "width": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "kind",
+                        "src",
+                        "alt",
+                        "width",
+                        "height"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "onAxis": {
+                  "type": "boolean"
+                },
+                "polity": {
+                  "anyOf": [
+                    {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "precision": {
+                  "enum": ["year", "reign", "period", "multi", "dynasty"],
+                  "type": "string"
+                },
+                "province": {
+                  "anyOf": [
+                    {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "startYear": {
+                  "maximum": 3000,
+                  "minimum": -3000,
+                  "type": "integer"
+                },
+                "title": {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "title",
+                "fullTitle",
+                "startYear",
+                "endYear",
+                "precision",
+                "dateLabel",
+                "onAxis",
+                "chapter",
+                "polity",
+                "disputed",
+                "groupId",
+                "groupTitle",
+                "province",
+                "holder",
+                "catalogId",
+                "media"
+              ],
+              "type": "object"
+            },
+            "maxItems": 5000,
+            "type": "array"
+          }
+        },
+        "required": ["entries"],
+        "type": "object"
+      },
       "UpdateArticleDraftCommand": {
         "$defs": {
           "__schema0": {
@@ -47909,6 +48193,81 @@
           }
         },
         "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/community/timeline": {
+      "get": {
+        "description": "Read-only reference rows of the Home timeline, the same for every viewer; a row links a Catalog record and its image only while that record is published. Private and no-store.",
+        "operationId": "readTimeline",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Timeline"
+                }
+              }
+            },
+            "description": "Committed result; private responses are never cached."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "A valid session is required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unavailable or private subject"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Version or request identity conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Strict input validation failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Service unavailable; no success is claimed"
+          }
+        },
+        "security": [
+          {},
           {
             "session": []
           }

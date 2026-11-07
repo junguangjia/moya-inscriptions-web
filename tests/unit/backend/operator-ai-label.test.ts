@@ -49,6 +49,9 @@ const start = async () => {
   const threadService = {
     operatorCreate: vi.fn(async () => ({})),
   };
+  const timelineService = {
+    operatorCreate: vi.fn(async () => ({})),
+  };
   const directMessageService = {
     operatorRead: vi.fn(async () => ({})),
   };
@@ -59,6 +62,7 @@ const start = async () => {
     moderationService: {},
     aiServices: { moderationService: {} },
     threadService,
+    timelineService,
     directMessageService,
     contentOperatorPort,
     operatorCredential: ownerToken,
@@ -88,7 +92,13 @@ const start = async () => {
     );
     expect(response.status, route).toBe(200);
   };
-  return { post, threadService, directMessageService, contentOperatorPort };
+  return {
+    post,
+    threadService,
+    timelineService,
+    directMessageService,
+    contentOperatorPort,
+  };
 };
 
 describe("the label the operator services are handed", () => {
@@ -100,6 +110,11 @@ describe("the label the operator services are handed", () => {
     const command = { requestId: randomUUID() };
     await backend.post(token, "threads", command);
     expect(backend.threadService.operatorCreate).toHaveBeenCalledWith(
+      label,
+      command,
+    );
+    await backend.post(token, "timeline-entries", command);
+    expect(backend.timelineService.operatorCreate).toHaveBeenCalledWith(
       label,
       command,
     );

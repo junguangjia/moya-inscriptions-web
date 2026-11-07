@@ -1075,6 +1075,11 @@ const allowedClientContractTypes = new Set([
   "DiscoveryQuery",
   "InscriptionFilters",
   "InscriptionFilterOptions",
+  // home-timeline-v1 read-only timeline DTOs.
+  "Timeline",
+  "TimelineChapter",
+  "TimelineEntry",
+  "TimelinePrecision",
 
   // special-article-editor-v1 public authoring document and human-review DTOs.
   "ArticleApprovalCandidate",

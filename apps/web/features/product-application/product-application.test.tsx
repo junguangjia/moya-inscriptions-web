@@ -83,7 +83,7 @@ describe("ProductApplication", () => {
     const markup = renderToStaticMarkup(
       <ProductApplication
         comments={null}
-        initialHomeFeed="nearby"
+        initialHomeFeed="timeline"
         initialPlatform="phone"
         initialTopicId="topic-one"
         states={states}
@@ -91,7 +91,7 @@ describe("ProductApplication", () => {
     );
     expect(markup).toContain("data-clean-product-preview");
     expect(lastPreviewProps()).toEqual({
-      initialHomeFeed: "nearby",
+      initialHomeFeed: "timeline",
       initialPlatform: "phone",
       initialTopicId: "topic-one",
       states,
@@ -227,7 +227,7 @@ describe("ProductApplication wide-screen browse-only (pc-browse-only-v1)", () =>
     renderToStaticMarkup(
       <ProductApplication
         comments={null}
-        initialHomeFeed="nearby"
+        initialHomeFeed="timeline"
         initialPlatform="pc"
         initialTopicId={null}
         states={states}
@@ -235,7 +235,7 @@ describe("ProductApplication wide-screen browse-only (pc-browse-only-v1)", () =>
       />,
     );
     expect(lastPreviewProps()).toEqual({
-      initialHomeFeed: "nearby",
+      initialHomeFeed: "timeline",
       initialPlatform: "pc",
       initialTopicId: null,
       states,

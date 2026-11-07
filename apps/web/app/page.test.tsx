@@ -127,7 +127,7 @@ describe("FormalPage", () => {
     );
   });
 
-  it.each(["discover", "nearby", "inscriptions", "calligraphy"] as const)(
+  it.each(["discover", "timeline", "inscriptions", "calligraphy"] as const)(
     "accepts the Home %s feed query",
     async (feed) => {
       renderToStaticMarkup(
@@ -140,6 +140,17 @@ describe("FormalPage", () => {
       });
     },
   );
+
+  it("opens the timeline from a link shared before it replaced 附近", async () => {
+    renderToStaticMarkup(
+      await FormalPage({ searchParams: Promise.resolve({ feed: "nearby" }) }),
+    );
+
+    expect(productApplicationMock.mock.calls[0]?.[0]).toMatchObject({
+      initialHomeFeed: "timeline",
+      initialTopicId: null,
+    });
+  });
 
   it.each(["topics", ["topics"]])(
     "falls back retired or invalid feed input %j to Discover",
@@ -160,12 +171,12 @@ describe("FormalPage", () => {
   it("hands a bounded topic to Discussion without changing the remembered Home feed", async () => {
     renderToStaticMarkup(
       await FormalPage({
-        searchParams: Promise.resolve({ feed: "nearby", topic: "topic-one" }),
+        searchParams: Promise.resolve({ feed: "timeline", topic: "topic-one" }),
       }),
     );
 
     expect(productApplicationMock.mock.calls[0]?.[0]).toMatchObject({
-      initialHomeFeed: "nearby",
+      initialHomeFeed: "timeline",
       initialTopicId: "topic-one",
     });
   });
@@ -175,7 +186,7 @@ describe("FormalPage", () => {
       await FormalPage({
         searchParams: Promise.resolve({
           catalogId: "catalog-one",
-          feed: "nearby",
+          feed: "timeline",
           image: "media-one",
           topic: "x".repeat(161),
         }),
@@ -185,7 +196,7 @@ describe("FormalPage", () => {
     expect(productApplicationMock.mock.calls[0]?.[0]).toEqual({
       comments: null,
       authorCommunity: false,
-      initialHomeFeed: "nearby",
+      initialHomeFeed: "timeline",
       initialPlatform: "tablet",
       initialTopicId: null,
       navigationAction: expect.objectContaining({

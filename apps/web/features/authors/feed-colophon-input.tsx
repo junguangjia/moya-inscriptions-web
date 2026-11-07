@@ -333,6 +333,9 @@ export const FeedColophonInput = forwardRef<
   );
   const [focused, setFocused] = useState(false);
   const [attachmentPanelOpen, setAttachmentPanelOpen] = useState(false);
+  const [attachmentPanelTop, setAttachmentPanelTop] = useState<number | null>(
+    null,
+  );
   const [localSubmitting, setLocalSubmitting] = useState(false);
   const [sendError, setSendError] = useState("");
   const pendingSend = useRef(false);
@@ -522,12 +525,22 @@ export const FeedColophonInput = forwardRef<
     const fit = () => {
       frameId = null;
       const rect = strip.getBoundingClientRect();
+      const fitted = colophonInputFitHeight({
+        frameTop: rect.top,
+        frameHeight: rect.height,
+        visibleBottom: Math.min(
+          visibleBottom(strip.ownerDocument),
+          attachmentPanelTop ?? Infinity,
+        ),
+      });
+      // The normal minimum must not push Send through the attachment tray.
       setFitHeight(
-        colophonInputFitHeight({
-          frameTop: rect.top,
-          frameHeight: rect.height,
-          visibleBottom: visibleBottom(strip.ownerDocument),
-        }),
+        attachmentPanelTop === null
+          ? fitted
+          : Math.min(
+              fitted ?? rect.height,
+              Math.max(0, attachmentPanelTop - rect.top),
+            ),
       );
     };
     const schedule = () => {
@@ -557,7 +570,7 @@ export const FeedColophonInput = forwardRef<
       document.removeEventListener("scroll", schedule, { capture: true });
       if (frameId !== null) window.cancelAnimationFrame(frameId);
     };
-  }, [writing, shown, strip]);
+  }, [writing, shown, strip, attachmentPanelTop]);
 
   // Back on the images, the hidden column lets go of focus (and the
   // keyboard); the draft stays.
@@ -707,6 +720,7 @@ export const FeedColophonInput = forwardRef<
       className={styles.column}
       data-colophon-input={state}
       data-colophon-input-focused={writing && shown ? "" : undefined}
+      data-colophon-attachments-open={attachmentPanelOpen ? "" : undefined}
       data-colophon-input-shown={shown ? "" : undefined}
       inert={!shown || undefined}
       noValidate
@@ -858,7 +872,9 @@ export const FeedColophonInput = forwardRef<
             composer={imageComposer}
             editorRef={boxRef}
             orientation="vertical"
+            active={shown && state === "write"}
             onOpenChange={setAttachmentPanelOpen}
+            onPanelTopChange={setAttachmentPanelTop}
             renderPreview={({ text, images }) => (
               <div className={styles.imagePreview}>
                 <InlineCommentBody

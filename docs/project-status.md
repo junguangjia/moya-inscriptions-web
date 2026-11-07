@@ -162,8 +162,9 @@ runtime；它只保留为 direct Prototype 和 legacy regression evidence。
 Home Discover:
 real Public Catalog first page
 
-Home Nearby:
-truthful unavailable in Production
+Home Timeline:
+read-only rows from /v1/community/timeline, requested when the feed first opens;
+truthful unavailable when the read fails or returns no rows
 
 Home Topics:
 truthful unavailable in Production

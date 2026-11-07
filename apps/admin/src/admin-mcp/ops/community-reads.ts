@@ -657,6 +657,46 @@ const EVENTS: CommunitySource = {
   fields: {},
 };
 
+/** The Backend's own page cap. A cut page goes on from its last whole row. */
+const TIMELINE_PAGE_MAX = 50;
+
+/**
+ * Reference rows, not a queue: nothing is withheld and nothing counts in SQL. `position`
+ * orders a start year's rows within each display rank, so it is read with the year.
+ */
+const TIMELINE: CommunitySource = {
+  route: "read-timeline",
+  pageMax: TIMELINE_PAGE_MAX,
+  row: (item) => ({
+    id: item.id,
+    title: shortOrFacts(item.title),
+    state: item.hidden === true ? "hidden" : "visible",
+    version: item.version,
+    startYear: item.startYear,
+    endYear: item.endYear,
+    chapter: item.chapter,
+    onAxis: item.onAxis,
+    position: item.position,
+    linkState: item.linkState,
+  }),
+  fields: {
+    fullTitle: (item) => shortOrFacts(item.fullTitle),
+    precision: plain("precision"),
+    dateLabel: plain("dateLabel"),
+    polity: plain("polity"),
+    disputed: plain("disputed"),
+    groupId: plain("groupId"),
+    groupTitle: plain("groupTitle"),
+    province: plain("province"),
+    holder: plain("holder"),
+    catalogId: plain("catalogId"),
+    createdBy: plain("createdBy"),
+    updatedBy: plain("updatedBy"),
+    createdAt: plain("createdAt"),
+    updatedAt: plain("updatedAt"),
+  },
+};
+
 const VIEW_ARGS = ["view", "fields", "groupBy"] as const;
 
 const ROWS_UNTRUSTED = ["/data/rows", "/data/filter"];
@@ -1013,6 +1053,8 @@ export const COMMUNITY_READ_FACTS: Readonly<
     route: "read-work-publishing-settings",
   }),
   "read-account-capacity": one({ route: "read-account-capacity" }),
+  "read-timeline": source(TIMELINE),
+  "read-timeline-summary": one({ route: "read-timeline-summary" }),
   // Behind the dm switch, on admin_sensitive_read.
   "read-dm-conversation": notBuilt("S13"),
   "lookup-dm-conversation": notBuilt("S13"),

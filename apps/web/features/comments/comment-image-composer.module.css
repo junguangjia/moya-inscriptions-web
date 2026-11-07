@@ -1,108 +1,186 @@
 .controls {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--yoyi-space-3);
+  gap: var(--yoyi-space-2);
   min-width: 0;
   color: var(--yoyi-color-text-primary);
   font-family: var(--yoyi-font-interface);
   font-size: var(--yoyi-type-body-small-size);
   line-height: 1.5;
+  direction: ltr;
   writing-mode: horizontal-tb;
 }
 
-.fileInput {
+.fileInput,
+.srOnly {
   position: absolute;
   width: 1px;
   height: 1px;
+  margin: -1px;
+  padding: 0;
   overflow: hidden;
+  border: 0;
   clip-path: inset(50%);
-  opacity: 0;
+  white-space: nowrap;
 }
 
 .trigger,
 .action,
-.actions button,
-.heading button {
+.actions button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 44px;
   min-height: 44px;
-  padding: var(--yoyi-space-2) var(--yoyi-space-3);
+  padding: var(--yoyi-space-2);
   color: var(--yoyi-color-text-secondary);
   background: transparent;
   border: 0;
   border-radius: var(--yoyi-radius-sm);
   font: inherit;
   cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.trigger {
+  position: relative;
 }
 
 .trigger:hover:not(:disabled),
 .action:hover:not(:disabled),
 .actions button:hover:not(:disabled),
-.heading button:hover:not(:disabled) {
+.actions button[aria-pressed="true"] {
   color: var(--yoyi-color-seal-red);
   background: var(--yoyi-color-background-muted);
 }
 
 .trigger:disabled,
 .action:disabled,
-.actions button:disabled,
-.heading button:disabled {
+.actions button:disabled {
   color: var(--yoyi-color-text-disabled);
   cursor: default;
 }
 
 .trigger:focus-visible,
 .action:focus-visible,
-.actions button:focus-visible,
-.heading button:focus-visible {
+.actions button:focus-visible {
   outline: 2px solid var(--yoyi-color-focus-ring);
   outline-offset: 2px;
 }
 
-.liveStatus {
-  min-width: 0;
-  color: var(--yoyi-color-text-secondary);
+.badge,
+.number,
+.uploadState {
+  display: grid;
+  place-items: center;
+  color: var(--yoyi-color-text-primary);
+  background: var(--yoyi-color-background-surface);
+  border-radius: var(--yoyi-radius-full);
   font-size: var(--yoyi-type-caption-size);
+  line-height: 1;
+}
+
+.badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: var(--yoyi-space-4);
+  height: var(--yoyi-space-4);
+}
+
+.noticeDot {
+  position: absolute;
+  top: var(--yoyi-space-1);
+  right: var(--yoyi-space-1);
+  width: var(--yoyi-space-2);
+  height: var(--yoyi-space-2);
+  background: var(--yoyi-color-seal-red);
+  border-radius: var(--yoyi-radius-full);
 }
 
 .panel {
-  grid-column: 1 / -1;
+  display: flex;
+  flex: 1 0 100%;
+  flex-direction: column;
+  box-sizing: border-box;
   min-width: 0;
   padding: var(--yoyi-space-3);
+  color: var(--yoyi-color-text-primary);
   background: var(--yoyi-color-background-surface);
   border: 1px solid var(--yoyi-color-border-subtle);
   border-radius: var(--yoyi-radius-md);
+  font-family: var(--yoyi-font-interface);
+  font-size: var(--yoyi-type-body-small-size);
+  line-height: 1.5;
+  text-align: start;
+  direction: ltr;
+  writing-mode: horizontal-tb;
+}
+
+/* The tray lives outside the moving reader and follows the software keyboard.
+   The host reserves the space up to its measured top for the original editor. */
+.panel[data-orientation="vertical"] {
+  position: fixed;
+  z-index: calc(var(--yoyi-z-index-overlay) + 1);
+  right: max(var(--yoyi-space-3), env(safe-area-inset-right));
+  left: max(var(--yoyi-space-3), env(safe-area-inset-left));
+  width: auto;
+  max-width: 448px;
+  max-height: 40svh;
+  margin-inline: auto;
+  box-shadow: var(--yoyi-shadow-dialog);
 }
 
 .heading,
 .actions {
   display: flex;
-  flex-wrap: wrap;
+  flex: none;
   align-items: center;
-  gap: var(--yoyi-space-2);
 }
 
 .heading {
   justify-content: space-between;
+  gap: var(--yoyi-space-2);
 }
 
-.help,
-.status,
-.position {
-  margin: 0;
-  color: var(--yoyi-color-text-secondary);
+.count {
+  display: flex;
+  align-items: center;
+  gap: var(--yoyi-space-2);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.count > span:last-child {
+  color: var(--yoyi-color-text-tertiary);
+}
+
+.actions {
+  flex-wrap: wrap;
+}
+
+.panelBody {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.notice {
+  flex: none;
+  margin: var(--yoyi-space-2) 0;
+  color: var(--yoyi-color-seal-red);
   font-size: var(--yoyi-type-caption-size);
   overflow-wrap: anywhere;
-}
-
-.help {
-  display: block;
-  margin: var(--yoyi-space-2) 0;
 }
 
 .items {
   display: grid;
   gap: var(--yoyi-space-3);
-  margin: var(--yoyi-space-3) 0 0;
+  margin: 0;
   padding: 0;
   list-style: none;
 }
@@ -110,19 +188,20 @@
 .item {
   display: grid;
   grid-template-columns: 64px minmax(0, 1fr);
-  align-items: start;
+  align-items: center;
   gap: var(--yoyi-space-3);
+  padding-block: var(--yoyi-space-2);
 }
 
 .thumbnail {
+  position: relative;
   display: grid;
   width: 64px;
   height: 64px;
   overflow: hidden;
   place-items: center;
   background: var(--yoyi-color-background-muted);
-  border-radius: var(--yoyi-radius-md);
-  font-size: var(--yoyi-type-caption-size);
+  border-radius: var(--yoyi-radius-sm);
 }
 
 .thumbnail img {
@@ -132,10 +211,43 @@
   object-fit: cover;
 }
 
+.number {
+  position: absolute;
+  top: var(--yoyi-space-1);
+  left: var(--yoyi-space-1);
+  min-width: var(--yoyi-space-4);
+  height: var(--yoyi-space-4);
+}
+
+.uploadState {
+  position: absolute;
+  right: var(--yoyi-space-1);
+  bottom: var(--yoyi-space-1);
+  width: var(--yoyi-space-6);
+  height: var(--yoyi-space-6);
+}
+
+.uploadState svg {
+  width: var(--yoyi-space-4);
+  height: var(--yoyi-space-4);
+}
+
+.progress {
+  width: var(--yoyi-space-3);
+  height: var(--yoyi-space-3);
+  border: 2px solid var(--yoyi-color-border-subtle);
+  border-top-color: var(--yoyi-color-seal-red);
+  border-radius: var(--yoyi-radius-full);
+  animation: spin 1s linear infinite;
+}
+
 .details {
-  display: grid;
   min-width: 0;
-  gap: var(--yoyi-space-1);
+}
+
+.plus {
+  font-size: var(--yoyi-type-section-title-size);
+  line-height: 1;
 }
 
 .preview {
@@ -145,11 +257,7 @@
   border-top: 1px solid var(--yoyi-color-border-subtle);
 }
 
-/* Keep the idle column narrow; management opens above its controls, not as
-   another editor or a second send row. Its host remains the stage's owner. */
 .controls[data-orientation="vertical"] {
-  position: relative;
-  display: flex;
   flex: none;
   align-self: flex-start;
   flex-direction: column;
@@ -157,37 +265,14 @@
   gap: 0;
 }
 
-.controls[data-orientation="vertical"] .trigger {
-  min-width: 44px;
-  padding-inline: var(--yoyi-space-2);
-  font-size: var(--yoyi-type-caption-size);
-}
-
-.controls[data-orientation="vertical"] .liveStatus {
-  max-width: 44px;
-  max-height: 96px;
-  overflow: auto;
-  text-align: center;
-}
-
-.controls[data-orientation="vertical"] .panel {
-  position: absolute;
-  z-index: calc(var(--yoyi-z-index-content) + 2);
-  bottom: calc(100% + var(--yoyi-space-3));
-  left: 0;
-  box-sizing: border-box;
-  width: min(320px, calc(100vw - 32px));
-  max-height: min(50svh, 360px);
-  overflow: auto;
-  overscroll-behavior: contain;
-  box-shadow: var(--yoyi-shadow-dialog);
-  text-align: start;
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .controls *,
-  .controls *::before,
-  .controls *::after {
-    scroll-behavior: auto;
+  .progress {
+    animation: none;
   }
 }

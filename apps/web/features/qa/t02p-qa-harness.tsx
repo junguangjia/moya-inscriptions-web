@@ -64,8 +64,8 @@ const catalogScenarioOptions = [
 const homeScenarioLabels = {
   "discover-empty": "Discover empty",
   "discover-visual": "Discover visual",
-  "nearby-demo": "Nearby demo",
-  "nearby-unavailable": "Nearby unavailable",
+  "timeline-demo": "Timeline demo",
+  "timeline-unavailable": "Timeline unavailable",
   "topic-long-blocks": "Topic long blocks",
   "topics-catalog-collection": "Topics catalog collection",
   "topics-editorial": "Topics editorial",

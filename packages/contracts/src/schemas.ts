@@ -1472,6 +1472,316 @@ export const inscriptionFilterOptionsSchema = z.strictObject({
   originalRegion: filterOptionSchema,
   script: filterOptionSchema,
 });
+/**
+ * home-timeline-v1: one entry of the Home timeline. A read-only reference row,
+ * not a Catalog record: most entries have no Catalog page, and `catalogId` plus
+ * `media` appear only when the row links a published Catalog record. Years are
+ * signed with no year 0 (-475 is 前475); an entry that cannot be placed
+ * precisely has `onAxis` false and lives on its chapter's shelf.
+ */
+export const TIMELINE_ENTRIES_MAXIMUM = 5_000;
+export const timelineChapterSchema = z.enum([
+  "商",
+  "西周",
+  "春秋",
+  "战国",
+  "秦",
+  "西汉",
+  "东汉",
+  "三国",
+  "两晋",
+  "南北朝",
+  "隋",
+  "唐",
+  "五代十国",
+  "宋辽金夏",
+  "元",
+  "明",
+  "清",
+  "民国",
+  "当代",
+]);
+
+/**
+ * Each chapter's span of start years, for the operator read's chapter check.
+ * Open-ended only for 当代. Chapters overlap where the dynasties do, so a row is
+ * out of place only outside its own span. Frontend code may not import runtime
+ * contracts, so the Web's chapter table holds the same spans and a unit test
+ * (tests/unit/backend/timeline-operator-http.test.ts) keeps the two equal.
+ */
+export const TIMELINE_CHAPTER_SPANS: Readonly<
+  Record<
+    z.infer<typeof timelineChapterSchema>,
+    readonly [number, number | null]
+  >
+> = {
+  商: [-1250, -1046],
+  西周: [-1046, -771],
+  春秋: [-770, -476],
+  战国: [-475, -221],
+  秦: [-221, -207],
+  西汉: [-206, 23],
+  东汉: [25, 220],
+  三国: [220, 280],
+  两晋: [265, 420],
+  南北朝: [420, 589],
+  隋: [581, 618],
+  唐: [618, 907],
+  五代十国: [907, 979],
+  宋辽金夏: [960, 1279],
+  元: [1271, 1368],
+  明: [1368, 1644],
+  清: [1644, 1911],
+  民国: [1912, 1949],
+  当代: [1949, null],
+};
+export const timelinePrecisionSchema = z.enum([
+  "year",
+  "reign",
+  "period",
+  "multi",
+  "dynasty",
+]);
+const timelineYearSchema = z
+  .number()
+  .int()
+  .min(-3000)
+  .max(3000)
+  .refine((year) => year !== 0);
+/**
+ * PostgreSQL stores neither NUL nor an unpaired UTF-16 surrogate as text (the
+ * rule of `authorText` above and of the editorial `isWellFormedEditorialText`,
+ * which this module cannot import). Refused here, a timeline command carrying
+ * one answers INVALID_COMMAND instead of failing in the store.
+ */
+const isWellFormedTimelineText = (value: string) =>
+  !value.includes("\u0000") && !/[\uD800-\uDFFF]/u.test(value);
+const timelineTextSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .refine(isWellFormedTimelineText);
+const timelineEntryFields = {
+  id: z.string().regex(/^[a-z0-9-]{1,64}$/),
+  title: timelineTextSchema,
+  fullTitle: timelineTextSchema,
+  startYear: timelineYearSchema,
+  endYear: timelineYearSchema,
+  precision: timelinePrecisionSchema,
+  dateLabel: timelineTextSchema.nullable(),
+  onAxis: z.boolean(),
+  chapter: timelineChapterSchema,
+  polity: timelineTextSchema.nullable(),
+  disputed: z.boolean(),
+  groupId: z
+    .string()
+    .regex(/^[a-z0-9-]{1,64}$/)
+    .nullable(),
+  groupTitle: timelineTextSchema.nullable(),
+  province: timelineTextSchema.nullable(),
+  holder: timelineTextSchema.nullable(),
+  catalogId: catalogIdSchema.refine(isWellFormedTimelineText).nullable(),
+};
+const addTimelineEntryIssues = (
+  entry: {
+    readonly startYear: number;
+    readonly endYear: number;
+    readonly groupId: string | null;
+    readonly groupTitle: string | null;
+  },
+  context: z.RefinementCtx,
+) => {
+  if (entry.endYear < entry.startYear)
+    context.addIssue({
+      code: "custom",
+      message: "An entry ends no earlier than it starts",
+      path: ["endYear"],
+    });
+  if ((entry.groupId === null) !== (entry.groupTitle === null))
+    context.addIssue({
+      code: "custom",
+      message: "A group has both an id and a title",
+      path: ["groupTitle"],
+    });
+};
+export const timelineEntrySchema = z
+  .strictObject({
+    ...timelineEntryFields,
+    media: publicMediaSchema.nullable(),
+  })
+  .superRefine(addTimelineEntryIssues);
+export const timelineSchema = z.strictObject({
+  entries: z.array(timelineEntrySchema).max(TIMELINE_ENTRIES_MAXIMUM),
+});
+/**
+ * The validated bulk file behind `scripts/import-timeline.mjs`. `position`
+ * orders entries of one start year; the file itself never enters Git or the
+ * Web bundle.
+ */
+export const timelineImportEntrySchema = z
+  .strictObject({
+    ...timelineEntryFields,
+    position: z.number().int().nonnegative().max(2_000_000_000),
+  })
+  .superRefine(addTimelineEntryIssues);
+export const timelineImportFileSchema = z
+  .strictObject({
+    version: z.literal(1),
+    entries: z
+      .array(timelineImportEntrySchema)
+      .min(1)
+      .max(TIMELINE_ENTRIES_MAXIMUM),
+  })
+  .superRefine((file, context) => {
+    const ids = new Set<string>();
+    const catalogs = new Set<string>();
+    file.entries.forEach((entry, index) => {
+      if (ids.has(entry.id))
+        context.addIssue({
+          code: "custom",
+          message: "Duplicate entry id",
+          path: ["entries", index, "id"],
+        });
+      ids.add(entry.id);
+      if (entry.catalogId === null) return;
+      if (catalogs.has(entry.catalogId))
+        context.addIssue({
+          code: "custom",
+          message: "A Catalog record links one entry",
+          path: ["entries", index, "catalogId"],
+        });
+      catalogs.add(entry.catalogId);
+    });
+  });
+/**
+ * The one response carrying every row passes the Web relay's 4.5 MB cap only
+ * with room for each linked row's image candidates. Measured over the import
+ * shape of every stored row, hidden ones included: any of them may be shown.
+ */
+export const TIMELINE_RESPONSE_BYTES_MAXIMUM = 4_000_000;
+const TIMELINE_LINKED_ROW_MEDIA_BYTES = 1_500;
+export const estimateTimelineResponseBytes = (
+  entries: readonly { readonly catalogId: string | null }[],
+): number =>
+  new TextEncoder().encode(JSON.stringify(entries)).byteLength +
+  entries.filter((entry) => entry.catalogId !== null).length *
+    TIMELINE_LINKED_ROW_MEDIA_BYTES;
+/** Why a whole set may not be stored; `index` names the row in the set given. */
+export type TimelineEntrySetIssue =
+  | { readonly code: "TIMELINE_FULL" }
+  | { readonly code: "ENTRY_INVALID"; readonly index: number }
+  | { readonly code: "ENTRY_EXISTS"; readonly index: number }
+  | { readonly code: "CATALOG_ALREADY_LINKED"; readonly index: number }
+  | { readonly code: "TIMELINE_TOO_LARGE" };
+/**
+ * The import's check over the whole file it is about to store: each row parses as an import row, the set holds at most
+ * TIMELINE_ENTRIES_MAXIMUM rows with distinct ids and distinct Catalog links,
+ * and its response estimate stays within the limit. A file must be wholly
+ * valid. Operator writes run `checkTimelineEntryWrite` instead. Group and
+ * chapter consistency are reported, never refused.
+ */
+export const checkTimelineEntrySet = (
+  entries: readonly unknown[],
+):
+  | { readonly ok: true; readonly entries: readonly TimelineImportEntry[] }
+  | { readonly ok: false; readonly issue: TimelineEntrySetIssue } => {
+  if (entries.length > TIMELINE_ENTRIES_MAXIMUM)
+    return { ok: false, issue: { code: "TIMELINE_FULL" } };
+  const parsed: TimelineImportEntry[] = [];
+  const ids = new Set<string>();
+  const catalogs = new Set<string>();
+  for (const [index, candidate] of entries.entries()) {
+    const result = timelineImportEntrySchema.safeParse(candidate);
+    if (!result.success)
+      return { ok: false, issue: { code: "ENTRY_INVALID", index } };
+    const entry = result.data;
+    if (ids.has(entry.id))
+      return { ok: false, issue: { code: "ENTRY_EXISTS", index } };
+    ids.add(entry.id);
+    if (entry.catalogId !== null) {
+      if (catalogs.has(entry.catalogId))
+        return { ok: false, issue: { code: "CATALOG_ALREADY_LINKED", index } };
+      catalogs.add(entry.catalogId);
+    }
+    parsed.push(entry);
+  }
+  if (estimateTimelineResponseBytes(parsed) > TIMELINE_RESPONSE_BYTES_MAXIMUM)
+    return { ok: false, issue: { code: "TIMELINE_TOO_LARGE" } };
+  return { ok: true, entries: parsed };
+};
+/**
+ * A stored row's import fields as stored. A row stored before a rule tightened,
+ * or by direct SQL, may fail the import row.
+ */
+export type StoredTimelineEntry = {
+  readonly [Field in keyof TimelineImportEntry]: Field extends "catalogId"
+    ? string | null
+    : unknown;
+};
+/** One row an operator write stores: before it (null when new), after it, and hidden after it. */
+export interface TimelineEntryChange {
+  readonly before: StoredTimelineEntry | null;
+  readonly after: StoredTimelineEntry;
+  readonly hidden: boolean;
+}
+/** Why an operator write may not be stored; `index` names the row in `changes`. */
+export type TimelineEntryWriteIssue =
+  | { readonly code: "TIMELINE_FULL" }
+  | { readonly code: "ENTRY_INVALID"; readonly index: number }
+  | { readonly code: "TIMELINE_TOO_LARGE" };
+const timelineImportFieldNames = Object.keys(
+  timelineImportEntrySchema.shape,
+) as readonly (keyof TimelineImportEntry)[];
+/**
+ * The check every operator write runs inside the shared lock, over the stored
+ * set before the write and after it. A write is refused only for what it makes
+ * worse, so a row that fails the contract can always be fixed, one at a time,
+ * and taken off the public read at once:
+ * - a changed row must parse as an import row (ENTRY_INVALID) when it is
+ *   visible after the write or the write changed one of its import fields; a
+ *   write that only hides a row passes, and showing an invalid row is refused;
+ * - other stored rows never refuse a write, whether they pass or not;
+ * - TIMELINE_FULL only when the write adds rows past TIMELINE_ENTRIES_MAXIMUM;
+ * - TIMELINE_TOO_LARGE only when the response estimate after the write is past
+ *   its limit and above the estimate before it.
+ * Ids and Catalog links stay unique by the table's keys. `limits` is for tests.
+ */
+export const checkTimelineEntryWrite = (
+  write: {
+    readonly before: readonly StoredTimelineEntry[];
+    readonly after: readonly StoredTimelineEntry[];
+    readonly changes: readonly TimelineEntryChange[];
+  },
+  limits: { readonly entries: number; readonly responseBytes: number } = {
+    entries: TIMELINE_ENTRIES_MAXIMUM,
+    responseBytes: TIMELINE_RESPONSE_BYTES_MAXIMUM,
+  },
+):
+  | { readonly ok: true }
+  | { readonly ok: false; readonly issue: TimelineEntryWriteIssue } => {
+  const { before, after, changes } = write;
+  if (after.length > limits.entries && after.length > before.length)
+    return { ok: false, issue: { code: "TIMELINE_FULL" } };
+  for (const [index, change] of changes.entries()) {
+    const old = change.before;
+    const changed =
+      old === null ||
+      timelineImportFieldNames.some((name) => old[name] !== change.after[name]);
+    if (
+      (changed || !change.hidden) &&
+      !timelineImportEntrySchema.safeParse(change.after).success
+    )
+      return { ok: false, issue: { code: "ENTRY_INVALID", index } };
+  }
+  const bytes = estimateTimelineResponseBytes(after);
+  if (
+    bytes > limits.responseBytes &&
+    bytes > estimateTimelineResponseBytes(before)
+  )
+    return { ok: false, issue: { code: "TIMELINE_TOO_LARGE" } };
+  return { ok: true };
+};
 export const contentStateQuerySchema = z.strictObject({
   target: contentIdentitySchema,
 });
@@ -1491,6 +1801,12 @@ export type InscriptionFilters = z.infer<typeof inscriptionFiltersSchema>;
 export type InscriptionFilterOptions = z.infer<
   typeof inscriptionFilterOptionsSchema
 >;
+export type TimelineChapter = z.infer<typeof timelineChapterSchema>;
+export type TimelinePrecision = z.infer<typeof timelinePrecisionSchema>;
+export type TimelineEntry = z.infer<typeof timelineEntrySchema>;
+export type Timeline = z.infer<typeof timelineSchema>;
+export type TimelineImportFile = z.infer<typeof timelineImportFileSchema>;
+export type TimelineImportEntry = z.infer<typeof timelineImportEntrySchema>;
 
 export const ownCommentPageSchema = pageOf(ownCommentSchema).extend({
   totalPages: z.number().int().nonnegative(),

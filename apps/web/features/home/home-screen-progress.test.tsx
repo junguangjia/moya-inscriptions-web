@@ -45,7 +45,7 @@ it("does not rerender populated feeds for fractional swipe progress, but updates
         <HomeScreen
           data={{
             discover: { state: "empty" },
-            nearby: { state: "empty" },
+            timeline: { state: "empty" },
             topics: { state: "empty" },
           }}
           renderDiscover={discover}
@@ -53,24 +53,24 @@ it("does not rerender populated feeds for fractional swipe progress, but updates
       ),
     );
     const initial = discover.mock.calls.length;
-    const icon = container.querySelector('[data-icon="nearby"]');
+    const icon = container.querySelector('[data-icon="timeline"]');
     for (const progress of [0.1, 0.3, 0.7, 0.4, 0]) {
       await act(async () => callbacks.progress(progress));
       expect(discover).toHaveBeenCalledTimes(initial);
-      expect(container.querySelector('[data-icon="nearby"]')).toBe(icon);
+      expect(container.querySelector('[data-icon="timeline"]')).toBe(icon);
       expect(
         Number(
           container
-            .querySelector<HTMLElement>('[data-tab-key="nearby"]')!
+            .querySelector<HTMLElement>('[data-tab-key="timeline"]')!
             .style.getPropertyValue("--top-tab-activation"),
         ),
       ).toBeCloseTo(progress, 5);
     }
-    await act(async () => callbacks.commit("nearby"));
+    await act(async () => callbacks.commit("timeline"));
     expect(discover).toHaveBeenCalledTimes(initial + 1);
     expect(
       container
-        .querySelector('[data-tab-key="nearby"]')
+        .querySelector('[data-tab-key="timeline"]')
         ?.getAttribute("aria-selected"),
     ).toBe("true");
   } finally {

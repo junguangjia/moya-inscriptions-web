@@ -2,7 +2,7 @@ export const quickActionNames = ["like", "favorite", "share"] as const;
 export type QuickActionName = (typeof quickActionNames)[number];
 
 export interface QuickActionContent {
-  readonly kind: "catalog" | "work" | "nearby" | "topic";
+  readonly kind: "catalog" | "work" | "topic";
   readonly id: string;
   readonly title: string;
 }

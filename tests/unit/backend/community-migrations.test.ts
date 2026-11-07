@@ -7,6 +7,10 @@ import {
   requiredCommunityMigrations,
   verifyCommunityMigrationLedger,
 } from "@moya/community-postgres";
+import {
+  timelineChapterSchema,
+  timelinePrecisionSchema,
+} from "@moya/contracts/schemas";
 import { describe, expect, it, vi } from "vitest";
 
 type LedgerPool = Parameters<typeof verifyCommunityMigrationLedger>[0];
@@ -109,10 +113,34 @@ describe("community migration family", () => {
         "20261105010000_article_consent_resume_secret.sql",
         "20261105020000_agent_connection_operator_preset.sql",
         "20261105030000_agent_connection_resume_secret.sql",
+        "20261105235900_timeline_entries.sql",
       ],
     );
     expect(files.every((file) => file.sql.includes("community."))).toBe(true);
     expect(files.some((file) => /CREATE SCHEMA/i.test(file.sql))).toBe(false);
+  });
+
+  it("keeps the timeline checks on the contract's closed lists", async () => {
+    const files = await readCommunityMigrationFiles(
+      fileURLToPath(
+        new URL("../../../database/community-migrations", import.meta.url),
+      ),
+    );
+    const { sql } = files.find(
+      ({ filename }) => filename === "20261105235900_timeline_entries.sql",
+    )!;
+    const listed = (constraint: string) =>
+      [
+        ...new RegExp(`${constraint} CHECK \\(\\s*\\w+ IN \\(([^)]*)\\)`, "u")
+          .exec(sql)![1]!
+          .matchAll(/'([^']+)'/gu),
+      ].map((match) => match[1]);
+    expect(listed("timeline_entries_precision_valid")).toEqual(
+      timelinePrecisionSchema.options,
+    );
+    expect(listed("timeline_entries_chapter_valid")).toEqual(
+      timelineChapterSchema.options,
+    );
   });
 
   it("verifies the ledger read-only and releases the client", async () => {

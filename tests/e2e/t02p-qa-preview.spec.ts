@@ -259,8 +259,8 @@ const navigateTo = async (
 
 const selectHomeFeed = async (
   shell: Locator,
-  name: "发现" | "附近" | "碑刻" | "书帖",
-  feed: "discover" | "nearby" | "inscriptions" | "calligraphy",
+  name: "发现" | "时间轴" | "碑刻" | "书帖",
+  feed: "discover" | "timeline" | "inscriptions" | "calligraphy",
 ) => {
   await navigateTo(shell, "首页", "home");
   const home = shell.locator("[data-home-surface]");
@@ -532,13 +532,13 @@ test("hidden QA preserves existing scenario feed and topic entry parameters", as
 }) => {
   const { surface, shell } = await openQa(
     page,
-    "?qaChrome=hidden&scenario=nearby-demo&feed=nearby",
+    "?qaChrome=hidden&scenario=timeline-demo&feed=timeline",
   );
   await expectChrome(surface, "hidden");
-  await expect(surface).toHaveAttribute("data-home-scenario", "nearby-demo");
+  await expect(surface).toHaveAttribute("data-home-scenario", "timeline-demo");
   await expect(shell.locator("[data-home-surface]")).toHaveAttribute(
     "data-active-home-feed",
-    "nearby",
+    "timeline",
   );
   expect((await page.reload({ waitUntil: "domcontentloaded" }))?.status()).toBe(
     200,
@@ -547,7 +547,7 @@ test("hidden QA preserves existing scenario feed and topic entry parameters", as
   await expectChrome(surface, "hidden");
   await expect(shell.locator("[data-home-surface]")).toHaveAttribute(
     "data-active-home-feed",
-    "nearby",
+    "timeline",
   );
 
   const topicEntries = [];

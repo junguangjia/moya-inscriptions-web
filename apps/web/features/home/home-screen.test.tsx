@@ -162,7 +162,7 @@ describe("HomeScreen", () => {
           <HomeScreen
             data={{
               discover,
-              nearby: { state: "empty" },
+              timeline: { state: "empty" },
               topics: { state: "empty" },
             }}
           />
@@ -192,7 +192,7 @@ describe("HomeScreen", () => {
     expect(markup).toContain('data-home-surface=""');
     expect(markup.match(/data-tab-key=/g)).toHaveLength(4);
     expect(markup).toContain(">发现<");
-    expect(markup).toContain(">附近<");
+    expect(markup).toContain(">时间轴<");
     expect(markup).toContain(">碑刻<");
     expect(markup).toContain(">书帖<");
     expect(markup).not.toContain(">专题<");

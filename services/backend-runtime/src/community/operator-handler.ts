@@ -68,6 +68,7 @@ import {
   handleFeedbackOperatorImageRequest,
 } from "./feedback-handler.js";
 import { handleThreadOperatorRequest } from "./thread-handler.js";
+import { handleTimelineOperatorRequest } from "./timeline-handler.js";
 import { handleDirectMessageOperatorRequest } from "./direct-message-handler.js";
 import { handleArticlePublicationOperatorRequest } from "./article-publication-operator-handler.js";
 
@@ -80,6 +81,7 @@ import type {
   DirectMessageService,
   PublishingOperatorService,
   ThreadService,
+  TimelineOperatorService,
   FeedbackService,
 } from "@moya/api";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -124,6 +126,8 @@ export interface OperatorRouteDependencies extends OperatorLabelledServices {
   readonly agentAdministrationService?: AgentAdministrationService | undefined;
   /** Threads (content-community-completion-v1, Development only); absent leaves threads/* unrouted. */
   readonly threadService?: ThreadService | undefined;
+  /** Home timeline rows (home-timeline-v1); absent leaves timeline-* unrouted. */
+  readonly timelineService?: TimelineOperatorService | undefined;
   readonly feedbackService?: FeedbackService | undefined;
   /** DM moderation (content-community-completion-v1, Development only). */
   readonly directMessageService?: DirectMessageService | undefined;
@@ -305,6 +309,7 @@ const pagedQueryOf = (request: IncomingMessage) => {
  *   GET  /internal/community/moderation-events?subjectId&action&page&pageSize
  *   GET  /internal/community/summary?range
  *   …    /internal/community/publishing/*                  (work-publishing-handler.ts)
+ *   …    /internal/community/timeline-*                    (timeline-handler.ts)
  * The subject id always travels in the route; a body carries the command only.
  */
 export const handleOperatorRequest = async (
@@ -329,6 +334,7 @@ export const handleOperatorRequest = async (
     discussionPort,
     agentAdministrationService,
     threadService,
+    timelineService,
     feedbackService,
     directMessageService,
   }: OperatorRouteDependencies,
@@ -600,6 +606,17 @@ export const handleOperatorRequest = async (
         response,
         pathname,
         threadService,
+        actor.label,
+      ))
+    )
+      return;
+    if (
+      timelineService !== undefined &&
+      (await handleTimelineOperatorRequest(
+        request,
+        response,
+        pathname,
+        timelineService,
         actor.label,
       ))
     )

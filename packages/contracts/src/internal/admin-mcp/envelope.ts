@@ -4,7 +4,7 @@ import { z } from "zod";
  * The contract the native path serves, as its serverInfo.version and in admin_whoami. A
  * date: raised on the day a release changes what a client sees, and only then.
  */
-export const ADMIN_MCP_CONTRACT_VERSION = "2026-11-06";
+export const ADMIN_MCP_CONTRACT_VERSION = "2026-11-07";
 
 /**
  * Server-only result shape of the `admin_*` MCP tools (admin-mcp-completion-v1,

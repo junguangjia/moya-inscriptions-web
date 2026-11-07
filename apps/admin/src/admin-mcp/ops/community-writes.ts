@@ -309,6 +309,19 @@ const threadEcho: Echo = (thread) => ({
   version: thread.version,
 });
 
+/**
+ * A timeline row's id is its writer's own text, so the echo leaves it out and the
+ * answer names the row by its index, as it does any id that is not a fixed shape.
+ */
+const timelineEcho: Echo = (entry) => ({
+  title: shortOrFacts(entry.title),
+  state: entry.hidden === true ? "hidden" : "visible",
+  version: entry.version,
+  linkState: entry.linkState,
+});
+
+const onTimelineEntry = onField("timeline_entry", "id");
+
 const onReport = onField("report", "id");
 
 /** These change no one's media: a warning, or comments restricted for the future. */
@@ -622,6 +635,27 @@ export const COMMUNITY_WRITE_FACTS: Readonly<
     ...previewOf("jobs"),
     completion: onJob,
   },
+  "create-timeline-entry": write(
+    "create-timeline-entry",
+    onTimelineEntry,
+    written("create-timeline-entry", timelineEcho),
+    TITLE,
+  ),
+  "update-timeline-entry": write(
+    "update-timeline-entry",
+    onTimelineEntry,
+    written("update-timeline-entry", timelineEcho),
+    TITLE,
+  ),
+  // One target, many rows: a year's order moves all at once or not at all.
+  "reorder-timeline": write(
+    "reorder-timeline",
+    () => ({ type: "timeline_year" }),
+    written("reorder-timeline", ({ startYear, count }) => ({
+      startYear,
+      count,
+    })),
+  ),
   // Irreversible: preview, then admin_execute_irreversible, with the run engine. Their
   // routes have no AI row until then.
   "forward-report": notBuilt("S8"),

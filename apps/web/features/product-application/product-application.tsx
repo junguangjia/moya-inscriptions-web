@@ -18,6 +18,7 @@ import {
   peekWorkDetail,
 } from "../authors/work-detail";
 import { LiveCatalogCards } from "../authors/live-catalog-cards";
+import { LiveTimeline } from "../home/timeline/live-timeline";
 import "../authors/author-styles.css";
 import { T02pProductPreview } from "../product-preview/t02p-product-preview";
 import { CreateWorkAction } from "../publishing/create-action";
@@ -262,6 +263,7 @@ const AuthorProduct = ({
                 renderInscriptions={(active) => (
                   <FilteredInscriptions active={active} />
                 )}
+                renderTimeline={(active) => <LiveTimeline active={active} />}
                 settingsHost={
                   <ProductSettingsHost
                     open={settingsOpen}

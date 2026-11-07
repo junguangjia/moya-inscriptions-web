@@ -32,6 +32,7 @@ import {
   PostgresFeedbackAdapter,
   PostgresPublishingOperatorAdapter,
   PostgresThreadAdapter,
+  PostgresTimelineOperatorAdapter,
   PostgresWorkPublishingAdapter,
   runCommunityMigrations,
 } from "@moya/community-postgres";
@@ -48,6 +49,8 @@ import {
   operatorReportAiPageSchema,
   operatorReportAiSchema,
   operatorReportSchema,
+  operatorTimelinePageSchema,
+  operatorTimelineSummarySchema,
   operatorUserAiPageSchema,
   operatorUserPageSchema,
 } from "@moya/contracts/internal/community-operator";
@@ -382,6 +385,7 @@ beforeAll(async () => {
       publishingOperatorPort: new PostgresPublishingOperatorAdapter(app),
       articlePublicationOperatorPort: new PostgresArticleAuthoringAdapter(app),
       threadPort: new PostgresThreadAdapter(app),
+      timelineOperatorPort: new PostgresTimelineOperatorAdapter(app),
       feedbackPort: new PostgresFeedbackAdapter(app),
       directMessagePort: new PostgresDirectMessageAdapter(app),
       aiOperatorReader: new PostgresAiOperatorReader(app),
@@ -690,6 +694,13 @@ const readSweep = (): Readonly<Record<string, readonly string[]>> => {
     "articles/:id/submission-media": [
       `articles/article-${"0".repeat(32)}/submission-media?variant=display`,
     ],
+    // Reference rows with no self-only record: nothing here may carry a canary.
+    "timeline-entries": [
+      "timeline-entries?pageSize=50",
+      `timeline-entries?${query({ search: canary })}`,
+      "timeline-entries?issue=not_published&hidden=include",
+    ],
+    "timeline-summary": ["timeline-summary"],
   };
 };
 
@@ -1839,6 +1850,13 @@ describe("a bad input on the AI path", () => {
     ["a forged cursor", "articles/submissions?cursor=forged"],
     ["a forged job state", "publishing/jobs?state=nosuch"],
     ["an impossible page size", "comments?pageSize=51"],
+    ["a NUL in a timeline search", "timeline-entries?search=%00"],
+    [
+      "a timeline range ending before it starts",
+      "timeline-entries?yearFrom=900&yearTo=700",
+    ],
+    ["a timeline view the read has not", "timeline-entries?view=compact"],
+    ["a query on the timeline summary", "timeline-summary?range=30d"],
   ])("answers a named refusal for %s", async (_, route) => {
     const read = await ai(route);
     expect(read.status, route).toBe(400);
@@ -1863,6 +1881,60 @@ describe("a bad input on the AI path", () => {
       "NOT_FOUND",
     );
     expect((await ai("publishing/submissions/nosuch")).code).toBe("NOT_FOUND");
+  });
+});
+
+describe("the timeline as AI reads it", () => {
+  const entryId = `ai-read-${run}`;
+  const linkedId = `ai-read-linked-${run}`;
+
+  beforeAll(async () => {
+    // The import's shape, written as the migration role writes it.
+    await setup.query(
+      `INSERT INTO community.timeline_entries(entry_id,title,full_title,start_year,end_year,precision,on_axis,chapter,disputed,catalog_id,position)
+       VALUES($1,'合成条目','合成朝合成条目',618,618,'year',true,'唐',false,NULL,0),
+             ($2,'合成链接','合成朝合成链接',619,619,'year',true,'唐',false,$3,0)`,
+      [entryId, linkedId, `catalog-${run}`],
+    );
+  });
+
+  it("answers the same rows and counts as the Owner's, on the community credential only", async () => {
+    const page = operatorTimelinePageSchema.parse(
+      (await ai("timeline-entries?pageSize=50")).json,
+    );
+    expect(page.items.map(({ id }) => id)).toEqual([entryId, linkedId]);
+    expect(page.items[1]).toMatchObject({
+      linkState: "not_published",
+      createdBy: "import",
+      version: 1,
+    });
+    expect((await owner("timeline-entries?pageSize=50")).json).toEqual(page);
+    const summary = operatorTimelineSummarySchema.parse(
+      (await ai("timeline-summary")).json,
+    );
+    expect(summary.entries.total).toBe(2);
+    expect(summary.links).toEqual({
+      unlinked: 1,
+      published: 0,
+      notPublished: 1,
+    });
+    expect(summary.issues.notPublished).toBe(1);
+    expect(
+      operatorTimelinePageSchema
+        .parse(
+          (
+            await ai(
+              `timeline-entries?${query({ ids: `${linkedId},${entryId}`, linked: "not_published" })}`,
+            )
+          ).json,
+        )
+        .items.map(({ id }) => id),
+    ).toEqual([linkedId]);
+    for (const route of ["timeline-entries", "timeline-summary"])
+      expect(await get(baseToken, route), route).toMatchObject({
+        status: 403,
+        code: "AI_ROUTE_FORBIDDEN",
+      });
   });
 });
 

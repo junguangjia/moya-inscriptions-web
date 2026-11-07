@@ -95,11 +95,11 @@ const activeHomeMasonry = (surface: Locator) =>
 
 const activateHomeFeed = async (
   home: Locator,
-  name: "发现" | "附近" | "碑刻" | "书帖",
+  name: "发现" | "时间轴" | "碑刻" | "书帖",
 ) => {
   const feed = {
     发现: "discover",
-    附近: "nearby",
+    时间轴: "timeline",
     碑刻: "inscriptions",
     书帖: "calligraphy",
   }[name];
@@ -109,11 +109,11 @@ const activateHomeFeed = async (
   await expect(home).toHaveAttribute("data-active-home-feed", feed);
 };
 
-type HomeFeedName = "discover" | "nearby" | "inscriptions" | "calligraphy";
+type HomeFeedName = "discover" | "timeline" | "inscriptions" | "calligraphy";
 
 const homeFeedIndex: Record<HomeFeedName, number> = {
   discover: 0,
-  nearby: 1,
+  timeline: 1,
   inscriptions: 2,
   calligraphy: 3,
 };
@@ -183,20 +183,27 @@ const writeHomePanelScroll = async (
 ) => {
   // Only the active panel owns scroll events in the shared Home pager.
   await touchSettleHomeFeed(home, feed);
-  return home
-    .locator(`[data-home-feed-panel="${feed}"]`)
-    .evaluate((node, desiredTop) => {
-      const panel = node as HTMLElement;
-      panel.scrollTop = desiredTop;
-      panel.dispatchEvent(new Event("scroll"));
-      return panel.scrollTop;
-    }, top);
+  const feedPanel = home.locator(`[data-home-feed-panel="${feed}"]`);
+  // The timeline mounts its rows only once its feed has opened.
+  if (feed === "timeline")
+    await expect
+      .poll(() =>
+        feedPanel.evaluate((node) => node.scrollHeight - node.clientHeight),
+      )
+      .toBeGreaterThan(top);
+  return feedPanel.evaluate((node, desiredTop) => {
+    const panel = node as HTMLElement;
+    panel.scrollTop = desiredTop;
+    panel.dispatchEvent(new Event("scroll"));
+    return panel.scrollTop;
+  }, top);
 };
 
 const readHomePanelEvidence = async (home: Locator, feed: HomeFeedName) =>
   home.locator(`[data-home-feed-panel="${feed}"]`).evaluate((node) => {
     const panel = node as HTMLElement;
     const masonry = panel.querySelector<HTMLElement>("[data-home-masonry]");
+    const timeline = panel.querySelector<HTMLElement>("[data-timeline-feed]");
     const anchor = masonry?.querySelector<HTMLElement>(
       "[data-home-masonry-item]",
     );
@@ -263,6 +270,7 @@ const readHomePanelEvidence = async (home: Locator, feed: HomeFeedName) =>
       ),
       scrollTop: panel.scrollTop,
       testIdentity: panel.dataset.testScrollIdentity ?? null,
+      timelineHeight: timeline?.getBoundingClientRect().height ?? null,
     };
     return {
       ...evidence,
@@ -281,6 +289,7 @@ const readHomePanelEvidence = async (home: Locator, feed: HomeFeedName) =>
         masonryWidth: evidence.masonryWidth,
         mediaStates: evidence.mediaStates,
         scrollTop: evidence.scrollTop,
+        timelineHeight: evidence.timelineHeight,
       }),
     };
   });
@@ -308,13 +317,16 @@ const waitForStableHomePanelEvidence = async (
         const geometrySettled =
           evidence.masonryHeightMinusMaxItemBottom !== null &&
           Math.abs(evidence.masonryHeightMinusMaxItemBottom) <= 2;
-        if (
-          evidence.activeFeed !== feed ||
-          evidence.layoutReady !== "true" ||
-          evidence.layoutRetained ||
-          !evidence.mediaTerminal ||
-          !geometrySettled
-        ) {
+        // The timeline windows its rows instead of laying out a masonry, and a
+        // lazy image in its overscan may not load until it comes closer.
+        const contentReady =
+          feed === "timeline"
+            ? (evidence.timelineHeight ?? 0) > 0
+            : evidence.layoutReady === "true" &&
+              !evidence.layoutRetained &&
+              evidence.mediaTerminal &&
+              geometrySettled;
+        if (evidence.activeFeed !== feed || !contentReady) {
           previousSignature = null;
           stableFrameCount = 0;
           return false;
@@ -1392,15 +1404,15 @@ test("Home tabs remain internal to Home and expose the four R2 feeds", async ({
   const tabs = home.getByRole("tab");
 
   await expect(tabs).toHaveCount(4);
-  await expect(tabs).toHaveText(["发现", "附近", "碑刻", "书帖"]);
+  await expect(tabs).toHaveText(["发现", "时间轴", "碑刻", "书帖"]);
   await expect(home.locator('[role="tab"][aria-selected="true"]')).toHaveCount(
     1,
   );
   await expect(home.locator('[role="tabpanel"]')).toHaveCount(4);
 
-  await activateHomeFeed(home, "附近");
-  await expect(home).toHaveAttribute("data-active-home-feed", "nearby");
-  await expect(home.locator('[data-home-feed-panel="nearby"]')).toBeVisible();
+  await activateHomeFeed(home, "时间轴");
+  await expect(home).toHaveAttribute("data-active-home-feed", "timeline");
+  await expect(home.locator('[data-home-feed-panel="timeline"]')).toBeVisible();
   await expect(
     home.locator('[data-home-feed-panel="discover"]'),
   ).toHaveAttribute("aria-hidden", "true");
@@ -1437,7 +1449,7 @@ test("Home pager follows touch progress and hands interaction over on release", 
   const home = activeHomeSurface(surface);
   const pager = home.locator("[data-home-feed-pager]");
   const discover = home.locator('[data-home-feed-panel="discover"]');
-  const nearby = home.locator('[data-home-feed-panel="nearby"]');
+  const timeline = home.locator('[data-home-feed-panel="timeline"]');
   const indicator = home.locator("[data-top-tab-indicator]");
 
   await expect(pager).toHaveAttribute("data-category-pager-engine", "embla");
@@ -1453,7 +1465,7 @@ test("Home pager follows touch progress and hands interaction over on release", 
       ? /^(?:pan-x pan-y pinch-zoom|manipulation)$/u
       : "pan-y pinch-zoom",
   );
-  await expect(nearby).not.toHaveAttribute("hidden", "");
+  await expect(timeline).not.toHaveAttribute("hidden", "");
   await expect(
     home.locator('[data-home-feed-panel="calligraphy"]'),
   ).not.toHaveAttribute("hidden", "");
@@ -1461,7 +1473,7 @@ test("Home pager follows touch progress and hands interaction over on release", 
     (node) => (node as HTMLElement).style.height,
   );
   const beforeDiscover = await requireBoundingBox(discover);
-  const beforeNearby = await requireBoundingBox(nearby);
+  const beforeTimeline = await requireBoundingBox(timeline);
 
   await pager.evaluate((node) => {
     const frame = node as HTMLElement;
@@ -1490,7 +1502,7 @@ test("Home pager follows touch progress and hands interaction over on release", 
   await expect
     .poll(async () =>
       home
-        .getByRole("tab", { name: "附近", exact: true })
+        .getByRole("tab", { name: "时间轴", exact: true })
         .evaluate((node) =>
           Number(
             (node as HTMLElement).style.getPropertyValue(
@@ -1508,7 +1520,7 @@ test("Home pager follows touch progress and hands interaction over on release", 
           home.getByRole("tab", { name: "发现", exact: true }),
         ),
         requireBoundingBox(
-          home.getByRole("tab", { name: "附近", exact: true }),
+          home.getByRole("tab", { name: "时间轴", exact: true }),
         ),
       ]);
       return Math.abs(line.x - (first.x + second.x) / 2);
@@ -1518,9 +1530,9 @@ test("Home pager follows touch progress and hands interaction over on release", 
     await pager.evaluate((node) => (node as HTMLElement).style.height),
   ).toBe(sourceHeight);
   const duringDiscover = await requireBoundingBox(discover);
-  const duringNearby = await requireBoundingBox(nearby);
+  const duringTimeline = await requireBoundingBox(timeline);
   expect(duringDiscover.x).toBeLessThan(beforeDiscover.x);
-  expect(duringNearby.x).toBeLessThan(beforeNearby.x);
+  expect(duringTimeline.x).toBeLessThan(beforeTimeline.x);
   await expect(productShell(surface)).toHaveAttribute(
     "data-active-destination",
     "home",
@@ -1543,7 +1555,7 @@ test("Home pager follows touch progress and hands interaction over on release", 
       frame.dispatchEvent(event);
     }
     const target = frame.querySelector<HTMLElement>(
-      '[data-home-feed-panel="nearby"]',
+      '[data-home-feed-panel="timeline"]',
     )!;
     return {
       active: frame.closest<HTMLElement>("[data-home-surface]")!.dataset
@@ -1555,14 +1567,14 @@ test("Home pager follows touch progress and hands interaction over on release", 
       ),
     };
   });
-  expect(release.active).toBe("nearby");
+  expect(release.active).toBe("timeline");
   expect(release.inert).toBe(false);
   expect(release.remaining).toBeGreaterThan(2);
-  await expect(home).toHaveAttribute("data-active-home-feed", "nearby");
+  await expect(home).toHaveAttribute("data-active-home-feed", "timeline");
   await expect(pager).toHaveAttribute("data-home-pager-scrolling", "false");
-  await expect(nearby).toHaveAttribute("aria-hidden", "false");
+  await expect(timeline).toHaveAttribute("aria-hidden", "false");
   await expect(discover).toHaveAttribute("aria-hidden", "true");
-  await expect(home.getByRole("tab", { name: "附近" })).toHaveAttribute(
+  await expect(home.getByRole("tab", { name: "时间轴" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
@@ -1617,7 +1629,12 @@ test("Home touch release commits once without post-release programmatic drift", 
     });
   });
 
-  const feeds = ["discover", "nearby", "inscriptions", "calligraphy"] as const;
+  const feeds = [
+    "discover",
+    "timeline",
+    "inscriptions",
+    "calligraphy",
+  ] as const;
   const expectSettledFeed = async (feed: (typeof feeds)[number]) => {
     // Confirm the full visual tail before the short out-and-back gesture;
     // ordinary repeated releases below can still interrupt a moving tail.
@@ -1755,7 +1772,7 @@ test("Home touch release commits once without post-release programmatic drift", 
     const frame = node as HTMLElement;
     const surface = frame.closest<HTMLElement>("[data-home-surface]")!;
     const target = frame.querySelector<HTMLElement>(
-      '[data-home-feed-panel="nearby"]',
+      '[data-home-feed-panel="timeline"]',
     )!;
     const track = target.parentElement!;
     const touch = (type: string, x: number) => {
@@ -1791,7 +1808,7 @@ test("Home touch release commits once without post-release programmatic drift", 
     await drag(0.2, 0.8);
     return { firstCommit, remaining, beforeReverse, afterReverseStart };
   });
-  expect(interruption.firstCommit).toBe("nearby");
+  expect(interruption.firstCommit).toBe("timeline");
   expect(interruption.remaining).toBeGreaterThan(2);
   expect(interruption.afterReverseStart).toBe(interruption.beforeReverse);
   await expect(home).toHaveAttribute("data-active-home-feed", "discover");
@@ -1809,7 +1826,7 @@ test("Home touch release commits once without post-release programmatic drift", 
   );
   expect(interruptedEvidence?.activeFeedChanges).toEqual([
     ...evidence!.activeFeedChanges,
-    "nearby",
+    "timeline",
     "discover",
   ]);
   expect(interruptedEvidence?.programmaticScrolls).toEqual([]);
@@ -1841,7 +1858,7 @@ test("Home PC pager accepts only explicit horizontal wheel input", async ({
     deltaX: 70,
     deltaY: 3,
   });
-  await expect(home).toHaveAttribute("data-active-home-feed", "nearby");
+  await expect(home).toHaveAttribute("data-active-home-feed", "timeline");
   await expect(productShell(surface)).toHaveAttribute(
     "data-active-destination",
     "home",
@@ -1860,7 +1877,7 @@ test("Home PC feeds keep document scroll restoration without nested scrollers", 
   const home = activeHomeSurface(surface);
   for (const feed of [
     "discover",
-    "nearby",
+    "timeline",
     "inscriptions",
     "calligraphy",
   ] as const) {
@@ -1875,21 +1892,21 @@ test("Home PC feeds keep document scroll restoration without nested scrollers", 
   await waitForStableHomePanelEvidence(home, "discover");
   const discoverTop = await writePrimaryScroll(shell, "home", 260);
   expect(discoverTop).toBeGreaterThan(0);
-  await activateHomeFeed(home, "附近");
+  await activateHomeFeed(home, "时间轴");
   // A first zero sample can precede the queued feed restoration. Await the
   // existing frame/geometry readiness before writing the next saved offset.
-  await waitForStableHomePanelEvidence(home, "nearby");
+  await waitForStableHomePanelEvidence(home, "timeline");
   await expect.poll(() => readPrimaryScroll(shell, "home")).toBe(0);
-  const nearbyTop = await writePrimaryScroll(shell, "home", 190);
-  expect(nearbyTop).toBeGreaterThan(0);
+  const timelineTop = await writePrimaryScroll(shell, "home", 190);
+  expect(timelineTop).toBeGreaterThan(0);
   await activateHomeFeed(home, "发现");
   await expect.poll(() => readPrimaryScroll(shell, "home")).toBe(discoverTop);
-  await activateHomeFeed(home, "附近");
-  await expect.poll(() => readPrimaryScroll(shell, "home")).toBe(nearbyTop);
+  await activateHomeFeed(home, "时间轴");
+  await expect.poll(() => readPrimaryScroll(shell, "home")).toBe(timelineTop);
 });
 
 test.describe(() => {
-  test("Home preserves independent Discover, Nearby, and Calligraphy scroll positions", async ({
+  test("Home preserves independent Discover, Timeline, and Calligraphy scroll positions", async ({
     page,
   }, testInfo) => {
     test.skip(
@@ -1901,8 +1918,8 @@ test.describe(() => {
     const home = activeHomeSurface(surface);
     const outerHome = shell.locator('[data-primary-destination="home"]');
     const pager = home.locator("[data-home-feed-pager]");
-    const feeds = ["discover", "nearby", "calligraphy"] as const;
-    const desired = { discover: 900, nearby: 350, calligraphy: 900 } as const;
+    const feeds = ["discover", "timeline", "calligraphy"] as const;
+    const desired = { discover: 900, timeline: 350, calligraphy: 900 } as const;
 
     for (const feed of feeds) {
       const panel = home.locator(`[data-home-feed-panel="${feed}"]`);
@@ -1926,16 +1943,17 @@ test.describe(() => {
     };
     const seeded = {
       discover: await seedAndRead("discover"),
-      nearby: await seedAndRead("nearby"),
+      timeline: await seedAndRead("timeline"),
       calligraphy: await seedAndRead("calligraphy"),
     };
     const saved = {
       discover: seeded.discover.top,
-      nearby: seeded.nearby.top,
+      // A row correction while settling may move the windowed list's offset.
+      timeline: seeded.timeline.evidence.scrollTop,
       calligraphy: seeded.calligraphy.top,
     };
     expect(saved.discover).toBeGreaterThan(0);
-    expect(saved.nearby).toBeGreaterThan(0);
+    expect(saved.timeline).toBeGreaterThan(0);
     expect(saved.calligraphy).toBeGreaterThan(0);
     await touchSettleHomeFeed(home, "discover");
     expect(
@@ -1944,7 +1962,7 @@ test.describe(() => {
     await expect(home).toHaveAttribute("data-active-home-feed", "discover");
     const baseline = {
       discover: seeded.discover.evidence,
-      nearby: seeded.nearby.evidence,
+      timeline: seeded.timeline.evidence,
       calligraphy: seeded.calligraphy.evidence,
     };
 
@@ -1969,8 +1987,8 @@ test.describe(() => {
       }
     });
     await expect(home).toHaveAttribute("data-active-home-feed", "discover");
-    expect((await readHomePanelEvidence(home, "nearby")).scrollTop).toBe(
-      saved.nearby,
+    expect((await readHomePanelEvidence(home, "timeline")).scrollTop).toBe(
+      saved.timeline,
     );
     expect(
       await outerHome.evaluate((node) => (node as HTMLElement).scrollTop),
@@ -1995,11 +2013,11 @@ test.describe(() => {
         frame.dispatchEvent(event);
       }
     });
-    await expect(home).toHaveAttribute("data-active-home-feed", "nearby");
+    await expect(home).toHaveAttribute("data-active-home-feed", "timeline");
 
     for (const feed of [
       "calligraphy",
-      "nearby",
+      "timeline",
       "discover",
       "calligraphy",
     ] as const) {
@@ -2013,7 +2031,7 @@ test.describe(() => {
 
     const beforeRebound = {
       discover: (await readHomePanelEvidence(home, "discover")).scrollTop,
-      nearby: (await readHomePanelEvidence(home, "nearby")).scrollTop,
+      timeline: (await readHomePanelEvidence(home, "timeline")).scrollTop,
       calligraphy: (await readHomePanelEvidence(home, "calligraphy")).scrollTop,
     };
     await pager.evaluate((node) => {
@@ -2044,7 +2062,7 @@ test.describe(() => {
     await expect(home).toHaveAttribute("data-active-home-feed", "calligraphy");
     expect({
       discover: (await readHomePanelEvidence(home, "discover")).scrollTop,
-      nearby: (await readHomePanelEvidence(home, "nearby")).scrollTop,
+      timeline: (await readHomePanelEvidence(home, "timeline")).scrollTop,
       calligraphy: (await readHomePanelEvidence(home, "calligraphy")).scrollTop,
     }).toEqual(beforeRebound);
 
@@ -2073,7 +2091,7 @@ test.describe(() => {
 
     const finalEvidence = {
       discover: await settleHomeFeedAndReadStableEvidence(home, "discover"),
-      nearby: await settleHomeFeedAndReadStableEvidence(home, "nearby"),
+      timeline: await settleHomeFeedAndReadStableEvidence(home, "timeline"),
       calligraphy: await settleHomeFeedAndReadStableEvidence(
         home,
         "calligraphy",
@@ -2088,6 +2106,8 @@ test.describe(() => {
         Math.abs(finalEvidence[feed].scrollTop - saved[feed]),
       ).toBeLessThanOrEqual(2);
       expect(finalEvidence[feed].testIdentity).toBe(`stable-${feed}`);
+      // The timeline has no masonry geometry to compare.
+      if (feed === "timeline") continue;
       expect(finalEvidence[feed].layoutReady).toBe("true");
       expect(finalEvidence[feed].masonryColumns).toBe(
         baseline[feed].masonryColumns,
@@ -2659,11 +2679,15 @@ test("Auto mode keeps an iPhone-like runtime on phone across viewport changes", 
   await expectPresentationPlatform(surface, "phone");
   const home = activeHomeSurface(surface);
   const discoverTop = await writeHomePanelScroll(home, "discover", 600);
-  const nearbyTop = await writeHomePanelScroll(home, "nearby", 300);
-  await touchSettleHomeFeed(home, "nearby");
+  await writeHomePanelScroll(home, "timeline", 300);
+  const reading = home.locator("[data-timeline-position]");
+  const readingRow = await reading.innerText();
 
+  // A new width reflows the timeline's rows. It holds the row at the top, whose
+  // offset then differs, so only Discover's masonry offset stays exact.
   await page.setViewportSize({ height: 500, width: 1200 });
   await expectPresentationPlatform(surface, "phone");
+  await expect(reading).toHaveText(readingRow);
   await expect
     .poll(() =>
       readHomePanelEvidence(home, "discover").then((state) => state.scrollTop),
@@ -2671,12 +2695,13 @@ test("Auto mode keeps an iPhone-like runtime on phone across viewport changes", 
     .toBe(discoverTop);
   await expect
     .poll(() =>
-      readHomePanelEvidence(home, "nearby").then((state) => state.scrollTop),
+      readHomePanelEvidence(home, "timeline").then((state) => state.scrollTop),
     )
-    .toBe(nearbyTop);
+    .toBeGreaterThan(0);
   await page.setViewportSize({ height: 700, width: 320 });
   await expectPresentationPlatform(surface, "phone");
-  await expect(home).toHaveAttribute("data-active-home-feed", "nearby");
+  await expect(home).toHaveAttribute("data-active-home-feed", "timeline");
+  await expect(reading).toHaveText(readingRow);
   await expect
     .poll(() =>
       readHomePanelEvidence(home, "discover").then((state) => state.scrollTop),
@@ -2684,9 +2709,9 @@ test("Auto mode keeps an iPhone-like runtime on phone across viewport changes", 
     .toBe(discoverTop);
   await expect
     .poll(() =>
-      readHomePanelEvidence(home, "nearby").then((state) => state.scrollTop),
+      readHomePanelEvidence(home, "timeline").then((state) => state.scrollTop),
     )
-    .toBe(nearbyTop);
+    .toBeGreaterThan(0);
 });
 
 test("Auto mode applies iPad-like viewport caps in both directions", async ({

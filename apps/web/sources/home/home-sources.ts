@@ -1,12 +1,11 @@
 import { loadHomeCatalogState } from "../../features/home/load-home-catalog";
 
 import type { CatalogSummary } from "@moya/contracts";
-import type { HomeFeedState, NearbyCard } from "../../features/home/home-feed";
+import type { HomeFeedState } from "../../features/home/home-feed";
 import type { HomeCatalogSource } from "../../features/home/load-home-catalog";
 import type { Topic } from "../../features/topics/topic";
 
 export type DiscoverSource = () => Promise<HomeFeedState<CatalogSummary>>;
-export type NearbySource = () => Promise<HomeFeedState<NearbyCard>>;
 export type TopicsSource = () => Promise<HomeFeedState<Topic>>;
 
 export const loadDiscoverFeed = async (
@@ -22,10 +21,6 @@ export const loadDiscoverFeed = async (
   if (state.state === "empty") return { state: "empty" };
   return state;
 };
-
-export const unavailableNearbySource: NearbySource = async () => ({
-  state: "unavailable",
-});
 
 export const unavailableTopicsSource: TopicsSource = async () => ({
   state: "unavailable",

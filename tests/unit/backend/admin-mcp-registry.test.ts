@@ -131,6 +131,11 @@ const COMMUNITY_ROUTES = [
   "read-publishing-jobs",
   "retry-publishing-job",
   "abandon-publishing-job",
+  "read-timeline",
+  "read-timeline-summary",
+  "create-timeline-entry",
+  "update-timeline-entry",
+  "reorder-timeline",
 ];
 const EDITORIAL_ROUTES = [
   "owner-drafts",

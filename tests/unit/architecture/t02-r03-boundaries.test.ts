@@ -240,7 +240,7 @@ describe("T02 R03 architecture boundaries", () => {
     );
     expect(homeAdapter).toContain("keys={homeFeeds}");
     expect(pager).not.toMatch(
-      /home-feed|discover|nearby|topics|user-scenarios/u,
+      /home-feed|discover|nearby|timeline|topics|user-scenarios/u,
     );
     // Category hosts retain state/scroll ownership; the approved core owns
     // touch motion, without a second direction or animation implementation.

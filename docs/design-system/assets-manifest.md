@@ -38,7 +38,9 @@ tokens 中集中定义，Web 与 Admin 共用轮廓和内缘样式；独立 SVG 
 `nearby.svg`、`image.svg`、`loading.svg`、`error.svg`、`empty.svg`、
 `previous.svg`、`next.svg` 均逐字节恢复为首个 T02 提交 `616c9a5` 的 24×24
 currentColor 圆角线性图标。`settings.svg`
-是同一线宽和端点规范下新增的原创齿轮图标。 `theme.svg` 仅为 `ThemeCycleButton`
+是同一线宽和端点规范下新增的原创齿轮图标，`timeline.svg`
+是同一规范下新增的原创时间轴图标。`nearby.svg` 保留原样，当前首页不再使用。
+`theme.svg` 仅为 `ThemeCycleButton`
 的兼容资产，不再用于移动主预览。Owner 提供并私下保留的原始界面参考图仅用于核对原版图标和底栏组合，未复制或嵌入其中像素。
 
 ## 固定字标
@@ -49,7 +51,7 @@ currentColor 圆角线性图标。`settings.svg`
 - `nav-inscriptions.png`：Owner 提供的原始字标资产；私有源文件由 Owner 保留。
 - `nav-calligraphy.png`：Owner 提供的原始字标资产；私有源文件由 Owner 保留。
 
-这三个文件是本设计系统唯一允许的位图例外。顶部“发现、附近”和其他界面文字均使用系统字体。
+这三个文件是本设计系统唯一允许的位图例外。顶部“发现、时间轴”和其他界面文字均使用系统字体。
 
 ## 演示图
 

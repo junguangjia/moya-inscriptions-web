@@ -10,8 +10,18 @@ const { headersMock, notFoundMock } = vi.hoisted(() => ({
 
 vi.mock("next/headers", () => ({ headers: headersMock }));
 vi.mock("next/navigation", () => ({ notFound: notFoundMock }));
+vi.mock("./development-data", async (importOriginal) => {
+  const original = await importOriginal<typeof developmentData>();
+  return {
+    ...original,
+    loadCleanPreviewStates: vi.fn(original.loadCleanPreviewStates),
+  };
+});
 
+import { loadCleanPreviewStates } from "./development-data";
 import T02pDevelopmentPage from "./page";
+
+import type * as developmentData from "./development-data";
 
 describe("T02pDevelopmentPage", () => {
   beforeEach(() => {
@@ -56,9 +66,18 @@ describe("T02pDevelopmentPage", () => {
     expect(markup).not.toContain("data-t02p-qa-search");
     expect(markup).not.toContain("data-open-settings");
     expect(markup).not.toContain("data-primary-navigation-action");
-    expect(markup).toContain(
-      'src="http://192.0.2.44:3102/docs/design-system/assets/demo/',
-    );
+    const states = await vi.mocked(loadCleanPreviewStates).mock.results.at(-1)
+      ?.value;
+    const timeline = states.home.timeline;
+    expect(timeline.state).toBe("populated");
+    expect(
+      timeline.items.some(
+        (entry: { media: { src: string } | null }) =>
+          entry.media?.src.startsWith(
+            "http://192.0.2.44:3102/docs/design-system/assets/demo/",
+          ) === true,
+      ),
+    ).toBe(true);
     expect(markup.match(/data-primary-destination=/g)).toHaveLength(3);
   });
 
