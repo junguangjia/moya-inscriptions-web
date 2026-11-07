@@ -547,6 +547,118 @@ describe("CatalogDetailExperience", () => {
     expect(scroller.scrollTop).toBe(1234);
   });
 
+  it("lets a quiet move away (Tab, a focus scroll, find in page) release an asked-for section, but not a clamp (timeline-posts-v1)", () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(performance.now());
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    let scroll: ContextType<typeof CatalogDetailScrollContext> = null;
+    const Actions = () => {
+      scroll = useContext(CatalogDetailScrollContext);
+      return null;
+    };
+    let contentHeight = 2400;
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    roots.push(root);
+    act(() =>
+      root.render(
+        <CatalogDetailExperience
+          activeViewerMediaId={null}
+          backButtonRef={createRef<HTMLButtonElement>()}
+          catalogId="work-quiet"
+          detailActions={<Actions />}
+          initialScrollTop={0}
+          onBack={vi.fn()}
+          onCloseViewer={vi.fn()}
+          onOpenViewer={vi.fn()}
+          onScrollTopChange={vi.fn()}
+          onViewerMediaChange={vi.fn()}
+          orientation="landscape"
+          platform="pc"
+          state={{
+            detail: {
+              aliases: [],
+              authorId: `user-${"a".repeat(32)}`,
+              authorName: "临帖人",
+              available: true,
+              canEdit: false,
+              contentType: "work",
+              facts: [],
+              id: "work-quiet",
+              media: [],
+              source: "runtime",
+              sourceCitations: [],
+              title: "春日临帖",
+            },
+            state: "loaded",
+          }}
+        />,
+      ),
+    );
+    const scroller = container.querySelector<HTMLElement>(
+      "[data-detail-scroll]",
+    )!;
+    let top = 0;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (value: number) => {
+        top = Math.max(0, Math.min(value, contentHeight - 800));
+      },
+    });
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, get: () => 800 },
+      scrollHeight: { configurable: true, get: () => contentHeight },
+    });
+    let sectionTop = 1280;
+    const section = document.createElement("section");
+    scroller.append(section);
+    section.getBoundingClientRect = () =>
+      ({ top: sectionTop - scroller.scrollTop }) as DOMRect;
+    const reveal = () =>
+      act(() => scroll!.restore(scroll!.collapseTop(section), section));
+    const quietScroll = (to: number) => {
+      scroller.scrollTop = to;
+      act(() => scroller.dispatchEvent(new Event("scroll", { bubbles: true })));
+    };
+
+    // A clamp (the page got shorter, the reader at its end) keeps the hold.
+    reveal();
+    expect(scroller.scrollTop).toBe(1280);
+    contentHeight = 1900;
+    quietScroll(scroller.scrollTop);
+    expect(scroller.scrollTop).toBe(1100);
+    contentHeight = 2300;
+    sectionTop = 1480;
+    act(() => scroll!.shift!(900, 200));
+    expect(scroller.scrollTop).toBe(1480);
+
+    // A focus scroll up into the band releases it: the band then grows
+    // below the reader's top and nothing moves them.
+    quietScroll(1214);
+    sectionTop = 1684;
+    contentHeight = 2504;
+    act(() => scroll!.shift!(1300, 204));
+    expect(scroller.scrollTop).toBe(1214);
+
+    // Tab releases it before any scroll.
+    contentHeight = 2504;
+    reveal();
+    expect(scroller.scrollTop).toBe(1684);
+    act(() =>
+      scroller.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, key: "Tab" }),
+      ),
+    );
+    sectionTop = 1884;
+    contentHeight = 2704;
+    act(() => scroll!.shift!(1800, 200));
+    expect(scroller.scrollTop).toBe(1684);
+  });
+
   it("withdraws a Detail in place: the Viewer closes, the notice is read from the top with focus", () => {
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
       callback(performance.now());

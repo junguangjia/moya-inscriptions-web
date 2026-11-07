@@ -408,6 +408,10 @@ export const CatalogDetailExperience = ({
     }
     const maximum = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
     if (!userScrollIntentRef.current && top < desiredScrollTopRef.current) {
+      // A clamp leaves the page at its end. Anywhere else, an upward move
+      // without wheel or keys is still the reader's (a focus move, find in
+      // page, a screen reader): it releases a held place or section.
+      if (Math.abs(top - maximum) > 1) releaseScrollHold();
       return;
     }
     if (desiredScrollTopRef.current > maximum && Math.abs(top - maximum) <= 1) {
@@ -453,6 +457,8 @@ export const CatalogDetailExperience = ({
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (SCROLL_KEYS.has(event.key)) markUserScrollIntent();
+    // Moving the focus is the reader moving on too.
+    else if (event.key === "Tab") releaseScrollHold();
   };
 
   return (
