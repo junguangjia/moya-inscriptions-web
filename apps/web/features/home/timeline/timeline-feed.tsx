@@ -343,7 +343,6 @@ export const TimelineFeed = ({
           return next;
         });
       },
-      expandMore: (key) => setExpanded((current) => new Set(current).add(key)),
     }),
     [onMediaFailed, openCatalog, openSheet],
   );

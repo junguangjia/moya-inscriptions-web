@@ -69,16 +69,7 @@ describe("timeline QA fixture", () => {
     );
     expect(fixture.some(({ disputed }) => disputed)).toBe(true);
     expect(new Set(rows.map(({ kind }) => kind))).toEqual(
-      new Set([
-        "head",
-        "empty",
-        "marker",
-        "entry",
-        "group",
-        "gap",
-        "more",
-        "shelf",
-      ]),
+      new Set(["head", "empty", "marker", "entry", "group", "gap", "shelf"]),
     );
   });
 
@@ -112,11 +103,11 @@ describe("timeline QA fixture", () => {
     expect(gaps.every((years) => years >= 20)).toBe(true);
   });
 
-  it("crowds one year past the fallback fold", () => {
-    expect(rows.find((row) => row.kind === "more")).toMatchObject({
-      moreKey: "more:唐:720",
-      count: 4,
-    });
+  it("shows all nine rows of its crowded year", () => {
+    const crowded = rows.filter(
+      (row) => row.kind === "entry" && row.chapter === "唐" && row.year === 720,
+    );
+    expect(crowded).toHaveLength(9);
   });
 
   it("shares a reign title across chapters", () => {

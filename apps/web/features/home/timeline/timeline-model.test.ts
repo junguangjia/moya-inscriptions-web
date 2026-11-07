@@ -461,55 +461,67 @@ describe("group folding", () => {
   });
 });
 
-describe("the year fold", () => {
+describe("a crowded year", () => {
   const crowded = (count: number) =>
     Array.from({ length: count }, () =>
       entry({ startYear: 720, endYear: 720 }),
     );
 
-  it("shows every row of a year below eight", () => {
-    const rows = inChapter(
-      buildTimelineRows(buildTimelineIndex(crowded(7))),
-      "唐",
-    );
-    expect(kinds(rows).filter((kind) => kind === "entry")).toHaveLength(7);
-    expect(kinds(rows)).not.toContain("more");
+  it("shows every row of a year, however many share it", () => {
+    for (const count of [7, 8, 9, 40]) {
+      const rows = inChapter(
+        buildTimelineRows(buildTimelineIndex(crowded(count))),
+        "唐",
+      );
+      expect(kinds(rows)).toEqual([
+        "head",
+        ...Array.from({ length: count }, () => "entry"),
+      ]);
+    }
   });
 
-  it("shows five plus 另 N 条 at eight or more, counted after group folding", () => {
-    const rows = inChapter(
-      buildTimelineRows(buildTimelineIndex(crowded(9))),
-      "唐",
-    );
-    expect(kinds(rows).filter((kind) => kind === "entry")).toHaveLength(5);
-    expect(rows.at(-1)).toMatchObject({
-      kind: "more",
-      count: 4,
-      moreKey: "more:唐:720",
+  it("folds only a group, in the media, group, text order", () => {
+    const withMedia = entry({
+      startYear: 720,
+      endYear: 720,
+      catalogId: "catalog-crowded" as never,
+      media: media(600, 400),
     });
-
-    const withGroup = inChapter(
+    const rows = inChapter(
       buildTimelineRows(
         buildTimelineIndex([
           ...crowded(6),
           ...groupMembers(3, "g4", { startYear: 720, endYear: 720 }),
+          ...groupMembers(2, "pair", { startYear: 720, endYear: 720 }),
+          withMedia,
         ]),
       ),
       "唐",
-    );
-    expect(kinds(withGroup)).not.toContain("more");
+    ).slice(1);
+    expect(kinds(rows)).toEqual([
+      "entry",
+      "group",
+      ...Array.from({ length: 8 }, () => "entry"),
+    ]);
+    expect(rows[0]).toMatchObject({ kind: "entry", entry: withMedia });
+    expect(rows[1]).toMatchObject({ kind: "group", groupKey: "axis:唐:g4" });
   });
 
-  it("opens in place", () => {
-    const rows = inChapter(
-      buildTimelineRows(
-        buildTimelineIndex(crowded(9)),
-        new Set(["more:唐:720"]),
-      ),
-      "唐",
+  it("reads each of its rows as that year, and jumps to its first row", () => {
+    const list = buildTimelineRows(
+      buildTimelineIndex([
+        ...crowded(12),
+        entry({ startYear: 730, endYear: 730 }),
+      ]),
     );
-    expect(kinds(rows).filter((kind) => kind === "entry")).toHaveLength(9);
-    expect(kinds(rows)).not.toContain("more");
+    const first = list.findIndex((row) => row.kind === "entry");
+    for (let at = first; at < first + 12; at += 1)
+      expect(timelinePositionAt(list, at)).toMatchObject({
+        label: "720 · 唐",
+        year: 720,
+      });
+    expect(rowIndexForYear(list, 720)).toBe(first);
+    expect(rowIndexForYear(list, 721)).toBe(first + 12);
   });
 });
 
@@ -520,16 +532,7 @@ describe("positions", () => {
 
   it("covers every row kind in the generated dataset", () => {
     expect(new Set(kinds(rows))).toEqual(
-      new Set([
-        "head",
-        "empty",
-        "marker",
-        "entry",
-        "group",
-        "gap",
-        "more",
-        "shelf",
-      ]),
+      new Set(["head", "empty", "marker", "entry", "group", "gap", "shelf"]),
     );
     expect(new Set(rows.map(({ key }) => key)).size).toBe(rows.length);
   });
@@ -592,18 +595,6 @@ describe("positions", () => {
     const head = list.findIndex((row) => row.key === "head:唐");
     expect(timelinePositionAt(list, head)?.label).toBe("唐");
     expect(timelinePositionAt(list, list.length)).toBeNull();
-  });
-
-  it("reads 另 N 条 as the row before it", () => {
-    const list = buildTimelineRows(
-      buildTimelineIndex(
-        Array.from({ length: 8 }, () =>
-          entry({ startYear: 720, endYear: 720, polity: "唐" }),
-        ),
-      ),
-    );
-    const more = list.findIndex((row) => row.kind === "more");
-    expect(timelinePositionAt(list, more)?.label).toBe("720 · 唐");
   });
 
   it("lands a year with no entry on the next entry", () => {
@@ -920,19 +911,6 @@ describe("row heights", () => {
     expect(
       estimateRowHeight({ kind: "marker", key: "m", chapter: "当代" }, metrics),
     ).toBe(46);
-    expect(
-      estimateRowHeight(
-        {
-          kind: "more",
-          key: "x",
-          moreKey: "x",
-          chapter: "唐",
-          year: 720,
-          count: 4,
-        },
-        metrics,
-      ),
-    ).toBe(40);
   });
 
   it("wraps a tagged meta to two lines and keeps a plain meta on one", () => {

@@ -592,7 +592,6 @@
 .entry,
 .head,
 .gap,
-.more,
 .groupToggle {
   display: grid;
   box-sizing: border-box;
@@ -605,7 +604,6 @@
 }
 
 .entry,
-.more,
 .groupToggle,
 .shelfPill,
 .member {
@@ -619,7 +617,6 @@
 }
 
 .entry:focus-visible,
-.more:focus-visible,
 .groupToggle:focus-visible,
 .shelfPill:focus-visible,
 .member:focus-visible {
@@ -898,18 +895,12 @@
   padding: 0;
 }
 
-/* Gap, 另 N 条. */
+/* Gap. */
 .gapText {
   padding-block: 3px;
   color: var(--yoyi-color-text-tertiary);
   font-size: var(--yoyi-type-metadata-size);
   line-height: 18px;
-}
-
-.moreText {
-  padding-block: 10px;
-  color: var(--yoyi-color-text-secondary);
-  font: 500 var(--yoyi-type-label-size) / 20px var(--yoyi-font-interface);
 }
 
 /* Shelf: covers the spine and opens the 书架 sheet. */
