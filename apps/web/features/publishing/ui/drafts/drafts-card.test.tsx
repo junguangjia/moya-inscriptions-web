@@ -126,13 +126,32 @@ describe("Drafts card", () => {
     const tool =
       document.querySelector<HTMLButtonElement>("[data-drafts-tool]")!;
     expect(tool.dataset.draftsCount).toBe("3");
-    expect(tool.getAttribute("aria-label")).toBe("草稿，3 份草稿");
+    expect(tool.getAttribute("aria-label")).toBe("草稿箱，3 份草稿");
     await act(async () => tool.click());
     await flush();
     expect(document.querySelector("dialog")?.open).toBe(true);
     expect(client.listDrafts).toHaveBeenCalledWith(
       expect.objectContaining({ page: 1 }),
       expect.any(AbortSignal),
+    );
+  });
+  it("does not call the unified box empty when only its Work draft count is zero", async () => {
+    client.listDrafts.mockResolvedValue(page([], 0));
+    await render(
+      <ArticleAvailability enabled>
+        <DraftsCard accountId={ACCOUNT} active presentation="tool" />
+      </ArticleAvailability>,
+    );
+    await flush();
+    const tool =
+      document.querySelector<HTMLButtonElement>("[data-drafts-tool]")!;
+    expect(tool.getAttribute("aria-label")).toBe("草稿箱，作品与专题草稿");
+    expect(tool.textContent).not.toContain("暂无草稿");
+    await act(async () => tool.click());
+    await flush();
+    expect(document.querySelector("dialog")?.open).toBe(true);
+    expect(document.querySelector("dialog")?.textContent).toContain(
+      "专题测试草稿",
     );
   });
   it("shows the account's true draft count from the first page total", async () => {
