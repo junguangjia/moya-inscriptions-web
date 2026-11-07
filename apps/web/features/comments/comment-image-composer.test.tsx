@@ -119,11 +119,13 @@ function Host({
   owner = h.account,
   scope = "feed:synthetic",
   revalidating = false,
+  active = true,
 }: {
   orientation?: "horizontal" | "vertical";
   owner?: string;
   scope?: string;
   revalidating?: boolean;
+  active?: boolean;
 }) {
   const [draft, setDraft] = useState("甲乙");
   const box = useRef<HTMLTextAreaElement>(null);
@@ -148,6 +150,7 @@ function Host({
       />
       <CommentImageComposerControls
         composer={composer}
+        active={active}
         editorRef={box}
         orientation={orientation}
         onOpenChange={(open) => h.openChanges.push(open)}
@@ -176,7 +179,7 @@ const render = (
     ),
   );
 const button = (label: string) =>
-  [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+  [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(
     (n) => n.getAttribute("aria-label") === label || n.textContent === label,
   )!;
 const pick = async (count = 1) => {
@@ -301,7 +304,7 @@ describe("comment image composer controls", () => {
   it("keeps a vertical management panel separate from the text field and closes only the panel on Escape", async () => {
     render("vertical");
     await pick();
-    const panel = container.querySelector<HTMLElement>(
+    const panel = document.body.querySelector<HTMLElement>(
       "[data-comment-image-panel]",
     )!;
     expect(panel).not.toBeNull();
@@ -315,10 +318,102 @@ describe("comment image composer controls", () => {
     });
     act(() => panel.dispatchEvent(escape));
     expect(escape.defaultPrevented).toBe(true);
-    expect(container.querySelector("[data-comment-image-panel]")).toBeNull();
+    expect(
+      document.body.querySelector("[data-comment-image-panel]"),
+    ).toBeNull();
     expect(current.items).toHaveLength(1);
     expect(h.abandoned).toBe(0);
     expect(h.openChanges).toEqual([true, false]);
+  });
+
+  it("uses labeled symbols and keeps the portaled tray out of a hidden host", async () => {
+    render("vertical");
+    await pick(2);
+    const panel = document.body.querySelector<HTMLElement>(
+      "[data-comment-image-panel]",
+    )!;
+    expect(container.contains(panel)).toBe(false);
+    expect(panel.getAttribute("aria-label")).toBe("附图管理");
+    expect(button("移除图片 1").textContent).toBe("");
+    expect(button("图片 1 在当前位置向前移").disabled).toBe(true);
+    expect(button("图片 1 在当前位置向后移").disabled).toBe(false);
+    expect(panel.textContent).not.toContain("先在输入框定位光标");
+    expect(panel.querySelector("[data-preview]")).toBeNull();
+    await click("预览发送效果");
+    expect(panel.querySelector("[data-preview]")).not.toBeNull();
+    act(() => root.render(<Host orientation="vertical" active={false} />));
+    expect(
+      document.body.querySelector("[data-comment-image-panel]"),
+    ).toBeNull();
+    expect(current.items).toHaveLength(2);
+    act(() => root.render(<Host orientation="vertical" />));
+    expect(
+      document.body.querySelector("[data-comment-image-panel]"),
+    ).toBeNull();
+    expect(h.openChanges).toEqual([true, false]);
+  });
+
+  it.each(["hidden", "inert", "aria-hidden"])(
+    "dismisses a portal when its retained parent becomes %s",
+    async (attribute) => {
+      render("vertical");
+      await pick();
+      expect(
+        document.body.querySelector("[data-comment-image-panel]"),
+      ).not.toBeNull();
+      await act(async () =>
+        container.setAttribute(
+          attribute,
+          attribute === "aria-hidden" ? "true" : "",
+        ),
+      );
+      expect(
+        document.body.querySelector("[data-comment-image-panel]"),
+      ).toBeNull();
+      expect(current.items).toHaveLength(1);
+      expect(h.openChanges).toEqual([true, false]);
+    },
+  );
+
+  it("releases the writing layout when the last photo is removed", async () => {
+    render("vertical");
+    await pick();
+    await click("移除图片 1");
+    expect(
+      document.body.querySelector("[data-comment-image-panel]"),
+    ).toBeNull();
+    expect(h.openChanges).toEqual([true, false]);
+    expect(container.querySelector("textarea")?.value).toBe("甲乙");
+  });
+
+  it("follows the visual viewport above the keyboard and cleans up its listeners", async () => {
+    const viewport = new EventTarget() as EventTarget & {
+      height: number;
+      offsetTop: number;
+    };
+    viewport.height = 420;
+    viewport.offsetTop = 20;
+    vi.stubGlobal("visualViewport", viewport);
+    try {
+      render("vertical");
+      await pick();
+      const panel = document.body.querySelector<HTMLElement>(
+        "[data-comment-image-panel]",
+      )!;
+      expect(panel.style.maxHeight).toBe("168px");
+      expect(panel.style.bottom).toContain(`${window.innerHeight - 440}px`);
+      act(() => {
+        viewport.height = 600;
+        viewport.dispatchEvent(new Event("resize"));
+      });
+      expect(panel.style.maxHeight).toBe("240px");
+      await click("收起附图面板");
+      expect(
+        document.body.querySelector("[data-comment-image-panel]"),
+      ).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("locks picker and image actions during a send and unlocks after an unconfirmed result", async () => {
@@ -352,7 +447,9 @@ describe("comment image composer controls", () => {
     act(() => root.render(<Host orientation="vertical" owner={h.account} />));
     expect(current.items).toHaveLength(0);
     expect(container.querySelector("[data-preview]")).toBeNull();
-    expect(container.querySelector("[data-comment-image-panel]")).toBeNull();
+    expect(
+      document.body.querySelector("[data-comment-image-panel]"),
+    ).toBeNull();
     expect(h.abandoned).toBe(1);
   });
 });
