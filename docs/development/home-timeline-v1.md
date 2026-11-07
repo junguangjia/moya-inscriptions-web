@@ -256,6 +256,31 @@ the table's checks list the same values and the operator read parses them.
   other way. The Owner routes exist, and the Owner sees the result on the public
   timeline.
 
+## Axis, shelf and folds
+
+Owner direction (2026-11-07), after seeing the live timeline:
+
+> 有大致时期的也放上去，完全不能确定的再折叠收录
+
+> 同一年太多的只有确定是同一处且同一类别再折叠，比如石鼓文这样。其他还是要展开显示
+
+**On the axis.** A row goes on the axis when its date is narrower than its
+dynasty or polity: a year, a reign, or a period such as 「玄宗朝（约712后）」. A
+row dated only by its dynasty or polity stays on its chapter's 其他 shelf. A
+row's `onAxis` carries the choice and the Web draws what it says, so moving a
+row is an `update-timeline-entry`, not a Web change. Following the first
+sentence, the rows with an approximate period were moved onto the axis through
+the Admin MCP on 2026-11-07; only dynasty- or polity-level rows stay on a shelf.
+
+**Folds.** No year folds: every row of a year shows, however many share it, and
+there is no 「另 N 条」 row. Only a group folds, following the second sentence.
+A group is the rows that share a `groupId`, a curated set of one place and one
+kind such as 石鼓, 熹平石经 or 云峰山摩崖. Three or more members fold into one
+row where the first member stands, and a pair stays two plain rows. On-axis and
+shelf members of one id fold apart, and the shelf sheet folds groups the same
+way. Within a year the order stays: rows with an image, then groups, then
+text-only rows, each in position order.
+
 ## Behavior Matrix
 
 The frozen Behavior Matrix is in Issue #384 and wins over tests. It covers rows
@@ -280,10 +305,12 @@ lower-confidence dates the Owner chose on 2026-11-07 to move every row
 rated考证（中） with a single year off the axis to its chapter's shelf before
 the import, to drop one entry that duplicates a live Catalog record, and to have
 the AI re-check those rows through the Admin MCP after launch, putting each back
-on the axis once its date is confirmed. The import file stays in the private
-task directory, never in Git, the Web bundle or the Issue. Development and tests
-use synthetic rows, so the private dataset never goes through MCP before the
-Production import.
+on the axis once its date is confirmed. After launch the Owner widened the axis
+to every row with a date narrower than its dynasty or polity (see
+[Axis, shelf and folds](#axis-shelf-and-folds)). The import file stays in the
+private task directory, never in Git, the Web bundle or the Issue. Development
+and tests use synthetic rows, so the private dataset never goes through MCP
+before the Production import.
 
 The contract change means Web, Backend and Admin ship together; a Web-only
 release cannot carry it. `main` is ahead of the last Production tag, so the

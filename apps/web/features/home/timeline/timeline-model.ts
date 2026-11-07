@@ -106,8 +106,6 @@ export const TIMELINE_NOW_YEAR = new Date().getFullYear();
 const SCALE_START_YEAR = -1250;
 const GROUP_FOLD_MINIMUM = 3;
 const GAP_MINIMUM_YEARS = 20;
-const YEAR_FOLD_MINIMUM = 8;
-const YEAR_FOLD_VISIBLE = 5;
 const GROUP_SUMMARY_LENGTH = 40;
 
 export type TimelineMark = "dot" | "bar" | "multi" | "ring" | "none";
@@ -149,12 +147,6 @@ export type TimelineRow =
   | TimelineEntryRow
   | TimelineGroupRow
   | (RowBase & { readonly kind: "gap"; readonly years: number })
-  | (RowBase & {
-      readonly kind: "more";
-      readonly moreKey: string;
-      readonly year: number;
-      readonly count: number;
-    })
   | (RowBase & { readonly kind: "shelf"; readonly count: number });
 
 export interface TimelineIndex {
@@ -259,11 +251,9 @@ const pushYearCluster = (
   cluster: readonly TimelineFoldItem[],
   expanded: ReadonlySet<string>,
 ) => {
+  // Every item of a year shows; only a group folds (Owner, 2026-11-07).
   // Array.prototype.sort is stable: equal ranks keep the API's position order.
   const ordered = [...cluster].sort((a, b) => itemRank(a) - itemRank(b));
-  const moreKey = `more:${chapter}:${year}`;
-  const folded = ordered.length >= YEAR_FOLD_MINIMUM && !expanded.has(moreKey);
-  const visible = folded ? ordered.slice(0, YEAR_FOLD_VISIBLE) : ordered;
   const printed = new Set<string>();
   const yearText = (start: number, end: number) => {
     const label = formatYearRange(start, end);
@@ -271,7 +261,7 @@ const pushYearCluster = (
     printed.add(label);
     return formatYearLines(start, end);
   };
-  for (const item of visible) {
+  for (const item of ordered) {
     if (item.type === "entry") {
       const { entry } = item;
       const yearLines = yearText(entry.startYear, entry.endYear);
@@ -307,20 +297,11 @@ const pushYearCluster = (
       expanded: isExpanded,
     });
   }
-  if (folded)
-    rows.push({
-      kind: "more",
-      key: moreKey,
-      moreKey,
-      chapter,
-      year,
-      count: ordered.length - YEAR_FOLD_VISIBLE,
-    });
 };
 
 /**
- * Every row in display order. `expanded` holds the opened group keys and any
- * opened 另 N 条 key; a row's position only ever depends on earlier rows.
+ * Every row in display order. `expanded` holds the opened group keys; a row's
+ * position only ever depends on earlier rows.
  */
 export const buildTimelineRows = (
   index: TimelineIndex,
@@ -455,9 +436,8 @@ export const timelinePositionAt = (
   if (row === undefined) return null;
   const own = positionOf(row);
   if (own !== null) return own;
-  // A head or a gap reads as the row it introduces, 另 N 条 as the row before.
-  const step = row.kind === "more" ? -1 : 1;
-  for (let at = index + step; at >= 0 && at < rows.length; at += step) {
+  // A head or a gap reads as the row it introduces.
+  for (let at = index + 1; at < rows.length; at += 1) {
     const candidate = rows[at]!;
     if (candidate.chapter !== row.chapter) break;
     const position = positionOf(candidate);
@@ -904,8 +884,6 @@ export const estimateRowHeight = (
       return 46;
     case "gap":
       return 24;
-    case "more":
-      return 40;
     case "shelf":
       return 54;
     case "entry":
