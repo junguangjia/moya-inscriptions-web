@@ -4,8 +4,11 @@ import type { Page } from "@playwright/test";
 
 // The double feed layout keeps phone Detail on the media carousel rather
 // than the calligraphy reading layout; every context that opens Detail needs it.
-const doubleFeedLayout = () =>
+// #260 gave a desktop browser its own layout key with the same effect.
+const doubleFeedLayout = () => {
   localStorage.setItem("yoyi.home-feed-layout.v2", "double");
+  localStorage.setItem("yoyi.desktop-feed-layout.v1", "double");
+};
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(doubleFeedLayout);

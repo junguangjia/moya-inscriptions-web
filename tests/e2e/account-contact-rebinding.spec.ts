@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import { addSessionCookie } from "./support/session-cookie";
+import { settingsEntry } from "./support/settings-entry";
 
 // Browser-only synthetic responses. No provider delivery, real session or database.
 const viewer = {
@@ -131,8 +132,9 @@ for (const channel of ["email", "phone"] as const) {
     // Actions have no timeout here: a hidden dock must fail, not wait forever.
     await expect(user).toBeVisible();
     await user.click();
-    const profile = page.getByRole("region", { name: "用户主页" });
-    await profile.getByRole("button", { name: "设置", exact: true }).click();
+    const entry = await settingsEntry(page);
+    await expect(entry).toBeVisible();
+    await entry.click();
     const settings = page.locator("dialog[open]");
     await settings.getByRole("button", { name: /账号与安全/ }).click();
     const label = channel === "email" ? "邮箱" : "手机号";

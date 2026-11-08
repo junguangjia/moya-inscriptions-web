@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 import { addSessionCookie } from "./support/session-cookie";
+import { settingsEntry } from "./support/settings-entry";
 
 // account-deletion-v1. Browser-only synthetic responses: no provider
 // delivery, real Session, account or database is used.
@@ -308,11 +309,9 @@ test("personal settings delete the account after re-verification and clear this 
   });
 
   await user.click();
-  const profile = page.getByRole("region", { name: "用户主页" });
-  await expect(
-    profile.getByRole("button", { name: "设置", exact: true }),
-  ).toBeVisible();
-  await profile.getByRole("button", { name: "设置", exact: true }).click();
+  const entry = await settingsEntry(page);
+  await expect(entry).toBeVisible();
+  await entry.click();
   const settings = page.locator("dialog[open]");
   await expect(
     settings.getByRole("button", { name: /账号与安全/ }),

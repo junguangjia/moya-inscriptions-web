@@ -9,6 +9,9 @@ test.beforeAll(async ({ request }) => {
 
 type PresentationPlatform = "phone" | "tablet" | "pc";
 
+/** Widest classic scrollbar a desktop browser reserves a gutter for. */
+const maxScrollbarWidth = 20;
+
 const expectedPlatform = (projectName: string): PresentationPlatform => {
   if (projectName === "mobile-webkit") return "phone";
   if (projectName.startsWith("tablet")) return "tablet";
@@ -124,90 +127,114 @@ test("User opens on published content and reuses the ProductShell Settings owner
   );
 });
 
-test("User traps focus and restores only its nearest QA harness exactly", async ({
-  page,
-}, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop-chromium");
-  const { shell, surface, trigger } = await openQa(page);
-  const inscriptionsTab = surface
-    .locator("[data-home-surface]")
-    .getByRole("tab", { exact: true, name: "碑刻" });
-  await inscriptionsTab.focus();
-  await inscriptionsTab.press("Enter");
-  await expect(shell).toHaveAttribute("data-active-destination", "home");
-  await expect(shell.locator("[data-home-surface]")).toHaveAttribute(
-    "data-active-home-feed",
-    "inscriptions",
-  );
+// #260: the full desktop composition navigates by a right rail and has no dock,
+// so its isolation target list is one shorter. A desktop browser below 896 px
+// keeps the dock. The contract below is the same for both, so it runs on both.
+const userIsolationCompositions = [
+  { dock: false, name: "desktop rail", width: 1280 },
+  { dock: true, name: "compact window dock", width: 800 },
+] as const;
 
-  const targets = surface.locator(
-    "[data-qa-controls], [data-primary-navigation-pager], [data-primary-navigation-dock], [data-primary-navigation], [data-t02p-qa-search], [data-inscription-filter], [data-user-trigger]",
-  );
-  await expect(targets).toHaveCount(7);
-  await surface.locator("[data-qa-controls]").evaluate((node) => {
-    node.setAttribute("aria-hidden", "menu");
-    (node as HTMLElement).inert = true;
-  });
-  await surface
-    .locator("[data-t02p-qa-search]")
-    .evaluate((node) => node.setAttribute("aria-hidden", "false"));
-  await page.evaluate(() => {
-    document.body.style.overflow = "clip";
-    const outside = document.createElement("div");
-    outside.dataset.t02pQaSearch = "";
-    outside.id = "outside-qa-utility";
-    outside.setAttribute("aria-hidden", "outside");
-    document.body.append(outside);
-  });
-  const state = (nodes: Element[]) =>
-    nodes.map((node) => ({
-      ariaHidden: node.getAttribute("aria-hidden"),
-      inert: (node as HTMLElement).inert,
-      inertAttribute: node.getAttribute("inert"),
-    }));
-  const before = await targets.evaluateAll(state);
+for (const composition of userIsolationCompositions) {
+  test(`User traps focus and restores only its nearest QA harness exactly on the ${composition.name}`, async ({
+    page,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chromium");
+    await page.setViewportSize({ height: 720, width: composition.width });
+    const { shell, surface, trigger } = await openQa(page);
+    const inscriptionsTab = surface
+      .locator("[data-home-surface]")
+      .getByRole("tab", { exact: true, name: "碑刻" });
+    await inscriptionsTab.focus();
+    await inscriptionsTab.press("Enter");
+    await expect(shell).toHaveAttribute("data-active-destination", "home");
+    await expect(shell.locator("[data-home-surface]")).toHaveAttribute(
+      "data-active-home-feed",
+      "inscriptions",
+    );
 
-  const userPage = await openUser(shell, trigger);
-  expect(
-    await targets.evaluateAll((nodes) =>
-      nodes.every(
-        (node) =>
-          node.getAttribute("aria-hidden") === "true" &&
-          (node as HTMLElement).inert,
+    const targetSelectors = [
+      "[data-qa-controls]",
+      "[data-primary-navigation-pager]",
+      "[data-primary-navigation-dock]",
+      "[data-primary-navigation]",
+      "[data-t02p-qa-search]",
+      "[data-inscription-filter]",
+      "[data-user-trigger]",
+    ];
+    for (const selector of targetSelectors)
+      await expect(surface.locator(selector)).toHaveCount(
+        selector === "[data-primary-navigation-dock]" && !composition.dock
+          ? 0
+          : 1,
+      );
+    const targets = surface.locator(targetSelectors.join(", "));
+    await expect(targets).toHaveCount(composition.dock ? 7 : 6);
+    await surface.locator("[data-qa-controls]").evaluate((node) => {
+      node.setAttribute("aria-hidden", "menu");
+      (node as HTMLElement).inert = true;
+    });
+    await surface
+      .locator("[data-t02p-qa-search]")
+      .evaluate((node) => node.setAttribute("aria-hidden", "false"));
+    await page.evaluate(() => {
+      document.body.style.overflow = "clip";
+      const outside = document.createElement("div");
+      outside.dataset.t02pQaSearch = "";
+      outside.id = "outside-qa-utility";
+      outside.setAttribute("aria-hidden", "outside");
+      document.body.append(outside);
+    });
+    const state = (nodes: Element[]) =>
+      nodes.map((node) => ({
+        ariaHidden: node.getAttribute("aria-hidden"),
+        inert: (node as HTMLElement).inert,
+        inertAttribute: node.getAttribute("inert"),
+      }));
+    const before = await targets.evaluateAll(state);
+
+    const userPage = await openUser(shell, trigger);
+    expect(
+      await targets.evaluateAll((nodes) =>
+        nodes.every(
+          (node) =>
+            node.getAttribute("aria-hidden") === "true" &&
+            (node as HTMLElement).inert,
+        ),
       ),
-    ),
-  ).toBe(true);
-  await expect(page.locator("#outside-qa-utility")).toHaveAttribute(
-    "aria-hidden",
-    "outside",
-  );
-  expect(await page.evaluate(() => document.body.style.overflow)).toBe(
-    "hidden",
-  );
+    ).toBe(true);
+    await expect(page.locator("#outside-qa-utility")).toHaveAttribute(
+      "aria-hidden",
+      "outside",
+    );
+    expect(await page.evaluate(() => document.body.style.overflow)).toBe(
+      "hidden",
+    );
 
-  const focusable = userPage.locator(
-    'button:not([disabled]):not([tabindex="-1"]):not([inert] *):visible',
-  );
-  const first = focusable.first();
-  const last = focusable.last();
-  await expect(first).toBeFocused();
-  await page.keyboard.press("Shift+Tab");
-  await expect(last).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(first).toBeFocused();
+    const focusable = userPage.locator(
+      'button:not([disabled]):not([tabindex="-1"]):not([inert] *):visible',
+    );
+    const first = focusable.first();
+    const last = focusable.last();
+    await expect(first).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(last).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(first).toBeFocused();
 
-  await first.click();
-  await expect(userPage).toHaveCount(0);
-  expect(await targets.evaluateAll(state)).toEqual(before);
-  await expect(trigger).toBeFocused();
-  await expect
-    .poll(() => page.evaluate(() => document.body.style.overflow))
-    .toBe("clip");
-  await page.evaluate(() => {
-    document.body.style.overflow = "";
-    document.querySelector("#outside-qa-utility")?.remove();
+    await first.click();
+    await expect(userPage).toHaveCount(0);
+    expect(await targets.evaluateAll(state)).toEqual(before);
+    await expect(trigger).toBeFocused();
+    await expect
+      .poll(() => page.evaluate(() => document.body.style.overflow))
+      .toBe("clip");
+    await page.evaluate(() => {
+      document.body.style.overflow = "";
+      document.querySelector("#outside-qa-utility")?.remove();
+    });
   });
-});
+}
 
 test("Published, saved, liked and history remain presentation-only", async ({
   page,
@@ -398,7 +425,27 @@ test("approved viewport matrices keep the single-layer User UI in bounds", async
     if (box === null) throw new Error("Missing User page geometry");
     expect(Math.abs(box.x)).toBeLessThanOrEqual(1);
     expect(Math.abs(box.y)).toBeLessThanOrEqual(1);
-    expect(Math.abs(box.width - viewport.width)).toBeLessThanOrEqual(1);
+    // #260 keeps a stable scrollbar gutter on the desktop root (design-tokens
+    // desktop.css) so a short destination cannot resize the gallery. A fixed
+    // full-screen layer therefore stops at the gutter rather than the window
+    // edge, even with the scrollbar hidden. It must still fill everything up
+    // to the gutter, and the gutter must show the layer's own colour.
+    let fullWidth: number = viewport.width;
+    if (testInfo.project.name === "desktop-chromium") {
+      const root = await userPage.evaluate((node) => ({
+        background: getComputedStyle(document.documentElement).backgroundColor,
+        bodyWidth: document.body.getBoundingClientRect().width,
+        layerBackground: getComputedStyle(node).backgroundColor,
+        scrollbarGutter: getComputedStyle(document.documentElement)
+          .scrollbarGutter,
+      }));
+      fullWidth = root.bodyWidth;
+      expect(root.scrollbarGutter).toBe("stable");
+      expect(viewport.width - fullWidth).toBeGreaterThanOrEqual(0);
+      expect(viewport.width - fullWidth).toBeLessThanOrEqual(maxScrollbarWidth);
+      expect(root.layerBackground).toBe(root.background);
+    }
+    expect(Math.abs(box.width - fullWidth)).toBeLessThanOrEqual(1);
     expect(Math.abs(box.height - viewport.height)).toBeLessThanOrEqual(1);
     const scroller = userPage.locator("[data-user-scroller]");
     const overflow = await scroller.evaluate((node) => ({
