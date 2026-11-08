@@ -40,6 +40,7 @@ import type {
 } from "@moya/contracts/internal/community-operator";
 import type { Pool, PoolClient } from "pg";
 import { asCommunityOperationError } from "./availability.js";
+import { OPERATOR_SOURCES, slotAfter } from "./operator-filters.js";
 import { reportAsksOfOwnProfileSql, reportIsSelfOnlySql } from "./self-only.js";
 import {
   beginWorkPublicationSync,
@@ -52,36 +53,11 @@ import type { PublicationSyncOptions } from "./publishing/publication-sync.js";
 const opaque = (prefix: string) =>
   `${prefix}-${randomUUID().replaceAll("-", "")}`;
 
-/** The queue's filters, on `community.report_cases c`, and their values from `$1`. */
-export const operatorReportFilter = {
-  sql: `($1::text IS NULL OR c.status=$1)
-    AND ($2::boolean IS NULL OR c.urgent=$2)
-    AND ($3::boolean IS NULL OR c.status<>'resolved')
-    AND ($4::text IS NULL OR c.target_type=$4)
-    AND ($5::text IS NULL OR c.target_id=$5)
-    AND ($6::text IS NULL OR c.affected_user_id=$6)
-    AND ($7::text IS NULL OR c.reporter_id=$7)`,
-  values: (q: Omit<OperatorReportQuery, "page" | "pageSize">): unknown[] => [
-    q.status ?? null,
-    q.urgent === undefined ? null : q.urgent === "true",
-    q.unresolved === undefined ? null : true,
-    q.targetType ?? null,
-    q.targetId ?? null,
-    q.affectedUserId ?? null,
-    q.reporterId ?? null,
-  ],
-  /**
-   * An owner-only row shows its id, kind and status and no more, so it stays only
-   * under a filter on what it shows. Anything else would read its target, its people
-   * or its urgency back by counting.
-   */
-  namesWithheld: (q: Omit<OperatorReportQuery, "page" | "pageSize">): boolean =>
-    q.urgent !== undefined ||
-    q.targetType !== undefined ||
-    q.targetId !== undefined ||
-    q.affectedUserId !== undefined ||
-    q.reporterId !== undefined,
-};
+/** The queue's filter, which the Owner's list, the AI's and the count all read. */
+const reports = OPERATOR_SOURCES.reports;
+/** The AI's list of the queue, which leaves out what only the Owner reviews. */
+const AI_READ = { withholdSelfOnly: true } as const;
+
 const publicEvidence = (
   e: ReportingEvidenceRecord,
 ): CommunityReportEvidence => ({
@@ -1098,17 +1074,18 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
     });
   }
   async operatorList(q: OperatorReportQuery) {
+    const queue = `${reports.from} ${reports.where(q)}`;
     return this.tx(async (db) => {
-      const args = operatorReportFilter.values(q);
+      const args = reports.values(q);
       const rows = (
         await db.query<CaseRow>(
-          `SELECT c.* FROM community.report_cases c WHERE ${operatorReportFilter.sql} ORDER BY c.urgent DESC,c.created_at,c.id LIMIT $8 OFFSET $9`,
+          `SELECT c.* ${queue} ORDER BY c.urgent DESC,c.created_at,c.id LIMIT ${slotAfter(args, 1)} OFFSET ${slotAfter(args, 2)}`,
           [...args, q.pageSize, (q.page - 1) * q.pageSize],
         )
       ).rows;
       const total = (
         await db.query<{ n: number }>(
-          `SELECT count(*)::integer n FROM community.report_cases c WHERE ${operatorReportFilter.sql}`,
+          `SELECT count(*)::integer n ${queue}`,
           args,
         )
       ).rows[0]!.n;
@@ -1146,23 +1123,21 @@ export class PostgresCommunityReportingAdapter implements CommunityReportingPort
   async operatorListForAi(
     q: OperatorReportQuery,
   ): Promise<OperatorReportAiPage> {
-    const leavesOut = operatorReportFilter.namesWithheld(q);
-    const where =
-      operatorReportFilter.sql +
-      (leavesOut ? ` AND NOT ${reportIsSelfOnlySql("c")}` : "");
+    const leavesOut = reports.withholds(q);
+    const queue = `${reports.from} ${reports.where(q, AI_READ)}`;
     return this.tx(async (db) => {
-      const args = operatorReportFilter.values(q);
+      const args = reports.values(q);
       const rows = (
         await db.query<
           CaseRow & { owner_only: boolean; owner_decides: boolean }
         >(
-          `SELECT c.*,${reportIsSelfOnlySql("c")} AS owner_only,${reportAsksOfOwnProfileSql("c")} AS owner_decides FROM community.report_cases c WHERE ${where} ORDER BY c.urgent DESC,c.created_at,c.id LIMIT $8 OFFSET $9`,
+          `SELECT c.*,${reportIsSelfOnlySql("c")} AS owner_only,${reportAsksOfOwnProfileSql("c")} AS owner_decides ${queue} ORDER BY c.urgent DESC,c.created_at,c.id LIMIT ${slotAfter(args, 1)} OFFSET ${slotAfter(args, 2)}`,
           [...args, q.pageSize, (q.page - 1) * q.pageSize],
         )
       ).rows;
       const total = (
         await db.query<{ n: number }>(
-          `SELECT count(*)::integer n FROM community.report_cases c WHERE ${where}`,
+          `SELECT count(*)::integer n ${queue}`,
           args,
         )
       ).rows[0]!.n;

@@ -10,17 +10,21 @@ export const ADMIN_EXECUTE_MAX_TARGETS = 100;
 
 // Kept as sent, own keys included: Zod's record would drop `__proto__` quietly, and
 // a save reads which keys were sent, so its defaults must not join them either.
-const sentObject = z.custom<Record<string, unknown>>(
+export const adminSentObjectSchema = z.custom<Record<string, unknown>>(
   (value) =>
     typeof value === "object" && value !== null && !Array.isArray(value),
 );
+const sentObject = adminSentObjectSchema;
+
+/** One intention, scoped to the credential: the same one replays and never repeats. */
+export const adminRequestIdSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9._:-]+$/u);
 
 const adminExecuteShape = {
-  requestId: z
-    .string()
-    .min(1)
-    .max(128)
-    .regex(/^[A-Za-z0-9._:-]+$/u),
+  requestId: adminRequestIdSchema,
   op: z.string().min(1).max(64),
   /** The one target, or what every target has in common. */
   input: sentObject.optional(),
@@ -56,7 +60,79 @@ export const adminExecuteListedShape = {
     .optional(),
 };
 
-const adminExecuteTargetRefSchema = z.union([z.number(), z.string()]);
+const runId = z.uuid();
+
+/**
+ * A run admin_preview froze, by either name: previewId and runId are one uuid
+ * (admin-mcp-completion-v1 section 8). Nothing else travels, so what runs is what was
+ * previewed. The requestId only goes into the audit: a run resumes under any.
+ */
+export const adminRunInputSchema = z
+  .strictObject({
+    requestId: adminRequestIdSchema,
+    previewId: runId.optional(),
+    runId: runId.optional(),
+  })
+  .superRefine(({ previewId, runId: run }, context) => {
+    if ((previewId === undefined) !== (run === undefined)) return;
+    context.addIssue({
+      code: "custom",
+      path: [previewId === undefined ? "previewId" : "runId"],
+      message: "Exactly one of previewId and runId.",
+    });
+  });
+
+/** tools/list for a run: plain strings, since a listed uuid costs 195 bytes a field. */
+export const adminRunListedShape = {
+  requestId: adminRequestIdSchema,
+  previewId: z.string().optional(),
+  runId: z.string().optional(),
+};
+
+const OP_SHAPE_KEYS = [
+  "op",
+  "input",
+  "targets",
+  "startAt",
+  "priorIncomplete",
+  "selector",
+] as const;
+
+/**
+ * What admin_execute takes once it also runs a previewed run: one op on its targets,
+ * or the run by previewId or runId and nothing else. Exactly one of the two shapes, so
+ * a call never changes what a preview froze.
+ */
+export const adminExecuteCallSchema = z
+  .strictObject({
+    ...adminExecuteShape,
+    op: adminExecuteShape.op.optional(),
+    selector: z.unknown().optional(),
+    previewId: runId.optional(),
+    runId: runId.optional(),
+  })
+  .superRefine((call, context) => {
+    const refuse = (key: string, message: string) =>
+      context.addIssue({ code: "custom", path: [key], message });
+    if (call.previewId === undefined && call.runId === undefined) {
+      if (call.op === undefined) refuse("op", "An op, or a previewed run.");
+      return;
+    }
+    if (call.previewId !== undefined && call.runId !== undefined)
+      refuse("runId", "Exactly one of previewId and runId.");
+    for (const key of OP_SHAPE_KEYS)
+      if (call[key] !== undefined) refuse(key, "Not with a previewed run.");
+  });
+
+/** tools/list for admin_execute once it takes a run as well: `op` is then optional. */
+export const adminExecuteCallListedShape = {
+  ...adminExecuteListedShape,
+  op: adminExecuteListedShape.op.optional(),
+  previewId: adminRunListedShape.previewId,
+  runId: adminRunListedShape.runId,
+};
+
+export const adminExecuteTargetRefSchema = z.union([z.number(), z.string()]);
 
 /** A target that did not complete: by index, always, and by id when it has a safe one. */
 export const adminExecuteRowSchema = z.strictObject({
@@ -137,6 +213,8 @@ export const adminCommunityWriteEchoSchema = z.looseObject({
 });
 
 export type AdminExecuteInput = z.infer<typeof adminExecuteInputSchema>;
+export type AdminExecuteCall = z.infer<typeof adminExecuteCallSchema>;
+export type AdminRunInput = z.infer<typeof adminRunInputSchema>;
 export type AdminExecuteRow = z.infer<typeof adminExecuteRowSchema>;
 export type AdminExecuteData = z.infer<typeof adminExecuteDataSchema>;
 export type AdminSaveEcho = z.infer<typeof adminSaveEchoSchema>;

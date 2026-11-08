@@ -1,12 +1,15 @@
 import {
   adminCommentListInputSchema,
+  adminRunListDataSchema,
+  adminRunListInputSchema,
   adminWorkListInputSchema,
 } from "@moya/contracts/internal/admin-mcp";
 import type { AdminOpName } from "@moya/contracts/internal/admin-mcp";
 
+import { listRunsRun } from "../runs/ops";
 import { communityOps } from "./community";
 import { appealQueueRun } from "./community-reads";
-import { readOp, type AdminOpEntry } from "./define";
+import { example, readOp, type AdminOpEntry } from "./define";
 import { editorialOps } from "./editorial";
 import { LIST_SOURCES, runListSource } from "./list-sources";
 import type { ListSource } from "./list-sources";
@@ -132,5 +135,12 @@ export const listOps: Readonly<Record<ListOpName, AdminOpEntry>> = {
     communityOnly,
   ),
   "list.masters": readOp("Deep zoom masters.", { credential: "base" }),
-  "list.runs": readOp("This credential's preview and bulk runs."),
+  "list.runs": readOp("This credential's preview and bulk runs.", {
+    input: adminRunListInputSchema,
+    output: { ai: adminRunListDataSchema },
+    run: listRunsRun,
+    paging: "keyset",
+    untrusted: ["/data/about/reason"],
+    example: { runId: example.run },
+  }),
 };

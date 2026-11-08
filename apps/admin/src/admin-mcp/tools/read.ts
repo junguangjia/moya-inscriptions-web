@@ -11,6 +11,7 @@ import type {
 } from "@moya/contracts/internal/admin-mcp";
 
 import { controlFor } from "../control/state";
+import { offsetCursor, offsetOfCursor, rowCursor } from "../cursor";
 import type { AdminMcpKey } from "../door";
 import {
   failedEnvelope,
@@ -24,7 +25,7 @@ import type { PayloadRequest } from "payload";
 
 export const READ_TOOL_NAME = "admin_read";
 
-export const READ_DESCRIPTION = `Read a queue or page by op. Rows are compact; long text is only ever state, length and hash. {op:"list.catalogs",input:{filter:{missing:["transcription"]}}}. {op:"list.reports",input:{status:"open"}}. Count in SQL with no rows: {op:"list.catalogs",view:"count",groupBy:"dynasty",input:{filter:{missing:["transcription"]}}}. {op:"list.reports",view:"count",groupBy:"kind",input:{unresolved:"true"}}. Project with fields:[...], continue with next. admin_actions gives each op's filter.`;
+export const READ_DESCRIPTION = `Read a queue or page by op; long text only as state, length and hash. {op:"list.reports",input:{status:"open"}}. view:"count" with groupBy counts in SQL. Continue with next. admin_actions gives each op's filter.`;
 
 const LIST_SOURCE_ARGS = [
   "cursor",
@@ -187,15 +188,17 @@ export const readContinuation = (
     };
   }
   if (entry.paging !== "keyset") return undefined;
-  if (read.view === "count")
-    return {
-      tool: READ_TOOL_NAME,
-      args: {
-        ...read,
-        cursor: String(Number(read.cursor ?? 0) + kept.length),
-      },
-    };
+  if (read.view === "count") {
+    // The call this cut answered read its cursor, so it names an offset.
+    const offset = read.cursor === undefined ? 0 : offsetOfCursor(read.cursor);
+    return offset === undefined
+      ? undefined
+      : {
+          tool: READ_TOOL_NAME,
+          args: { ...read, cursor: offsetCursor(offset + kept.length) },
+        };
+  }
   return typeof last.id === "number"
-    ? { tool: READ_TOOL_NAME, args: { ...read, cursor: String(last.id) } }
+    ? { tool: READ_TOOL_NAME, args: { ...read, cursor: rowCursor(last.id) } }
     : undefined;
 };

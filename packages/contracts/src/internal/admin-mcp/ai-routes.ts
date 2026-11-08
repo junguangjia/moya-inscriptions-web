@@ -34,6 +34,16 @@ export const URGENT_OWNER_ONLY = "URGENT_OWNER_ONLY";
  */
 export const AI_OPERATOR_RUN_HEADER = "x-admin-mcp-run";
 
+const RUN_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+
+/**
+ * A run header the engine could have set: one run id, a uuid. Anything else, a word,
+ * a repeated header or an empty one, is no run header at all.
+ */
+export const isAiRunHeader = (value: unknown): value is string =>
+  typeof value === "string" && RUN_ID.test(value);
+
 /**
  * This target's key on a write whose body has no `requestId`: the comment, user and
  * policy routes, whose receipt the route builds from it, so a retry replays and never
@@ -201,6 +211,7 @@ export const AI_OPERATOR_ROUTES: readonly AiOperatorRoute[] = [
   },
   communityRead("ai/find"),
   communityRead("ai/count"),
+  communityRead("ai/select"),
   communityRead("reports"),
   communityRead("reports/:id"),
   {

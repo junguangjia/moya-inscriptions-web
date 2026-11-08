@@ -7,6 +7,7 @@ import {
   ADMIN_COMMUNITY_RECORD_TYPES,
   ADMIN_EXECUTE_MAX_TARGETS,
   ADMIN_MCP_CONTRACT_VERSION,
+  ADMIN_MCP_NATIVE_TOOLS,
   ADMIN_MCP_TEXT_CAP_BYTES,
   ADMIN_MCP_TOKEN_BUDGET,
   ADMIN_MCP_TOOL_PROFILES,
@@ -24,6 +25,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   actionsCatalogHash,
+  ADMIN_MCP_TOOL_RESERVE_BYTES,
+  ADMIN_TOOL_EXAMPLES,
   adminMcpBudgets,
   CODE_GUIDE,
   contractOf,
@@ -34,9 +37,10 @@ import { connectClient, serveRoutes } from "./admin-mcp-wire.js";
 
 // What a connected tool can learn of the contract, and how a name that moved answers
 // (extensibility plan 2.2 and 2.8), as real JSON-RPC with the official client: the
-// tools/list it receives, serverInfo, admin_whoami's contract, the choices a refusal
-// names now that tools/list shows them as strings, and earlier op names. The alias
-// table is empty in the repository, so synthetic rows stand in for it here.
+// tools/list it receives and the room it holds for tools to come, a tool's worked
+// examples, serverInfo, admin_whoami's contract, the choices a refusal names now that
+// tools/list shows them as strings, and earlier op names. The alias table is empty in
+// the repository, so synthetic rows stand in for it here.
 
 vi.mock("@moya/contracts/internal/admin-mcp", async (importOriginal) => ({
   ...(await importOriginal<
@@ -200,6 +204,41 @@ describe("tools/list as the official client receives it", () => {
     },
   );
 
+  it("leaves room on the wire for each native tool still to come", async () => {
+    const { tools, bytes } = await listedOnTheWire("full");
+    const toCome = ADMIN_MCP_NATIVE_TOOLS.filter(
+      (name) => !tools.some((tool) => tool.name === name),
+    );
+    const held = bytes + ADMIN_MCP_TOOL_RESERVE_BYTES * toCome.length;
+    expect(held).toBe(adminMcpBudgets().toolsList.reserved.bytes);
+    expect(held).toBeLessThanOrEqual(CEILING_BYTES);
+  });
+
+  it("gives a tool's worked examples through admin_actions, and none of a tool the key lacks", async () => {
+    await withClient("read", async (client) => {
+      expect(
+        await callOn(client, "admin_actions", { tool: "admin_analytics" }),
+      ).toMatchObject({
+        ok: true,
+        data: {
+          tool: "admin_analytics",
+          available: true,
+          examples: ADMIN_TOOL_EXAMPLES.admin_analytics,
+        },
+      });
+      expect(
+        await callOn(client, "admin_actions", { tool: "admin_execute" }),
+      ).toMatchObject({
+        ok: true,
+        data: {
+          tool: "admin_execute",
+          available: false,
+          unavailable: "tool_not_listed",
+        },
+      });
+    });
+  });
+
   it("shows what grows with the registry as a plain string, and the runtime still names the choices", async () => {
     const { tools } = await listedOnTheWire("read");
     const property = (tool: string, name: string) =>
@@ -211,6 +250,7 @@ describe("tools/list as the official client receives it", () => {
     expect(property("admin_get", "type")).toEqual({ type: "string" });
     expect(property("admin_analytics", "report")).toEqual({ type: "string" });
     expect(property("admin_get", "find")).toEqual({ type: "object" });
+    expect(property("admin_actions", "tool")).toEqual({ type: "string" });
     const types = [...ADMIN_CMS_RECORD_TYPES, ...ADMIN_COMMUNITY_RECORD_TYPES];
     await withClient("read", async (client) => {
       for (const [tool, args, path, allowed] of [
@@ -221,6 +261,12 @@ describe("tools/list as the official client receives it", () => {
           { report: "weather" },
           ["report"],
           ADMIN_ANALYTICS_REPORTS,
+        ],
+        [
+          "admin_actions",
+          { tool: "admin_weather" },
+          ["tool"],
+          ADMIN_MCP_NATIVE_TOOLS,
         ],
       ] as const)
         expect(await callOn(client, tool, args), tool).toMatchObject({

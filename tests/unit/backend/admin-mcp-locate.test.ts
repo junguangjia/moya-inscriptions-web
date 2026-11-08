@@ -33,8 +33,10 @@ import {
   LINK_PARAMETER_EXCLUSIONS,
   LINK_PARAMETER_RULES,
   normalizeSearchQuery,
+  offsetCursor,
   okEnvelope,
   readContinuation,
+  rowCursor,
   textHash,
   textWindow,
   toolListingFor,
@@ -753,17 +755,23 @@ describe("a read cut at the size cap", () => {
   it("goes on by the last row, or a count's offset, on a list source", () => {
     expect(readContinuation({ op: "list.catalogs" }, rows(3))).toEqual({
       tool: "admin_read",
-      args: { op: "list.catalogs", cursor: "3" },
+      args: { op: "list.catalogs", cursor: rowCursor(3) },
     });
+    const counted = [{ count: 1 }, { count: 1 }, { count: 1 }];
     expect(
-      readContinuation({ op: "list.catalogs", view: "count", cursor: "200" }, [
-        { count: 1 },
-        { count: 1 },
-        { count: 1 },
-      ]),
+      readContinuation({ op: "list.catalogs", view: "count" }, counted),
     ).toEqual({
       tool: "admin_read",
-      args: { op: "list.catalogs", view: "count", cursor: "203" },
+      args: { op: "list.catalogs", view: "count", cursor: offsetCursor(3) },
+    });
+    expect(
+      readContinuation(
+        { op: "list.catalogs", view: "count", cursor: offsetCursor(200) },
+        counted,
+      ),
+    ).toEqual({
+      tool: "admin_read",
+      args: { op: "list.catalogs", view: "count", cursor: offsetCursor(203) },
     });
   });
 
@@ -894,7 +902,8 @@ describe("what tools/list advertises", () => {
         "admin_actions",
         "admin_view_media",
         "admin_job",
-        ...(profile === "read" ? [] : ["admin_execute"]),
+        ...(profile === "read" ? [] : ["admin_preview", "admin_execute"]),
+        ...(profile === "full" ? ["admin_execute_irreversible"] : []),
       ]);
   });
 

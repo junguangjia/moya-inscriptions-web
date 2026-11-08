@@ -38,8 +38,10 @@ import {
 } from "@moya/community-postgres";
 import {
   AI_OPERATOR_ROUTES,
+  aiCountQuerySchema,
   aiCountResultSchema,
   aiFindResultSchema,
+  aiSelectResultSchema,
 } from "@moya/contracts/internal/admin-mcp";
 import {
   articlePendingCandidateSchema,
@@ -609,6 +611,13 @@ const readSweep = (): Readonly<Record<string, readonly string[]>> => {
       `ai/count?${query({ source: "comments", search: CANARY.comment })}`,
       `ai/count?${query({ source: "works", search: canary })}`,
       `ai/count?${query({ source: "work_submissions" })}`,
+    ],
+    "ai/select": [
+      `ai/select?${query({ source: "comments", ids: `${ids.selfComment},${ids.selfReply},${ids.publicComment}` })}`,
+      `ai/select?${query({ source: "works", ids: `${ids.selfWork},${ids.publicWork}` })}`,
+      `ai/select?${query({ source: "reports", ids: [ids.selfReport, ids.commentReport, ids.replyReport, ids.rightsReport].join(",") })}`,
+      `ai/select?${query({ source: "jobs", ids: ids.job })}`,
+      `ai/select?${query({ source: "users", ids: ids.author })}`,
     ],
     reports: ["reports?pageSize=100", "reports?status=open&pageSize=100"],
     "reports/:id": [
@@ -1335,6 +1344,105 @@ describe("ai/count", () => {
     },
   );
 
+  /** Where each source's list is. */
+  const LISTS = {
+    reports: "reports",
+    comments: "comments",
+    works: "works",
+    users: "users",
+    work_submissions: "publishing/submissions",
+    jobs: "publishing/jobs",
+  } as const;
+  const none = (prefix: string) => `${prefix}-${"0".repeat(32)}`;
+  const LONG_AGO = "2001-01-01T00:00:00Z";
+  const FAR_OFF = "2100-01-01T00:00:00Z";
+  /**
+   * Each filter's value that holds rows, then one that holds none where the filter can
+   * say so: a filter the SQL dropped would read every row, and never zero.
+   */
+  const filtersOf = (): Record<
+    keyof typeof LISTS,
+    Record<string, readonly [string, string?]>
+  > => ({
+    reports: {
+      status: ["open", "reviewing"],
+      unresolved: ["true"],
+      urgent: ["false", "true"],
+      targetType: ["work", "thread"],
+      targetId: [ids.publicWork, none("work")],
+      affectedUserId: [ids.author, none("user")],
+      reporterId: [ids.reporter, none("user")],
+    },
+    comments: {
+      moderation: ["visible", "hidden"],
+      kind: ["comment", "reply"],
+      catalogId: [ids.publicWork, none("work")],
+      search: ["Public comment", `nosuch${run}`],
+      authorId: [ids.reporter, none("user")],
+      from: [LONG_AGO, FAR_OFF],
+      to: [FAR_OFF, LONG_AGO],
+    },
+    works: {
+      search: ["Public", `nosuch${run}`],
+      authorId: [ids.author, none("user")],
+      workId: [ids.publicWork, none("work")],
+      from: [LONG_AGO, FAR_OFF],
+      to: [FAR_OFF, LONG_AGO],
+    },
+    users: {
+      search: [`author-${run}`, `nosuch${run}`],
+      userId: [ids.author, none("user")],
+    },
+    work_submissions: {
+      state: ["approved", "rejected"],
+      authorId: [ids.author, none("user")],
+      workId: [ids.publicWork, none("work")],
+    },
+    jobs: {
+      state: ["queued", "failed"],
+      kind: ["publish_media", "purge_blob"],
+      subjectId: [ids.item, none("media-item")],
+      id: [ids.job, none("publishing-job")],
+    },
+  });
+
+  it.each(Object.keys(LISTS) as (keyof typeof LISTS)[])(
+    "answers %s with its list's own total under each filter, one at a time",
+    async (source) => {
+      const filters = filtersOf()[source];
+      // Every filter the count takes, so one added there is one tested here.
+      const option = aiCountQuerySchema.options.find(
+        (candidate) => candidate.shape.source.value === source,
+      )!;
+      expect(Object.keys(filters).sort()).toEqual(
+        Object.keys(option.shape)
+          .filter((key) => key !== "source" && key !== "groupBy")
+          .sort(),
+      );
+      for (const [key, [holds, holdsNone]] of Object.entries(filters))
+        for (const [value, expected] of [
+          [holds, "some"],
+          ...(holdsNone === undefined ? [] : [[holdsNone, "none"]]),
+        ] as const) {
+          const page = (
+            await ai(
+              `${LISTS[source]}?${query({ pageSize: "1", [key]: value })}`,
+            )
+          ).json as { total: number };
+          const counted = await count({ source, [key]: value });
+          expect({ key, value, total: counted.total }).toEqual({
+            key,
+            value,
+            total: page.total,
+          });
+          // The fixture holds a row for each, so equal is never zero against zero.
+          expect(counted.total > 0 ? "some" : "none", `${key}=${value}`).toBe(
+            expected,
+          );
+        }
+    },
+  );
+
   it("reads no withheld case's reason or target back through a group", async () => {
     const byReason = await count({ source: "reports", groupBy: "reason" });
     const groups = Object.fromEntries(
@@ -1387,6 +1495,157 @@ describe("ai/count", () => {
       expect(read.status).toBe(503);
       expect(read.code).toBe("READ_TIMED_OUT");
       expect(read.text).not.toContain("total");
+    } finally {
+      await blocker.query("ROLLBACK");
+      blocker.release();
+    }
+  }, 30_000);
+});
+
+// S8-08: the stamps a preview freezes, by ids, in one statement a source.
+describe("ai/select by ids", () => {
+  const select = async (source: string, named: readonly string[]) => {
+    const read = await ai(
+      `ai/select?${query({ source, ids: named.join(",") })}`,
+    );
+    expect(read.status, read.text).toBe(200);
+    expectNoCanary(read.text, `ai/select ${source}`);
+    const answer = aiSelectResultSchema.parse(read.json);
+    return {
+      answer,
+      byId: new Map(answer.items.map((item) => [item.id, item])),
+    };
+  };
+
+  it("stamps each named comment, marks a withheld one by why alone, and leaves a missing one out", async () => {
+    const missing = opaque("comment");
+    const { answer, byId } = await select("comments", [
+      ids.publicComment,
+      ids.selfComment,
+      ids.selfReply,
+      missing,
+    ]);
+    expect(answer.excluded).toEqual(["self_only"]);
+    expect(byId.get(ids.publicComment)).toMatchObject({
+      state: "visible",
+      kind: "comment",
+      affected: 1,
+    });
+    for (const id of [ids.selfComment, ids.selfReply])
+      expect(byId.get(id)).toEqual({
+        id,
+        stamp: "withheld",
+        withheld: "self_only",
+      });
+    expect(byId.has(missing)).toBe(false);
+    expect(answer.items).toHaveLength(3);
+  });
+
+  it("moves a comment's stamp when its moderation moves, and a reply joins its thread's count", async () => {
+    // An author of its own, so no other read here meets these rows.
+    const author = opaque("user");
+    await setup.query(
+      "INSERT INTO community.public_users(id,handle,display_name) VALUES($1,$2,'Stamped')",
+      [author, `stamped-${run}`],
+    );
+    const root = opaque("comment");
+    await setup.query(
+      "INSERT INTO community.catalog_comments(id,catalog_id,target_type,author_id,text,moderation) VALUES($1,$2,'work',$3,'Stamped','visible')",
+      [root, ids.publicWork, author],
+    );
+    const before = (await select("comments", [root])).byId.get(root)!;
+    expect(before.affected).toBe(1);
+    await setup.query(
+      "INSERT INTO community.catalog_comment_replies(id,root_comment_id,author_id,text,moderation) VALUES($1,$2,$3,'Reply','visible')",
+      [opaque("comment"), root, author],
+    );
+    const replied = (await select("comments", [root])).byId.get(root)!;
+    expect(replied).toMatchObject({ stamp: before.stamp, affected: 2 });
+    await setup.query(
+      "UPDATE community.catalog_comments SET moderation='hidden' WHERE id=$1",
+      [root],
+    );
+    const hidden = (await select("comments", [root])).byId.get(root)!;
+    expect(hidden.state).toBe("hidden");
+    expect(hidden.stamp).not.toBe(before.stamp);
+  });
+
+  it("marks a case on a self-only work self_only and a person's own privacy request personal_info, with no contact", async () => {
+    const reporting = new PostgresCommunityReportingAdapter(setup);
+    const { id: privacy } = await reporting.create(ids.reporter, {
+      kind: "standard",
+      target: { type: "user", id: ids.reporter },
+      reason: "privacy",
+      description: `Privacy ${run}`,
+      requestId: randomUUID(),
+    });
+    const { answer, byId } = await select("reports", [
+      ids.selfReport,
+      ids.commentReport,
+      ids.rightsReport,
+      privacy,
+    ]);
+    expect(answer.excluded).toEqual(["self_only", "personal_info"]);
+    for (const id of [ids.selfReport, ids.commentReport])
+      expect(byId.get(id)).toEqual({
+        id,
+        stamp: "withheld",
+        withheld: "self_only",
+      });
+    expect(byId.get(privacy)).toEqual({
+      id: privacy,
+      stamp: "withheld",
+      withheld: "personal_info",
+    });
+    const rights = byId.get(ids.rightsReport)!;
+    expect(rights).toMatchObject({ kind: "rights_notice" });
+    expect(rights.stamp).toBe(`r${rights.version}`);
+  });
+
+  it("stamps works, users and jobs, and withholds a job on a self-only work", async () => {
+    const purge = opaque("publishing-job");
+    await setup.query(
+      "INSERT INTO community.publishing_jobs(id,kind,subject_id,state,run_after) VALUES($1,'purge_trashed_work',$2,'failed',CURRENT_TIMESTAMP)",
+      [purge, ids.selfWork],
+    );
+    const works = await select("works", [ids.publicWork, ids.selfWork]);
+    expect(works.byId.get(ids.publicWork)).toMatchObject({
+      version: expect.any(Number) as number,
+      state: expect.any(String) as string,
+    });
+    expect(works.byId.get(ids.selfWork)).toEqual({
+      id: ids.selfWork,
+      stamp: "withheld",
+      withheld: "self_only",
+    });
+    const users = await select("users", [ids.author]);
+    expect(users.answer.excluded).toEqual([]);
+    expect(users.byId.get(ids.author)).toMatchObject({ state: "active" });
+    const jobs = await select("jobs", [ids.job, purge]);
+    expect(jobs.byId.get(ids.job)).toMatchObject({
+      state: "queued",
+      kind: "publish_media",
+      stamp: "jqueued.0",
+    });
+    expect(jobs.byId.get(purge)).toEqual({
+      id: purge,
+      stamp: "withheld",
+      withheld: "self_only",
+    });
+  });
+
+  it("answers no stamps when it runs out of time", async () => {
+    const blocker = await setup.connect();
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query(
+        "LOCK TABLE community.publishing_jobs IN ACCESS EXCLUSIVE MODE",
+      );
+      const read = await ai(
+        `ai/select?${query({ source: "jobs", ids: ids.job })}`,
+      );
+      expect(read.status).toBe(503);
+      expect(read.code).toBe("READ_TIMED_OUT");
     } finally {
       await blocker.query("ROLLBACK");
       blocker.release();

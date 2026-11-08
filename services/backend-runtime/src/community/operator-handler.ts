@@ -40,6 +40,7 @@ import {
   AI_OPERATOR_RUN_HEADER,
   aiOperatorRouteFor,
   aiOperatorRouteId,
+  isAiRunHeader,
   SELF_ONLY_OWNER_REVIEW,
   type AiOperatorCredential,
   type AiOperatorReader,
@@ -203,9 +204,10 @@ export const aiOperatorRefusal = (
   );
   if (route === undefined || !route.credentials.includes(credential))
     return "AI_ROUTE_FORBIDDEN";
+  // Only a run id passes: a header any caller could fill with a word is no run.
   if (
     route.klass === "irreversible" &&
-    !request.headers[AI_OPERATOR_RUN_HEADER]
+    !isAiRunHeader(request.headers[AI_OPERATOR_RUN_HEADER])
   )
     return "AI_RUN_REQUIRED";
   if (route.klass.startsWith("sensitive:")) return "SENSITIVE_SWITCH_OFF";
@@ -266,13 +268,6 @@ const numericQuery = (value: unknown): number | undefined => {
   return Number(value);
 };
 
-const stringQuery = (value: unknown): string | undefined => {
-  if (value === undefined) return undefined;
-  if (typeof value !== "string")
-    throw new CommunityInputError("Operator query is invalid");
-  return value;
-};
-
 /** A malformed percent escape is a missing subject, never a 500. */
 const decodeSegment = (segment: string): string | undefined => {
   try {
@@ -287,20 +282,25 @@ const queryOf = (request: IncomingMessage) =>
     new URL(request.url ?? "/", "http://request.invalid").searchParams,
   );
 
-const withDefined = <Value>(
-  entries: readonly (readonly [string, Value | undefined])[],
-): Record<string, Value> =>
-  Object.fromEntries(
-    entries.filter(
-      (entry): entry is readonly [string, Value] => entry[1] !== undefined,
-    ),
-  );
+/**
+ * The whole query, as the service's strict schema reads it: a key no schema knows is
+ * refused there, never dropped here, so a filter the Owner set always reaches the SQL.
+ * Only the page numbers are read as numbers first.
+ */
+const pagedQueryOf = (request: IncomingMessage) => {
+  const { page, pageSize, ...query } = queryOf(request);
+  return {
+    ...query,
+    ...(page === undefined ? {} : { page: numericQuery(page) }),
+    ...(pageSize === undefined ? {} : { pageSize: numericQuery(pageSize) }),
+  };
+};
 
 /**
  * Routes, all behind the operator credential:
  *   GET  /internal/community/publication-policy
  *   PUT  /internal/community/publication-policy
- *   GET  /internal/community/comments?moderation&kind&catalogId&search&order&page&pageSize
+ *   GET  /internal/community/comments?moderation&kind&catalogId&search&authorId&from&to&order&page&pageSize
  *   POST /internal/community/comments/moderation          (selected items, bounded)
  *   GET  /internal/community/comments/{id}                (detail with context)
  *   GET  /internal/community/comments/{id}/analysis       (advisory state only)
@@ -811,27 +811,11 @@ export const handleOperatorRequest = async (
         methodNotAllowed();
         return;
       }
-      const query = queryOf(request);
       sendCommentJson(
         request,
         response,
         200,
-        await moderationService.readComments({
-          ...withDefined([
-            ["moderation", stringQuery(query.moderation)],
-            ["kind", stringQuery(query.kind)],
-            ["catalogId", stringQuery(query.catalogId)],
-            ["search", stringQuery(query.search)],
-            ["authorId", stringQuery(query.authorId)],
-            ["from", stringQuery(query.from)],
-            ["to", stringQuery(query.to)],
-            ["order", stringQuery(query.order)],
-          ]),
-          ...withDefined([
-            ["page", numericQuery(query.page)],
-            ["pageSize", numericQuery(query.pageSize)],
-          ]),
-        }),
+        await moderationService.readComments(pagedQueryOf(request)),
       );
       return;
     }
@@ -856,20 +840,10 @@ export const handleOperatorRequest = async (
         methodNotAllowed();
         return;
       }
-      const query = queryOf(request);
       sendJson(
         response,
         200,
-        await moderationService.readModerationEvents({
-          ...withDefined([
-            ["subjectId", stringQuery(query.subjectId)],
-            ["action", stringQuery(query.action)],
-          ]),
-          ...withDefined([
-            ["page", numericQuery(query.page)],
-            ["pageSize", numericQuery(query.pageSize)],
-          ]),
-        }),
+        await moderationService.readModerationEvents(pagedQueryOf(request)),
       );
       return;
     }
@@ -879,13 +853,10 @@ export const handleOperatorRequest = async (
         methodNotAllowed();
         return;
       }
-      const query = queryOf(request);
       sendJson(
         response,
         200,
-        await moderationService.readSummary(
-          withDefined([["range", stringQuery(query.range)]]),
-        ),
+        await moderationService.readSummary(queryOf(request)),
       );
       return;
     }

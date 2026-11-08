@@ -96,6 +96,18 @@ export const CODE_GUIDE: AdminMcpCodeGuide = {
     hint: "This input makes the op irreversible: a save binding a new identity, or a legal hold's release. Call admin_preview first.",
     retryable: false,
   },
+  PREVIEW_EXPIRED: {
+    hint: "This run expired, unused or unconfirmed past its time, so none of it runs. Preview again under a new requestId.",
+    retryable: false,
+  },
+  PREVIEW_STALE: {
+    hint: "This run was frozen under an earlier version of its op, so it cannot run and has expired. Preview again under a new requestId.",
+    retryable: false,
+  },
+  RUN_CANCELLED: {
+    hint: "This run was cancelled, so nothing more of it runs; targets it already applied stay applied. list.runs shows each target.",
+    retryable: false,
+  },
   INPUT_INVALID: {
     hint: "Fix the arguments named in issues. Repeating the call unchanged fails the same way.",
     retryable: false,

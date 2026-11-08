@@ -10,7 +10,7 @@ import { z } from "zod";
 
 export const FIND_TOOL_NAME = "admin_find";
 
-export const FIND_DESCRIPTION = `Resolve a reference in one call: id, pasted public or Admin link, @handle, sourceId, or free text. {query:"/catalog/abc"}, {query:"https://.../?articleId=article-..."}, {query:"兰亭序",type:"catalog"}. resolution says exact, candidates or none. Use resolution.ref for a mutation, never the first candidate. A branch that did not answer is named in meta.sources, never read as zero. Neither none nor a short candidate list proves absence: a draft Catalog is matched on its title only, as typed and by one simplified-traditional conversion, so another form of a character and any draft alias are missed. Community text is matched as stored, with no such conversion. Retry in the other form before saying it does not exist.`;
+export const FIND_DESCRIPTION = `Resolve an id, link, @handle, sourceId or text: {query:"/catalog/abc"}. resolution: exact, candidates or none; mutate only resolution.ref. meta.sources names an unanswered branch. Neither none nor a short candidate list proves absence: a draft Catalog matches by title only, as typed or in one simplified-traditional form, not any draft alias; retry the other form.`;
 
 /** What tools/list shows: the record type grows with the registry, so it is a string. */
 export const findListedInput = adminFindInputSchema.extend({

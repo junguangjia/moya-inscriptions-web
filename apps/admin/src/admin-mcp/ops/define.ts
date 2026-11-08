@@ -1,5 +1,6 @@
 import type {
   AdminMcpEnvelope,
+  AdminOpClass,
   AdminOpMeta,
   AdminOpRecovery,
   AdminReadInput,
@@ -7,6 +8,30 @@ import type {
 import type { PayloadRequest } from "payload";
 
 import type { AdminMcpKey } from "../door";
+
+/**
+ * The run a target executes under (S8 plan 2.8). Only the run executor issues one, and
+ * only an issued one counts: an object of the same shape built anywhere else carries
+ * no run header and admits nothing.
+ */
+export interface RunTicket {
+  readonly runId: string;
+}
+
+const issuedTickets = new WeakSet<RunTicket>();
+const RUN_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+
+/** For runs/executor.ts alone; tests/unit/architecture/admin-mcp-run-header.test.ts holds it there. */
+export const issueRunTicket = (runId: string): RunTicket => {
+  if (!RUN_ID.test(runId)) throw new Error("RUN_TICKET_INVALID");
+  const ticket: RunTicket = Object.freeze({ runId });
+  issuedTickets.add(ticket);
+  return ticket;
+};
+
+export const isIssuedTicket = (ticket: RunTicket | undefined) =>
+  ticket !== undefined && issuedTickets.has(ticket);
 
 /** What an op runs with. Never holds a credential: its transport chooses one. */
 export interface AdminOpContext {
@@ -16,12 +41,40 @@ export interface AdminOpContext {
   readonly read?: Partial<AdminReadInput>;
   /** On admin_execute: this target's idempotency key, from requestId, index and connection. */
   readonly requestKey?: string;
+  /** Set by the run executor alone: the frozen run this target belongs to. */
+  readonly run?: RunTicket;
 }
 
 /** A write runs with one: a target with none would have no replay to fall back on. */
 export const requestKeyOf = ({ requestKey }: AdminOpContext): string => {
   if (requestKey === undefined) throw new Error("WRITE_WITHOUT_REQUEST_KEY");
   return requestKey;
+};
+
+/**
+ * The class the per-target core read for this target's one call, kept by the context
+ * itself, so a save's class and its removal check still read through the same context.
+ */
+const admissions = new WeakMap<AdminOpContext, AdminOpClass>();
+
+/** For ops/target.ts alone, which classifies a target before it runs. */
+export const admitTarget = (context: AdminOpContext, klass: AdminOpClass) => {
+  admissions.set(context, klass);
+};
+
+/**
+ * First in each write that may bind an identity for good: it runs only through the
+ * per-target core, and only as reversible or inside an issued run. A direct call of
+ * its `run`, whatever it was handed, fails here before anything is read or written.
+ */
+export const requireAdmission = (context: AdminOpContext): void => {
+  const klass = admissions.get(context);
+  if (
+    klass === "reversible" ||
+    (klass === "irreversible" && isIssuedTicket(context.run))
+  )
+    return;
+  throw new Error("RUN_ADMISSION_REQUIRED");
 };
 
 /**
@@ -123,6 +176,7 @@ export const example = {
   job: `publishing-job-${syntheticHex("9")}`,
   conversation: `dm-${syntheticHex("a")}`,
   message: `dmsg-${syntheticHex("b")}`,
+  run: "00000000-0000-4000-8000-00000000000c",
   digest: "a".repeat(64),
   reason: "Synthetic reason",
 } as const;

@@ -8,6 +8,7 @@ import {
   SELF_ONLY_OWNER_REVIEW,
   aiCountQuerySchema,
   aiFindQuerySchema,
+  aiSelectQuerySchema,
   aiSettlementQuerySchema,
 } from "@moya/contracts/internal/admin-mcp";
 import type {
@@ -181,16 +182,38 @@ const answerSettlement = async (
   else sendJson(response, 200, answer, noStore);
 };
 
-/** `internal/community/ai/find`, `ai/count` and `ai/settlement`, for AI alone. */
+/**
+ * A preview's stamps: up to 100 named rows of one source. Only by ids for now: a
+ * filter and `movable` are the selector's, and are refused by name until it lands.
+ */
+const answerSelect = async (
+  response: ServerResponse,
+  query: unknown,
+  reader: AiOperatorReader,
+): Promise<void> => {
+  const input = aiSelectQuerySchema.safeParse(query);
+  if (
+    !input.success ||
+    !("ids" in input.data) ||
+    ("movable" in input.data && input.data.movable !== undefined)
+  )
+    return refuse(response, 400, "INVALID_QUERY");
+  const answer = await reader.select(input.data);
+  if (answer === "timed_out") refuse(response, 503, "READ_TIMED_OUT");
+  else sendJson(response, 200, answer, noStore);
+};
+
+/** `internal/community/ai/find`, `count`, `select` and `settlement`, for AI alone. */
 export const handleAiOperatorRead = async (
   request: IncomingMessage,
   response: ServerResponse,
   pathname: string,
   reader: AiOperatorReader | undefined,
 ): Promise<boolean> => {
-  const leaf = /^\/internal\/community\/ai\/(find|count|settlement)$/u.exec(
-    pathname,
-  )?.[1];
+  const leaf =
+    /^\/internal\/community\/ai\/(find|count|select|settlement)$/u.exec(
+      pathname,
+    )?.[1];
   if (leaf === undefined) return false;
   if (reader === undefined) {
     refuse(response, 503, "OPERATOR_UNAVAILABLE");
@@ -201,6 +224,10 @@ export const handleAiOperatorRead = async (
   );
   if (leaf === "settlement") {
     await answerSettlement(response, query, reader);
+    return true;
+  }
+  if (leaf === "select") {
+    await answerSelect(response, query, reader);
     return true;
   }
   if (leaf === "find") {

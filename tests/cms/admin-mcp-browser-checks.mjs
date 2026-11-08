@@ -927,6 +927,70 @@ export const verifyAdminMcpSurfaces = async ({
     "editorial_query",
   ]);
 
+  setStage("admin-mcp-run-confirm");
+  // "Irreversible op above threshold": the Owner confirms once, in the real Owner tab,
+  // by the page's own button, and the AI resumes the run by its id alone.
+  const fullKey = await makeKey(aiOperator, { toolProfile: "full" });
+  const { threshold } = await asOwner("GET", "globals/mcp-control?depth=0");
+  const operator = await clientFor(fullKey.secret);
+  try {
+    const drafts = ["a", "b"].map((name) =>
+      syntheticDraft(`mcp-run-${run}-${name}`, `run-source-${run}-${name}`),
+    );
+    const preview = replyOf(
+      await operator.callTool({
+        name: "admin_preview",
+        arguments: {
+          requestId: randomUUID(),
+          op: "editorial.save-draft",
+          targets: drafts.map((content) => ({ content })),
+        },
+      }),
+    );
+    assert.equal(preview.ok, true);
+    assert.equal(preview.data.class, "irreversible");
+    const runId = preview.runId;
+    await asOwner("POST", "globals/mcp-control", { threshold: 1 });
+    try {
+      const waiting = replyOf(
+        await operator.callTool({
+          name: "admin_execute_irreversible",
+          arguments: { requestId: randomUUID(), previewId: runId },
+        }),
+      );
+      assert.equal(waiting.code, "AWAITING_OWNER");
+      assert.equal(waiting.data.awaiting.path, CONTROL);
+      await page.goto(`${origin}${CONTROL}`);
+      const row = page.locator(`[data-mcp-run="${runId}"]`);
+      await row.waitFor({ state: "visible" });
+      const confirmed = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname ===
+          `/api/mcp-control/runs/${runId}/confirm`,
+      );
+      await row.locator("[data-mcp-run-confirm]").click();
+      assert.equal((await confirmed).status(), 200);
+      await page
+        .getByRole("status")
+        .filter({ hasText: "已确认" })
+        .waitFor({ state: "visible" });
+      await expect(page.locator(`[data-mcp-run="${runId}"]`)).toHaveCount(0);
+      const ran = replyOf(
+        await operator.callTool({
+          name: "admin_execute_irreversible",
+          arguments: { requestId: randomUUID(), runId },
+        }),
+      );
+      assert.equal(ran.ok, true);
+      assert.equal(ran.state, "succeeded");
+      assert.equal(ran.done, 2);
+    } finally {
+      await asOwner("POST", "globals/mcp-control", { threshold });
+    }
+  } finally {
+    await operator.close();
+  }
+
   setStage("admin-mcp-development-surfaces-absent");
   // Composition is the gate: absent from this build for the Owner too.
   for (const route of ["agent-connections", "agent-connections/start"]) {

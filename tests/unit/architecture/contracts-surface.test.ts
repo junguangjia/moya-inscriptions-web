@@ -312,6 +312,13 @@ describe("contracts package surface", () => {
       "AdminMcpCodeGuide",
       "AdminOpMeta",
       "AdminMcpToolProfile",
+      // The run engine's shapes (S8): server-only, like the rest.
+      "AdminOpPreviewHooks",
+      "AdminPreviewData",
+      "AdminRunData",
+      "AdminRunRow",
+      "AiSelectQuery",
+      "canonicalJson",
     ]) {
       expect(publicDeclaration).not.toContain(name);
       expect(adminMcpDeclaration).toContain(name);

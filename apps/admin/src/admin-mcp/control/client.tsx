@@ -5,9 +5,13 @@ import { useRouter } from "next/navigation";
 import { SetStepNav } from "@payloadcms/ui";
 
 import type {
+  AdminMcpAwaitingRun,
   AdminMcpControlPage,
   AdminMcpSensitiveCategory,
+  AdminMcpStalledRun,
   AdminMcpSwitchRow,
+  AdminPreviewConsequence,
+  AdminRunState,
 } from "@moya/contracts/internal/admin-mcp";
 
 import styles from "../../community/community.module.css";
@@ -27,13 +31,46 @@ const SWITCH_NOTES: Readonly<Record<AdminMcpSensitiveCategory, string>> = {
     "允许 AI 读取仅自己可见的作品、其下评论和相关举报。未发布的私人草稿不在其中。",
 };
 
+/** What each hazard means, as the preview named it; every one has its sentence. */
+const CONSEQUENCE_TEXT: Readonly<Record<AdminPreviewConsequence, string>> = {
+  body_deleted_permanently:
+    "每条评论的正文会被永久删除，任何人都无法恢复，Owner 也不能；其下的回复保留。",
+  thread_removed:
+    "每个讨论串会连同其中所有回复离开公开页面；只有推翻移除的复核能恢复。",
+  job_not_retried:
+    "每个任务会停止，且不会再被排期；没做完的工作要有人手动重试。",
+  purge_not_retried:
+    "清除任务会停止：要清除的数据留在原处，也不会再被排期清除。",
+  forwarded_to_other_party: "对方会立即收到这段文字，无法撤回或修改。",
+  legal_hold_released:
+    "案件的法律保全会解除；关闭超过三年的案件，证据可能随即按保留期删除。",
+  identity_bound_permanently:
+    "每个新身份会永久绑定到它的记录，即使撤回，也不能再指向其他记录。",
+  subject_notified: "每位当事人都会收到一条关于此操作的消息，消息无法撤回。",
+};
+
+const STATE_TEXT: Readonly<Partial<Record<AdminRunState, string>>> = {
+  planning: "规划中",
+  running: "执行中",
+  settling: "等待后台任务",
+};
+
 const FAILURE_TEXT: Readonly<Record<string, string>> = {
   AUDIT_UNAVAILABLE: "操作记录暂时无法写入，这次更改没有生效。",
   COMPLIANCE_CONFIRMATION_REQUIRED: "确认文字不一致，开关没有开启。",
   COMPLIANCE_ONE_SWITCH_AT_A_TIME: "一次只能开启一个开关。",
+  CONCURRENT_OPERATION_BUSY: "这项操作正在执行，暂时不能取消，请稍后重试。",
+  NOT_FOUND: "没有找到这项操作，请刷新页面。",
   ORIGIN_REQUIRED: "请从管理后台页面发起这次操作。",
   OWNER_ONLY: "需要 Owner 登录会话。",
   RENEW_FAILED: "续期没有生效，请刷新后重试。",
+  RUN_ACTION_FAILED: "这项操作没有改变，请刷新后重试。",
+  RUN_CANCELLED: "这项操作已经取消。",
+  RUN_EXPIRED: "这项操作已过期，没有执行。",
+  RUN_NOT_AWAITING: "这项操作已不在等待确认，请刷新页面。",
+  RUN_STALE: "这项操作的定义已更新，原预览已失效，没有执行。",
+  SEAL_HASH_MISMATCH: "这项操作的内容和页面显示的不一致，请刷新后重新查看。",
+  SEAL_HASH_REQUIRED: "请刷新页面后再确认。",
 };
 
 /**
@@ -61,6 +98,180 @@ const saveControl = (body: Readonly<Record<string, unknown>>) =>
 
 const when = (value: string | null) =>
   value === null ? "未设置" : formatPreciseTime(value);
+
+type Act = (work: () => Promise<Response>, done: string) => Promise<boolean>;
+
+const runAction = (
+  runId: string,
+  action: "confirm" | "cancel",
+  body: Readonly<Record<string, unknown>> = {},
+) =>
+  fetch(`/api/mcp-control/runs/${runId}/${action}`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+const credentialOf = (run: {
+  readonly credential: string;
+  readonly credentialLabel: string | null;
+}) =>
+  run.credentialLabel === null
+    ? run.credential
+    : `${run.credentialLabel}（${run.credential}）`;
+
+/**
+ * One run past the threshold, as its preview froze it. Everything the caller wrote is
+ * shown as text: React escapes it, and no field here is ever read as markup.
+ */
+const AwaitingRunRow = ({
+  run,
+  busy,
+  act,
+}: {
+  readonly run: AdminMcpAwaitingRun;
+  readonly busy: boolean;
+  readonly act: Act;
+}) => (
+  <li className={own.runRow} data-mcp-run={run.runId}>
+    <div className={own.switchHead}>
+      <strong>
+        <code>{run.op}</code>
+      </strong>
+      <span className={styles.chip} data-state="pending">
+        {run.count} 个对象
+      </span>
+      {run.conflicts > 0 ? (
+        <span className={styles.chip} data-state="kind">
+          另有 {run.conflicts} 个预览时已冲突，不会执行
+        </span>
+      ) : null}
+    </div>
+    <p className={styles.lead}>
+      来自 {credentialOf(run)}，{when(run.expiresAt)} 前未确认即过期。
+    </p>
+    {run.reason === null ? null : (
+      <p className={own.reason}>
+        <span>理由：</span>
+        {run.reason}
+      </p>
+    )}
+    {run.consequences.length === 0 ? null : (
+      <ul className={own.facts}>
+        {run.consequences.map((code) => (
+          <li data-mcp-consequence={code} key={code}>
+            {CONSEQUENCE_TEXT[code]}
+          </li>
+        ))}
+      </ul>
+    )}
+    <ul className={own.facts}>
+      {run.userNotifications > 0 ? (
+        <li>{run.userNotifications} 位当事人会收到消息。</li>
+      ) : null}
+      {run.impact === null
+        ? null
+        : Object.entries(run.impact).map(([name, count]) => (
+            <li key={name}>
+              <code>{name}</code>：{count}
+            </li>
+          ))}
+      {run.newIdentities === null ? null : (
+        <li>
+          永久绑定 {run.newIdentities.count} 个新身份
+          {run.newIdentities.first.length === 0
+            ? "。"
+            : `，例如：${run.newIdentities.first
+                .slice(0, 5)
+                .map(({ field, value }) => `${field} ${value}`)
+                .join("、")}`}
+        </li>
+      )}
+      {run.sample.length === 0 ? null : (
+        <li>
+          示例对象：
+          {run.sample
+            .map(({ index, ref }) =>
+              ref === null ? `#${index}` : `#${index} ${String(ref)}`,
+            )
+            .join("、")}
+        </li>
+      )}
+    </ul>
+    <div className={styles.actions}>
+      <button
+        className={styles.actionButton}
+        data-danger="true"
+        data-mcp-run-confirm={run.runId}
+        disabled={busy}
+        onClick={() =>
+          void act(
+            () =>
+              runAction(run.runId, "confirm", {
+                expectedSealHash: run.sealHash,
+              }),
+            `已确认，AI 可以继续执行这 ${run.count} 个对象。`,
+          )
+        }
+        type="button"
+      >
+        确认执行
+      </button>
+      <button
+        className={styles.actionButton}
+        data-mcp-run-cancel={run.runId}
+        disabled={busy}
+        onClick={() =>
+          void act(() => runAction(run.runId, "cancel"), "已取消这项操作。")
+        }
+        type="button"
+      >
+        取消操作
+      </button>
+    </div>
+  </li>
+);
+
+const StalledRunRow = ({
+  run,
+  busy,
+  act,
+}: {
+  readonly run: AdminMcpStalledRun;
+  readonly busy: boolean;
+  readonly act: Act;
+}) => (
+  <li className={own.runRow} data-mcp-stalled-run={run.runId}>
+    <div className={own.switchHead}>
+      <strong>
+        <code>{run.op}</code>
+      </strong>
+      <span className={styles.chip} data-state="kind">
+        {STATE_TEXT[run.state] ?? run.state}
+      </span>
+      <span className={styles.chip} data-state="pending">
+        已完成 {run.done} / {run.count}
+      </span>
+    </div>
+    <p className={styles.lead}>
+      来自 {credentialOf(run)}，最近一次进展在 {when(run.updatedAt)}。
+    </p>
+    <div className={styles.actions}>
+      <button
+        className={styles.actionButton}
+        data-mcp-run-cancel={run.runId}
+        disabled={busy}
+        onClick={() =>
+          void act(() => runAction(run.runId, "cancel"), "已取消这项操作。")
+        }
+        type="button"
+      >
+        取消操作
+      </button>
+    </div>
+  </li>
+);
 
 const SwitchRow = ({
   row,
@@ -319,6 +530,55 @@ export const McpControlClient = ({
           </form>
         </section>
 
+        <section className={styles.card} data-mcp-awaiting-runs>
+          <h2>等待确认的操作</h2>
+          {page.runs === null ? (
+            <p className={styles.notice} data-tone="error" role="alert">
+              操作列表暂时无法读取。
+            </p>
+          ) : page.runs.awaiting.length === 0 ? (
+            <p className={styles.lead}>没有等待确认的操作。</p>
+          ) : (
+            <>
+              <p className={styles.lead}>
+                对象数超过阈值的不可逆操作，确认一次即可由 AI
+                继续执行；确认只对页面显示的这一批有效。
+              </p>
+              <ul className={own.runList}>
+                {page.runs.awaiting.map((run) => (
+                  <AwaitingRunRow
+                    act={act}
+                    busy={busy}
+                    key={run.runId}
+                    run={run}
+                  />
+                ))}
+              </ul>
+            </>
+          )}
+        </section>
+
+        {page.runs === null || page.runs.stalled.length === 0 ? null : (
+          <section className={styles.card} data-mcp-stalled-runs>
+            <h2>停滞的操作</h2>
+            <p className={styles.lead}>
+              超过 10 分钟没有进展。原来的
+              {connections ? " AI 连接或密钥" : "密钥"}
+              可以继续执行，也可以在这里取消；已执行的对象保持原状。
+            </p>
+            <ul className={own.runList}>
+              {page.runs.stalled.map((run) => (
+                <StalledRunRow
+                  act={act}
+                  busy={busy}
+                  key={run.runId}
+                  run={run}
+                />
+              ))}
+            </ul>
+          </section>
+        )}
+
         <section className={styles.card}>
           <h2>敏感数据开关</h2>
           <p className={styles.lead}>
@@ -388,6 +648,12 @@ export const McpControlClient = ({
                   <strong>{page.figures.irreversibleTargets}</strong>
                   <span>24 小时内不可逆操作对象数</span>
                 </li>
+                {page.figures.irreversibleByCredential.map((row) => (
+                  <li key={row.credential}>
+                    <strong>{row.targets}</strong>
+                    <span>其中 {row.credential}</span>
+                  </li>
+                ))}
                 <li>
                   <strong>{page.figures.outcomeUnknown}</strong>
                   <span>7 天内结果未知的写入</span>

@@ -1,0 +1,1813 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`the operator sources' statements > are the ones recorded before the filter was shared, text and values 1`] = `
+{
+  "reads": {
+    "comments ai newest all": [
+      "884b307eaf68 []",
+      "b6eea702352d []",
+      "b330ab08515f ["pending","reply","catalog-golden","%墨 50\\\\%\\\\_\\\\\\\\x%","user-04f8996da763b7a969b1028ee3007569","2026-01-01T00:00:00Z","2026-02-01T00:00:00+08:00",true]",
+      "4cda471641f3 [null,"reply","catalog-golden","%墨 50\\\\%\\\\_\\\\\\\\x%","user-04f8996da763b7a969b1028ee3007569","2026-01-01T00:00:00Z","2026-02-01T00:00:00+08:00",true]",
+      "f25ec0866c7a ["pending","reply","catalog-golden","%墨 50\\\\%\\\\_\\\\\\\\x%","user-04f8996da763b7a969b1028ee3007569","2026-01-01T00:00:00Z","2026-02-01T00:00:00+08:00",true,7,14]",
+      "79663c1d3b43 []",
+    ],
+    "comments ai newest authorId": [
+      "884b307eaf68 []",
+      "b6eea702352d []",
+      "b330ab08515f [null,null,null,null,"user-04f8996da763b7a969b1028ee3007569",null,null,true]",
+      "4cda471641f3 [null,null,null,null,"user-04f8996da763b7a969b1028ee3007569",null,null,true]",
+      "f25ec0866c7a [null,null,null,null,"user-04f8996da763b7a969b1028ee3007569",null,null,true,7,14]",
+      "79663c1d3b43 []",
+    ],
+    "comments ai newest catalogId": [
+      "884b307eaf68 []",
+      "b6eea702352d []",
+      "b330ab08515f [null,null,"catalog-golden",null,null,null,null,true]",
+      "4cda471641f3 [null,null,"catalog-golden",null,null,null,null,true]",
+      "f25ec0866c7a [null,null,"catalog-golden",null,null,null,null,true,7,14]",
+      "79663c1d3b43 []",
+    ],
+    "comments ai newest from": [
+      "884b307eaf68 []",
+      "b6eea702352d []",
+      "b330ab08515f [null,null,null,null,null,"2026-01-01T00:00:00Z",null,true]",
+      "4cda471641f3 [null,null,null,null,null,"2026-01-01T00:00:00Z",null,true]",
+      "f25ec0866c7a [null,null,null,null,null,"2026-01-01T00:00:00Z",null,true,7,14]",
+      "79663c1d3b43 []",
+    ],
+    "comments ai newest kind": [
+      "884b307eaf68 []",
+      "b6eea702352d []",
+      "b330ab08515f [null,"reply",null,null,null,null,null,true]",
+      "4cda471641f3 [null,"reply",null,null,null,null,null,true]",
+      "f25ec0866c7a [null,"reply",null,null,null,null,null,true,7,14]",
+      "79663c1d3b43 []",
+    ],
+    "comments ai newest moderation": [
+      "884b307eaf68 []",
+      "b6eea702352d []",
+      "b330ab08515f ["pending",null,null,null,null,null,null,true]",
+      "4cda471641f3 [null,null,null,null,null,null,null,true]",
+      "f25ec0866c7a ["pending",null,null,null,null,null,null,true,7,14]",
+      "79663c1d3b43 []",
+    ],
+    "comments ai newest none": [
+      "884b307eaf68 []",
+      "b6eea702352d []",
+      "b330ab08515f [null,null,null,null,null,null,null,true]",
+      "4cda471641f3 [null,null,null,null,null,null,null,true]",
+      "f25ec0866c7a [null,null,null,null,null,null,null,true,7,14]",
+      "79663c1d3b43 []",
+    ],
+    "comments ai newest search": [
+      "884b307eaf68 []",
+      "b6eea702352d []",
+      "b330ab08515f [null,null,null,"%墨 50\\\\%\\\\_\\\\\\\\x%",null,null,null,true]",
+      "4cda471641f3 [null,null,null,"%墨 50\\\\%\\\\_\\\\\\\\x%",null,null,null,true]",
+      "f25ec0866c7a [null,null,null,"%墨 50\\\\%\\\\_\\\\\\\\x%",null,null,null,true,7,14]",
+      "79663c1d3b43 []",
+    ],
+    "comments ai newest to": [
+      "884b307eaf68 []",
+      "b6eea702352d []",
+      "b330ab08515f [null,null,null,null,null,null,"2026-02-01T00:00:00+08:00",true]",
+      "4cda471641f3 [null,null,null,null,null,null,"2026-02-01T00:00:00+08:00",true]",
+      "f25ec0866c7a [null,null,null,null,null,null,"2026-02-01T00:00:00+08:00",true,7,14]",
+      "79663c1d3b43 []",
+    ],
+    "comments ai oldest all": [
+      "884b307eaf68 []",
+      "b6eea702352d []",
+      "b330ab08515f ["pending","reply","catalog-golden","%墨 50\\\\%\\\\_\\\\\\\\x%","user-04f8996da763b7a969b1028ee3007569","2026-01-01T00:00:00Z","2026-02-01T00:00:00+08:00",true]",
+      "4cda471641f3 [null,"reply","catalog-golden","%墨 50\\\\%\\\\_\\\\\\\\x%","user-04f8996da763b7a969b1028ee3007569","2026-01-01T00:00:00Z","2026-02-01T00:00:00+08:00",true]",
+      "c5f89565c453 ["pending","reply","catalog-golden","%墨 50\\\\%\\\\_\\\\\\\\x%","user-04f8996da763b7a969b1028ee3007569","2026-01-01T00:00:00Z","2026-02-01T00:00:00+08:00",true,7,14]",
+      "79663c1d3b43 []",
+    ],
+    "comments owner newest all": [
+      "884b307eaf68 []",
+      "b330ab08515f ["pending","reply","catalog-golden","%墨 50\\\\%\\\\_\\\\\\\\x%","user-04f8996da763b7a969b1028ee3007569","2026-01-01T00:00:00Z","2026-02-01T00:00:00+08:00",false]",
+      "4cda471641f3 [null,"reply","catalog-golden","%墨 50\\\\%\\\\_\\\\\\\\x%","user-04f8996da763b7a969b1028ee3007569","2026-01-01T00:00:00Z","2026-02-01T00:00:00+08:00",false]",
+      "f25ec0866c7a ["pending","reply","catalog-golden","%墨 50\\\\%\\\\_\\\\\\\\x%","user-04f8996da763b7a969b1028ee3007569","2026-01-01T00:00:00Z","2026-02-01T00:00:00+08:00",false,7,14]",
+      "79663c1d3b43 []",
+    ],
+    "comments owner newest authorId": [
+      "884b307eaf68 []",
+      "b330ab08515f [null,null,null,null,"user-04f8996da763b7a969b1028ee3007569",null,null,false]",
+      "4cda471641f3 [null,null,null,null,"user-04f8996da763b7a969b1028ee3007569",null,null,false]",
+      "f25ec0866c7a [null,null,null,null,"user-04f8996da763b7a969b1028ee3007569",null,null,false,7,14]",
+      "79663c1d3b43 []",
+    ],
+    "comments owner newest catalogId": [
+      "884b307eaf68 []",
+      "b330ab08515f [null,null,"catalog-golden",null,null,null,null,false]",
+      "4cda471641f3 [null,null,"catalog-golden",null,null,null,null,false]",
+      "f25ec0866c7a [null,null,"catalog-golden",null,null,null,null,false,7,14]",
+      "79663c1d3b43 []",
+    ],
+    "comments owner newest from": [
+      "884b307eaf68 []",
+      "b330ab08515f [null,null,null,null,null,"2026-01-01T00:00:00Z",null,false]",
+      "4cda471641f3 [null,null,null,null,null,"2026-01-01T00:00:00Z",null,false]",
+      "f25ec0866c7a [null,null,null,null,null,"2026-01-01T00:00:00Z",null,false,7,14]",
+      "79663c1d3b43 []",
+    ],
+    "comments owner newest kind": [
+      "884b307eaf68 []",
+      "b330ab08515f [null,"reply",null,null,null,null,null,false]",
+      "4cda471641f3 [null,"reply",null,null,null,null,null,false]",
+      "f25ec0866c7a [null,"reply",null,null,null,null,null,false,7,14]",
+      "79663c1d3b43 []",
+    ],
+    "comments owner newest moderation": [
+      "884b307eaf68 []",
+      "b330ab08515f ["pending",null,null,null,null,null,null,false]",
+      "4cda471641f3 [null,null,null,null,null,null,null,false]",
+      "f25ec0866c7a ["pending",null,null,null,null,null,null,false,7,14]",
+      "79663c1d3b43 []",
+    ],
+    "comments owner newest none": [
+      "884b307eaf68 []",
+      "b330ab08515f [null,null,null,null,null,null,null,false]",
+      "4cda471641f3 [null,null,null,null,null,null,null,false]",
+      "f25ec0866c7a [null,null,null,null,null,null,null,false,7,14]",
+      "79663c1d3b43 []",
+    ],
+    "comments owner newest search": [
+      "884b307eaf68 []",
+      "b330ab08515f [null,null,null,"%墨 50\\\\%\\\\_\\\\\\\\x%",null,null,null,false]",
+      "4cda471641f3 [null,null,null,"%墨 50\\\\%\\\\_\\\\\\\\x%",null,null,null,false]",
+      "f25ec0866c7a [null,null,null,"%墨 50\\\\%\\\\_\\\\\\\\x%",null,null,null,false,7,14]",
+      "79663c1d3b43 []",
+    ],
+    "comments owner newest to": [
+      "884b307eaf68 []",
+      "b330ab08515f [null,null,null,null,null,null,"2026-02-01T00:00:00+08:00",false]",
+      "4cda471641f3 [null,null,null,null,null,null,"2026-02-01T00:00:00+08:00",false]",
+      "f25ec0866c7a [null,null,null,null,null,null,"2026-02-01T00:00:00+08:00",false,7,14]",
+      "79663c1d3b43 []",
+    ],
+    "comments owner oldest all": [
+      "884b307eaf68 []",
+      "b330ab08515f ["pending","reply","catalog-golden","%墨 50\\\\%\\\\_\\\\\\\\x%","user-04f8996da763b7a969b1028ee3007569","2026-01-01T00:00:00Z","2026-02-01T00:00:00+08:00",false]",
+      "4cda471641f3 [null,"reply","catalog-golden","%墨 50\\\\%\\\\_\\\\\\\\x%","user-04f8996da763b7a969b1028ee3007569","2026-01-01T00:00:00Z","2026-02-01T00:00:00+08:00",false]",
+      "c5f89565c453 ["pending","reply","catalog-golden","%墨 50\\\\%\\\\_\\\\\\\\x%","user-04f8996da763b7a969b1028ee3007569","2026-01-01T00:00:00Z","2026-02-01T00:00:00+08:00",false,7,14]",
+      "79663c1d3b43 []",
+    ],
+    "count comments all": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "68061837704e ["pending","reply","catalog-golden","%墨 50\\\\%\\\\_\\\\\\\\x%","user-04f8996da763b7a969b1028ee3007569","2026-01-01T00:00:00Z","2026-02-01T00:00:00+08:00",true]",
+      "79663c1d3b43 []",
+    ],
+    "count comments authorId": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "68061837704e [null,null,null,null,"user-04f8996da763b7a969b1028ee3007569",null,null,true]",
+      "79663c1d3b43 []",
+    ],
+    "count comments by kind": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "58c33bdb887c [null,null,null,null,null,null,null,true]",
+      "79663c1d3b43 []",
+    ],
+    "count comments by moderation": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "70f478d238f0 [null,null,null,null,null,null,null,true]",
+      "79663c1d3b43 []",
+    ],
+    "count comments by targetType": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "4e0487ab5003 [null,null,null,null,null,null,null,true]",
+      "79663c1d3b43 []",
+    ],
+    "count comments catalogId": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "68061837704e [null,null,"catalog-golden",null,null,null,null,true]",
+      "79663c1d3b43 []",
+    ],
+    "count comments from": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "68061837704e [null,null,null,null,null,"2026-01-01T00:00:00Z",null,true]",
+      "79663c1d3b43 []",
+    ],
+    "count comments kind": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "68061837704e [null,"reply",null,null,null,null,null,true]",
+      "79663c1d3b43 []",
+    ],
+    "count comments moderation": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "68061837704e ["pending",null,null,null,null,null,null,true]",
+      "79663c1d3b43 []",
+    ],
+    "count comments none": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "68061837704e [null,null,null,null,null,null,null,true]",
+      "79663c1d3b43 []",
+    ],
+    "count comments search": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "68061837704e [null,null,null,"%墨 50\\\\%\\\\_\\\\\\\\x%",null,null,null,true]",
+      "79663c1d3b43 []",
+    ],
+    "count comments to": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "68061837704e [null,null,null,null,null,null,"2026-02-01T00:00:00+08:00",true]",
+      "79663c1d3b43 []",
+    ],
+    "count jobs all": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "f77191cb100d ["failed","process_item","media-item-4a33eacd5fa65f2b2e2871cd131286b5","publishing-job-5e8c9902207afaeb7120430c585a445f"]",
+      "79663c1d3b43 []",
+    ],
+    "count jobs by kind": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "ad2f907e5adb [null,null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "count jobs by state": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "fe746ba61897 [null,null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "count jobs id": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "f77191cb100d [null,null,null,"publishing-job-5e8c9902207afaeb7120430c585a445f"]",
+      "79663c1d3b43 []",
+    ],
+    "count jobs kind": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "f77191cb100d [null,"process_item",null,null]",
+      "79663c1d3b43 []",
+    ],
+    "count jobs none": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "f77191cb100d [null,null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "count jobs state": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "f77191cb100d ["failed",null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "count jobs subjectId": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "f77191cb100d [null,null,"media-item-4a33eacd5fa65f2b2e2871cd131286b5",null]",
+      "79663c1d3b43 []",
+    ],
+    "count reports affectedUserId": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "d75932f9e56a [null,null,null,null,null,"user-04f8996da763b7a969b1028ee3007569",null]",
+      "79663c1d3b43 []",
+    ],
+    "count reports all": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "d75932f9e56a ["open",false,true,"work","work-00e13ed7af55b27622f1d6eab5bec014","user-04f8996da763b7a969b1028ee3007569","user-d9298a10d1b0735837dc4bd85dac641b"]",
+      "79663c1d3b43 []",
+    ],
+    "count reports by kind": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "5df0235292ad [null,null,null,null,null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "count reports by reason": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "a51819653f70 [null,null,null,null,null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "count reports by status": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "468fca9197ec [null,null,null,null,null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "count reports by targetType": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "9d95f668715d [null,null,null,null,null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "count reports none": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "8e5dd4de32df [null,null,null,null,null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "count reports reporterId": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "d75932f9e56a [null,null,null,null,null,null,"user-d9298a10d1b0735837dc4bd85dac641b"]",
+      "79663c1d3b43 []",
+    ],
+    "count reports status": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "8e5dd4de32df ["open",null,null,null,null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "count reports targetId": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "d75932f9e56a [null,null,null,null,"work-00e13ed7af55b27622f1d6eab5bec014",null,null]",
+      "79663c1d3b43 []",
+    ],
+    "count reports targetType": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "d75932f9e56a [null,null,null,"work",null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "count reports unresolved": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "8e5dd4de32df [null,null,true,null,null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "count reports urgent": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "d75932f9e56a [null,false,null,null,null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "count users all": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "ae867f294471 ["墨 50%_\\\\x","user-04f8996da763b7a969b1028ee3007569"]",
+      "79663c1d3b43 []",
+    ],
+    "count users by status": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "aaeb72688612 ["",null]",
+      "79663c1d3b43 []",
+    ],
+    "count users none": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "ae867f294471 ["",null]",
+      "79663c1d3b43 []",
+    ],
+    "count users search": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "ae867f294471 ["墨 50%_\\\\x",null]",
+      "79663c1d3b43 []",
+    ],
+    "count users userId": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "ae867f294471 ["","user-04f8996da763b7a969b1028ee3007569"]",
+      "79663c1d3b43 []",
+    ],
+    "count work_submissions all": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "af4f893b736d ["approved","user-04f8996da763b7a969b1028ee3007569","work-00e13ed7af55b27622f1d6eab5bec014",true]",
+      "79663c1d3b43 []",
+    ],
+    "count work_submissions authorId": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "af4f893b736d [null,"user-04f8996da763b7a969b1028ee3007569",null,true]",
+      "79663c1d3b43 []",
+    ],
+    "count work_submissions by state": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "287f0843e19f [null,null,null,true]",
+      "79663c1d3b43 []",
+    ],
+    "count work_submissions none": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "af4f893b736d [null,null,null,true]",
+      "79663c1d3b43 []",
+    ],
+    "count work_submissions state": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "af4f893b736d ["approved",null,null,true]",
+      "79663c1d3b43 []",
+    ],
+    "count work_submissions workId": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "af4f893b736d [null,null,"work-00e13ed7af55b27622f1d6eab5bec014",true]",
+      "79663c1d3b43 []",
+    ],
+    "count works all": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "490d6e154cd7 ["墨 50%_\\\\x","user-04f8996da763b7a969b1028ee3007569","work-00e13ed7af55b27622f1d6eab5bec014","2026-01-01T00:00:00Z","2026-02-01T00:00:00+08:00",true]",
+      "79663c1d3b43 []",
+    ],
+    "count works authorId": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "490d6e154cd7 ["","user-04f8996da763b7a969b1028ee3007569",null,null,null,true]",
+      "79663c1d3b43 []",
+    ],
+    "count works by state": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "df43cfeb1781 ["",null,null,null,null,true]",
+      "79663c1d3b43 []",
+    ],
+    "count works from": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "490d6e154cd7 ["",null,null,"2026-01-01T00:00:00Z",null,true]",
+      "79663c1d3b43 []",
+    ],
+    "count works none": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "490d6e154cd7 ["",null,null,null,null,true]",
+      "79663c1d3b43 []",
+    ],
+    "count works search": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "490d6e154cd7 ["墨 50%_\\\\x",null,null,null,null,true]",
+      "79663c1d3b43 []",
+    ],
+    "count works to": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "490d6e154cd7 ["",null,null,null,"2026-02-01T00:00:00+08:00",true]",
+      "79663c1d3b43 []",
+    ],
+    "count works workId": [
+      "d85f85aa1fb0 []",
+      "668ed1c068d5 []",
+      "490d6e154cd7 ["",null,"work-00e13ed7af55b27622f1d6eab5bec014",null,null,true]",
+      "79663c1d3b43 []",
+    ],
+    "jobs all": [
+      "884b307eaf68 []",
+      "75eb1508f6a4 ["failed","process_item","media-item-4a33eacd5fa65f2b2e2871cd131286b5","publishing-job-5e8c9902207afaeb7120430c585a445f"]",
+      "c3364b94e306 ["failed","process_item","media-item-4a33eacd5fa65f2b2e2871cd131286b5","publishing-job-5e8c9902207afaeb7120430c585a445f",5,5]",
+      "79663c1d3b43 []",
+    ],
+    "jobs id": [
+      "884b307eaf68 []",
+      "75eb1508f6a4 [null,null,null,"publishing-job-5e8c9902207afaeb7120430c585a445f"]",
+      "c3364b94e306 [null,null,null,"publishing-job-5e8c9902207afaeb7120430c585a445f",5,5]",
+      "79663c1d3b43 []",
+    ],
+    "jobs kind": [
+      "884b307eaf68 []",
+      "75eb1508f6a4 [null,"process_item",null,null]",
+      "c3364b94e306 [null,"process_item",null,null,5,5]",
+      "79663c1d3b43 []",
+    ],
+    "jobs none": [
+      "884b307eaf68 []",
+      "75eb1508f6a4 [null,null,null,null]",
+      "c3364b94e306 [null,null,null,null,5,5]",
+      "79663c1d3b43 []",
+    ],
+    "jobs state": [
+      "884b307eaf68 []",
+      "75eb1508f6a4 ["failed",null,null,null]",
+      "c3364b94e306 ["failed",null,null,null,5,5]",
+      "79663c1d3b43 []",
+    ],
+    "jobs subjectId": [
+      "884b307eaf68 []",
+      "75eb1508f6a4 [null,null,"media-item-4a33eacd5fa65f2b2e2871cd131286b5",null]",
+      "c3364b94e306 [null,null,"media-item-4a33eacd5fa65f2b2e2871cd131286b5",null,5,5]",
+      "79663c1d3b43 []",
+    ],
+    "moderation summary ai": [
+      "884b307eaf68 []",
+      "b6eea702352d []",
+      "4cda471641f3 [null,null,null,null,null,null,null,true]",
+      "685e45fffd9f ["2026-01-01T00:00:00.000Z","2026-01-31T16:00:00.000Z",true]",
+      "bcb255aa5246 [10,true]",
+      "79663c1d3b43 []",
+    ],
+    "moderation summary owner": [
+      "884b307eaf68 []",
+      "4cda471641f3 [null,null,null,null,null,null,null,false]",
+      "685e45fffd9f ["2026-01-01T00:00:00.000Z","2026-01-31T16:00:00.000Z",false]",
+      "bcb255aa5246 [10,false]",
+      "79663c1d3b43 []",
+    ],
+    "reports ai affectedUserId": [
+      "a8402858d4f1 []",
+      "09faed418d59 []",
+      "9b9c4b228d9c [null,null,null,null,null,"user-04f8996da763b7a969b1028ee3007569",null,5,5]",
+      "61ccb589bcba [null,null,null,null,null,"user-04f8996da763b7a969b1028ee3007569",null]",
+      "79663c1d3b43 []",
+    ],
+    "reports ai all": [
+      "a8402858d4f1 []",
+      "09faed418d59 []",
+      "9b9c4b228d9c ["open",false,true,"work","work-00e13ed7af55b27622f1d6eab5bec014","user-04f8996da763b7a969b1028ee3007569","user-d9298a10d1b0735837dc4bd85dac641b",5,5]",
+      "61ccb589bcba ["open",false,true,"work","work-00e13ed7af55b27622f1d6eab5bec014","user-04f8996da763b7a969b1028ee3007569","user-d9298a10d1b0735837dc4bd85dac641b"]",
+      "79663c1d3b43 []",
+    ],
+    "reports ai none": [
+      "a8402858d4f1 []",
+      "09faed418d59 []",
+      "ae7198152443 [null,null,null,null,null,null,null,5,5]",
+      "07ed49d02f66 [null,null,null,null,null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "reports ai reporterId": [
+      "a8402858d4f1 []",
+      "09faed418d59 []",
+      "9b9c4b228d9c [null,null,null,null,null,null,"user-d9298a10d1b0735837dc4bd85dac641b",5,5]",
+      "61ccb589bcba [null,null,null,null,null,null,"user-d9298a10d1b0735837dc4bd85dac641b"]",
+      "79663c1d3b43 []",
+    ],
+    "reports ai status": [
+      "a8402858d4f1 []",
+      "09faed418d59 []",
+      "ae7198152443 ["open",null,null,null,null,null,null,5,5]",
+      "07ed49d02f66 ["open",null,null,null,null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "reports ai targetId": [
+      "a8402858d4f1 []",
+      "09faed418d59 []",
+      "9b9c4b228d9c [null,null,null,null,"work-00e13ed7af55b27622f1d6eab5bec014",null,null,5,5]",
+      "61ccb589bcba [null,null,null,null,"work-00e13ed7af55b27622f1d6eab5bec014",null,null]",
+      "79663c1d3b43 []",
+    ],
+    "reports ai targetType": [
+      "a8402858d4f1 []",
+      "09faed418d59 []",
+      "9b9c4b228d9c [null,null,null,"work",null,null,null,5,5]",
+      "61ccb589bcba [null,null,null,"work",null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "reports ai unresolved": [
+      "a8402858d4f1 []",
+      "09faed418d59 []",
+      "ae7198152443 [null,null,true,null,null,null,null,5,5]",
+      "07ed49d02f66 [null,null,true,null,null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "reports ai urgent": [
+      "a8402858d4f1 []",
+      "09faed418d59 []",
+      "9b9c4b228d9c [null,false,null,null,null,null,null,5,5]",
+      "61ccb589bcba [null,false,null,null,null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "reports owner affectedUserId": [
+      "a8402858d4f1 []",
+      "09faed418d59 []",
+      "10748d1b9b2b [null,null,null,null,null,"user-04f8996da763b7a969b1028ee3007569",null,5,5]",
+      "07ed49d02f66 [null,null,null,null,null,"user-04f8996da763b7a969b1028ee3007569",null]",
+      "79663c1d3b43 []",
+    ],
+    "reports owner all": [
+      "a8402858d4f1 []",
+      "09faed418d59 []",
+      "10748d1b9b2b ["open",false,true,"work","work-00e13ed7af55b27622f1d6eab5bec014","user-04f8996da763b7a969b1028ee3007569","user-d9298a10d1b0735837dc4bd85dac641b",5,5]",
+      "07ed49d02f66 ["open",false,true,"work","work-00e13ed7af55b27622f1d6eab5bec014","user-04f8996da763b7a969b1028ee3007569","user-d9298a10d1b0735837dc4bd85dac641b"]",
+      "79663c1d3b43 []",
+    ],
+    "reports owner none": [
+      "a8402858d4f1 []",
+      "09faed418d59 []",
+      "10748d1b9b2b [null,null,null,null,null,null,null,5,5]",
+      "07ed49d02f66 [null,null,null,null,null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "reports owner reporterId": [
+      "a8402858d4f1 []",
+      "09faed418d59 []",
+      "10748d1b9b2b [null,null,null,null,null,null,"user-d9298a10d1b0735837dc4bd85dac641b",5,5]",
+      "07ed49d02f66 [null,null,null,null,null,null,"user-d9298a10d1b0735837dc4bd85dac641b"]",
+      "79663c1d3b43 []",
+    ],
+    "reports owner status": [
+      "a8402858d4f1 []",
+      "09faed418d59 []",
+      "10748d1b9b2b ["open",null,null,null,null,null,null,5,5]",
+      "07ed49d02f66 ["open",null,null,null,null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "reports owner targetId": [
+      "a8402858d4f1 []",
+      "09faed418d59 []",
+      "10748d1b9b2b [null,null,null,null,"work-00e13ed7af55b27622f1d6eab5bec014",null,null,5,5]",
+      "07ed49d02f66 [null,null,null,null,"work-00e13ed7af55b27622f1d6eab5bec014",null,null]",
+      "79663c1d3b43 []",
+    ],
+    "reports owner targetType": [
+      "a8402858d4f1 []",
+      "09faed418d59 []",
+      "10748d1b9b2b [null,null,null,"work",null,null,null,5,5]",
+      "07ed49d02f66 [null,null,null,"work",null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "reports owner unresolved": [
+      "a8402858d4f1 []",
+      "09faed418d59 []",
+      "10748d1b9b2b [null,null,true,null,null,null,null,5,5]",
+      "07ed49d02f66 [null,null,true,null,null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "reports owner urgent": [
+      "a8402858d4f1 []",
+      "09faed418d59 []",
+      "10748d1b9b2b [null,false,null,null,null,null,null,5,5]",
+      "07ed49d02f66 [null,false,null,null,null,null,null]",
+      "79663c1d3b43 []",
+    ],
+    "users ai all": [
+      "884b307eaf68 []",
+      "230ed5f2a3b4 ["墨 50%_\\\\x","user-04f8996da763b7a969b1028ee3007569"]",
+      "032fc3ef0b41 ["墨 50%_\\\\x","user-04f8996da763b7a969b1028ee3007569",5,5,true]",
+      "79663c1d3b43 []",
+    ],
+    "users ai none": [
+      "884b307eaf68 []",
+      "230ed5f2a3b4 ["",null]",
+      "032fc3ef0b41 ["",null,5,5,true]",
+      "79663c1d3b43 []",
+    ],
+    "users ai search": [
+      "884b307eaf68 []",
+      "230ed5f2a3b4 ["墨 50%_\\\\x",null]",
+      "032fc3ef0b41 ["墨 50%_\\\\x",null,5,5,true]",
+      "79663c1d3b43 []",
+    ],
+    "users ai userId": [
+      "884b307eaf68 []",
+      "230ed5f2a3b4 ["","user-04f8996da763b7a969b1028ee3007569"]",
+      "032fc3ef0b41 ["","user-04f8996da763b7a969b1028ee3007569",5,5,true]",
+      "79663c1d3b43 []",
+    ],
+    "users owner all": [
+      "884b307eaf68 []",
+      "230ed5f2a3b4 ["墨 50%_\\\\x","user-04f8996da763b7a969b1028ee3007569"]",
+      "d66f1f6e46a0 ["墨 50%_\\\\x","user-04f8996da763b7a969b1028ee3007569",5,5,false]",
+      "79663c1d3b43 []",
+    ],
+    "users owner none": [
+      "884b307eaf68 []",
+      "230ed5f2a3b4 ["",null]",
+      "d66f1f6e46a0 ["",null,5,5,false]",
+      "79663c1d3b43 []",
+    ],
+    "users owner search": [
+      "884b307eaf68 []",
+      "230ed5f2a3b4 ["墨 50%_\\\\x",null]",
+      "d66f1f6e46a0 ["墨 50%_\\\\x",null,5,5,false]",
+      "79663c1d3b43 []",
+    ],
+    "users owner userId": [
+      "884b307eaf68 []",
+      "230ed5f2a3b4 ["","user-04f8996da763b7a969b1028ee3007569"]",
+      "d66f1f6e46a0 ["","user-04f8996da763b7a969b1028ee3007569",5,5,false]",
+      "79663c1d3b43 []",
+    ],
+    "work_submissions ai all": [
+      "884b307eaf68 []",
+      "efd3d0211864 ["approved","user-04f8996da763b7a969b1028ee3007569","work-00e13ed7af55b27622f1d6eab5bec014",true]",
+      "91968b764b37 ["approved","user-04f8996da763b7a969b1028ee3007569","work-00e13ed7af55b27622f1d6eab5bec014",true,5,5]",
+      "d24bebf97d66 [[]]",
+      "79663c1d3b43 []",
+    ],
+    "work_submissions ai authorId": [
+      "884b307eaf68 []",
+      "efd3d0211864 [null,"user-04f8996da763b7a969b1028ee3007569",null,true]",
+      "91968b764b37 [null,"user-04f8996da763b7a969b1028ee3007569",null,true,5,5]",
+      "d24bebf97d66 [[]]",
+      "79663c1d3b43 []",
+    ],
+    "work_submissions ai none": [
+      "884b307eaf68 []",
+      "efd3d0211864 [null,null,null,true]",
+      "91968b764b37 [null,null,null,true,5,5]",
+      "d24bebf97d66 [[]]",
+      "79663c1d3b43 []",
+    ],
+    "work_submissions ai pending": [
+      "884b307eaf68 []",
+      "efd3d0211864 ["pending",null,null,true]",
+      "e85fb5a6aded ["pending",null,null,true,5,5]",
+      "d24bebf97d66 [[]]",
+      "79663c1d3b43 []",
+    ],
+    "work_submissions ai state": [
+      "884b307eaf68 []",
+      "efd3d0211864 ["approved",null,null,true]",
+      "91968b764b37 ["approved",null,null,true,5,5]",
+      "d24bebf97d66 [[]]",
+      "79663c1d3b43 []",
+    ],
+    "work_submissions ai workId": [
+      "884b307eaf68 []",
+      "efd3d0211864 [null,null,"work-00e13ed7af55b27622f1d6eab5bec014",true]",
+      "91968b764b37 [null,null,"work-00e13ed7af55b27622f1d6eab5bec014",true,5,5]",
+      "d24bebf97d66 [[]]",
+      "79663c1d3b43 []",
+    ],
+    "work_submissions owner all": [
+      "884b307eaf68 []",
+      "efd3d0211864 ["approved","user-04f8996da763b7a969b1028ee3007569","work-00e13ed7af55b27622f1d6eab5bec014",false]",
+      "91968b764b37 ["approved","user-04f8996da763b7a969b1028ee3007569","work-00e13ed7af55b27622f1d6eab5bec014",false,5,5]",
+      "d24bebf97d66 [[]]",
+      "79663c1d3b43 []",
+    ],
+    "work_submissions owner authorId": [
+      "884b307eaf68 []",
+      "efd3d0211864 [null,"user-04f8996da763b7a969b1028ee3007569",null,false]",
+      "91968b764b37 [null,"user-04f8996da763b7a969b1028ee3007569",null,false,5,5]",
+      "d24bebf97d66 [[]]",
+      "79663c1d3b43 []",
+    ],
+    "work_submissions owner none": [
+      "884b307eaf68 []",
+      "efd3d0211864 [null,null,null,false]",
+      "91968b764b37 [null,null,null,false,5,5]",
+      "d24bebf97d66 [[]]",
+      "79663c1d3b43 []",
+    ],
+    "work_submissions owner pending": [
+      "884b307eaf68 []",
+      "efd3d0211864 ["pending",null,null,false]",
+      "e85fb5a6aded ["pending",null,null,false,5,5]",
+      "d24bebf97d66 [[]]",
+      "79663c1d3b43 []",
+    ],
+    "work_submissions owner state": [
+      "884b307eaf68 []",
+      "efd3d0211864 ["approved",null,null,false]",
+      "91968b764b37 ["approved",null,null,false,5,5]",
+      "d24bebf97d66 [[]]",
+      "79663c1d3b43 []",
+    ],
+    "work_submissions owner workId": [
+      "884b307eaf68 []",
+      "efd3d0211864 [null,null,"work-00e13ed7af55b27622f1d6eab5bec014",false]",
+      "91968b764b37 [null,null,"work-00e13ed7af55b27622f1d6eab5bec014",false,5,5]",
+      "d24bebf97d66 [[]]",
+      "79663c1d3b43 []",
+    ],
+    "works ai all": [
+      "884b307eaf68 []",
+      "03163fbc9e67 ["墨 50%_\\\\x","user-04f8996da763b7a969b1028ee3007569","work-00e13ed7af55b27622f1d6eab5bec014","2026-01-01T00:00:00Z","2026-02-01T00:00:00+08:00",true]",
+      "fa77b11fc9c7 ["墨 50%_\\\\x","user-04f8996da763b7a969b1028ee3007569","work-00e13ed7af55b27622f1d6eab5bec014","2026-01-01T00:00:00Z","2026-02-01T00:00:00+08:00",true,5,5]",
+      "79663c1d3b43 []",
+    ],
+    "works ai authorId": [
+      "884b307eaf68 []",
+      "03163fbc9e67 ["","user-04f8996da763b7a969b1028ee3007569",null,null,null,true]",
+      "fa77b11fc9c7 ["","user-04f8996da763b7a969b1028ee3007569",null,null,null,true,5,5]",
+      "79663c1d3b43 []",
+    ],
+    "works ai from": [
+      "884b307eaf68 []",
+      "03163fbc9e67 ["",null,null,"2026-01-01T00:00:00Z",null,true]",
+      "fa77b11fc9c7 ["",null,null,"2026-01-01T00:00:00Z",null,true,5,5]",
+      "79663c1d3b43 []",
+    ],
+    "works ai none": [
+      "884b307eaf68 []",
+      "03163fbc9e67 ["",null,null,null,null,true]",
+      "fa77b11fc9c7 ["",null,null,null,null,true,5,5]",
+      "79663c1d3b43 []",
+    ],
+    "works ai search": [
+      "884b307eaf68 []",
+      "03163fbc9e67 ["墨 50%_\\\\x",null,null,null,null,true]",
+      "fa77b11fc9c7 ["墨 50%_\\\\x",null,null,null,null,true,5,5]",
+      "79663c1d3b43 []",
+    ],
+    "works ai to": [
+      "884b307eaf68 []",
+      "03163fbc9e67 ["",null,null,null,"2026-02-01T00:00:00+08:00",true]",
+      "fa77b11fc9c7 ["",null,null,null,"2026-02-01T00:00:00+08:00",true,5,5]",
+      "79663c1d3b43 []",
+    ],
+    "works ai workId": [
+      "884b307eaf68 []",
+      "03163fbc9e67 ["",null,"work-00e13ed7af55b27622f1d6eab5bec014",null,null,true]",
+      "fa77b11fc9c7 ["",null,"work-00e13ed7af55b27622f1d6eab5bec014",null,null,true,5,5]",
+      "79663c1d3b43 []",
+    ],
+    "works owner all": [
+      "884b307eaf68 []",
+      "03163fbc9e67 ["墨 50%_\\\\x","user-04f8996da763b7a969b1028ee3007569","work-00e13ed7af55b27622f1d6eab5bec014","2026-01-01T00:00:00Z","2026-02-01T00:00:00+08:00",false]",
+      "fa77b11fc9c7 ["墨 50%_\\\\x","user-04f8996da763b7a969b1028ee3007569","work-00e13ed7af55b27622f1d6eab5bec014","2026-01-01T00:00:00Z","2026-02-01T00:00:00+08:00",false,5,5]",
+      "79663c1d3b43 []",
+    ],
+    "works owner authorId": [
+      "884b307eaf68 []",
+      "03163fbc9e67 ["","user-04f8996da763b7a969b1028ee3007569",null,null,null,false]",
+      "fa77b11fc9c7 ["","user-04f8996da763b7a969b1028ee3007569",null,null,null,false,5,5]",
+      "79663c1d3b43 []",
+    ],
+    "works owner from": [
+      "884b307eaf68 []",
+      "03163fbc9e67 ["",null,null,"2026-01-01T00:00:00Z",null,false]",
+      "fa77b11fc9c7 ["",null,null,"2026-01-01T00:00:00Z",null,false,5,5]",
+      "79663c1d3b43 []",
+    ],
+    "works owner none": [
+      "884b307eaf68 []",
+      "03163fbc9e67 ["",null,null,null,null,false]",
+      "fa77b11fc9c7 ["",null,null,null,null,false,5,5]",
+      "79663c1d3b43 []",
+    ],
+    "works owner search": [
+      "884b307eaf68 []",
+      "03163fbc9e67 ["墨 50%_\\\\x",null,null,null,null,false]",
+      "fa77b11fc9c7 ["墨 50%_\\\\x",null,null,null,null,false,5,5]",
+      "79663c1d3b43 []",
+    ],
+    "works owner to": [
+      "884b307eaf68 []",
+      "03163fbc9e67 ["",null,null,null,"2026-02-01T00:00:00+08:00",false]",
+      "fa77b11fc9c7 ["",null,null,null,"2026-02-01T00:00:00+08:00",false,5,5]",
+      "79663c1d3b43 []",
+    ],
+    "works owner workId": [
+      "884b307eaf68 []",
+      "03163fbc9e67 ["",null,"work-00e13ed7af55b27622f1d6eab5bec014",null,null,false]",
+      "fa77b11fc9c7 ["",null,"work-00e13ed7af55b27622f1d6eab5bec014",null,null,false,5,5]",
+      "79663c1d3b43 []",
+    ],
+  },
+  "texts": {
+    "03163fbc9e67": "SELECT COUNT(*)::integer AS total FROM community.works w JOIN community.public_users u ON u.id=w.author_id LEFT JOIN community.work_revisions ar ON ar.id=w.author_revision_id AND ar.requested_visibility='public'
+  WHERE ($1='' OR position(lower($1) in lower(w.id||' '||w.title||' '||w.text||' '||COALESCE(ar.title,'')||' '||COALESCE(ar.body,'')||' '||u.display_name||' '||u.handle))>0)
+  AND ($2::text IS NULL OR (w.author_id=$2 AND w.deleted_at IS NULL AND EXISTS(SELECT 1 FROM community.work_revisions r WHERE r.work_id=w.id AND r.disposition<>'not_required')))
+  AND ($3::text IS NULL OR w.id=$3)
+  AND ($4::timestamptz IS NULL OR COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at)>=$4::timestamptz)
+  AND ($5::timestamptz IS NULL OR COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at)<=$5::timestamptz)
+  AND NOT ($6::boolean AND ((w.visibility='self' AND w.deleted_at IS NULL) OR (w.deleted_at IS NOT NULL AND (w.title<>'' OR w.text<>'' OR cardinality(w.media_ids)>0
+    OR w.public_revision_id IS NOT NULL OR w.author_revision_id IS NOT NULL
+    OR w.id IN (SELECT hc.work_id FROM community.work_revisions hc WHERE hc.work_id IS NOT NULL) OR w.id IN (SELECT hc.work_id FROM community.work_drafts hc WHERE hc.work_id IS NOT NULL) OR w.id IN (SELECT hc.work_id FROM community.work_draft_snapshots hc WHERE hc.work_id IS NOT NULL) OR w.id IN (SELECT hc.work_id FROM community.work_edit_drafts hc WHERE hc.work_id IS NOT NULL)))))",
+    "032fc3ef0b41": "SELECT u.id,u.handle,u.display_name,u.bio,u.status,u.created_at,
+        COALESCE(f.enabled,FALSE) AS recommended,COALESCE(f.version,0) AS recommendation_version,
+        (SELECT COUNT(*)::integer FROM community.works w WHERE w.author_id=u.id AND w.deleted_at IS NULL
+          AND NOT ($5::boolean AND ((w.visibility='self' AND w.deleted_at IS NULL) OR (w.deleted_at IS NOT NULL AND (w.title<>'' OR w.text<>'' OR cardinality(w.media_ids)>0
+    OR w.public_revision_id IS NOT NULL OR w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=w.id)))))
+          AND EXISTS(SELECT 1 FROM community.work_revisions r WHERE r.work_id=w.id AND r.disposition<>'not_required')) AS submitted_works,(SELECT COUNT(*)::integer FROM community.catalog_comments c WHERE c.author_id=u.id AND NOT (c.target_type='work' AND EXISTS(SELECT 1 FROM community.works so_w
+    WHERE so_w.id=c.catalog_id AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id)))))))
+          +(SELECT COUNT(*)::integer FROM community.catalog_comment_replies r JOIN community.catalog_comments c ON c.id=r.root_comment_id WHERE r.author_id=u.id AND NOT (c.target_type='work' AND EXISTS(SELECT 1 FROM community.works so_w
+    WHERE so_w.id=c.catalog_id AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id))))))) AS comment_count,
+        (SELECT COUNT(*)::integer FROM community.report_cases rc WHERE rc.affected_user_id=u.id AND NOT ((rc.target_type='work' AND EXISTS(SELECT 1 FROM community.works so_w
+    WHERE so_w.id=rc.target_id AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id))))))
+    OR (rc.target_type='comment' AND (EXISTS(SELECT 1 FROM community.catalog_comments so_c
+    JOIN community.works so_w ON so_w.id=so_c.catalog_id
+    WHERE so_c.id=COALESCE(
+      (SELECT so_r.root_comment_id FROM community.catalog_comment_replies so_r WHERE so_r.id=rc.target_id),
+      rc.target_id)
+    AND so_c.target_type='work' AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id)))))
+      OR (rc.snapshot->'post'->>'type'='work' AND EXISTS(SELECT 1 FROM community.works so_w
+    WHERE so_w.id=rc.snapshot->'post'->>'id' AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id)))))))))) AS report_count
+        FROM community.public_users u LEFT JOIN community.featured_users f ON f.user_id=u.id WHERE ($1='' OR position(lower($1) in lower(u.id||' '||u.handle||' '||u.display_name))>0)
+  AND ($2::text IS NULL OR u.id=$2)
+        ORDER BY u.created_at DESC,u.id LIMIT $3 OFFSET $4",
+    "07ed49d02f66": "SELECT count(*)::integer n FROM community.report_cases c WHERE ($1::text IS NULL OR c.status=$1)
+    AND ($2::boolean IS NULL OR c.urgent=$2)
+    AND ($3::boolean IS NULL OR c.status<>'resolved')
+    AND ($4::text IS NULL OR c.target_type=$4)
+    AND ($5::text IS NULL OR c.target_id=$5)
+    AND ($6::text IS NULL OR c.affected_user_id=$6)
+    AND ($7::text IS NULL OR c.reporter_id=$7)",
+    "09faed418d59": "SET LOCAL statement_timeout='8s'",
+    "10748d1b9b2b": "SELECT c.* FROM community.report_cases c WHERE ($1::text IS NULL OR c.status=$1)
+    AND ($2::boolean IS NULL OR c.urgent=$2)
+    AND ($3::boolean IS NULL OR c.status<>'resolved')
+    AND ($4::text IS NULL OR c.target_type=$4)
+    AND ($5::text IS NULL OR c.target_id=$5)
+    AND ($6::text IS NULL OR c.affected_user_id=$6)
+    AND ($7::text IS NULL OR c.reporter_id=$7) ORDER BY c.urgent DESC,c.created_at,c.id LIMIT $8 OFFSET $9",
+    "230ed5f2a3b4": "SELECT COUNT(*)::integer AS total FROM community.public_users u WHERE ($1='' OR position(lower($1) in lower(u.id||' '||u.handle||' '||u.display_name))>0)
+  AND ($2::text IS NULL OR u.id=$2)",
+    "287f0843e19f": "SELECT r.disposition AS value,count(*)::integer AS count,min(r.submitted_at) AS oldest FROM community.work_revisions r
+  JOIN community.works w ON w.id=r.work_id
+  JOIN community.public_users u ON u.id=r.author_id
+  WHERE r.disposition<>'not_required' AND w.deleted_at IS NULL AND r.origin='submission'
+  AND ($1::text IS NULL OR r.disposition=$1::text)
+  AND ($2::text IS NULL OR r.author_id=$2::text)
+  AND ($3::text IS NULL OR r.work_id=$3::text)
+  AND NOT ($4::boolean AND ((w.visibility='self' AND w.deleted_at IS NULL) OR (w.deleted_at IS NOT NULL AND (w.title<>'' OR w.text<>'' OR cardinality(w.media_ids)>0
+    OR w.public_revision_id IS NOT NULL OR w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=w.id)))))
+                 GROUP BY 1 ORDER BY count DESC,value ASC NULLS LAST",
+    "468fca9197ec": "SELECT c.status AS value,count(*)::integer AS count,min(c.created_at) AS oldest FROM community.report_cases c WHERE ($1::text IS NULL OR c.status=$1)
+    AND ($2::boolean IS NULL OR c.urgent=$2)
+    AND ($3::boolean IS NULL OR c.status<>'resolved')
+    AND ($4::text IS NULL OR c.target_type=$4)
+    AND ($5::text IS NULL OR c.target_id=$5)
+    AND ($6::text IS NULL OR c.affected_user_id=$6)
+    AND ($7::text IS NULL OR c.reporter_id=$7)
+                 GROUP BY 1 ORDER BY count DESC,value ASC NULLS LAST",
+    "490d6e154cd7": "SELECT count(*)::integer AS count,min(COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at)) AS oldest FROM community.works w JOIN community.public_users u ON u.id=w.author_id LEFT JOIN community.work_revisions ar ON ar.id=w.author_revision_id AND ar.requested_visibility='public'
+  WHERE ($1='' OR position(lower($1) in lower(w.id||' '||w.title||' '||w.text||' '||COALESCE(ar.title,'')||' '||COALESCE(ar.body,'')||' '||u.display_name||' '||u.handle))>0)
+  AND ($2::text IS NULL OR (w.author_id=$2 AND w.deleted_at IS NULL AND EXISTS(SELECT 1 FROM community.work_revisions r WHERE r.work_id=w.id AND r.disposition<>'not_required')))
+  AND ($3::text IS NULL OR w.id=$3)
+  AND ($4::timestamptz IS NULL OR COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at)>=$4::timestamptz)
+  AND ($5::timestamptz IS NULL OR COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at)<=$5::timestamptz)
+  AND NOT ($6::boolean AND ((w.visibility='self' AND w.deleted_at IS NULL) OR (w.deleted_at IS NOT NULL AND (w.title<>'' OR w.text<>'' OR cardinality(w.media_ids)>0
+    OR w.public_revision_id IS NOT NULL OR w.author_revision_id IS NOT NULL
+    OR w.id IN (SELECT hc.work_id FROM community.work_revisions hc WHERE hc.work_id IS NOT NULL) OR w.id IN (SELECT hc.work_id FROM community.work_drafts hc WHERE hc.work_id IS NOT NULL) OR w.id IN (SELECT hc.work_id FROM community.work_draft_snapshots hc WHERE hc.work_id IS NOT NULL) OR w.id IN (SELECT hc.work_id FROM community.work_edit_drafts hc WHERE hc.work_id IS NOT NULL)))))",
+    "4cda471641f3": "
+  SELECT entries.moderation, COUNT(*)::text AS total
+  FROM (
+  SELECT c.id, 'comment' AS kind, c.catalog_id,c.target_type,c.body_deleted_at,c.thread_removed_at, NULL::text AS root_comment_id,
+         NULL::text AS reply_to_reply_id,
+         c.text, c.created_at, c.moderation, CASE WHEN c.body_deleted_at IS NOT NULL  THEN '[]'::jsonb ELSE COALESCE((
+    SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('id',i.id,'offset',(ref.value->>'offset')::integer,
+      'width',d.width,'height',d.height,'thumbSrc','/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'thumb','src','/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'display',
+      'fullSrc',CASE WHEN EXISTS (SELECT 1 FROM community.media_renditions f JOIN community.media_blobs fb ON fb.id=f.blob_id AND fb.state='committed'
+        WHERE f.item_id=i.id AND f.role='full' AND f.edit_key='base' AND f.state='ready' AND f.content_type='image/webp' AND (f.role<>'full' OR GREATEST(f.width,f.height)<=8192 OR (GREATEST(f.width,f.height)+0.5>2.5*(LEAST(f.width,f.height)-0.5) AND GREATEST(f.width,f.height)<=16000 AND (f.width-0.5)*(f.height-0.5)<=40000000))) THEN '/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'full' END)) ORDER BY ref.ordinality)
+    FROM jsonb_array_elements(c.image_refs) WITH ORDINALITY ref(value,ordinality)
+    JOIN community.media_items i ON i.id=ref.value->>'itemId' AND i.owner_id=c.author_id AND i.purpose='comment'
+      AND i.state='ready' AND i.cancelled_at IS NULL AND i.purged_at IS NULL
+    JOIN community.media_renditions d ON d.item_id=i.id AND d.role='display' AND d.edit_key='base' AND d.state='ready' AND d.content_type='image/webp'
+    JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed'
+    WHERE EXISTS (SELECT 1 FROM community.media_renditions t JOIN community.media_blobs tb ON tb.id=t.blob_id AND tb.state='committed'
+      WHERE t.item_id=i.id AND t.role='thumb' AND t.edit_key='base' AND t.state='ready' AND t.content_type='image/webp')
+  ),'[]'::jsonb) END AS images,
+         u.id AS author_id, u.handle AS author_handle,
+         u.display_name AS author_display_name, u.status AS author_status
+  FROM community.catalog_comments c
+  JOIN community.public_users u ON u.id = c.author_id
+  UNION ALL
+  SELECT r.id, 'reply' AS kind, c.catalog_id,c.target_type,r.body_deleted_at,c.thread_removed_at,r.root_comment_id,
+         r.reply_to_reply_id,
+         r.text, r.created_at, r.moderation, CASE WHEN r.body_deleted_at IS NOT NULL  THEN '[]'::jsonb ELSE COALESCE((
+    SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('id',i.id,'offset',(ref.value->>'offset')::integer,
+      'width',d.width,'height',d.height,'thumbSrc','/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'thumb','src','/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'display',
+      'fullSrc',CASE WHEN EXISTS (SELECT 1 FROM community.media_renditions f JOIN community.media_blobs fb ON fb.id=f.blob_id AND fb.state='committed'
+        WHERE f.item_id=i.id AND f.role='full' AND f.edit_key='base' AND f.state='ready' AND f.content_type='image/webp' AND (f.role<>'full' OR GREATEST(f.width,f.height)<=8192 OR (GREATEST(f.width,f.height)+0.5>2.5*(LEAST(f.width,f.height)-0.5) AND GREATEST(f.width,f.height)<=16000 AND (f.width-0.5)*(f.height-0.5)<=40000000))) THEN '/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'full' END)) ORDER BY ref.ordinality)
+    FROM jsonb_array_elements(r.image_refs) WITH ORDINALITY ref(value,ordinality)
+    JOIN community.media_items i ON i.id=ref.value->>'itemId' AND i.owner_id=r.author_id AND i.purpose='comment'
+      AND i.state='ready' AND i.cancelled_at IS NULL AND i.purged_at IS NULL
+    JOIN community.media_renditions d ON d.item_id=i.id AND d.role='display' AND d.edit_key='base' AND d.state='ready' AND d.content_type='image/webp'
+    JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed'
+    WHERE EXISTS (SELECT 1 FROM community.media_renditions t JOIN community.media_blobs tb ON tb.id=t.blob_id AND tb.state='committed'
+      WHERE t.item_id=i.id AND t.role='thumb' AND t.edit_key='base' AND t.state='ready' AND t.content_type='image/webp')
+  ),'[]'::jsonb) END AS images,
+         u.id AS author_id, u.handle AS author_handle,
+         u.display_name AS author_display_name, u.status AS author_status
+  FROM community.catalog_comment_replies r
+  JOIN community.catalog_comments c ON c.id = r.root_comment_id
+  JOIN community.public_users u ON u.id = r.author_id
+) entries
+  
+  WHERE ($1::text IS NULL OR entries.moderation = $1::text)
+    AND ($2::text IS NULL OR entries.kind = $2::text)
+    AND ($3::text IS NULL OR entries.catalog_id = $3::text)
+    AND (
+      $4::text IS NULL
+      OR entries.text ILIKE $4::text ESCAPE '\\'
+      OR entries.author_handle ILIKE $4::text ESCAPE '\\'
+      OR entries.author_display_name ILIKE $4::text ESCAPE '\\'
+    )
+    AND ($5::text IS NULL OR entries.author_id = $5::text)
+    AND ($6::timestamptz IS NULL OR entries.created_at >= $6::timestamptz)
+    AND ($7::timestamptz IS NULL OR entries.created_at <= $7::timestamptz)
+    AND NOT (
+      $8::boolean
+      AND entries.target_type = 'work'
+      AND entries.catalog_id IN (SELECT so_w.id FROM community.works so_w WHERE ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR so_w.id IN (SELECT hc.work_id FROM community.work_revisions hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_drafts hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_draft_snapshots hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_edit_drafts hc WHERE hc.work_id IS NOT NULL)))))
+    )
+
+  GROUP BY entries.moderation
+",
+    "4e0487ab5003": "SELECT entries.target_type AS value,count(*)::integer AS count,min(entries.created_at) AS oldest FROM (
+  SELECT c.id, 'comment' AS kind, c.catalog_id,c.target_type,c.body_deleted_at,c.thread_removed_at, NULL::text AS root_comment_id,
+         NULL::text AS reply_to_reply_id,
+         c.text, c.created_at, c.moderation, CASE WHEN c.body_deleted_at IS NOT NULL  THEN '[]'::jsonb ELSE COALESCE((
+    SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('id',i.id,'offset',(ref.value->>'offset')::integer,
+      'width',d.width,'height',d.height,'thumbSrc','/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'thumb','src','/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'display',
+      'fullSrc',CASE WHEN EXISTS (SELECT 1 FROM community.media_renditions f JOIN community.media_blobs fb ON fb.id=f.blob_id AND fb.state='committed'
+        WHERE f.item_id=i.id AND f.role='full' AND f.edit_key='base' AND f.state='ready' AND f.content_type='image/webp' AND (f.role<>'full' OR GREATEST(f.width,f.height)<=8192 OR (GREATEST(f.width,f.height)+0.5>2.5*(LEAST(f.width,f.height)-0.5) AND GREATEST(f.width,f.height)<=16000 AND (f.width-0.5)*(f.height-0.5)<=40000000))) THEN '/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'full' END)) ORDER BY ref.ordinality)
+    FROM jsonb_array_elements(c.image_refs) WITH ORDINALITY ref(value,ordinality)
+    JOIN community.media_items i ON i.id=ref.value->>'itemId' AND i.owner_id=c.author_id AND i.purpose='comment'
+      AND i.state='ready' AND i.cancelled_at IS NULL AND i.purged_at IS NULL
+    JOIN community.media_renditions d ON d.item_id=i.id AND d.role='display' AND d.edit_key='base' AND d.state='ready' AND d.content_type='image/webp'
+    JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed'
+    WHERE EXISTS (SELECT 1 FROM community.media_renditions t JOIN community.media_blobs tb ON tb.id=t.blob_id AND tb.state='committed'
+      WHERE t.item_id=i.id AND t.role='thumb' AND t.edit_key='base' AND t.state='ready' AND t.content_type='image/webp')
+  ),'[]'::jsonb) END AS images,
+         u.id AS author_id, u.handle AS author_handle,
+         u.display_name AS author_display_name, u.status AS author_status
+  FROM community.catalog_comments c
+  JOIN community.public_users u ON u.id = c.author_id
+  UNION ALL
+  SELECT r.id, 'reply' AS kind, c.catalog_id,c.target_type,r.body_deleted_at,c.thread_removed_at,r.root_comment_id,
+         r.reply_to_reply_id,
+         r.text, r.created_at, r.moderation, CASE WHEN r.body_deleted_at IS NOT NULL  THEN '[]'::jsonb ELSE COALESCE((
+    SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('id',i.id,'offset',(ref.value->>'offset')::integer,
+      'width',d.width,'height',d.height,'thumbSrc','/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'thumb','src','/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'display',
+      'fullSrc',CASE WHEN EXISTS (SELECT 1 FROM community.media_renditions f JOIN community.media_blobs fb ON fb.id=f.blob_id AND fb.state='committed'
+        WHERE f.item_id=i.id AND f.role='full' AND f.edit_key='base' AND f.state='ready' AND f.content_type='image/webp' AND (f.role<>'full' OR GREATEST(f.width,f.height)<=8192 OR (GREATEST(f.width,f.height)+0.5>2.5*(LEAST(f.width,f.height)-0.5) AND GREATEST(f.width,f.height)<=16000 AND (f.width-0.5)*(f.height-0.5)<=40000000))) THEN '/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'full' END)) ORDER BY ref.ordinality)
+    FROM jsonb_array_elements(r.image_refs) WITH ORDINALITY ref(value,ordinality)
+    JOIN community.media_items i ON i.id=ref.value->>'itemId' AND i.owner_id=r.author_id AND i.purpose='comment'
+      AND i.state='ready' AND i.cancelled_at IS NULL AND i.purged_at IS NULL
+    JOIN community.media_renditions d ON d.item_id=i.id AND d.role='display' AND d.edit_key='base' AND d.state='ready' AND d.content_type='image/webp'
+    JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed'
+    WHERE EXISTS (SELECT 1 FROM community.media_renditions t JOIN community.media_blobs tb ON tb.id=t.blob_id AND tb.state='committed'
+      WHERE t.item_id=i.id AND t.role='thumb' AND t.edit_key='base' AND t.state='ready' AND t.content_type='image/webp')
+  ),'[]'::jsonb) END AS images,
+         u.id AS author_id, u.handle AS author_handle,
+         u.display_name AS author_display_name, u.status AS author_status
+  FROM community.catalog_comment_replies r
+  JOIN community.catalog_comments c ON c.id = r.root_comment_id
+  JOIN community.public_users u ON u.id = r.author_id
+) entries 
+  WHERE ($1::text IS NULL OR entries.moderation = $1::text)
+    AND ($2::text IS NULL OR entries.kind = $2::text)
+    AND ($3::text IS NULL OR entries.catalog_id = $3::text)
+    AND (
+      $4::text IS NULL
+      OR entries.text ILIKE $4::text ESCAPE '\\'
+      OR entries.author_handle ILIKE $4::text ESCAPE '\\'
+      OR entries.author_display_name ILIKE $4::text ESCAPE '\\'
+    )
+    AND ($5::text IS NULL OR entries.author_id = $5::text)
+    AND ($6::timestamptz IS NULL OR entries.created_at >= $6::timestamptz)
+    AND ($7::timestamptz IS NULL OR entries.created_at <= $7::timestamptz)
+    AND NOT (
+      $8::boolean
+      AND entries.target_type = 'work'
+      AND entries.catalog_id IN (SELECT so_w.id FROM community.works so_w WHERE ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR so_w.id IN (SELECT hc.work_id FROM community.work_revisions hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_drafts hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_draft_snapshots hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_edit_drafts hc WHERE hc.work_id IS NOT NULL)))))
+    )
+
+                 GROUP BY 1 ORDER BY count DESC,value ASC NULLS LAST",
+    "58c33bdb887c": "SELECT entries.kind AS value,count(*)::integer AS count,min(entries.created_at) AS oldest FROM (
+  SELECT c.id, 'comment' AS kind, c.catalog_id,c.target_type,c.body_deleted_at,c.thread_removed_at, NULL::text AS root_comment_id,
+         NULL::text AS reply_to_reply_id,
+         c.text, c.created_at, c.moderation, CASE WHEN c.body_deleted_at IS NOT NULL  THEN '[]'::jsonb ELSE COALESCE((
+    SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('id',i.id,'offset',(ref.value->>'offset')::integer,
+      'width',d.width,'height',d.height,'thumbSrc','/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'thumb','src','/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'display',
+      'fullSrc',CASE WHEN EXISTS (SELECT 1 FROM community.media_renditions f JOIN community.media_blobs fb ON fb.id=f.blob_id AND fb.state='committed'
+        WHERE f.item_id=i.id AND f.role='full' AND f.edit_key='base' AND f.state='ready' AND f.content_type='image/webp' AND (f.role<>'full' OR GREATEST(f.width,f.height)<=8192 OR (GREATEST(f.width,f.height)+0.5>2.5*(LEAST(f.width,f.height)-0.5) AND GREATEST(f.width,f.height)<=16000 AND (f.width-0.5)*(f.height-0.5)<=40000000))) THEN '/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'full' END)) ORDER BY ref.ordinality)
+    FROM jsonb_array_elements(c.image_refs) WITH ORDINALITY ref(value,ordinality)
+    JOIN community.media_items i ON i.id=ref.value->>'itemId' AND i.owner_id=c.author_id AND i.purpose='comment'
+      AND i.state='ready' AND i.cancelled_at IS NULL AND i.purged_at IS NULL
+    JOIN community.media_renditions d ON d.item_id=i.id AND d.role='display' AND d.edit_key='base' AND d.state='ready' AND d.content_type='image/webp'
+    JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed'
+    WHERE EXISTS (SELECT 1 FROM community.media_renditions t JOIN community.media_blobs tb ON tb.id=t.blob_id AND tb.state='committed'
+      WHERE t.item_id=i.id AND t.role='thumb' AND t.edit_key='base' AND t.state='ready' AND t.content_type='image/webp')
+  ),'[]'::jsonb) END AS images,
+         u.id AS author_id, u.handle AS author_handle,
+         u.display_name AS author_display_name, u.status AS author_status
+  FROM community.catalog_comments c
+  JOIN community.public_users u ON u.id = c.author_id
+  UNION ALL
+  SELECT r.id, 'reply' AS kind, c.catalog_id,c.target_type,r.body_deleted_at,c.thread_removed_at,r.root_comment_id,
+         r.reply_to_reply_id,
+         r.text, r.created_at, r.moderation, CASE WHEN r.body_deleted_at IS NOT NULL  THEN '[]'::jsonb ELSE COALESCE((
+    SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('id',i.id,'offset',(ref.value->>'offset')::integer,
+      'width',d.width,'height',d.height,'thumbSrc','/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'thumb','src','/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'display',
+      'fullSrc',CASE WHEN EXISTS (SELECT 1 FROM community.media_renditions f JOIN community.media_blobs fb ON fb.id=f.blob_id AND fb.state='committed'
+        WHERE f.item_id=i.id AND f.role='full' AND f.edit_key='base' AND f.state='ready' AND f.content_type='image/webp' AND (f.role<>'full' OR GREATEST(f.width,f.height)<=8192 OR (GREATEST(f.width,f.height)+0.5>2.5*(LEAST(f.width,f.height)-0.5) AND GREATEST(f.width,f.height)<=16000 AND (f.width-0.5)*(f.height-0.5)<=40000000))) THEN '/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'full' END)) ORDER BY ref.ordinality)
+    FROM jsonb_array_elements(r.image_refs) WITH ORDINALITY ref(value,ordinality)
+    JOIN community.media_items i ON i.id=ref.value->>'itemId' AND i.owner_id=r.author_id AND i.purpose='comment'
+      AND i.state='ready' AND i.cancelled_at IS NULL AND i.purged_at IS NULL
+    JOIN community.media_renditions d ON d.item_id=i.id AND d.role='display' AND d.edit_key='base' AND d.state='ready' AND d.content_type='image/webp'
+    JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed'
+    WHERE EXISTS (SELECT 1 FROM community.media_renditions t JOIN community.media_blobs tb ON tb.id=t.blob_id AND tb.state='committed'
+      WHERE t.item_id=i.id AND t.role='thumb' AND t.edit_key='base' AND t.state='ready' AND t.content_type='image/webp')
+  ),'[]'::jsonb) END AS images,
+         u.id AS author_id, u.handle AS author_handle,
+         u.display_name AS author_display_name, u.status AS author_status
+  FROM community.catalog_comment_replies r
+  JOIN community.catalog_comments c ON c.id = r.root_comment_id
+  JOIN community.public_users u ON u.id = r.author_id
+) entries 
+  WHERE ($1::text IS NULL OR entries.moderation = $1::text)
+    AND ($2::text IS NULL OR entries.kind = $2::text)
+    AND ($3::text IS NULL OR entries.catalog_id = $3::text)
+    AND (
+      $4::text IS NULL
+      OR entries.text ILIKE $4::text ESCAPE '\\'
+      OR entries.author_handle ILIKE $4::text ESCAPE '\\'
+      OR entries.author_display_name ILIKE $4::text ESCAPE '\\'
+    )
+    AND ($5::text IS NULL OR entries.author_id = $5::text)
+    AND ($6::timestamptz IS NULL OR entries.created_at >= $6::timestamptz)
+    AND ($7::timestamptz IS NULL OR entries.created_at <= $7::timestamptz)
+    AND NOT (
+      $8::boolean
+      AND entries.target_type = 'work'
+      AND entries.catalog_id IN (SELECT so_w.id FROM community.works so_w WHERE ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR so_w.id IN (SELECT hc.work_id FROM community.work_revisions hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_drafts hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_draft_snapshots hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_edit_drafts hc WHERE hc.work_id IS NOT NULL)))))
+    )
+
+                 GROUP BY 1 ORDER BY count DESC,value ASC NULLS LAST",
+    "5df0235292ad": "SELECT c.kind AS value,count(*)::integer AS count,min(c.created_at) AS oldest FROM community.report_cases c WHERE ($1::text IS NULL OR c.status=$1)
+    AND ($2::boolean IS NULL OR c.urgent=$2)
+    AND ($3::boolean IS NULL OR c.status<>'resolved')
+    AND ($4::text IS NULL OR c.target_type=$4)
+    AND ($5::text IS NULL OR c.target_id=$5)
+    AND ($6::text IS NULL OR c.affected_user_id=$6)
+    AND ($7::text IS NULL OR c.reporter_id=$7)
+                 GROUP BY 1 ORDER BY count DESC,value ASC NULLS LAST",
+    "61ccb589bcba": "SELECT count(*)::integer n FROM community.report_cases c WHERE ($1::text IS NULL OR c.status=$1)
+    AND ($2::boolean IS NULL OR c.urgent=$2)
+    AND ($3::boolean IS NULL OR c.status<>'resolved')
+    AND ($4::text IS NULL OR c.target_type=$4)
+    AND ($5::text IS NULL OR c.target_id=$5)
+    AND ($6::text IS NULL OR c.affected_user_id=$6)
+    AND ($7::text IS NULL OR c.reporter_id=$7) AND NOT ((c.target_type='work' AND EXISTS(SELECT 1 FROM community.works so_w
+    WHERE so_w.id=c.target_id AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id))))))
+    OR (c.target_type='comment' AND (EXISTS(SELECT 1 FROM community.catalog_comments so_c
+    JOIN community.works so_w ON so_w.id=so_c.catalog_id
+    WHERE so_c.id=COALESCE(
+      (SELECT so_r.root_comment_id FROM community.catalog_comment_replies so_r WHERE so_r.id=c.target_id),
+      c.target_id)
+    AND so_c.target_type='work' AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id)))))
+      OR (c.snapshot->'post'->>'type'='work' AND EXISTS(SELECT 1 FROM community.works so_w
+    WHERE so_w.id=c.snapshot->'post'->>'id' AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id)))))))))",
+    "668ed1c068d5": "SET LOCAL statement_timeout='2000ms'",
+    "68061837704e": "SELECT count(*)::integer AS count,min(entries.created_at) AS oldest FROM (
+  SELECT c.id, 'comment' AS kind, c.catalog_id,c.target_type,c.body_deleted_at,c.thread_removed_at, NULL::text AS root_comment_id,
+         NULL::text AS reply_to_reply_id,
+         c.text, c.created_at, c.moderation, CASE WHEN c.body_deleted_at IS NOT NULL  THEN '[]'::jsonb ELSE COALESCE((
+    SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('id',i.id,'offset',(ref.value->>'offset')::integer,
+      'width',d.width,'height',d.height,'thumbSrc','/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'thumb','src','/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'display',
+      'fullSrc',CASE WHEN EXISTS (SELECT 1 FROM community.media_renditions f JOIN community.media_blobs fb ON fb.id=f.blob_id AND fb.state='committed'
+        WHERE f.item_id=i.id AND f.role='full' AND f.edit_key='base' AND f.state='ready' AND f.content_type='image/webp' AND (f.role<>'full' OR GREATEST(f.width,f.height)<=8192 OR (GREATEST(f.width,f.height)+0.5>2.5*(LEAST(f.width,f.height)-0.5) AND GREATEST(f.width,f.height)<=16000 AND (f.width-0.5)*(f.height-0.5)<=40000000))) THEN '/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'full' END)) ORDER BY ref.ordinality)
+    FROM jsonb_array_elements(c.image_refs) WITH ORDINALITY ref(value,ordinality)
+    JOIN community.media_items i ON i.id=ref.value->>'itemId' AND i.owner_id=c.author_id AND i.purpose='comment'
+      AND i.state='ready' AND i.cancelled_at IS NULL AND i.purged_at IS NULL
+    JOIN community.media_renditions d ON d.item_id=i.id AND d.role='display' AND d.edit_key='base' AND d.state='ready' AND d.content_type='image/webp'
+    JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed'
+    WHERE EXISTS (SELECT 1 FROM community.media_renditions t JOIN community.media_blobs tb ON tb.id=t.blob_id AND tb.state='committed'
+      WHERE t.item_id=i.id AND t.role='thumb' AND t.edit_key='base' AND t.state='ready' AND t.content_type='image/webp')
+  ),'[]'::jsonb) END AS images,
+         u.id AS author_id, u.handle AS author_handle,
+         u.display_name AS author_display_name, u.status AS author_status
+  FROM community.catalog_comments c
+  JOIN community.public_users u ON u.id = c.author_id
+  UNION ALL
+  SELECT r.id, 'reply' AS kind, c.catalog_id,c.target_type,r.body_deleted_at,c.thread_removed_at,r.root_comment_id,
+         r.reply_to_reply_id,
+         r.text, r.created_at, r.moderation, CASE WHEN r.body_deleted_at IS NOT NULL  THEN '[]'::jsonb ELSE COALESCE((
+    SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('id',i.id,'offset',(ref.value->>'offset')::integer,
+      'width',d.width,'height',d.height,'thumbSrc','/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'thumb','src','/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'display',
+      'fullSrc',CASE WHEN EXISTS (SELECT 1 FROM community.media_renditions f JOIN community.media_blobs fb ON fb.id=f.blob_id AND fb.state='committed'
+        WHERE f.item_id=i.id AND f.role='full' AND f.edit_key='base' AND f.state='ready' AND f.content_type='image/webp' AND (f.role<>'full' OR GREATEST(f.width,f.height)<=8192 OR (GREATEST(f.width,f.height)+0.5>2.5*(LEAST(f.width,f.height)-0.5) AND GREATEST(f.width,f.height)<=16000 AND (f.width-0.5)*(f.height-0.5)<=40000000))) THEN '/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'full' END)) ORDER BY ref.ordinality)
+    FROM jsonb_array_elements(r.image_refs) WITH ORDINALITY ref(value,ordinality)
+    JOIN community.media_items i ON i.id=ref.value->>'itemId' AND i.owner_id=r.author_id AND i.purpose='comment'
+      AND i.state='ready' AND i.cancelled_at IS NULL AND i.purged_at IS NULL
+    JOIN community.media_renditions d ON d.item_id=i.id AND d.role='display' AND d.edit_key='base' AND d.state='ready' AND d.content_type='image/webp'
+    JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed'
+    WHERE EXISTS (SELECT 1 FROM community.media_renditions t JOIN community.media_blobs tb ON tb.id=t.blob_id AND tb.state='committed'
+      WHERE t.item_id=i.id AND t.role='thumb' AND t.edit_key='base' AND t.state='ready' AND t.content_type='image/webp')
+  ),'[]'::jsonb) END AS images,
+         u.id AS author_id, u.handle AS author_handle,
+         u.display_name AS author_display_name, u.status AS author_status
+  FROM community.catalog_comment_replies r
+  JOIN community.catalog_comments c ON c.id = r.root_comment_id
+  JOIN community.public_users u ON u.id = r.author_id
+) entries 
+  WHERE ($1::text IS NULL OR entries.moderation = $1::text)
+    AND ($2::text IS NULL OR entries.kind = $2::text)
+    AND ($3::text IS NULL OR entries.catalog_id = $3::text)
+    AND (
+      $4::text IS NULL
+      OR entries.text ILIKE $4::text ESCAPE '\\'
+      OR entries.author_handle ILIKE $4::text ESCAPE '\\'
+      OR entries.author_display_name ILIKE $4::text ESCAPE '\\'
+    )
+    AND ($5::text IS NULL OR entries.author_id = $5::text)
+    AND ($6::timestamptz IS NULL OR entries.created_at >= $6::timestamptz)
+    AND ($7::timestamptz IS NULL OR entries.created_at <= $7::timestamptz)
+    AND NOT (
+      $8::boolean
+      AND entries.target_type = 'work'
+      AND entries.catalog_id IN (SELECT so_w.id FROM community.works so_w WHERE ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR so_w.id IN (SELECT hc.work_id FROM community.work_revisions hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_drafts hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_draft_snapshots hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_edit_drafts hc WHERE hc.work_id IS NOT NULL)))))
+    )
+",
+    "685e45fffd9f": "
+  SELECT action, COUNT(*)::text AS total
+  FROM community.moderation_events
+  WHERE occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
+    AND NOT (
+      $3::boolean
+      AND subject_kind IN ('comment', 'reply')
+      AND EXISTS(SELECT 1 FROM community.catalog_comments so_c
+    JOIN community.works so_w ON so_w.id=so_c.catalog_id
+    WHERE so_c.id=COALESCE(
+      (SELECT so_r.root_comment_id FROM community.catalog_comment_replies so_r WHERE so_r.id=subject_id),
+      subject_id)
+    AND so_c.target_type='work' AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id)))))
+    )
+  GROUP BY action
+",
+    "70f478d238f0": "SELECT entries.moderation AS value,count(*)::integer AS count,min(entries.created_at) AS oldest FROM (
+  SELECT c.id, 'comment' AS kind, c.catalog_id,c.target_type,c.body_deleted_at,c.thread_removed_at, NULL::text AS root_comment_id,
+         NULL::text AS reply_to_reply_id,
+         c.text, c.created_at, c.moderation, CASE WHEN c.body_deleted_at IS NOT NULL  THEN '[]'::jsonb ELSE COALESCE((
+    SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('id',i.id,'offset',(ref.value->>'offset')::integer,
+      'width',d.width,'height',d.height,'thumbSrc','/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'thumb','src','/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'display',
+      'fullSrc',CASE WHEN EXISTS (SELECT 1 FROM community.media_renditions f JOIN community.media_blobs fb ON fb.id=f.blob_id AND fb.state='committed'
+        WHERE f.item_id=i.id AND f.role='full' AND f.edit_key='base' AND f.state='ready' AND f.content_type='image/webp' AND (f.role<>'full' OR GREATEST(f.width,f.height)<=8192 OR (GREATEST(f.width,f.height)+0.5>2.5*(LEAST(f.width,f.height)-0.5) AND GREATEST(f.width,f.height)<=16000 AND (f.width-0.5)*(f.height-0.5)<=40000000))) THEN '/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'full' END)) ORDER BY ref.ordinality)
+    FROM jsonb_array_elements(c.image_refs) WITH ORDINALITY ref(value,ordinality)
+    JOIN community.media_items i ON i.id=ref.value->>'itemId' AND i.owner_id=c.author_id AND i.purpose='comment'
+      AND i.state='ready' AND i.cancelled_at IS NULL AND i.purged_at IS NULL
+    JOIN community.media_renditions d ON d.item_id=i.id AND d.role='display' AND d.edit_key='base' AND d.state='ready' AND d.content_type='image/webp'
+    JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed'
+    WHERE EXISTS (SELECT 1 FROM community.media_renditions t JOIN community.media_blobs tb ON tb.id=t.blob_id AND tb.state='committed'
+      WHERE t.item_id=i.id AND t.role='thumb' AND t.edit_key='base' AND t.state='ready' AND t.content_type='image/webp')
+  ),'[]'::jsonb) END AS images,
+         u.id AS author_id, u.handle AS author_handle,
+         u.display_name AS author_display_name, u.status AS author_status
+  FROM community.catalog_comments c
+  JOIN community.public_users u ON u.id = c.author_id
+  UNION ALL
+  SELECT r.id, 'reply' AS kind, c.catalog_id,c.target_type,r.body_deleted_at,c.thread_removed_at,r.root_comment_id,
+         r.reply_to_reply_id,
+         r.text, r.created_at, r.moderation, CASE WHEN r.body_deleted_at IS NOT NULL  THEN '[]'::jsonb ELSE COALESCE((
+    SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('id',i.id,'offset',(ref.value->>'offset')::integer,
+      'width',d.width,'height',d.height,'thumbSrc','/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'thumb','src','/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'display',
+      'fullSrc',CASE WHEN EXISTS (SELECT 1 FROM community.media_renditions f JOIN community.media_blobs fb ON fb.id=f.blob_id AND fb.state='committed'
+        WHERE f.item_id=i.id AND f.role='full' AND f.edit_key='base' AND f.state='ready' AND f.content_type='image/webp' AND (f.role<>'full' OR GREATEST(f.width,f.height)<=8192 OR (GREATEST(f.width,f.height)+0.5>2.5*(LEAST(f.width,f.height)-0.5) AND GREATEST(f.width,f.height)<=16000 AND (f.width-0.5)*(f.height-0.5)<=40000000))) THEN '/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'full' END)) ORDER BY ref.ordinality)
+    FROM jsonb_array_elements(r.image_refs) WITH ORDINALITY ref(value,ordinality)
+    JOIN community.media_items i ON i.id=ref.value->>'itemId' AND i.owner_id=r.author_id AND i.purpose='comment'
+      AND i.state='ready' AND i.cancelled_at IS NULL AND i.purged_at IS NULL
+    JOIN community.media_renditions d ON d.item_id=i.id AND d.role='display' AND d.edit_key='base' AND d.state='ready' AND d.content_type='image/webp'
+    JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed'
+    WHERE EXISTS (SELECT 1 FROM community.media_renditions t JOIN community.media_blobs tb ON tb.id=t.blob_id AND tb.state='committed'
+      WHERE t.item_id=i.id AND t.role='thumb' AND t.edit_key='base' AND t.state='ready' AND t.content_type='image/webp')
+  ),'[]'::jsonb) END AS images,
+         u.id AS author_id, u.handle AS author_handle,
+         u.display_name AS author_display_name, u.status AS author_status
+  FROM community.catalog_comment_replies r
+  JOIN community.catalog_comments c ON c.id = r.root_comment_id
+  JOIN community.public_users u ON u.id = r.author_id
+) entries 
+  WHERE ($1::text IS NULL OR entries.moderation = $1::text)
+    AND ($2::text IS NULL OR entries.kind = $2::text)
+    AND ($3::text IS NULL OR entries.catalog_id = $3::text)
+    AND (
+      $4::text IS NULL
+      OR entries.text ILIKE $4::text ESCAPE '\\'
+      OR entries.author_handle ILIKE $4::text ESCAPE '\\'
+      OR entries.author_display_name ILIKE $4::text ESCAPE '\\'
+    )
+    AND ($5::text IS NULL OR entries.author_id = $5::text)
+    AND ($6::timestamptz IS NULL OR entries.created_at >= $6::timestamptz)
+    AND ($7::timestamptz IS NULL OR entries.created_at <= $7::timestamptz)
+    AND NOT (
+      $8::boolean
+      AND entries.target_type = 'work'
+      AND entries.catalog_id IN (SELECT so_w.id FROM community.works so_w WHERE ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR so_w.id IN (SELECT hc.work_id FROM community.work_revisions hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_drafts hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_draft_snapshots hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_edit_drafts hc WHERE hc.work_id IS NOT NULL)))))
+    )
+
+                 GROUP BY 1 ORDER BY count DESC,value ASC NULLS LAST",
+    "75eb1508f6a4": "SELECT count(*) AS total FROM community.publishing_jobs WHERE ($1::text IS NULL OR state=$1::text) AND ($2::text IS NULL OR kind=$2::text) AND ($3::text IS NULL OR subject_id=$3::text) AND ($4::text IS NULL OR id=$4::text)",
+    "79663c1d3b43": "COMMIT",
+    "884b307eaf68": "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+    "8e5dd4de32df": "SELECT count(*)::integer AS count,min(c.created_at) AS oldest FROM community.report_cases c WHERE ($1::text IS NULL OR c.status=$1)
+    AND ($2::boolean IS NULL OR c.urgent=$2)
+    AND ($3::boolean IS NULL OR c.status<>'resolved')
+    AND ($4::text IS NULL OR c.target_type=$4)
+    AND ($5::text IS NULL OR c.target_id=$5)
+    AND ($6::text IS NULL OR c.affected_user_id=$6)
+    AND ($7::text IS NULL OR c.reporter_id=$7)",
+    "91968b764b37": "SELECT r.id,r.work_id,r.sequence,r.origin,r.author_id,u.handle,u.display_name,
+  u.status AS author_status,r.title,r.body,r.authorship_kind,r.reference_title,r.original_author,r.source_note,
+  r.cover_item_id,r.cover_crop,r.disposition,r.id=w.author_revision_id AS latest,w.operator_state,
+  w.trashed_at IS NOT NULL AS trashed,r.submitted_at,r.decided_at,r.decided_by,r.version FROM community.work_revisions r
+  JOIN community.works w ON w.id=r.work_id
+  JOIN community.public_users u ON u.id=r.author_id
+  WHERE r.disposition<>'not_required' AND w.deleted_at IS NULL AND r.origin='submission'
+  AND ($1::text IS NULL OR r.disposition=$1::text)
+  AND ($2::text IS NULL OR r.author_id=$2::text)
+  AND ($3::text IS NULL OR r.work_id=$3::text)
+  AND NOT ($4::boolean AND ((w.visibility='self' AND w.deleted_at IS NULL) OR (w.deleted_at IS NOT NULL AND (w.title<>'' OR w.text<>'' OR cardinality(w.media_ids)>0
+    OR w.public_revision_id IS NOT NULL OR w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=w.id))))) ORDER BY r.submitted_at DESC,r.id DESC LIMIT $5 OFFSET $6",
+    "9b9c4b228d9c": "SELECT c.*,((c.target_type='work' AND EXISTS(SELECT 1 FROM community.works so_w
+    WHERE so_w.id=c.target_id AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id))))))
+    OR (c.target_type='comment' AND (EXISTS(SELECT 1 FROM community.catalog_comments so_c
+    JOIN community.works so_w ON so_w.id=so_c.catalog_id
+    WHERE so_c.id=COALESCE(
+      (SELECT so_r.root_comment_id FROM community.catalog_comment_replies so_r WHERE so_r.id=c.target_id),
+      c.target_id)
+    AND so_c.target_type='work' AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id)))))
+      OR (c.snapshot->'post'->>'type'='work' AND EXISTS(SELECT 1 FROM community.works so_w
+    WHERE so_w.id=c.snapshot->'post'->>'id' AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id))))))))) AS owner_only,(c.reason='privacy' AND c.target_type='user' AND c.target_id=c.reporter_id) AS owner_decides FROM community.report_cases c WHERE ($1::text IS NULL OR c.status=$1)
+    AND ($2::boolean IS NULL OR c.urgent=$2)
+    AND ($3::boolean IS NULL OR c.status<>'resolved')
+    AND ($4::text IS NULL OR c.target_type=$4)
+    AND ($5::text IS NULL OR c.target_id=$5)
+    AND ($6::text IS NULL OR c.affected_user_id=$6)
+    AND ($7::text IS NULL OR c.reporter_id=$7) AND NOT ((c.target_type='work' AND EXISTS(SELECT 1 FROM community.works so_w
+    WHERE so_w.id=c.target_id AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id))))))
+    OR (c.target_type='comment' AND (EXISTS(SELECT 1 FROM community.catalog_comments so_c
+    JOIN community.works so_w ON so_w.id=so_c.catalog_id
+    WHERE so_c.id=COALESCE(
+      (SELECT so_r.root_comment_id FROM community.catalog_comment_replies so_r WHERE so_r.id=c.target_id),
+      c.target_id)
+    AND so_c.target_type='work' AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id)))))
+      OR (c.snapshot->'post'->>'type'='work' AND EXISTS(SELECT 1 FROM community.works so_w
+    WHERE so_w.id=c.snapshot->'post'->>'id' AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id))))))))) ORDER BY c.urgent DESC,c.created_at,c.id LIMIT $8 OFFSET $9",
+    "9d95f668715d": "SELECT c.target_type AS value,count(*)::integer AS count,min(c.created_at) AS oldest FROM community.report_cases c WHERE ($1::text IS NULL OR c.status=$1)
+    AND ($2::boolean IS NULL OR c.urgent=$2)
+    AND ($3::boolean IS NULL OR c.status<>'resolved')
+    AND ($4::text IS NULL OR c.target_type=$4)
+    AND ($5::text IS NULL OR c.target_id=$5)
+    AND ($6::text IS NULL OR c.affected_user_id=$6)
+    AND ($7::text IS NULL OR c.reporter_id=$7) AND NOT ((c.target_type='work' AND EXISTS(SELECT 1 FROM community.works so_w
+    WHERE so_w.id=c.target_id AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id))))))
+    OR (c.target_type='comment' AND (EXISTS(SELECT 1 FROM community.catalog_comments so_c
+    JOIN community.works so_w ON so_w.id=so_c.catalog_id
+    WHERE so_c.id=COALESCE(
+      (SELECT so_r.root_comment_id FROM community.catalog_comment_replies so_r WHERE so_r.id=c.target_id),
+      c.target_id)
+    AND so_c.target_type='work' AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id)))))
+      OR (c.snapshot->'post'->>'type'='work' AND EXISTS(SELECT 1 FROM community.works so_w
+    WHERE so_w.id=c.snapshot->'post'->>'id' AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id)))))))))
+                 GROUP BY 1 ORDER BY count DESC,value ASC NULLS LAST",
+    "a51819653f70": "SELECT c.reason AS value,count(*)::integer AS count,min(c.created_at) AS oldest FROM community.report_cases c WHERE ($1::text IS NULL OR c.status=$1)
+    AND ($2::boolean IS NULL OR c.urgent=$2)
+    AND ($3::boolean IS NULL OR c.status<>'resolved')
+    AND ($4::text IS NULL OR c.target_type=$4)
+    AND ($5::text IS NULL OR c.target_id=$5)
+    AND ($6::text IS NULL OR c.affected_user_id=$6)
+    AND ($7::text IS NULL OR c.reporter_id=$7) AND NOT ((c.target_type='work' AND EXISTS(SELECT 1 FROM community.works so_w
+    WHERE so_w.id=c.target_id AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id))))))
+    OR (c.target_type='comment' AND (EXISTS(SELECT 1 FROM community.catalog_comments so_c
+    JOIN community.works so_w ON so_w.id=so_c.catalog_id
+    WHERE so_c.id=COALESCE(
+      (SELECT so_r.root_comment_id FROM community.catalog_comment_replies so_r WHERE so_r.id=c.target_id),
+      c.target_id)
+    AND so_c.target_type='work' AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id)))))
+      OR (c.snapshot->'post'->>'type'='work' AND EXISTS(SELECT 1 FROM community.works so_w
+    WHERE so_w.id=c.snapshot->'post'->>'id' AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id)))))))))
+                 GROUP BY 1 ORDER BY count DESC,value ASC NULLS LAST",
+    "a8402858d4f1": "BEGIN",
+    "aaeb72688612": "SELECT u.status AS value,count(*)::integer AS count,min(u.created_at) AS oldest FROM community.public_users u WHERE ($1='' OR position(lower($1) in lower(u.id||' '||u.handle||' '||u.display_name))>0)
+  AND ($2::text IS NULL OR u.id=$2)
+                 GROUP BY 1 ORDER BY count DESC,value ASC NULLS LAST",
+    "ad2f907e5adb": "SELECT kind AS value,count(*)::integer AS count,min(created_at) AS oldest FROM community.publishing_jobs WHERE ($1::text IS NULL OR state=$1::text) AND ($2::text IS NULL OR kind=$2::text) AND ($3::text IS NULL OR subject_id=$3::text) AND ($4::text IS NULL OR id=$4::text)
+                 GROUP BY 1 ORDER BY count DESC,value ASC NULLS LAST",
+    "ae7198152443": "SELECT c.*,((c.target_type='work' AND EXISTS(SELECT 1 FROM community.works so_w
+    WHERE so_w.id=c.target_id AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id))))))
+    OR (c.target_type='comment' AND (EXISTS(SELECT 1 FROM community.catalog_comments so_c
+    JOIN community.works so_w ON so_w.id=so_c.catalog_id
+    WHERE so_c.id=COALESCE(
+      (SELECT so_r.root_comment_id FROM community.catalog_comment_replies so_r WHERE so_r.id=c.target_id),
+      c.target_id)
+    AND so_c.target_type='work' AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id)))))
+      OR (c.snapshot->'post'->>'type'='work' AND EXISTS(SELECT 1 FROM community.works so_w
+    WHERE so_w.id=c.snapshot->'post'->>'id' AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id))))))))) AS owner_only,(c.reason='privacy' AND c.target_type='user' AND c.target_id=c.reporter_id) AS owner_decides FROM community.report_cases c WHERE ($1::text IS NULL OR c.status=$1)
+    AND ($2::boolean IS NULL OR c.urgent=$2)
+    AND ($3::boolean IS NULL OR c.status<>'resolved')
+    AND ($4::text IS NULL OR c.target_type=$4)
+    AND ($5::text IS NULL OR c.target_id=$5)
+    AND ($6::text IS NULL OR c.affected_user_id=$6)
+    AND ($7::text IS NULL OR c.reporter_id=$7) ORDER BY c.urgent DESC,c.created_at,c.id LIMIT $8 OFFSET $9",
+    "ae867f294471": "SELECT count(*)::integer AS count,min(u.created_at) AS oldest FROM community.public_users u WHERE ($1='' OR position(lower($1) in lower(u.id||' '||u.handle||' '||u.display_name))>0)
+  AND ($2::text IS NULL OR u.id=$2)",
+    "af4f893b736d": "SELECT count(*)::integer AS count,min(r.submitted_at) AS oldest FROM community.work_revisions r
+  JOIN community.works w ON w.id=r.work_id
+  JOIN community.public_users u ON u.id=r.author_id
+  WHERE r.disposition<>'not_required' AND w.deleted_at IS NULL AND r.origin='submission'
+  AND ($1::text IS NULL OR r.disposition=$1::text)
+  AND ($2::text IS NULL OR r.author_id=$2::text)
+  AND ($3::text IS NULL OR r.work_id=$3::text)
+  AND NOT ($4::boolean AND ((w.visibility='self' AND w.deleted_at IS NULL) OR (w.deleted_at IS NOT NULL AND (w.title<>'' OR w.text<>'' OR cardinality(w.media_ids)>0
+    OR w.public_revision_id IS NOT NULL OR w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=w.id)))))",
+    "b330ab08515f": "
+  SELECT COUNT(*)::text AS total
+  FROM (
+  SELECT c.id, 'comment' AS kind, c.catalog_id,c.target_type,c.body_deleted_at,c.thread_removed_at, NULL::text AS root_comment_id,
+         NULL::text AS reply_to_reply_id,
+         c.text, c.created_at, c.moderation, CASE WHEN c.body_deleted_at IS NOT NULL  THEN '[]'::jsonb ELSE COALESCE((
+    SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('id',i.id,'offset',(ref.value->>'offset')::integer,
+      'width',d.width,'height',d.height,'thumbSrc','/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'thumb','src','/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'display',
+      'fullSrc',CASE WHEN EXISTS (SELECT 1 FROM community.media_renditions f JOIN community.media_blobs fb ON fb.id=f.blob_id AND fb.state='committed'
+        WHERE f.item_id=i.id AND f.role='full' AND f.edit_key='base' AND f.state='ready' AND f.content_type='image/webp' AND (f.role<>'full' OR GREATEST(f.width,f.height)<=8192 OR (GREATEST(f.width,f.height)+0.5>2.5*(LEAST(f.width,f.height)-0.5) AND GREATEST(f.width,f.height)<=16000 AND (f.width-0.5)*(f.height-0.5)<=40000000))) THEN '/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'full' END)) ORDER BY ref.ordinality)
+    FROM jsonb_array_elements(c.image_refs) WITH ORDINALITY ref(value,ordinality)
+    JOIN community.media_items i ON i.id=ref.value->>'itemId' AND i.owner_id=c.author_id AND i.purpose='comment'
+      AND i.state='ready' AND i.cancelled_at IS NULL AND i.purged_at IS NULL
+    JOIN community.media_renditions d ON d.item_id=i.id AND d.role='display' AND d.edit_key='base' AND d.state='ready' AND d.content_type='image/webp'
+    JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed'
+    WHERE EXISTS (SELECT 1 FROM community.media_renditions t JOIN community.media_blobs tb ON tb.id=t.blob_id AND tb.state='committed'
+      WHERE t.item_id=i.id AND t.role='thumb' AND t.edit_key='base' AND t.state='ready' AND t.content_type='image/webp')
+  ),'[]'::jsonb) END AS images,
+         u.id AS author_id, u.handle AS author_handle,
+         u.display_name AS author_display_name, u.status AS author_status
+  FROM community.catalog_comments c
+  JOIN community.public_users u ON u.id = c.author_id
+  UNION ALL
+  SELECT r.id, 'reply' AS kind, c.catalog_id,c.target_type,r.body_deleted_at,c.thread_removed_at,r.root_comment_id,
+         r.reply_to_reply_id,
+         r.text, r.created_at, r.moderation, CASE WHEN r.body_deleted_at IS NOT NULL  THEN '[]'::jsonb ELSE COALESCE((
+    SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('id',i.id,'offset',(ref.value->>'offset')::integer,
+      'width',d.width,'height',d.height,'thumbSrc','/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'thumb','src','/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'display',
+      'fullSrc',CASE WHEN EXISTS (SELECT 1 FROM community.media_renditions f JOIN community.media_blobs fb ON fb.id=f.blob_id AND fb.state='committed'
+        WHERE f.item_id=i.id AND f.role='full' AND f.edit_key='base' AND f.state='ready' AND f.content_type='image/webp' AND (f.role<>'full' OR GREATEST(f.width,f.height)<=8192 OR (GREATEST(f.width,f.height)+0.5>2.5*(LEAST(f.width,f.height)-0.5) AND GREATEST(f.width,f.height)<=16000 AND (f.width-0.5)*(f.height-0.5)<=40000000))) THEN '/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'full' END)) ORDER BY ref.ordinality)
+    FROM jsonb_array_elements(r.image_refs) WITH ORDINALITY ref(value,ordinality)
+    JOIN community.media_items i ON i.id=ref.value->>'itemId' AND i.owner_id=r.author_id AND i.purpose='comment'
+      AND i.state='ready' AND i.cancelled_at IS NULL AND i.purged_at IS NULL
+    JOIN community.media_renditions d ON d.item_id=i.id AND d.role='display' AND d.edit_key='base' AND d.state='ready' AND d.content_type='image/webp'
+    JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed'
+    WHERE EXISTS (SELECT 1 FROM community.media_renditions t JOIN community.media_blobs tb ON tb.id=t.blob_id AND tb.state='committed'
+      WHERE t.item_id=i.id AND t.role='thumb' AND t.edit_key='base' AND t.state='ready' AND t.content_type='image/webp')
+  ),'[]'::jsonb) END AS images,
+         u.id AS author_id, u.handle AS author_handle,
+         u.display_name AS author_display_name, u.status AS author_status
+  FROM community.catalog_comment_replies r
+  JOIN community.catalog_comments c ON c.id = r.root_comment_id
+  JOIN community.public_users u ON u.id = r.author_id
+) entries
+  
+  WHERE ($1::text IS NULL OR entries.moderation = $1::text)
+    AND ($2::text IS NULL OR entries.kind = $2::text)
+    AND ($3::text IS NULL OR entries.catalog_id = $3::text)
+    AND (
+      $4::text IS NULL
+      OR entries.text ILIKE $4::text ESCAPE '\\'
+      OR entries.author_handle ILIKE $4::text ESCAPE '\\'
+      OR entries.author_display_name ILIKE $4::text ESCAPE '\\'
+    )
+    AND ($5::text IS NULL OR entries.author_id = $5::text)
+    AND ($6::timestamptz IS NULL OR entries.created_at >= $6::timestamptz)
+    AND ($7::timestamptz IS NULL OR entries.created_at <= $7::timestamptz)
+    AND NOT (
+      $8::boolean
+      AND entries.target_type = 'work'
+      AND entries.catalog_id IN (SELECT so_w.id FROM community.works so_w WHERE ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR so_w.id IN (SELECT hc.work_id FROM community.work_revisions hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_drafts hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_draft_snapshots hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_edit_drafts hc WHERE hc.work_id IS NOT NULL)))))
+    )
+
+",
+    "b6eea702352d": "SET LOCAL statement_timeout='4000ms'",
+    "bcb255aa5246": "
+  SELECT 
+  id, occurred_at, operator_label, action, subject_kind, subject_id, detail
+
+  FROM community.moderation_events
+  WHERE NOT (
+    $2::boolean
+    AND subject_kind IN ('comment', 'reply')
+    AND EXISTS(SELECT 1 FROM community.catalog_comments so_c
+    JOIN community.works so_w ON so_w.id=so_c.catalog_id
+    WHERE so_c.id=COALESCE(
+      (SELECT so_r.root_comment_id FROM community.catalog_comment_replies so_r WHERE so_r.id=subject_id),
+      subject_id)
+    AND so_c.target_type='work' AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id)))))
+  )
+  ORDER BY occurred_at DESC, id DESC
+  LIMIT $1::integer
+",
+    "c3364b94e306": "SELECT id,kind,subject_id,state,attempts,max_attempts,run_after,lease_expires_at,last_error_code,created_at,updated_at,finished_at FROM community.publishing_jobs WHERE ($1::text IS NULL OR state=$1::text) AND ($2::text IS NULL OR kind=$2::text) AND ($3::text IS NULL OR subject_id=$3::text) AND ($4::text IS NULL OR id=$4::text) ORDER BY updated_at DESC,id DESC LIMIT $5 OFFSET $6",
+    "c5f89565c453": "
+  
+  SELECT page.*,
+         (1 + (SELECT COUNT(*) FROM community.catalog_comment_replies siblings
+               WHERE siblings.root_comment_id = COALESCE(page.root_comment_id, page.id)))::integer
+           AS thread_affected_count
+  FROM (
+    SELECT * FROM (
+  SELECT c.id, 'comment' AS kind, c.catalog_id,c.target_type,c.body_deleted_at,c.thread_removed_at, NULL::text AS root_comment_id,
+         NULL::text AS reply_to_reply_id,
+         c.text, c.created_at, c.moderation, CASE WHEN c.body_deleted_at IS NOT NULL  THEN '[]'::jsonb ELSE COALESCE((
+    SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('id',i.id,'offset',(ref.value->>'offset')::integer,
+      'width',d.width,'height',d.height,'thumbSrc','/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'thumb','src','/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'display',
+      'fullSrc',CASE WHEN EXISTS (SELECT 1 FROM community.media_renditions f JOIN community.media_blobs fb ON fb.id=f.blob_id AND fb.state='committed'
+        WHERE f.item_id=i.id AND f.role='full' AND f.edit_key='base' AND f.state='ready' AND f.content_type='image/webp' AND (f.role<>'full' OR GREATEST(f.width,f.height)<=8192 OR (GREATEST(f.width,f.height)+0.5>2.5*(LEAST(f.width,f.height)-0.5) AND GREATEST(f.width,f.height)<=16000 AND (f.width-0.5)*(f.height-0.5)<=40000000))) THEN '/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'full' END)) ORDER BY ref.ordinality)
+    FROM jsonb_array_elements(c.image_refs) WITH ORDINALITY ref(value,ordinality)
+    JOIN community.media_items i ON i.id=ref.value->>'itemId' AND i.owner_id=c.author_id AND i.purpose='comment'
+      AND i.state='ready' AND i.cancelled_at IS NULL AND i.purged_at IS NULL
+    JOIN community.media_renditions d ON d.item_id=i.id AND d.role='display' AND d.edit_key='base' AND d.state='ready' AND d.content_type='image/webp'
+    JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed'
+    WHERE EXISTS (SELECT 1 FROM community.media_renditions t JOIN community.media_blobs tb ON tb.id=t.blob_id AND tb.state='committed'
+      WHERE t.item_id=i.id AND t.role='thumb' AND t.edit_key='base' AND t.state='ready' AND t.content_type='image/webp')
+  ),'[]'::jsonb) END AS images,
+         u.id AS author_id, u.handle AS author_handle,
+         u.display_name AS author_display_name, u.status AS author_status
+  FROM community.catalog_comments c
+  JOIN community.public_users u ON u.id = c.author_id
+  UNION ALL
+  SELECT r.id, 'reply' AS kind, c.catalog_id,c.target_type,r.body_deleted_at,c.thread_removed_at,r.root_comment_id,
+         r.reply_to_reply_id,
+         r.text, r.created_at, r.moderation, CASE WHEN r.body_deleted_at IS NOT NULL  THEN '[]'::jsonb ELSE COALESCE((
+    SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('id',i.id,'offset',(ref.value->>'offset')::integer,
+      'width',d.width,'height',d.height,'thumbSrc','/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'thumb','src','/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'display',
+      'fullSrc',CASE WHEN EXISTS (SELECT 1 FROM community.media_renditions f JOIN community.media_blobs fb ON fb.id=f.blob_id AND fb.state='committed'
+        WHERE f.item_id=i.id AND f.role='full' AND f.edit_key='base' AND f.state='ready' AND f.content_type='image/webp' AND (f.role<>'full' OR GREATEST(f.width,f.height)<=8192 OR (GREATEST(f.width,f.height)+0.5>2.5*(LEAST(f.width,f.height)-0.5) AND GREATEST(f.width,f.height)<=16000 AND (f.width-0.5)*(f.height-0.5)<=40000000))) THEN '/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'full' END)) ORDER BY ref.ordinality)
+    FROM jsonb_array_elements(r.image_refs) WITH ORDINALITY ref(value,ordinality)
+    JOIN community.media_items i ON i.id=ref.value->>'itemId' AND i.owner_id=r.author_id AND i.purpose='comment'
+      AND i.state='ready' AND i.cancelled_at IS NULL AND i.purged_at IS NULL
+    JOIN community.media_renditions d ON d.item_id=i.id AND d.role='display' AND d.edit_key='base' AND d.state='ready' AND d.content_type='image/webp'
+    JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed'
+    WHERE EXISTS (SELECT 1 FROM community.media_renditions t JOIN community.media_blobs tb ON tb.id=t.blob_id AND tb.state='committed'
+      WHERE t.item_id=i.id AND t.role='thumb' AND t.edit_key='base' AND t.state='ready' AND t.content_type='image/webp')
+  ),'[]'::jsonb) END AS images,
+         u.id AS author_id, u.handle AS author_handle,
+         u.display_name AS author_display_name, u.status AS author_status
+  FROM community.catalog_comment_replies r
+  JOIN community.catalog_comments c ON c.id = r.root_comment_id
+  JOIN community.public_users u ON u.id = r.author_id
+) entries
+    
+  WHERE ($1::text IS NULL OR entries.moderation = $1::text)
+    AND ($2::text IS NULL OR entries.kind = $2::text)
+    AND ($3::text IS NULL OR entries.catalog_id = $3::text)
+    AND (
+      $4::text IS NULL
+      OR entries.text ILIKE $4::text ESCAPE '\\'
+      OR entries.author_handle ILIKE $4::text ESCAPE '\\'
+      OR entries.author_display_name ILIKE $4::text ESCAPE '\\'
+    )
+    AND ($5::text IS NULL OR entries.author_id = $5::text)
+    AND ($6::timestamptz IS NULL OR entries.created_at >= $6::timestamptz)
+    AND ($7::timestamptz IS NULL OR entries.created_at <= $7::timestamptz)
+    AND NOT (
+      $8::boolean
+      AND entries.target_type = 'work'
+      AND entries.catalog_id IN (SELECT so_w.id FROM community.works so_w WHERE ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR so_w.id IN (SELECT hc.work_id FROM community.work_revisions hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_drafts hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_draft_snapshots hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_edit_drafts hc WHERE hc.work_id IS NOT NULL)))))
+    )
+
+    ORDER BY entries.created_at ASC, entries.id ASC
+    LIMIT $9::integer OFFSET $10::bigint
+  ) page
+
+  ORDER BY page.created_at ASC, page.id ASC
+",
+    "d24bebf97d66": "SELECT ri.revision_id,ri.position,ri.item_id,ri.edit,i.kind,i.quality_mode,i.state,i.presentation,k.edit_key,
+        (i.quality_mode='legacy' AND i.state='ready' AND k.edit_key='base' AND i.owner_id=r.author_id AND EXISTS (
+          SELECT 1 FROM community.user_media m WHERE m.id=i.legacy_media_id AND m.owner_id=i.owner_id
+            AND m.mime_type='image/png')) AS legacy_display,
+        CASE WHEN ri.item_id=r.cover_item_id THEN community.media_edit_key(ri.edit,r.cover_crop) END AS cover_edit_key,
+        ARRAY(
+          SELECT d.role FROM community.media_renditions d
+          JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed'
+          WHERE d.item_id=ri.item_id AND d.state='ready'
+            AND d.role=ANY(ARRAY['thumb','display','full','cover','motion']::text[])
+            AND d.edit_key=community.media_edit_key(ri.edit, CASE WHEN d.role IN ('thumb','cover') AND ri.item_id=r.cover_item_id THEN r.cover_crop END)
+          ORDER BY array_position(ARRAY['thumb','display','full','cover','motion']::text[],d.role)
+        ) AS variants
+      FROM community.work_revision_items ri
+      JOIN community.work_revisions r ON r.id=ri.revision_id
+      JOIN community.media_items i ON i.id=ri.item_id
+      CROSS JOIN LATERAL (SELECT community.media_edit_key(ri.edit,NULL) AS edit_key) k
+      WHERE ri.revision_id=ANY($1::text[])
+      ORDER BY ri.revision_id,ri.position",
+    "d66f1f6e46a0": "SELECT u.id,u.handle,u.display_name,u.bio,u.status,u.created_at,
+        COALESCE(f.enabled,FALSE) AS recommended,COALESCE(f.version,0) AS recommendation_version,
+        (SELECT COUNT(*)::integer FROM community.works w WHERE w.author_id=u.id AND w.deleted_at IS NULL
+          AND NOT ($5::boolean AND ((w.visibility='self' AND w.deleted_at IS NULL) OR (w.deleted_at IS NOT NULL AND (w.title<>'' OR w.text<>'' OR cardinality(w.media_ids)>0
+    OR w.public_revision_id IS NOT NULL OR w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=w.id)))))
+          AND EXISTS(SELECT 1 FROM community.work_revisions r WHERE r.work_id=w.id AND r.disposition<>'not_required')) AS submitted_works
+        FROM community.public_users u LEFT JOIN community.featured_users f ON f.user_id=u.id WHERE ($1='' OR position(lower($1) in lower(u.id||' '||u.handle||' '||u.display_name))>0)
+  AND ($2::text IS NULL OR u.id=$2)
+        ORDER BY u.created_at DESC,u.id LIMIT $3 OFFSET $4",
+    "d75932f9e56a": "SELECT count(*)::integer AS count,min(c.created_at) AS oldest FROM community.report_cases c WHERE ($1::text IS NULL OR c.status=$1)
+    AND ($2::boolean IS NULL OR c.urgent=$2)
+    AND ($3::boolean IS NULL OR c.status<>'resolved')
+    AND ($4::text IS NULL OR c.target_type=$4)
+    AND ($5::text IS NULL OR c.target_id=$5)
+    AND ($6::text IS NULL OR c.affected_user_id=$6)
+    AND ($7::text IS NULL OR c.reporter_id=$7) AND NOT ((c.target_type='work' AND EXISTS(SELECT 1 FROM community.works so_w
+    WHERE so_w.id=c.target_id AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id))))))
+    OR (c.target_type='comment' AND (EXISTS(SELECT 1 FROM community.catalog_comments so_c
+    JOIN community.works so_w ON so_w.id=so_c.catalog_id
+    WHERE so_c.id=COALESCE(
+      (SELECT so_r.root_comment_id FROM community.catalog_comment_replies so_r WHERE so_r.id=c.target_id),
+      c.target_id)
+    AND so_c.target_type='work' AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id)))))
+      OR (c.snapshot->'post'->>'type'='work' AND EXISTS(SELECT 1 FROM community.works so_w
+    WHERE so_w.id=c.snapshot->'post'->>'id' AND ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=so_w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=so_w.id)))))))))",
+    "d85f85aa1fb0": "BEGIN READ ONLY",
+    "df43cfeb1781": "SELECT w.operator_state AS value,count(*)::integer AS count,min(COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at)) AS oldest FROM community.works w JOIN community.public_users u ON u.id=w.author_id LEFT JOIN community.work_revisions ar ON ar.id=w.author_revision_id AND ar.requested_visibility='public'
+  WHERE ($1='' OR position(lower($1) in lower(w.id||' '||w.title||' '||w.text||' '||COALESCE(ar.title,'')||' '||COALESCE(ar.body,'')||' '||u.display_name||' '||u.handle))>0)
+  AND ($2::text IS NULL OR (w.author_id=$2 AND w.deleted_at IS NULL AND EXISTS(SELECT 1 FROM community.work_revisions r WHERE r.work_id=w.id AND r.disposition<>'not_required')))
+  AND ($3::text IS NULL OR w.id=$3)
+  AND ($4::timestamptz IS NULL OR COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at)>=$4::timestamptz)
+  AND ($5::timestamptz IS NULL OR COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at)<=$5::timestamptz)
+  AND NOT ($6::boolean AND ((w.visibility='self' AND w.deleted_at IS NULL) OR (w.deleted_at IS NOT NULL AND (w.title<>'' OR w.text<>'' OR cardinality(w.media_ids)>0
+    OR w.public_revision_id IS NOT NULL OR w.author_revision_id IS NOT NULL
+    OR w.id IN (SELECT hc.work_id FROM community.work_revisions hc WHERE hc.work_id IS NOT NULL) OR w.id IN (SELECT hc.work_id FROM community.work_drafts hc WHERE hc.work_id IS NOT NULL) OR w.id IN (SELECT hc.work_id FROM community.work_draft_snapshots hc WHERE hc.work_id IS NOT NULL) OR w.id IN (SELECT hc.work_id FROM community.work_edit_drafts hc WHERE hc.work_id IS NOT NULL)))))
+                 GROUP BY 1 ORDER BY count DESC,value ASC NULLS LAST",
+    "e85fb5a6aded": "SELECT r.id,r.work_id,r.sequence,r.origin,r.author_id,u.handle,u.display_name,
+  u.status AS author_status,r.title,r.body,r.authorship_kind,r.reference_title,r.original_author,r.source_note,
+  r.cover_item_id,r.cover_crop,r.disposition,r.id=w.author_revision_id AS latest,w.operator_state,
+  w.trashed_at IS NOT NULL AS trashed,r.submitted_at,r.decided_at,r.decided_by,r.version FROM community.work_revisions r
+  JOIN community.works w ON w.id=r.work_id
+  JOIN community.public_users u ON u.id=r.author_id
+  WHERE r.disposition<>'not_required' AND w.deleted_at IS NULL AND r.origin='submission'
+  AND ($1::text IS NULL OR r.disposition=$1::text)
+  AND ($2::text IS NULL OR r.author_id=$2::text)
+  AND ($3::text IS NULL OR r.work_id=$3::text)
+  AND NOT ($4::boolean AND ((w.visibility='self' AND w.deleted_at IS NULL) OR (w.deleted_at IS NOT NULL AND (w.title<>'' OR w.text<>'' OR cardinality(w.media_ids)>0
+    OR w.public_revision_id IS NOT NULL OR w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=w.id))))) ORDER BY r.submitted_at ASC,r.id ASC LIMIT $5 OFFSET $6",
+    "efd3d0211864": "SELECT count(*) AS total FROM community.work_revisions r
+  JOIN community.works w ON w.id=r.work_id
+  JOIN community.public_users u ON u.id=r.author_id
+  WHERE r.disposition<>'not_required' AND w.deleted_at IS NULL AND r.origin='submission'
+  AND ($1::text IS NULL OR r.disposition=$1::text)
+  AND ($2::text IS NULL OR r.author_id=$2::text)
+  AND ($3::text IS NULL OR r.work_id=$3::text)
+  AND NOT ($4::boolean AND ((w.visibility='self' AND w.deleted_at IS NULL) OR (w.deleted_at IS NOT NULL AND (w.title<>'' OR w.text<>'' OR cardinality(w.media_ids)>0
+    OR w.public_revision_id IS NOT NULL OR w.author_revision_id IS NOT NULL
+    OR EXISTS(SELECT 1 FROM community.work_revisions hc WHERE hc.work_id=w.id) OR EXISTS(SELECT 1 FROM community.work_drafts hc WHERE hc.work_id=w.id) OR EXISTS(SELECT 1 FROM community.work_draft_snapshots hc WHERE hc.work_id=w.id) OR EXISTS(SELECT 1 FROM community.work_edit_drafts hc WHERE hc.work_id=w.id)))))",
+    "f25ec0866c7a": "
+  
+  SELECT page.*,
+         (1 + (SELECT COUNT(*) FROM community.catalog_comment_replies siblings
+               WHERE siblings.root_comment_id = COALESCE(page.root_comment_id, page.id)))::integer
+           AS thread_affected_count
+  FROM (
+    SELECT * FROM (
+  SELECT c.id, 'comment' AS kind, c.catalog_id,c.target_type,c.body_deleted_at,c.thread_removed_at, NULL::text AS root_comment_id,
+         NULL::text AS reply_to_reply_id,
+         c.text, c.created_at, c.moderation, CASE WHEN c.body_deleted_at IS NOT NULL  THEN '[]'::jsonb ELSE COALESCE((
+    SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('id',i.id,'offset',(ref.value->>'offset')::integer,
+      'width',d.width,'height',d.height,'thumbSrc','/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'thumb','src','/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'display',
+      'fullSrc',CASE WHEN EXISTS (SELECT 1 FROM community.media_renditions f JOIN community.media_blobs fb ON fb.id=f.blob_id AND fb.state='committed'
+        WHERE f.item_id=i.id AND f.role='full' AND f.edit_key='base' AND f.state='ready' AND f.content_type='image/webp' AND (f.role<>'full' OR GREATEST(f.width,f.height)<=8192 OR (GREATEST(f.width,f.height)+0.5>2.5*(LEAST(f.width,f.height)-0.5) AND GREATEST(f.width,f.height)<=16000 AND (f.width-0.5)*(f.height-0.5)<=40000000))) THEN '/api/community-moderation/comment-media/'||c.id||'/'||i.id||'/'||'full' END)) ORDER BY ref.ordinality)
+    FROM jsonb_array_elements(c.image_refs) WITH ORDINALITY ref(value,ordinality)
+    JOIN community.media_items i ON i.id=ref.value->>'itemId' AND i.owner_id=c.author_id AND i.purpose='comment'
+      AND i.state='ready' AND i.cancelled_at IS NULL AND i.purged_at IS NULL
+    JOIN community.media_renditions d ON d.item_id=i.id AND d.role='display' AND d.edit_key='base' AND d.state='ready' AND d.content_type='image/webp'
+    JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed'
+    WHERE EXISTS (SELECT 1 FROM community.media_renditions t JOIN community.media_blobs tb ON tb.id=t.blob_id AND tb.state='committed'
+      WHERE t.item_id=i.id AND t.role='thumb' AND t.edit_key='base' AND t.state='ready' AND t.content_type='image/webp')
+  ),'[]'::jsonb) END AS images,
+         u.id AS author_id, u.handle AS author_handle,
+         u.display_name AS author_display_name, u.status AS author_status
+  FROM community.catalog_comments c
+  JOIN community.public_users u ON u.id = c.author_id
+  UNION ALL
+  SELECT r.id, 'reply' AS kind, c.catalog_id,c.target_type,r.body_deleted_at,c.thread_removed_at,r.root_comment_id,
+         r.reply_to_reply_id,
+         r.text, r.created_at, r.moderation, CASE WHEN r.body_deleted_at IS NOT NULL  THEN '[]'::jsonb ELSE COALESCE((
+    SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('id',i.id,'offset',(ref.value->>'offset')::integer,
+      'width',d.width,'height',d.height,'thumbSrc','/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'thumb','src','/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'display',
+      'fullSrc',CASE WHEN EXISTS (SELECT 1 FROM community.media_renditions f JOIN community.media_blobs fb ON fb.id=f.blob_id AND fb.state='committed'
+        WHERE f.item_id=i.id AND f.role='full' AND f.edit_key='base' AND f.state='ready' AND f.content_type='image/webp' AND (f.role<>'full' OR GREATEST(f.width,f.height)<=8192 OR (GREATEST(f.width,f.height)+0.5>2.5*(LEAST(f.width,f.height)-0.5) AND GREATEST(f.width,f.height)<=16000 AND (f.width-0.5)*(f.height-0.5)<=40000000))) THEN '/api/community-moderation/comment-media/'||r.id||'/'||i.id||'/'||'full' END)) ORDER BY ref.ordinality)
+    FROM jsonb_array_elements(r.image_refs) WITH ORDINALITY ref(value,ordinality)
+    JOIN community.media_items i ON i.id=ref.value->>'itemId' AND i.owner_id=r.author_id AND i.purpose='comment'
+      AND i.state='ready' AND i.cancelled_at IS NULL AND i.purged_at IS NULL
+    JOIN community.media_renditions d ON d.item_id=i.id AND d.role='display' AND d.edit_key='base' AND d.state='ready' AND d.content_type='image/webp'
+    JOIN community.media_blobs b ON b.id=d.blob_id AND b.state='committed'
+    WHERE EXISTS (SELECT 1 FROM community.media_renditions t JOIN community.media_blobs tb ON tb.id=t.blob_id AND tb.state='committed'
+      WHERE t.item_id=i.id AND t.role='thumb' AND t.edit_key='base' AND t.state='ready' AND t.content_type='image/webp')
+  ),'[]'::jsonb) END AS images,
+         u.id AS author_id, u.handle AS author_handle,
+         u.display_name AS author_display_name, u.status AS author_status
+  FROM community.catalog_comment_replies r
+  JOIN community.catalog_comments c ON c.id = r.root_comment_id
+  JOIN community.public_users u ON u.id = r.author_id
+) entries
+    
+  WHERE ($1::text IS NULL OR entries.moderation = $1::text)
+    AND ($2::text IS NULL OR entries.kind = $2::text)
+    AND ($3::text IS NULL OR entries.catalog_id = $3::text)
+    AND (
+      $4::text IS NULL
+      OR entries.text ILIKE $4::text ESCAPE '\\'
+      OR entries.author_handle ILIKE $4::text ESCAPE '\\'
+      OR entries.author_display_name ILIKE $4::text ESCAPE '\\'
+    )
+    AND ($5::text IS NULL OR entries.author_id = $5::text)
+    AND ($6::timestamptz IS NULL OR entries.created_at >= $6::timestamptz)
+    AND ($7::timestamptz IS NULL OR entries.created_at <= $7::timestamptz)
+    AND NOT (
+      $8::boolean
+      AND entries.target_type = 'work'
+      AND entries.catalog_id IN (SELECT so_w.id FROM community.works so_w WHERE ((so_w.visibility='self' AND so_w.deleted_at IS NULL) OR (so_w.deleted_at IS NOT NULL AND (so_w.title<>'' OR so_w.text<>'' OR cardinality(so_w.media_ids)>0
+    OR so_w.public_revision_id IS NOT NULL OR so_w.author_revision_id IS NOT NULL
+    OR so_w.id IN (SELECT hc.work_id FROM community.work_revisions hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_drafts hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_draft_snapshots hc WHERE hc.work_id IS NOT NULL) OR so_w.id IN (SELECT hc.work_id FROM community.work_edit_drafts hc WHERE hc.work_id IS NOT NULL)))))
+    )
+
+    ORDER BY entries.created_at DESC, entries.id DESC
+    LIMIT $9::integer OFFSET $10::bigint
+  ) page
+
+  ORDER BY page.created_at DESC, page.id DESC
+",
+    "f77191cb100d": "SELECT count(*)::integer AS count,min(created_at) AS oldest FROM community.publishing_jobs WHERE ($1::text IS NULL OR state=$1::text) AND ($2::text IS NULL OR kind=$2::text) AND ($3::text IS NULL OR subject_id=$3::text) AND ($4::text IS NULL OR id=$4::text)",
+    "fa77b11fc9c7": "SELECT w.*,u.display_name,u.status AS author_status,
+  json_build_object('enabled',COALESCE(f.enabled,fu.enabled,FALSE),
+    'version',COALESCE(f.version,0),'position',COALESCE(f.position,9007199254740991::bigint),
+    'source',CASE WHEN f.content_id IS NOT NULL THEN 'work' WHEN fu.enabled THEN 'user' ELSE 'none' END) AS recommendation,
+  community.work_is_public(w) AND u.status='active' AS publicly_visible,
+  (SELECT json_build_object('revisionId',r.id,'title',r.title,'disposition',r.disposition)
+   FROM community.work_revisions r WHERE r.work_id=w.id
+   AND r.disposition<>'not_required' AND w.deleted_at IS NULL
+   ORDER BY r.sequence DESC LIMIT 1) AS latest_submission
+  FROM community.works w JOIN community.public_users u ON u.id=w.author_id
+  LEFT JOIN community.featured_content f ON f.content_type='work' AND f.content_id=w.id
+  LEFT JOIN community.featured_users fu ON fu.user_id=w.author_id LEFT JOIN community.work_revisions ar ON ar.id=w.author_revision_id AND ar.requested_visibility='public'
+  WHERE ($1='' OR position(lower($1) in lower(w.id||' '||w.title||' '||w.text||' '||COALESCE(ar.title,'')||' '||COALESCE(ar.body,'')||' '||u.display_name||' '||u.handle))>0)
+  AND ($2::text IS NULL OR (w.author_id=$2 AND w.deleted_at IS NULL AND EXISTS(SELECT 1 FROM community.work_revisions r WHERE r.work_id=w.id AND r.disposition<>'not_required')))
+  AND ($3::text IS NULL OR w.id=$3)
+  AND ($4::timestamptz IS NULL OR COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at)>=$4::timestamptz)
+  AND ($5::timestamptz IS NULL OR COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at)<=$5::timestamptz)
+  AND NOT ($6::boolean AND ((w.visibility='self' AND w.deleted_at IS NULL) OR (w.deleted_at IS NOT NULL AND (w.title<>'' OR w.text<>'' OR cardinality(w.media_ids)>0
+    OR w.public_revision_id IS NOT NULL OR w.author_revision_id IS NOT NULL
+    OR w.id IN (SELECT hc.work_id FROM community.work_revisions hc WHERE hc.work_id IS NOT NULL) OR w.id IN (SELECT hc.work_id FROM community.work_drafts hc WHERE hc.work_id IS NOT NULL) OR w.id IN (SELECT hc.work_id FROM community.work_draft_snapshots hc WHERE hc.work_id IS NOT NULL) OR w.id IN (SELECT hc.work_id FROM community.work_edit_drafts hc WHERE hc.work_id IS NOT NULL))))) ORDER BY COALESCE(w.first_published_at,w.first_submitted_at,w.updated_at) DESC,w.id LIMIT $7 OFFSET $8",
+    "fe746ba61897": "SELECT state AS value,count(*)::integer AS count,min(created_at) AS oldest FROM community.publishing_jobs WHERE ($1::text IS NULL OR state=$1::text) AND ($2::text IS NULL OR kind=$2::text) AND ($3::text IS NULL OR subject_id=$3::text) AND ($4::text IS NULL OR id=$4::text)
+                 GROUP BY 1 ORDER BY count DESC,value ASC NULLS LAST",
+  },
+}
+`;

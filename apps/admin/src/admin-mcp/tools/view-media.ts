@@ -29,7 +29,7 @@ import type { RecordDocument } from "../records";
 
 export const VIEW_MEDIA_TOOL_NAME = "admin_view_media";
 
-export const VIEW_MEDIA_DESCRIPTION = `See a Catalog image as a WebP of at most 512 KiB, with original and rendered size in the text. {kind:"catalog_thumb",mediaId:"..."}. One passage of the original, in its pixels: {kind:"catalog_original",mediaId:"...",region:{left,top,width,height}}. Only save a transcription from text you can read; if you cannot read it, say so.`;
+export const VIEW_MEDIA_DESCRIPTION = `A Catalog image as WebP of at most 512 KiB, sizes in the text. {kind:"catalog_thumb",mediaId:"..."}; catalog_original with region:{left,top,width,height} shows one passage at full pixels. Save a transcription only from text you can read; else say so.`;
 
 export interface AdminMcpImageAnswer {
   readonly envelope: AdminMcpEnvelope;

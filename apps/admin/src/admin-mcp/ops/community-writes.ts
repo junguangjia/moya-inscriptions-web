@@ -1,11 +1,13 @@
 import {
   AI_OPERATOR_LABEL,
   AI_OPERATOR_REQUEST_ID_HEADER,
+  AI_OPERATOR_RUN_HEADER,
   adminCommunityWriteEchoSchema,
 } from "@moya/contracts/internal/admin-mcp";
 import type {
   AdminJobRef,
   AiSettlementQuery,
+  AiStampSource,
 } from "@moya/contracts/internal/admin-mcp";
 import type { z } from "zod";
 
@@ -29,7 +31,7 @@ import {
   type CommunityItem,
   type CommunityReadRoute,
 } from "./community-reads";
-import { onField, requestKeyOf } from "./define";
+import { isIssuedTicket, onField, requestKeyOf } from "./define";
 import type { AdminOpContext, AdminOpEntry } from "./define";
 
 /**
@@ -79,8 +81,10 @@ interface WriteAnswer {
 
 /**
  * One route's write, under this target's key. The route's own command takes it in its
- * body, or in a header when it has no such field. Checked against what the route
- * answers once the words only AI is told are off it.
+ * body, or in a header when it has no such field. Inside an issued run it carries the
+ * run's id, which the Backend asks for on an irreversible write and nowhere else
+ * (S8 plan 2.8). Checked against what the route answers once the words only AI is told
+ * are off it.
  */
 const sendWrite = async (
   route: CommunityOperationName,
@@ -95,9 +99,12 @@ const sendWrite = async (
   );
   const answered = (await definition.run(
     parsed,
-    communityWriteCall(
-      "requestId" in shape ? {} : { [AI_OPERATOR_REQUEST_ID_HEADER]: key },
-    ),
+    communityWriteCall({
+      ...("requestId" in shape ? {} : { [AI_OPERATOR_REQUEST_ID_HEADER]: key }),
+      ...(isIssuedTicket(context.run)
+        ? { [AI_OPERATOR_RUN_HEADER]: context.run!.runId }
+        : {}),
+    }),
     context.req,
   )) as CommunityItem;
   const { replayed, alreadyInPlace, ...sent } = answered;
@@ -272,6 +279,27 @@ const write = (
   untrusted,
 });
 
+/**
+ * What admin_preview freezes of a write and shows of it (S8 plan 2.5): the state a
+ * stamp reads of its record, where one does, and whether its subject gets a message.
+ * A write that opens a case sends one, and a decision or a review does too.
+ */
+const previewOf = (
+  stampSource: AiStampSource | "none",
+  { notifies = false, released = false } = {},
+): Pick<AdminOpEntry, "previewHooks"> => ({
+  previewHooks: {
+    stampSource,
+    consequences: (input) => [
+      ...(notifies ? (["subject_notified"] as const) : []),
+      ...(released && (input as { legalHold?: unknown }).legalHold === false
+        ? (["legal_hold_released"] as const)
+        : []),
+    ],
+    ...(notifies ? { notifiesSubject: () => true } : {}),
+  },
+});
+
 const TITLE = ["/data/results/*/title"];
 
 const threadEcho: Echo = (thread) => ({
@@ -436,6 +464,7 @@ export const COMMUNITY_WRITE_FACTS: Readonly<
       onReport,
       reportWrite("decide-report", showsDecision),
     ),
+    ...previewOf("reports", { notifies: true }),
     completion: onDecision,
   },
   "review-report": {
@@ -444,6 +473,7 @@ export const COMMUNITY_WRITE_FACTS: Readonly<
       onReport,
       reportWrite("review-report", showsReview),
     ),
+    ...previewOf("reports", { notifies: true }),
     completion: onReview,
   },
   "set-report-metadata": {
@@ -452,20 +482,24 @@ export const COMMUNITY_WRITE_FACTS: Readonly<
       onReport,
       reportWrite("set-report-metadata", showsMetadata),
     ),
+    ...previewOf("reports", { released: true }),
     classify: async (input) =>
       (input as { legalHold?: unknown }).legalHold === false
         ? "irreversible"
         : "reversible",
   },
-  "moderate-comment": write(
-    "moderate-comment",
-    onField("comment", "id"),
-    written(
+  "moderate-comment": {
+    ...write(
       "moderate-comment",
-      (answer) => ({ id: answer.id, state: answer.moderation }),
-      true,
+      onField("comment", "id"),
+      written(
+        "moderate-comment",
+        (answer) => ({ id: answer.id, state: answer.moderation }),
+        true,
+      ),
     ),
-  ),
+    ...previewOf("comments", { notifies: true }),
+  },
   "moderate-user": {
     ...write(
       "moderate-user",
@@ -480,6 +514,7 @@ export const COMMUNITY_WRITE_FACTS: Readonly<
         true,
       ),
     ),
+    ...previewOf("users", { notifies: true }),
     completion: onUser,
   },
   "moderate-work": {
@@ -499,6 +534,7 @@ export const COMMUNITY_WRITE_FACTS: Readonly<
       ),
       TITLE,
     ),
+    ...previewOf("works", { notifies: true }),
     completion: onWork,
   },
   "moderate-work-submission": {
@@ -516,6 +552,7 @@ export const COMMUNITY_WRITE_FACTS: Readonly<
         true,
       ),
     ),
+    ...previewOf("none", { notifies: true }),
     completion: onSubmission,
   },
   "moderate-article-submission": {
@@ -534,13 +571,17 @@ export const COMMUNITY_WRITE_FACTS: Readonly<
         true,
       ),
     ),
+    ...previewOf("none", { notifies: true }),
     completion: onArticle,
   },
-  "recommend-user": write(
-    "recommend-user",
-    onField("user", "id"),
-    written("recommend-user", ({ version }) => ({ version })),
-  ),
+  "recommend-user": {
+    ...write(
+      "recommend-user",
+      onField("user", "id"),
+      written("recommend-user", ({ version }) => ({ version })),
+    ),
+    ...previewOf("users"),
+  },
   "set-featured": write(
     "set-featured",
     (input) => {
@@ -583,11 +624,14 @@ export const COMMUNITY_WRITE_FACTS: Readonly<
     () => ({ type: "work_publishing_settings" }),
     written("set-work-publishing-settings", (settings) => settings),
   ),
-  "set-account-capacity": write(
-    "set-account-capacity",
-    onField("user", "accountId"),
-    written("set-account-capacity", (capacity) => capacity),
-  ),
+  "set-account-capacity": {
+    ...write(
+      "set-account-capacity",
+      onField("user", "accountId"),
+      written("set-account-capacity", (capacity) => capacity),
+    ),
+    ...previewOf("users"),
+  },
   // Accepted never reads as done, and how far it got is the job's own state, read by
   // its settlement: this echo holds only what stays true of the job.
   "retry-publishing-job": {
@@ -600,6 +644,7 @@ export const COMMUNITY_WRITE_FACTS: Readonly<
         subjectId,
       })),
     ),
+    ...previewOf("jobs"),
     completion: onJob,
   },
   "create-timeline-entry": write(
@@ -623,12 +668,17 @@ export const COMMUNITY_WRITE_FACTS: Readonly<
       count,
     })),
   ),
-  "set-timeline-post": write(
-    "set-timeline-post",
-    onField("work", "id"),
-    written("set-timeline-post", timelinePostEcho),
-    TITLE,
-  ),
+  "set-timeline-post": {
+    ...write(
+      "set-timeline-post",
+      onField("work", "id"),
+      written("set-timeline-post", timelinePostEcho),
+      TITLE,
+    ),
+    // It names a work, so a preview freezes that work's state; an operator withhold
+    // does not notify the author (home-timeline-v1.md).
+    ...previewOf("works"),
+  },
   // Irreversible: preview, then admin_execute_irreversible, with the run engine. Their
   // routes have no AI row until then.
   "forward-report": notBuilt("S8"),

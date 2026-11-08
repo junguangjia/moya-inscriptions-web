@@ -1,6 +1,12 @@
 import type { z } from "zod";
 
+import type {
+  AiSelectItem,
+  AiSelectMovable,
+  AiStampSource,
+} from "./ai-reads.js";
 import type { AdminMcpEnvelope } from "./envelope.js";
+import type { AdminPreviewConsequence } from "./runs.js";
 
 /** Class decides the tool, so a tool's annotations are always true. */
 export type AdminOpClass = "read" | "reversible" | "irreversible";
@@ -67,6 +73,64 @@ export interface AdminOpOutput {
   readonly ai?: z.ZodType;
 }
 
+/** One identity a target binds for good, by the field that holds it. */
+export interface AdminPreviewIdentity {
+  readonly field: string;
+  readonly value: string;
+}
+
+/** A row a selector froze: a community row from `ai/select`, or a CMS row. */
+export type AdminSelectedRow =
+  AiSelectItem | { readonly id: number; readonly revision: number };
+
+/** How a source's selected rows become this op's targets. */
+export interface AdminSelectorTarget {
+  /** The target's own fields, merged over the common input as a given target is. */
+  readonly target: (row: AdminSelectedRow) => Readonly<Record<string, unknown>>;
+  /** Picked by the op from its common input, never by the model. */
+  readonly movable?: (
+    common: Readonly<Record<string, unknown>>,
+  ) => AiSelectMovable | undefined;
+}
+
+/**
+ * What admin_preview shows of an op beyond its count, and what it freezes beside the
+ * input (admin-mcp-completion-v1 section 8). Shown, never compared with the threshold,
+ * which counts targets. `stamp` is the target's frozen row, absent where the source is
+ * `none`.
+ */
+export interface AdminOpPreviewHooks<Input, Context> {
+  /** Every hazard of the effect, required so none goes unnamed; empty when it has none. */
+  readonly consequences: (
+    input: Input,
+    stamp: AiSelectItem | undefined,
+  ) => readonly AdminPreviewConsequence[];
+  /**
+   * Where a target's state is read and frozen; `none` where a CAS field of the input
+   * holds it, as a Catalog's revision does.
+   */
+  readonly stampSource: AiStampSource | "none";
+  /** What a target binds for good. `classify` derives from it, so the two agree. */
+  readonly newIdentities?: (
+    input: Input,
+    context: Context,
+  ) => Promise<readonly AdminPreviewIdentity[]>;
+  /** Counts by name, summed over the targets: the replies a thread removal takes. */
+  readonly impact?: (
+    input: Input,
+    stamp: AiSelectItem | undefined,
+  ) => Readonly<Record<string, number>>;
+  /** Fills what the input left to the frozen row, or `conflict` where the two disagree. */
+  readonly fillFromStamp?: (
+    input: Input,
+    stamp: AiSelectItem,
+  ) => Input | "conflict";
+  /** By selector source, as `selectorSources` names it. */
+  readonly selectorTarget?: Readonly<Record<string, AdminSelectorTarget>>;
+  /** True when a target's subject receives a message it cannot recall. */
+  readonly notifiesSubject?: (input: Input) => boolean;
+}
+
 /**
  * One registry entry. `Input` is the parsed contract input and `Context` the
  * server-side call context, which contracts never name. The facts hold from the
@@ -109,9 +173,8 @@ export interface AdminOpMeta<Input, Output, Context> {
     input: Input,
     context: Context,
   ) => Promise<{ readonly type: string; readonly id?: number }>;
-  /** Shown to the client, never compared with the threshold. */
-  readonly impact?: (input: Input, context: Context) => Promise<unknown>;
-  readonly preview?: (input: Input, context: Context) => Promise<unknown>;
+  /** What a preview shows and freezes; absent, it names no hazard and freezes no row. */
+  readonly previewHooks?: AdminOpPreviewHooks<Input, Context>;
   /** Absent until a slice builds the op; such an op reports not_available. */
   readonly run?: (input: Input, context: Context) => Promise<Output>;
 }

@@ -852,6 +852,7 @@ describe("the timeline post routes", () => {
   const reader = (selfOnly: boolean): AiOperatorReader => ({
     find: async () => ({ items: [], sources: {}, excluded: ["self_only"] }),
     count: async () => ({ total: 0, oldestAt: null }),
+    select: async () => ({ items: [], excluded: ["self_only"] }),
     settlement: async () => ({ open: 0, failed: 0, failedJobs: [] }),
     isSelfOnly: async () => selfOnly,
     isPersonalInfoRequest: async () => false,
