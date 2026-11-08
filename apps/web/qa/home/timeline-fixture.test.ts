@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { authorClient } from "../../features/authors/author-data";
 import {
   TIMELINE_CHAPTERS,
-  buildShelfSections,
   buildTimelineIndex,
   buildTimelineRows,
 } from "../../features/home/timeline/timeline-model";
@@ -60,7 +59,10 @@ describe("timeline QA fixture", () => {
     );
     expect(empty).toEqual(["商", "西周", "春秋", "当代"]);
     expect(index.onAxis.get("战国")).toBeUndefined();
-    expect(index.shelf.get("战国")?.length).toBeGreaterThan(0);
+    expect(index.offAxis.get("战国")?.length).toBeGreaterThan(0);
+    expect(
+      rows.filter(({ chapter }) => chapter === "战国").map(({ kind }) => kind),
+    ).toEqual(["head", "undated", ...Array.from({ length: 6 }, () => "entry")]);
   });
 
   it("covers every precision, row kind and tag", () => {
@@ -69,13 +71,13 @@ describe("timeline QA fixture", () => {
     );
     expect(fixture.some(({ disputed }) => disputed)).toBe(true);
     expect(new Set(rows.map(({ kind }) => kind))).toEqual(
-      new Set(["head", "empty", "marker", "entry", "group", "gap", "shelf"]),
+      new Set(["head", "empty", "marker", "entry", "group", "gap", "undated"]),
     );
   });
 
-  it("folds groups of 23, 3 and 10, and one more on a shelf", () => {
+  it("folds groups of 23, 3 and 10 on the axis, and 5 under 年代不详", () => {
     const sizes = rows.flatMap((row) =>
-      row.kind === "group" ? [row.entries.length] : [],
+      row.kind === "group" && row.year !== null ? [row.entries.length] : [],
     );
     expect(sizes.sort((a, b) => a - b)).toEqual([3, 10, 23]);
     const spanning = rows.find(
@@ -83,11 +85,42 @@ describe("timeline QA fixture", () => {
     );
     expect(spanning).toMatchObject({ year: 175, endYear: 183, mark: "bar" });
 
-    const shelfItems = buildShelfSections(
-      index.shelf.get("南北朝") ?? [],
-      "place",
-    ).flatMap(({ items }) => items);
-    expect(shelfItems.some(({ type }) => type === "group")).toBe(true);
+    const undated = rows.filter(
+      (row) => row.kind === "group" && row.year === null,
+    );
+    expect(undated).toEqual([
+      expect.objectContaining({
+        chapter: "南北朝",
+        groupKey: "undated:南北朝:qa-tl-undated-caves",
+        mark: "none",
+        yearLines: null,
+      }),
+    ]);
+    const [caves] = undated;
+    expect(caves?.kind === "group" ? caves.entries.length : 0).toBe(5);
+  });
+
+  it("shows every off-axis row at its chapter's end, under 年代不详", () => {
+    const offAxis = [...index.offAxis.values()].flat();
+    const shown = rows.flatMap((row) =>
+      row.kind === "entry" && row.year === null
+        ? [row.entry]
+        : row.kind === "group" && row.year === null
+          ? row.entries
+          : [],
+    );
+    expect(new Set(shown)).toEqual(new Set(offAxis));
+    expect(shown).toHaveLength(offAxis.length);
+    for (const chapter of index.offAxis.keys()) {
+      const own = rows.filter((row) => row.chapter === chapter);
+      const heading = own.findIndex(({ kind }) => kind === "undated");
+      expect(heading).toBeGreaterThan(0);
+      expect(
+        own
+          .slice(heading + 1)
+          .every((row) => "year" in row && row.year === null),
+      ).toBe(true);
+    }
   });
 
   it("leaves a pair sharing an id as plain rows", () => {

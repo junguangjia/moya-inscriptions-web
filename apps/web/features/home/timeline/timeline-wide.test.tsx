@@ -334,6 +334,43 @@ describe("the PC chrome", () => {
     expect(button.textContent).not.toContain("虚元八年 · 虚构西州");
   });
 
+  it("closes a chapter with 年代不详 rows: columns kept, no year or mark", () => {
+    render(
+      true,
+      small([
+        entry({}),
+        entry({
+          onAxis: false,
+          precision: "dynasty",
+          dateLabel: null,
+          startYear: 618,
+          endYear: 907,
+          title: "虚构无年碑",
+          fullTitle: "唐虚构无年碑",
+          holder: "虚构山房",
+        }),
+      ]),
+    );
+    expect(
+      rows()
+        .map(({ dataset }) => dataset.timelineRow)
+        .filter((kind) => kind !== "empty" && kind !== "marker"),
+    ).toEqual(["head", "entry", "undated", "entry"]);
+    const [dated, undated] = [
+      ...panel.querySelectorAll<HTMLElement>(
+        "[data-timeline-row='entry'] button",
+      ),
+    ];
+    expect(dated?.querySelector("[data-mark='dot']")).not.toBeNull();
+    expect(undated?.firstElementChild?.textContent).toBe("");
+    expect(undated?.querySelector("[data-mark]")).toBeNull();
+    // The short title, as the axis rows have.
+    expect(undated?.textContent).toContain("虚构无年碑");
+    expect(undated?.textContent).not.toContain("唐虚构无年碑");
+    expect(undated?.textContent).toContain("虚构西州");
+    expect(undated?.textContent).toContain("虚构山房");
+  });
+
   it("lists every chapter and jumps from those that hold rows", () => {
     render(true, small([entry({})]));
     const cells = eras();

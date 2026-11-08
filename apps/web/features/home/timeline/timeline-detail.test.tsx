@@ -33,7 +33,11 @@ const client = vi.hoisted(() => ({
   accountEpoch: vi.fn(() => 0),
   timeline: vi.fn(),
 }));
-vi.mock("../../authors/author-data", () => ({ authorClient: client }));
+// The deck's post cards use the works grid's helpers from the same module.
+vi.mock("../../authors/author-data", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../authors/author-data")>()),
+  authorClient: client,
+}));
 const data = vi.hoisted(() => ({
   readContentTimelineEntry: vi.fn(),
   readTimelinePosts: vi.fn(),
@@ -170,13 +174,30 @@ describe("Catalog Detail's 帖子 section (D1-A)", () => {
     expect(data.readContentTimelineEntry).toHaveBeenCalledOnce();
   });
 
-  it("names the section, uploads to the entry and learns its name", async () => {
+  const sectionPost = {
+    id: `work-${"2".repeat(32)}`,
+    authorId: `user-${"b".repeat(32)}`,
+    authorName: "虚构作者",
+    title: "访碑记",
+    text: "",
+    media: [],
+    available: true,
+    canEdit: false,
+    firstPublishedAt: "2026-11-07T00:00:00.000Z",
+  };
+
+  it("names the section and shows the posts with no upload, and learns the entry's name", async () => {
     authors.value = {
       checking: false,
       viewer: { id: `user-${"a".repeat(32)}` },
     };
     const { detail, session } = await load();
     data.readContentTimelineEntry.mockResolvedValue(yongping);
+    data.readTimelinePosts.mockResolvedValue({
+      items: [sectionPost],
+      total: 1,
+      page: 1,
+    });
     act(() =>
       root.render(<detail.CatalogTimelinePosts catalogId="catalog-linked" />),
     );
@@ -187,11 +208,19 @@ describe("Catalog Detail's 帖子 section (D1-A)", () => {
         .querySelector("[data-timeline-posts]")
         ?.getAttribute("data-timeline-posts"),
     ).toBe("row-yongping");
-    const upload = container.querySelector("[data-timeline-upload]");
-    click(upload);
-    expect(shell.openEditor).toHaveBeenCalledWith(
-      { type: "new", timelineEntryId: "row-yongping" },
-      upload,
+    // Issue #422: a card the deck opened never offers an upload (Owner:
+    // 点开某一个卡片后不要再显示上传); the deck's 上传 and the 词条卡 do.
+    expect(container.querySelector("[data-timeline-upload]")).toBeNull();
+    expect(container.querySelector("[data-timeline-attach]")).toBeNull();
+    expect(container.textContent).not.toMatch(
+      /上传这件碑帖|发布后会出现在这个词条下|关联我发过的帖子/u,
+    );
+    expect(container.textContent).toBe("帖子访碑记");
+    const cell = container.querySelector("[data-timeline-post]");
+    click(cell);
+    expect(shell.openContent).toHaveBeenCalledWith(
+      { type: "work", id: sectionPost.id },
+      cell,
     );
     // 关联词条 can name the entry without reading the whole timeline.
     let named: ReturnType<typeof session.useTimelineEntryName> | null = null;
@@ -205,30 +234,115 @@ describe("Catalog Detail's 帖子 section (D1-A)", () => {
     expect(client.timeline).not.toHaveBeenCalled();
   });
 
-  it("sends a guest's upload to sign-in and hides it when browse-only", async () => {
+  it("is not there at all for an entry with no posts, nor while they load", async () => {
+    const { detail } = await load();
+    const { DetailBandContext } = await import("../../detail/detail-band");
+    data.readContentTimelineEntry.mockResolvedValue(yongping);
+    let answer: (value: unknown) => void = () => undefined;
+    data.readTimelinePosts.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const band = document.createElement("div");
+    document.body.append(band);
+    act(() =>
+      root.render(
+        <DetailBandContext.Provider value={band}>
+          <detail.CatalogTimelinePosts catalogId="catalog-linked" />
+        </DetailBandContext.Provider>,
+      ),
+    );
+    await flush();
+    expect(data.readTimelinePosts).toHaveBeenCalledOnce();
+    expect(data.readTimelinePosts).toHaveBeenCalledWith(
+      "row-yongping",
+      1,
+      6,
+      expect.any(AbortSignal),
+    );
+    // While the posts load it keeps no room.
+    expect(band.innerHTML).toBe("");
+    expect(container.innerHTML).toBe("");
+    answer({ items: [], total: 0, page: 1 });
+    await flush();
+    // No heading and no section: the band stays empty, so it is not shown.
+    expect(band.innerHTML).toBe("");
+    expect(container.innerHTML).toBe("");
+    expect(data.readTimelinePosts).toHaveBeenCalledOnce();
+    band.remove();
+  });
+
+  it("still says a failed read of the posts, and reads again on 重试", async () => {
     const { detail } = await load();
     data.readContentTimelineEntry.mockResolvedValue(yongping);
+    data.readTimelinePosts.mockRejectedValueOnce(new Error("offline"));
     act(() =>
       root.render(<detail.CatalogTimelinePosts catalogId="catalog-linked" />),
     );
     await flush();
-    const upload = container.querySelector("[data-timeline-upload]");
-    click(upload);
+    expect(container.querySelector("h2")?.textContent).toBe("帖子");
+    expect(container.textContent).toContain("帖子载入失败");
+    data.readTimelinePosts.mockResolvedValue({
+      items: [sectionPost],
+      total: 1,
+      page: 1,
+    });
+    click(
+      [...container.querySelectorAll("button")].find(
+        (button) => button.textContent === "重试",
+      ),
+    );
+    await flush();
+    expect(container.querySelectorAll("[data-timeline-post]")).toHaveLength(1);
+    expect(container.textContent).not.toContain("帖子载入失败");
+  });
+
+  it("keeps the grid and 全部 N 篇 with no upload, for a guest and when browse-only", async () => {
+    const { detail } = await load();
+    data.readContentTimelineEntry.mockResolvedValue(yongping);
+    data.readTimelinePosts.mockResolvedValue({
+      items: Array.from({ length: 6 }, (_, at) => ({
+        ...sectionPost,
+        id: `work-${String(at + 1).repeat(32)}`,
+      })),
+      total: 9,
+      page: 1,
+    });
+    act(() =>
+      root.render(<detail.CatalogTimelinePosts catalogId="catalog-linked" />),
+    );
+    await flush();
+    const noUpload = () => {
+      expect(container.querySelector("[data-timeline-upload]")).toBeNull();
+      expect(container.querySelector("[data-timeline-attach]")).toBeNull();
+      expect(container.querySelectorAll("[data-timeline-post]")).toHaveLength(
+        6,
+      );
+      expect(
+        container.querySelector("[data-timeline-posts-more]")?.textContent,
+      ).toBe("全部 9 篇");
+    };
+    noUpload();
     expect(shell.openEditor).not.toHaveBeenCalled();
-    expect(shell.openProfile).toHaveBeenCalledWith(null, upload);
+    expect(shell.openProfile).not.toHaveBeenCalled();
 
     shell.browseOnly = true;
     act(() =>
       root.render(<detail.CatalogTimelinePosts catalogId="catalog-linked" />),
     );
-    expect(container.querySelector("[data-timeline-upload]")).toBeNull();
-    expect(container.querySelector("[data-timeline-posts]")).not.toBeNull();
+    noUpload();
   });
 
   it("renders in the desktop Detail's band, never in the actions slot under the image", async () => {
     const { detail } = await load();
     const { DetailBandContext } = await import("../../detail/detail-band");
     data.readContentTimelineEntry.mockResolvedValue(yongping);
+    data.readTimelinePosts.mockResolvedValue({
+      items: [sectionPost],
+      total: 1,
+      page: 1,
+    });
     // Outside the root's container, as the layout's band is outside the slot.
     const band = document.createElement("div");
     document.body.append(band);
@@ -253,13 +367,34 @@ describe("Catalog Detail's 帖子 section (D1-A)", () => {
 });
 
 describe("a work's 收录于", () => {
-  it("opens the 词条卡, reading the timeline only on the tap", async () => {
+  const post = {
+    id: `work-${"1".repeat(32)}`,
+    authorId: `user-${"b".repeat(32)}`,
+    authorName: "虚构作者",
+    title: "访碑记",
+    text: "",
+    media: [],
+    available: true,
+    canEdit: false,
+    firstPublishedAt: "2026-11-07T00:00:00.000Z",
+  };
+  const closedDialog = () =>
+    vi.waitFor(() => expect(container.querySelector("dialog")).toBeNull(), {
+      timeout: 5000,
+    });
+
+  it("opens the entry's card deck, reading the timeline only on the tap", async () => {
     authors.value = {
       checking: false,
       viewer: { id: `user-${"a".repeat(32)}` },
     };
     const { detail } = await load();
     client.timeline.mockResolvedValue({ entries: [fullEntry] });
+    data.readTimelinePosts.mockResolvedValue({
+      items: [post],
+      total: 1,
+      page: 1,
+    });
     act(() => root.render(<detail.WorkTimelineEntryLine entry={yongping} />));
     const line = container.querySelector<HTMLElement>(
       "[data-work-timeline-entry]",
@@ -269,20 +404,64 @@ describe("a work's 收录于", () => {
     click(line);
     await flush();
     expect(client.timeline).toHaveBeenCalledOnce();
-    const dialog = container.querySelector("dialog");
+    // The line's work is one of the entry's posts, so no count is read.
+    const deck = container.querySelector("dialog [data-timeline-deck]");
+    expect(deck?.getAttribute("data-timeline-deck")).toBe("row-yongping");
     expect(
-      dialog?.querySelector("[data-timeline-card]")?.textContent,
-    ).toContain("虚构碑林");
-    // The card's upload closes the sheet first, then acts from the line.
-    click(dialog?.querySelector("[data-timeline-upload]"));
-    await vi.waitFor(
-      () => expect(container.querySelector("dialog")).toBeNull(),
-      {
-        timeout: 5000,
-      },
-    );
+      deck?.querySelector("[data-timeline-deck-header]")?.textContent,
+    ).toBe("北魏虚构永平碑511 · 永平四年 · 虚构东州 · 虚构碑林");
+    expect(
+      deck
+        ?.querySelector("[data-deck-current]")
+        ?.getAttribute("data-deck-post"),
+    ).toBe(post.id);
+    // The deck's upload closes it first, then acts from the line.
+    click(deck?.querySelector("[data-timeline-deck-upload]"));
+    click(deck?.querySelector("[data-timeline-deck-new]"));
+    await closedDialog();
     expect(shell.openEditor).toHaveBeenCalledWith(
       { type: "new", timelineEntryId: "row-yongping" },
+      line,
+    );
+  });
+
+  it("opens a card's Detail from the line, the Catalog card first", async () => {
+    const { detail } = await load();
+    client.timeline.mockResolvedValue({
+      entries: [{ ...fullEntry, catalogId: "catalog-yongping" }],
+    });
+    data.readTimelinePosts.mockResolvedValue({
+      items: [post],
+      total: 1,
+      page: 1,
+    });
+    act(() => root.render(<detail.WorkTimelineEntryLine entry={yongping} />));
+    const line = container.querySelector<HTMLElement>(
+      "[data-work-timeline-entry]",
+    );
+    click(line);
+    await flush();
+    const cards = [
+      ...container.querySelectorAll("dialog button[data-deck-card]"),
+    ];
+    expect(cards.map((card) => card.getAttribute("data-deck-card"))).toEqual([
+      "catalog",
+      "post",
+    ]);
+    click(cards[0]);
+    await closedDialog();
+    expect(shell.openContent).toHaveBeenCalledWith(
+      { type: "catalog", id: "catalog-yongping" },
+      line,
+    );
+
+    click(line);
+    await flush();
+    click(container.querySelectorAll("dialog button[data-deck-card]")[1]);
+    click(container.querySelector("dialog [data-deck-current]"));
+    await closedDialog();
+    expect(shell.openContent).toHaveBeenLastCalledWith(
+      { type: "work", id: post.id },
       line,
     );
   });
@@ -389,7 +568,7 @@ describe("a work's 关联词条 sheet", () => {
 });
 
 describe("a late 收录于 answer", () => {
-  it("does not stack the 词条卡 on a modal opened while the timeline was read", async () => {
+  it("does not stack the deck on a modal opened while the timeline was read", async () => {
     const { detail } = await load();
     let answer: (value: { entries: TimelineEntry[] }) => void = () => {};
     client.timeline.mockReturnValue(
@@ -405,12 +584,12 @@ describe("a late 收录于 answer", () => {
     document.body.append(other);
     await act(async () => answer({ entries: [fullEntry] }));
     await flush();
-    expect(container.querySelector("[data-timeline-card]")).toBeNull();
+    expect(container.querySelector("[data-timeline-deck]")).toBeNull();
     other.remove();
-    // A later tap, with nothing open, shows the card from the session list.
+    // A later tap, with nothing open, shows the deck from the session list.
     click(container.querySelector("[data-work-timeline-entry]"));
     await flush();
-    expect(container.querySelector("[data-timeline-card]")).not.toBeNull();
+    expect(container.querySelector("[data-timeline-deck]")).not.toBeNull();
   });
 });
 

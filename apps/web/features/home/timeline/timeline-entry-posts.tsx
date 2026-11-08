@@ -42,7 +42,7 @@ export interface TimelineEntryPostsActions {
   readonly postsChanged?: (() => void) | undefined;
 }
 
-type PostsState =
+export type TimelinePostsState =
   | { readonly state: "loading" }
   | { readonly state: "failed" }
   | {
@@ -122,56 +122,32 @@ const appendPosts = (
   return [...current, ...next.filter((work) => !known.has(work.id))];
 };
 
+/** One entry's posts as useTimelinePosts reads them. */
+export interface TimelinePosts {
+  readonly state: TimelinePostsState;
+  readonly showMore: () => void;
+  readonly reload: () => void;
+}
+
 /**
- * The posts of one timeline entry (timeline-posts-v1 §2.2): the upload
- * action and its line, which is also all a row with no posts says; then the
- * newest attached posts as a three-column grid of their covers, six first
- * and 「全部 N 篇」 for the rest, paged in place; and 「关联我发过的帖子」.
- * Browse-only keeps the posts and drops both actions. Loads after its host
- * has painted and never holds it up.
+ * The viewer's posts of one entry, as the 词条卡's grid and the card deck
+ * read them: the preview first, then pages of TIMELINE_POSTS_PAGE on
+ * `showMore`. A new entry or account starts over from the preview, and so
+ * does `reload` (after an attachment); a reload keeps the posts shown until
+ * the new preview replaces them, so nothing around them shrinks and regrows.
+ * A null entry reads nothing: its host passes posts it has read itself.
  */
-export const TimelineEntryPosts = ({
-  actions,
-  browseOnly = false,
-  entryId,
-  entryTitle,
-  heading = null,
-}: {
-  readonly actions: TimelineEntryPostsActions;
-  readonly browseOnly?: boolean;
-  readonly entryId: string;
-  /** The entry's full title (with its dynasty), named when a post moves here. */
-  readonly entryTitle: string;
-  /** Catalog Detail names the section; the 词条卡 does not. */
-  readonly heading?: string | null;
-}) => {
+export const useTimelinePosts = (entryId: string | null): TimelinePosts => {
   const authors = useOptionalAuthors();
   const viewerId = authors?.viewer?.id ?? null;
-  const [state, setState] = useState<PostsState>({ state: "loading" });
+  const [state, setState] = useState<TimelinePostsState>({ state: "loading" });
   const [revision, setRevision] = useState(0);
-  const [attaching, setAttaching] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
   const latest = useRef(state);
   latest.current = state;
-  // 「关联我发过的帖子」 is replaced by its picker; when the picker closes
-  // (取消 or an attachment), the focus comes back to the new button.
-  const attachRef = useRef<HTMLButtonElement>(null);
-  const attachClosed = useRef(false);
-  useEffect(() => {
-    if (attaching || !attachClosed.current) return;
-    attachClosed.current = false;
-    attachRef.current?.focus();
-  }, [attaching]);
-  const closeAttach = () => {
-    attachClosed.current = true;
-    setAttaching(false);
-  };
 
-  // A new entry, account or attachment starts over from the preview. After
-  // an attachment the posts shown stay until the new preview replaces them,
-  // so the list (and a Detail page around it) does not shrink and regrow.
   const loadedFor = useRef<string | null>(null);
   useEffect(() => {
+    if (entryId === null) return undefined;
     const controller = new AbortController();
     const key = `${entryId}\n${viewerId ?? ""}`;
     if (loadedFor.current !== key || latest.current.state !== "ready")
@@ -196,9 +172,13 @@ export const TimelineEntryPosts = ({
 
   const showMore = useCallback(() => {
     const current = latest.current;
+    if (entryId === null) return;
     if (current.state !== "ready" || current.more === "loading") return;
     const page = current.pages + 1;
-    setState({ ...current, more: "loading" });
+    // Held at once, so a second call before the next render reads nothing twice.
+    const loading = { ...current, more: "loading" } as const;
+    latest.current = loading;
+    setState(loading);
     readTimelinePosts(entryId, page, TIMELINE_POSTS_PAGE).then(
       (answer) => {
         const now = latest.current;
@@ -220,7 +200,71 @@ export const TimelineEntryPosts = ({
     );
   }, [entryId]);
 
-  const openAttach = (opener: HTMLElement) => {
+  const reload = useCallback(() => setRevision((value) => value + 1), []);
+  return { state, showMore, reload };
+};
+
+/** The props of an entry's posts; see TimelineEntryPosts. */
+type TimelineEntryPostsProps = {
+  readonly browseOnly?: boolean;
+  readonly entryId: string;
+  /** The entry's full title (with its dynasty), named when a post moves here. */
+  readonly entryTitle: string;
+  /** Catalog Detail names the section; the 词条卡 does not. */
+  readonly heading?: string | null;
+  /**
+   * Posts its host has read already (Catalog Detail, which shows nothing
+   * until it knows there are some); read here otherwise.
+   */
+  readonly posts?: TimelinePosts;
+} & (
+  | { readonly actions: TimelineEntryPostsActions; readonly uploads?: true }
+  | {
+      readonly actions: Pick<TimelineEntryPostsActions, "openWork">;
+      /** Neither 「上传这件碑帖」 nor 「关联我发过的帖子」, at any width. */
+      readonly uploads: false;
+    }
+);
+
+/**
+ * The posts of one timeline entry (timeline-posts-v1 §2.2): the upload
+ * action and its line, which is also all a row with no posts says; then the
+ * newest attached posts as a three-column grid of their covers, six first
+ * and 「全部 N 篇」 for the rest, paged in place; and 「关联我发过的帖子」.
+ * Browse-only keeps the posts and drops both actions, and so does
+ * `uploads={false}`: Catalog Detail shows the posts alone, because uploading
+ * starts from the card deck's 「上传」 and the 词条卡 (Issue #422). Loads
+ * after its host has painted and never holds it up.
+ */
+export const TimelineEntryPosts = (props: TimelineEntryPostsProps) => {
+  const { browseOnly = false, entryId, entryTitle, heading = null } = props;
+  // The upload and attach actions, when this host shows them.
+  const owned = props.uploads === false || browseOnly ? null : props.actions;
+  const { openWork } = props.actions;
+  const authors = useOptionalAuthors();
+  const viewerId = authors?.viewer?.id ?? null;
+  const own = useTimelinePosts(props.posts === undefined ? entryId : null);
+  const { state, showMore, reload } = props.posts ?? own;
+  const [attaching, setAttaching] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  // 「关联我发过的帖子」 is replaced by its picker; when the picker closes
+  // (取消 or an attachment), the focus comes back to the new button.
+  const attachRef = useRef<HTMLButtonElement>(null);
+  const attachClosed = useRef(false);
+  useEffect(() => {
+    if (attaching || !attachClosed.current) return;
+    attachClosed.current = false;
+    attachRef.current?.focus();
+  }, [attaching]);
+  const closeAttach = () => {
+    attachClosed.current = true;
+    setAttaching(false);
+  };
+
+  const openAttach = (
+    actions: TimelineEntryPostsActions,
+    opener: HTMLElement,
+  ) => {
     if (authors?.checking) return;
     if (!authors?.viewer) {
       actions.signIn(opener);
@@ -242,12 +286,12 @@ export const TimelineEntryPosts = ({
       data-timeline-posts={entryId}
     >
       {heading === null ? null : <h2 className={styles.heading}>{heading}</h2>}
-      {browseOnly ? null : (
+      {owned === null ? null : (
         <>
           <button
             className={styles.upload}
             data-timeline-upload=""
-            onClick={(event) => actions.upload(event.currentTarget)}
+            onClick={(event) => owned.upload(event.currentTarget)}
             type="button"
           >
             上传这件碑帖
@@ -267,11 +311,7 @@ export const TimelineEntryPosts = ({
           <p className={styles.status} data-tone="error" role="status">
             帖子载入失败
           </p>
-          <button
-            className={styles.textAction}
-            onClick={() => setRevision((value) => value + 1)}
-            type="button"
-          >
+          <button className={styles.textAction} onClick={reload} type="button">
             重试
           </button>
         </div>
@@ -280,7 +320,7 @@ export const TimelineEntryPosts = ({
         <>
           <ul className={styles.grid} data-timeline-post-grid="">
             {state.items.map((work) => (
-              <PostCell key={work.id} onOpen={actions.openWork} work={work} />
+              <PostCell key={work.id} onOpen={openWork} work={work} />
             ))}
           </ul>
           {remaining > 0 ? (
@@ -303,7 +343,7 @@ export const TimelineEntryPosts = ({
           ) : null}
         </>
       ) : null}
-      {browseOnly ? null : attaching && viewerId !== null ? (
+      {owned === null ? null : attaching && viewerId !== null ? (
         <TimelineAttachPicker
           authorId={viewerId}
           entryId={entryId}
@@ -312,8 +352,8 @@ export const TimelineEntryPosts = ({
           onAttached={(text) => {
             closeAttach();
             setNotice(text);
-            setRevision((value) => value + 1);
-            actions.postsChanged?.();
+            reload();
+            owned.postsChanged?.();
           }}
         />
       ) : (
@@ -321,7 +361,7 @@ export const TimelineEntryPosts = ({
           <button
             className={styles.textAction}
             data-timeline-attach=""
-            onClick={(event) => openAttach(event.currentTarget)}
+            onClick={(event) => openAttach(owned, event.currentTarget)}
             ref={attachRef}
             type="button"
           >

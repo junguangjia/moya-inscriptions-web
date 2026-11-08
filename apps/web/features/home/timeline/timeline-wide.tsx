@@ -444,6 +444,7 @@ export const TimelineWideChrome = ({
           <div
             className={styles.group}
             data-expanded=""
+            data-spine={pinnedGroup.year === null ? "dotted" : undefined}
             data-timeline-pinned=""
           >
             <TimelineGroupToggle actions={actions} pinned row={pinnedGroup} />

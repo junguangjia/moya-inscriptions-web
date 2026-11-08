@@ -16,10 +16,18 @@ import type {
  * across an account change.
  */
 
-/** The 词条卡 and Catalog Detail show this many posts before 「全部 N 篇」. */
+/**
+ * The 词条卡 and Catalog Detail show this many posts before 「全部 N 篇」; the
+ * card deck reads as many first.
+ */
 export const TIMELINE_POSTS_PREVIEW = 6;
 /** Each further page of 「全部 N 篇」: whole rows of the three-column grid. */
 export const TIMELINE_POSTS_PAGE = 18;
+/**
+ * Issue #422: a row tap whose post count is unknown reads one post's page,
+ * the smallest the route answers, only for its total.
+ */
+export const TIMELINE_POSTS_COUNT_PAGE = 1;
 
 export interface TimelinePostsPage {
   readonly items: readonly UserWork[];
@@ -81,6 +89,12 @@ export const emptyTimelinePostCounts = (): ReadonlyMap<string, number> =>
   NO_COUNTS;
 
 /** The counts read for the current account, or null when none are held. */
+/** Whether the cached counts are this account's and still within their freshness. */
+export const timelinePostCountsFresh = (): boolean =>
+  countsCache !== null &&
+  countsCache.epoch === authorClient.accountEpoch() &&
+  Date.now() - countsCache.fetchedAt < COUNTS_FRESH_MS;
+
 export const cachedTimelinePostCounts = (): ReadonlyMap<
   string,
   number

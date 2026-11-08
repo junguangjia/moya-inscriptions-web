@@ -157,14 +157,10 @@
 }
 
 /* The arrow icon, sized past .yoyi-icon's own 24 px whatever the sheet order. */
-.root .chevronDown,
-.root .chevronRight {
+.root .chevronDown {
   width: 16px;
   height: 16px;
   color: var(--yoyi-color-text-secondary);
-}
-
-.root .chevronDown {
   transform: rotate(90deg);
 }
 
@@ -592,6 +588,7 @@
 .entry,
 .head,
 .gap,
+.undated,
 .groupToggle {
   display: grid;
   box-sizing: border-box;
@@ -605,7 +602,6 @@
 
 .entry,
 .groupToggle,
-.shelfPill,
 .member {
   border: 0;
   background: none;
@@ -618,7 +614,6 @@
 
 .entry:focus-visible,
 .groupToggle:focus-visible,
-.shelfPill:focus-visible,
 .member:focus-visible {
   outline: 2px solid var(--yoyi-color-focus-ring);
   outline-offset: -2px;
@@ -627,6 +622,36 @@
 .entry:active .title,
 .member:active {
   color: var(--yoyi-color-text-secondary);
+}
+
+/*
+ * Issue #422: a tap that first reads the entry's post count keeps the row
+ * pressed and gently breathing until the deck or the 词条卡 opens.
+ */
+.entry[aria-busy="true"],
+.member[aria-busy="true"] {
+  background: var(--yoyi-color-background-muted);
+  cursor: progress;
+}
+
+.entry[aria-busy="true"] .title,
+.member[aria-busy="true"] {
+  color: var(--yoyi-color-text-secondary);
+  animation: rowOpening var(--yoyi-duration-loading-logo)
+    var(--yoyi-easing-standard) infinite alternate;
+}
+
+@keyframes rowOpening {
+  to {
+    opacity: 0.6;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .entry[aria-busy="true"] .title,
+  .member[aria-busy="true"] {
+    animation: none;
+  }
 }
 
 .root:not([data-timeline-layout="phone"]) .entry {
@@ -914,23 +939,14 @@
   line-height: 18px;
 }
 
-/* Shelf: covers the spine and opens the 书架 sheet. */
-.shelf {
-  padding: var(--yoyi-space-3) var(--timeline-end) var(--yoyi-space-3)
-    var(--timeline-start);
-}
-
-.shelfPill {
-  display: flex;
-  box-sizing: border-box;
-  width: 100%;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--yoyi-space-3);
-  padding: 9px 10px 9px var(--yoyi-space-4);
-  border-radius: var(--yoyi-radius-lg);
-  background: var(--yoyi-color-background-muted);
-  font: 500 var(--yoyi-type-body-small-size) / 20px var(--yoyi-font-interface);
+/*
+ * 年代不详: the small heading over a chapter's off-axis rows, which follow it
+ * on a dotted spine with no year and no mark. 12 + 18 + 4 tall.
+ */
+.undatedText {
+  padding: var(--yoyi-space-4) 0 var(--yoyi-space-2);
+  color: var(--yoyi-color-text-secondary);
+  font: 500 var(--yoyi-type-metadata-size) / 18px var(--yoyi-font-interface);
 }
 
 /* Group: the fold row, its stacked page edges, the pinned head and members. */
@@ -953,6 +969,14 @@
   width: 1px;
   background: var(--timeline-spine);
   content: "";
+}
+
+.group[data-expanded][data-spine="dotted"]::before {
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--timeline-spine) 0 3px,
+    transparent 3px 6px
+  );
 }
 
 .group:not([data-expanded]) .gutter {
@@ -1208,12 +1232,6 @@
   transition: none;
 }
 
-.sheetPanel[data-sheet-variant="full"] {
-  height: 100%;
-  max-height: 100%;
-  border-radius: 0;
-}
-
 /* Tablet: a 360 side panel. */
 .root:not([data-timeline-layout="phone"]) .sheetDialog.sheetDialog > div {
   align-items: flex-end;
@@ -1303,27 +1321,6 @@
 
 .root[data-timeline-layout="wide"] .eraHeader {
   padding-right: var(--yoyi-space-9);
-}
-
-.root[data-timeline-layout="wide"] .shelfHeader {
-  padding: 6px 2px 0 var(--yoyi-space-6);
-}
-
-.root[data-timeline-layout="wide"] .shelfTabs {
-  padding: 6px var(--yoyi-space-6) var(--yoyi-space-4);
-}
-
-.root[data-timeline-layout="wide"] .shelfSectionHead,
-.root[data-timeline-layout="wide"] .shelfEntry {
-  padding-inline: var(--yoyi-space-6);
-}
-
-.root[data-timeline-layout="wide"] .shelfGroup {
-  margin-inline: var(--yoyi-space-6);
-}
-
-.root[data-timeline-layout="wide"] .shelfGroup .shelfEntry {
-  padding-inline: var(--yoyi-space-4);
 }
 
 @keyframes sheetDim {
@@ -1707,121 +1704,4 @@
   color: var(--yoyi-color-text-tertiary);
   font-size: var(--yoyi-type-metadata-size);
   line-height: 20px;
-}
-
-/* 书架. */
-.shelfSheet {
-  display: flex;
-  min-height: 0;
-  flex: 1 1 auto;
-  flex-direction: column;
-  padding-top: env(safe-area-inset-top);
-}
-
-.shelfHeader {
-  display: flex;
-  flex: none;
-  min-height: 44px;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--yoyi-space-2) var(--yoyi-space-2) 0 var(--yoyi-space-5);
-}
-
-.shelfTabs {
-  display: flex;
-  flex: none;
-  gap: var(--yoyi-space-3);
-  padding: var(--yoyi-space-2) var(--yoyi-space-5) var(--yoyi-space-3);
-}
-
-.shelfTab {
-  height: 32px;
-  padding: 0 var(--yoyi-space-4);
-  border: 0;
-  border-radius: var(--yoyi-radius-full);
-  background: var(--yoyi-color-background-surface);
-  color: var(--yoyi-color-text-secondary);
-  font-family: var(--yoyi-font-interface);
-  font-size: var(--yoyi-type-label-size);
-  cursor: pointer;
-}
-
-.shelfTab[aria-selected="true"] {
-  background: var(--yoyi-color-seal-red-muted);
-  color: var(--yoyi-color-text-primary);
-}
-
-.shelfList {
-  min-height: 0;
-  flex: 1 1 auto;
-  overflow-y: auto;
-  padding-bottom: calc(var(--yoyi-space-5) + env(safe-area-inset-bottom));
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
-}
-
-.shelfSectionHead {
-  display: flex;
-  height: 32px;
-  align-items: center;
-  gap: var(--yoyi-space-3);
-  margin: 0;
-  padding: 0 var(--yoyi-space-5);
-  background: var(--yoyi-color-background-surface);
-  font: 500 var(--yoyi-type-label-size) / 18px var(--yoyi-font-interface);
-}
-
-.shelfSectionHead span:last-child {
-  color: var(--yoyi-color-text-tertiary);
-  font-weight: 400;
-}
-
-.shelfEntry {
-  display: flex;
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 40px;
-  flex-direction: column;
-  justify-content: center;
-  padding: var(--yoyi-space-3) var(--yoyi-space-5);
-  border: 0;
-  background: none;
-  color: var(--yoyi-color-text-primary);
-  font-family: var(--yoyi-font-interface);
-  text-align: start;
-  cursor: pointer;
-}
-
-.shelfEntryTitle {
-  font: 500 var(--timeline-group-title-size) / 22px var(--yoyi-font-editorial);
-}
-
-.shelfEntryMeta {
-  color: var(--yoyi-color-text-tertiary);
-  font-size: var(--yoyi-type-metadata-size);
-  line-height: 18px;
-}
-
-.shelfGroup {
-  margin: var(--yoyi-space-2) var(--yoyi-space-5);
-  border-radius: var(--yoyi-radius-lg);
-  background: var(--yoyi-color-background-surface);
-}
-
-.shelfGroup .shelfEntry {
-  padding-inline: var(--yoyi-space-4);
-}
-
-.shelfGroupToggle {
-  display: flex;
-  box-sizing: border-box;
-  width: 100%;
-  align-items: center;
-  gap: 6px;
-  padding: 11px var(--yoyi-space-3) 11px var(--yoyi-space-4);
-  border: 0;
-  background: none;
-  color: var(--yoyi-color-text-primary);
-  text-align: start;
-  cursor: pointer;
 }

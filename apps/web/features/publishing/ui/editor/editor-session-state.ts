@@ -931,10 +931,11 @@ export const createEditorSessionStore = (
 /**
  * Whether an open editor entry answers to this session: the same draft or
  * work, a new work (one new-work session at a time), or the draft this
- * session created. A new work a tap of 「上传这件碑帖」 opens on its entry
- * never answers to a session that takes no entry, the Thread quick
- * composer's (timeline-posts-v1): that post stays another session, so the
- * author is told and the entry is never dropped unseen.
+ * session created. A new work a tap of 「上传这件碑帖」 (the 词条卡) or
+ * 「上传新帖子」 (the card deck) opens on its entry never answers to a
+ * session that takes no entry, the Thread quick composer's
+ * (timeline-posts-v1): that post stays another session, so the author is
+ * told and the entry is never dropped unseen.
  */
 export const sessionAnswers = (
   state: EditorSessionState,

@@ -193,7 +193,7 @@ const createRows = (): MutableEntry[] => {
     for (const year of years) add(chapter, year);
   };
 
-  const addShelf = (
+  const addUndated = (
     chapter: TimelineChapter,
     from: number,
     to: number,
@@ -240,8 +240,8 @@ const createRows = (): MutableEntry[] => {
       });
   };
 
-  // 战国 has only a shelf: a head and its shelf row, no spine rows.
-  addShelf("战国", -475, -221, 6);
+  // 战国 has only off-axis rows: a head, then 年代不详 and its rows.
+  addUndated("战国", -475, -221, 6);
 
   add("秦", -219, {
     precision: "multi",
@@ -261,7 +261,7 @@ const createRows = (): MutableEntry[] => {
       polity: year > 8 ? "新莽" : "西汉",
     });
   rows.find(({ startYear }) => startYear === -149)!.disputed = true;
-  addShelf("西汉", -206, 23, 3);
+  addUndated("西汉", -206, 23, 3);
 
   addYears("东汉", spread(30, 138, 8));
   add("东汉", 140, { precision: "year", endYear: 140, disputed: false });
@@ -275,13 +275,13 @@ const createRows = (): MutableEntry[] => {
     precision: "reign",
   });
   addYears("东汉", spread(175, 218, 16));
-  addShelf("东汉", 25, 220, 8);
+  addUndated("东汉", 25, 220, 8);
 
   addYears("三国", spread(222, 278, 8));
-  addShelf("三国", 220, 280, 2);
+  addUndated("三国", 220, 280, 2);
 
   addYears("两晋", spread(266, 418, 14));
-  addShelf("两晋", 265, 420, 4);
+  addUndated("两晋", 265, 420, 4);
 
   add("南北朝", 424, { disputed: true, precision: "year", endYear: 424 });
   add("南北朝", 433, { precision: "year", endYear: 433, disputed: false });
@@ -303,8 +303,8 @@ const createRows = (): MutableEntry[] => {
   // Two members share an id and stay plain rows.
   addGroup("南北朝", "qa-tl-pair", "虚构双阙", 2, { startYear: 520 });
   addYears("南北朝", spread(525, 588, 20));
-  addShelf("南北朝", 420, 589, 10);
-  addGroup("南北朝", "qa-tl-shelf-caves", "虚构石窟诸题记", 5, {
+  addUndated("南北朝", 420, 589, 10);
+  addGroup("南北朝", "qa-tl-undated-caves", "虚构石窟诸题记", 5, {
     onAxis: false,
     startYear: 500,
     endYear: 530,
@@ -313,28 +313,28 @@ const createRows = (): MutableEntry[] => {
   });
 
   addYears("隋", spread(582, 616, 8));
-  addShelf("隋", 581, 618, 2);
+  addUndated("隋", 581, 618, 2);
 
   addYears("唐", spread(620, 719, 30));
   // A crowded year: all nine rows show, since only groups fold.
   addYears("唐", repeat(720, 9));
   addYears("唐", spread(721, 905, 40));
-  addShelf("唐", 618, 907, 14);
+  addUndated("唐", 618, 907, 14);
 
   addYears("五代十国", spread(908, 975, 6));
-  addShelf("五代十国", 907, 979, 2);
+  addUndated("五代十国", 907, 979, 2);
 
   addYears("宋辽金夏", spread(962, 1278, 40));
-  addShelf("宋辽金夏", 960, 1279, 8);
+  addUndated("宋辽金夏", 960, 1279, 8);
 
   addYears("元", spread(1272, 1366, 16));
-  addShelf("元", 1271, 1368, 3);
+  addUndated("元", 1271, 1368, 3);
 
   addYears("明", spread(1370, 1642, 20));
-  addShelf("明", 1368, 1644, 4);
+  addUndated("明", 1368, 1644, 4);
 
   addYears("清", spread(1646, 1907, 22));
-  addShelf("清", 1644, 1911, 6);
+  addUndated("清", 1644, 1911, 6);
 
   add("民国", 1917, { precision: "year", endYear: 1917, disputed: false });
 
@@ -390,9 +390,9 @@ const addDemoMedia = (rows: MutableEntry[], origin: string) => {
 };
 
 /**
- * A linked row opens Catalog Detail, so it takes the record's identity, title
- * and own media, which is absent on some (a text-only Detail row) and
- * deliberately broken on one.
+ * A linked row's card deck leads with its Catalog card, which opens Catalog
+ * Detail, so the row takes the record's identity, title and own media, which
+ * is absent on some (a text-only Detail row) and deliberately broken on one.
  */
 const linkCatalogRecords = (
   rows: MutableEntry[],
@@ -402,7 +402,7 @@ const linkCatalogRecords = (
     (row) =>
       row.onAxis && row.groupId === null && !row.disputed && row.media === null,
   );
-  // One member of the small group links too: it opens Detail from inside it.
+  // One member of the small group links too: its deck opens from inside it.
   const member = rows.find((row) => row.groupId === "qa-tl-yunfeng-512");
   const [memberRecord, ...spaced] = records;
   if (member !== undefined && memberRecord !== undefined) {

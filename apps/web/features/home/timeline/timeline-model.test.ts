@@ -6,7 +6,6 @@ import {
   TIMELINE_RAIL,
   buildChapterSegments,
   buildRailCells,
-  buildShelfSections,
   buildTimelineIndex,
   buildTimelineRows,
   buildYearBars,
@@ -28,12 +27,12 @@ import {
   timelineEntryDate,
   timelineEntryMeta,
   timelineEntryTag,
+  timelineMarkerYear,
   timelineMediaBox,
   timelinePositionAt,
   timelinePostCountText,
   timelineTitleWidth,
   TIMELINE_TITLE_COUNT_GAP,
-  timelineShelfMeta,
   timelineWindowRange,
   timelineYearFraction,
 } from "./timeline-model";
@@ -225,35 +224,87 @@ describe("rows", () => {
     ]);
   });
 
-  it("gives a chapter with only shelf entries a head and its shelf", () => {
-    const rows = buildTimelineRows(
-      buildTimelineIndex([
-        entry({
-          chapter: "战国",
-          onAxis: false,
-          startYear: -300,
-          endYear: -300,
-        }),
-        entry({
-          chapter: "战国",
-          onAxis: false,
-          startYear: -250,
-          endYear: -250,
-        }),
-      ]),
+  it("gives a chapter of off-axis rows only its head, then 年代不详", () => {
+    const first = entry({
+      chapter: "战国",
+      onAxis: false,
+      startYear: -300,
+      endYear: -300,
+    });
+    const second = entry({
+      chapter: "战国",
+      onAxis: false,
+      startYear: -250,
+      endYear: -250,
+    });
+    const rows = inChapter(
+      buildTimelineRows(buildTimelineIndex([second, first])),
+      "战国",
     );
-    expect(kinds(inChapter(rows, "战国"))).toEqual(["head", "shelf"]);
-    expect(inChapter(rows, "战国")[1]).toMatchObject({ count: 2 });
+    expect(kinds(rows)).toEqual(["head", "undated", "entry", "entry"]);
+    expect(rows[1]).toMatchObject({ key: "undated:战国" });
+    // The index's order: by start year, then the API's position.
+    expect(rows.slice(2)).toMatchObject([{ entry: first }, { entry: second }]);
   });
 
-  it("puts the shelf after the chapter's on-axis rows", () => {
-    const rows = buildTimelineRows(
-      buildTimelineIndex([
-        entry({ onAxis: false, startYear: 640, endYear: 640 }),
-        entry({ startYear: 700, endYear: 700 }),
-      ]),
+  it("closes a chapter with its off-axis rows, which carry no year", () => {
+    const offAxis = entry({
+      onAxis: false,
+      precision: "dynasty",
+      dateLabel: null,
+      startYear: 618,
+      endYear: 907,
+    });
+    const rows = inChapter(
+      buildTimelineRows(
+        buildTimelineIndex([offAxis, entry({ startYear: 700, endYear: 700 })]),
+      ),
+      "唐",
     );
-    expect(kinds(inChapter(rows, "唐"))).toEqual(["head", "entry", "shelf"]);
+    expect(kinds(rows)).toEqual(["head", "entry", "undated", "entry"]);
+    expect(rows[3]).toEqual({
+      kind: "entry",
+      key: `entry:${offAxis.id}`,
+      chapter: "唐",
+      entry: offAxis,
+      year: null,
+      yearLines: null,
+      mark: "none",
+    });
+  });
+
+  it("keeps the index's order under 年代不详, with no media first", () => {
+    const plain = entry({ onAxis: false, title: "甲" });
+    const pictured = entry({
+      onAxis: false,
+      title: "乙",
+      catalogId: "catalog-undated" as never,
+      media: media(600, 400),
+    });
+    const disputed = entry({ onAxis: false, title: "丙", disputed: true });
+    const rows = inChapter(
+      buildTimelineRows(buildTimelineIndex([plain, pictured, disputed])),
+      "唐",
+    ).slice(2);
+    expect(
+      rows.map((row) => (row.kind === "entry" ? row.entry.title : row.kind)),
+    ).toEqual(["甲", "乙", "丙"]);
+    // A dispute keeps its tag in the meta, but no ring: it has no year.
+    expect(rows.map((row) => row.kind === "entry" && row.mark)).toEqual([
+      "none",
+      "none",
+      "none",
+    ]);
+    const tagged = rows[2]!;
+    expect(tagged.kind === "entry" && timelineEntryTag(tagged.entry)).toEqual({
+      kind: "disputed",
+      text: "异说",
+    });
+    expect(
+      rows
+        .slice(0, 2)
+        .map((row) => row.kind === "entry" && timelineEntryTag(row.entry)),
+    ).toEqual([null, null]);
   });
 
   it("orders one year by media, then group, then position", () => {
@@ -421,7 +472,7 @@ describe("group folding", () => {
     );
   });
 
-  it("treats on-axis and shelf members of one id separately", () => {
+  it("treats on-axis and off-axis members of one id separately", () => {
     const items = foldTimelineGroups(groupMembers(4, "g3"), "scope");
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ type: "group", groupKey: "scope:g3" });
@@ -430,7 +481,44 @@ describe("group folding", () => {
       ...groupMembers(3, "split", { onAxis: false }),
     ]);
     const rows = inChapter(buildTimelineRows(index), "唐");
-    expect(kinds(rows)).toEqual(["head", "entry", "entry", "shelf"]);
+    expect(kinds(rows)).toEqual(["head", "entry", "entry", "undated", "group"]);
+  });
+
+  it("folds a group of three under 年代不详 and leaves a pair plain", () => {
+    const index = buildTimelineIndex([
+      entry({ onAxis: false, title: "前" }),
+      ...groupMembers(3, "caves", { onAxis: false }),
+      ...groupMembers(2, "pair", { onAxis: false }),
+    ]);
+    const rows = inChapter(buildTimelineRows(index), "唐");
+    expect(kinds(rows)).toEqual([
+      "head",
+      "undated",
+      "entry",
+      "group",
+      "entry",
+      "entry",
+    ]);
+    // The group stands where its first member does, with no year or mark.
+    expect(rows[3]).toMatchObject({
+      key: "group:undated:唐:caves",
+      groupKey: "undated:唐:caves",
+      title: "虚构caves诸刻",
+      year: null,
+      endYear: null,
+      yearLines: null,
+      mark: "none",
+      expanded: false,
+    });
+    const opened = inChapter(
+      buildTimelineRows(index, new Set(["undated:唐:caves"])),
+      "唐",
+    );
+    expect(opened.map(({ key }) => key)).toEqual(rows.map(({ key }) => key));
+    expect(opened[3]).toMatchObject({
+      expanded: true,
+      sizeKey: "group:undated:唐:caves:open",
+    });
   });
 
   it("keeps rows above and below in order when a group expands", () => {
@@ -535,9 +623,24 @@ describe("positions", () => {
 
   it("covers every row kind in the generated dataset", () => {
     expect(new Set(kinds(rows))).toEqual(
-      new Set(["head", "empty", "marker", "entry", "group", "gap", "shelf"]),
+      new Set(["head", "empty", "marker", "entry", "group", "gap", "undated"]),
     );
     expect(new Set(rows.map(({ key }) => key)).size).toBe(rows.length);
+  });
+
+  it("shows every entry once, on the axis or under 年代不详", () => {
+    const shown = rows.flatMap((row) =>
+      row.kind === "entry"
+        ? [row.entry.id]
+        : row.kind === "group"
+          ? row.entries.map(({ id }) => id)
+          : [],
+    );
+    expect(shown).toHaveLength(dataset.length);
+    expect(new Set(shown)).toEqual(new Set(dataset.map(({ id }) => id)));
+    expect(rows.filter(({ kind }) => kind === "undated")).toHaveLength(
+      index.offAxis.size,
+    );
   });
 
   it("reads the row's own year and polity", () => {
@@ -581,15 +684,23 @@ describe("positions", () => {
     expect(timelinePositionAt(list, gap)?.label).toBe("前56 · 西汉");
   });
 
-  it("reads a shelf, an empty chapter and the final marker", () => {
+  it("reads 年代不详, an empty chapter and the final marker", () => {
     const list = buildTimelineRows(
-      buildTimelineIndex([entry({ onAxis: false, chapter: "唐" })]),
+      buildTimelineIndex([
+        entry({ onAxis: false, chapter: "唐" }),
+        ...groupMembers(3, "undated-position", { onAxis: false }),
+      ]),
     );
-    const shelf = list.findIndex((row) => row.kind === "shelf");
-    expect(timelinePositionAt(list, shelf)).toMatchObject({
-      label: "唐 · 其他",
-      year: null,
-    });
+    const heading = list.findIndex((row) => row.kind === "undated");
+    for (const at of [heading, heading + 1, heading + 2])
+      expect(timelinePositionAt(list, at)).toEqual({
+        chapter: "唐",
+        name: "唐",
+        yearText: "年代不详",
+        label: "唐 · 年代不详",
+        year: null,
+      });
+    expect(list[heading + 2]).toMatchObject({ kind: "group" });
     expect(timelinePositionAt(list, 0)).toMatchObject({
       label: "约前1250 · 晚商",
       year: null,
@@ -598,6 +709,80 @@ describe("positions", () => {
     const head = list.findIndex((row) => row.key === "head:唐");
     expect(timelinePositionAt(list, head)?.label).toBe("唐");
     expect(timelinePositionAt(list, list.length)).toBeNull();
+  });
+
+  it("keeps the markers at the chapter's last on-axis year under 年代不详", () => {
+    const list = buildTimelineRows(
+      buildTimelineIndex([
+        entry({ startYear: 650, endYear: 650 }),
+        entry({ startYear: 720, endYear: 760 }),
+        entry({ onAxis: false, startYear: 618, endYear: 907 }),
+        entry({ onAxis: false, startYear: 618, endYear: 907 }),
+        // A chapter with no axis row at all.
+        entry({ chapter: "五代十国", onAxis: false, startYear: 907 }),
+      ]),
+    );
+    const marker = (at: number) =>
+      timelineMarkerYear(list, at, timelinePositionAt(list, at));
+    const heading = list.findIndex((row) => row.key === "undated:唐");
+    for (const at of [heading, heading + 1, heading + 2]) {
+      // The URL keeps the last year it wrote; the markers stay put.
+      expect(timelinePositionAt(list, at)?.year).toBeNull();
+      expect(marker(at)).toBe(720);
+    }
+    // An axis row stands at its own year, as before.
+    expect(marker(heading - 1)).toBe(720);
+    expect(marker(list.findIndex((row) => row.kind === "entry"))).toBe(650);
+    // Without an axis row, the chapter's end; a head alone, its start.
+    const fiveDynasties = list.findIndex(
+      (row) => row.key === "undated:五代十国",
+    );
+    expect(marker(fiveDynasties)).toBe(timelineChapterInfo("五代十国").endYear);
+    expect(marker(fiveDynasties - 1)).toBe(
+      timelineChapterInfo("五代十国").startYear,
+    );
+    // An empty chapter keeps its start, and nothing past the rows has one.
+    const empty = list.findIndex((row) => row.kind === "empty");
+    expect(marker(empty)).toBe(
+      timelineChapterInfo(list[empty]!.chapter).startYear,
+    );
+    expect(timelineMarkerYear(list, list.length, null)).toBeNull();
+  });
+
+  it("reads a head over axis rows as its first row, not as 年代不详", () => {
+    const list = buildTimelineRows(
+      buildTimelineIndex([
+        entry({ onAxis: false, startYear: 618, endYear: 907 }),
+        entry({ startYear: 700, endYear: 700 }),
+      ]),
+    );
+    const head = list.findIndex((row) => row.key === "head:唐");
+    expect(timelinePositionAt(list, head)).toMatchObject({
+      label: "700 · 唐",
+      year: 700,
+    });
+  });
+
+  it("never lands a year or a reign choice on a row with no year", () => {
+    const list = buildTimelineRows(
+      buildTimelineIndex([
+        entry({ startYear: 700, endYear: 700 }),
+        entry({ onAxis: false, startYear: 720, endYear: 720 }),
+        entry({
+          chapter: "明",
+          onAxis: false,
+          startYear: 1400,
+          endYear: 1400,
+        }),
+      ]),
+    );
+    const axis = list.findIndex((row) => row.kind === "entry");
+    expect(rowIndexForYear(list, 710)).toBe(axis);
+    expect(rowIndexForYear(list, 1400)).toBe(axis);
+    // A chapter with no axis row lands on its head.
+    expect(rowIndexInChapter(list, "明", 1400)).toBe(
+      list.findIndex((row) => row.key === "head:明"),
+    );
   });
 
   it("lands a year with no entry on the next entry", () => {
@@ -726,73 +911,6 @@ describe("reign lookup", () => {
   it("returns nothing for an unknown or empty reign", () => {
     expect(lookupReign(index, "没有")).toEqual([]);
     expect(lookupReign(index, "   ")).toEqual([]);
-  });
-});
-
-describe("the shelf", () => {
-  const entries = [
-    entry({ onAxis: false, province: "虚构东州", fullTitle: "唐丙碑" }),
-    entry({ onAxis: false, province: "虚构西州", fullTitle: "唐甲碑" }),
-    entry({ onAxis: false, province: "虚构西州", fullTitle: "唐乙碑" }),
-    entry({ onAxis: false, province: null, fullTitle: "唐丁碑", polity: null }),
-  ];
-
-  it("sections by place, largest first, with no-value entries last", () => {
-    const sections = buildShelfSections(entries, "place");
-    expect(sections.map(({ label, count }) => [label, count])).toEqual([
-      ["虚构西州", 2],
-      ["虚构东州", 1],
-      ["其他", 1],
-    ]);
-  });
-
-  it("sections by polity", () => {
-    const sections = buildShelfSections(entries, "polity");
-    expect(sections.map(({ label }) => label)).toEqual(["唐", "其他"]);
-  });
-
-  it("lists by name without sections", () => {
-    const [section] = buildShelfSections(entries, "name");
-    expect(section?.label).toBeNull();
-    expect(section?.count).toBe(4);
-    expect(section?.items).toHaveLength(4);
-  });
-
-  it("folds a group inside its section", () => {
-    const sections = buildShelfSections(
-      groupMembers(3, "shelfgroup", { onAxis: false }),
-      "place",
-    );
-    expect(sections[0]?.items).toHaveLength(1);
-    expect(sections[0]?.items[0]).toMatchObject({ type: "group" });
-  });
-
-  it("omits what a section already says and any missing value", () => {
-    const row = entry({
-      onAxis: false,
-      precision: "period",
-      startYear: 712,
-      endYear: 756,
-      dateLabel: "虚宗朝",
-      province: "虚构西州",
-      holder: "虚构昭陵",
-    });
-    expect(timelineShelfMeta(row, "place")).toBe("虚宗朝 712–756 · 虚构昭陵");
-    expect(timelineShelfMeta(row, "name")).toBe(
-      "虚宗朝 712–756 · 虚构西州 · 虚构昭陵",
-    );
-    expect(
-      timelineShelfMeta(
-        entry({
-          onAxis: false,
-          precision: "dynasty",
-          dateLabel: null,
-          province: null,
-          holder: null,
-        }),
-        "place",
-      ),
-    ).toBe("");
   });
 });
 
@@ -987,11 +1105,8 @@ describe("row heights", () => {
       ),
     ).toBe(24);
     expect(
-      estimateRowHeight(
-        { kind: "shelf", key: "s", chapter: "唐", count: 3 },
-        metrics,
-      ),
-    ).toBe(54);
+      estimateRowHeight({ kind: "undated", key: "u", chapter: "唐" }, metrics),
+    ).toBe(34);
     expect(
       estimateRowHeight({ kind: "empty", key: "e", chapter: "商" }, metrics),
     ).toBe(64);
@@ -1001,6 +1116,22 @@ describe("row heights", () => {
     expect(
       estimateRowHeight({ kind: "marker", key: "m", chapter: "当代" }, metrics),
     ).toBe(46);
+  });
+
+  it("sizes a 年代不详 row with no year lines in its gutter", () => {
+    const undated = buildTimelineRows(
+      buildTimelineIndex([entry({ onAxis: false, title: "虚构南寺碑" })]),
+    ).find((candidate) => candidate.kind === "entry");
+    if (undated === undefined) throw new Error("No entry row");
+    expect(undated).toMatchObject({ year: null, yearLines: null });
+    expect(estimateRowHeight(undated, metrics)).toBe(64);
+    expect(
+      estimateRowHeight(undated, {
+        ...metrics,
+        layout: "wide",
+        listWidth: 996,
+      }),
+    ).toBe(58);
   });
 
   it("wraps a tagged meta to two lines and keeps a plain meta on one", () => {

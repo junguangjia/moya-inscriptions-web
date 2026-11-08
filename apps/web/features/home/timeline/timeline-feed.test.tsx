@@ -7,6 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createVisualCatalogItems } from "../../../qa/home-catalog-scenarios";
 import { createTimelineFixture } from "../../../qa/home/timeline-fixture";
 import { TimelineFeed, resolveTimelineLayout } from "./timeline-feed";
+import { formatPercent } from "./timeline-format";
+import { timelineChapterInfo, timelineYearFraction } from "./timeline-model";
+// @ts-expect-error -- Vite serves the stylesheet's own text for a ?raw import.
+import timelineCss from "./timeline.module.css?raw";
 
 import type { TimelineEntry } from "@moya/contracts";
 import type { Root } from "react-dom/client";
@@ -88,6 +92,13 @@ const waitForHistory = <T,>(check: () => T) =>
 const settlePop = async () => {
   await act(async () => {
     await new Promise((resolve) => window.setTimeout(resolve, 0));
+  });
+};
+
+/** A row tap without a known count reads its total before anything opens. */
+const settleReads = async () => {
+  await act(async () => {
+    for (let at = 0; at < 6; at += 1) await Promise.resolve();
   });
 };
 
@@ -264,7 +275,7 @@ describe("the windowed list", () => {
 });
 
 describe("rows", () => {
-  it("opens Detail for a linked row, with or without media", () => {
+  it("opens the deck for a linked row, whose Catalog card opens Detail from the row", async () => {
     const withMedia = entry({
       catalogId: "catalog-one" as never,
       media: {
@@ -290,8 +301,20 @@ describe("rows", () => {
     expect(linked[0]?.querySelector("img")?.getAttribute("sizes")).toBeNull();
     expect(linked[1]?.querySelector("img")).toBeNull();
     click(linked[1]);
-    expect(shell.openCatalog).toHaveBeenCalledWith("catalog-two", linked[1]);
-    expect(openedDialog()).toBeNull();
+    // Issue #422: the row no longer opens Detail itself; its deck's first
+    // card does, after the deck has closed.
+    expect(shell.openCatalog).not.toHaveBeenCalled();
+    const deck = openedDialog()?.querySelector("[data-timeline-deck]");
+    expect(deck?.getAttribute("data-timeline-deck")).toBe(textOnly.id);
+    const card = deck?.querySelector("[data-deck-current]");
+    expect(card?.getAttribute("data-deck-card")).toBe("catalog");
+    click(card);
+    expect(shell.openContent).not.toHaveBeenCalled();
+    await waitForHistory(() => expect(openedDialog()).toBeNull());
+    expect(shell.openContent).toHaveBeenCalledWith(
+      { type: "catalog", id: "catalog-two" },
+      linked[1],
+    );
   });
 
   it("opens the 词条卡 for an unlinked row and omits absent values", async () => {
@@ -309,6 +332,16 @@ describe("rows", () => {
     );
     const row = queryAll("[data-timeline-row='entry'] button")[0]!;
     click(row);
+    // No count is known: the row reads its own total (one post's page)
+    // first, and opens the 词条卡 because it has none.
+    expect(openedDialog()).toBeNull();
+    expect(posts.readTimelinePosts).toHaveBeenCalledWith(
+      expect.stringMatching(/^row-/u),
+      1,
+      1,
+      expect.any(AbortSignal),
+    );
+    await settleReads();
     const dialog = openedDialog();
     expect(dialog?.textContent).toContain("北魏虚构永平碑");
     expect(dialog?.textContent).toContain("年代");
@@ -347,7 +380,7 @@ describe("rows", () => {
     expect(lines?.textContent).toContain("–700");
   });
 
-  it("expands a group in place, opens a member, and collapses", () => {
+  it("expands a group in place, opens a member, and collapses", async () => {
     const members = Array.from({ length: 3 }, (_, at) =>
       entry({
         groupId: "yunfeng",
@@ -368,7 +401,14 @@ describe("rows", () => {
     expect(toggle.textContent).toContain("收起");
     const member = query("li [data-open-catalog]");
     click(member);
-    expect(shell.openCatalog).toHaveBeenCalledWith("catalog-member", member);
+    expect(
+      openedDialog()
+        ?.querySelector("[data-deck-current]")
+        ?.getAttribute("data-deck-card"),
+    ).toBe("catalog");
+    window.history.back();
+    await settlePop();
+    await waitForHistory(() => expect(openedDialog()).toBeNull());
     click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(query("li [data-open-catalog]")).toBeNull();
@@ -411,8 +451,18 @@ describe("rows", () => {
 describe("posts on the timeline (timeline-posts-v1)", () => {
   const unlinked = () =>
     entry({ id: "row-post", fullTitle: "北魏虚构永平碑", title: "永平碑" });
+  // A count known as 0 opens the 词条卡 at once; its grid still shows the
+  // posts the read finds, as after a stale count.
   const openCard = () => {
-    render(true, small([unlinked()]));
+    act(() => {
+      root.render(
+        <TimelineFeed
+          active
+          postCounts={new Map([["row-post", 0]])}
+          state={small([unlinked()])}
+        />,
+      );
+    });
     const row = queryAll("[data-timeline-row='entry'] button")[0]!;
     click(row);
     return { dialog: openedDialog() as HTMLElement, row };
@@ -533,131 +583,460 @@ describe("posts on the timeline (timeline-posts-v1)", () => {
   });
 });
 
-describe("the shelf", () => {
-  const shelf = [
-    ...Array.from({ length: 3 }, (_, at) =>
-      entry({
-        onAxis: false,
-        precision: "dynasty",
-        dateLabel: null,
-        province: "虚构西州",
-        fullTitle: `唐虚构西碑${at}`,
+describe("the card deck (Issue #422)", () => {
+  const post = (n: number) => ({
+    id: `work-${String(n).repeat(32)}`,
+    authorId: `user-${"b".repeat(32)}`,
+    authorName: `虚构作者${n}`,
+    title: `访碑记${n}`,
+    text: "",
+    media: [],
+    available: true,
+    canEdit: false,
+    firstPublishedAt: "2026-11-07T00:00:00.000Z",
+  });
+  const counted = () =>
+    entry({ id: "row-post", fullTitle: "北魏虚构永平碑", title: "永平碑" });
+  const none = () =>
+    entry({
+      id: "row-none",
+      fullTitle: "唐虚构无帖碑",
+      startYear: 701,
+      endYear: 701,
+    });
+  const renderCounted = () => {
+    act(() => {
+      root.render(
+        <TimelineFeed
+          active
+          postCounts={new Map([["row-post", 2]])}
+          state={small([counted(), none()])}
+        />,
+      );
+    });
+    return queryAll("[data-timeline-row='entry'] button");
+  };
+  const deck = () => openedDialog()?.querySelector("[data-timeline-deck]");
+  const flushPosts = async () => {
+    await act(async () => {
+      for (let at = 0; at < 4; at += 1) await Promise.resolve();
+    });
+  };
+
+  beforeEach(() => {
+    posts.readTimelinePosts.mockResolvedValue({
+      items: [post(1), post(2)],
+      total: 2,
+      page: 1,
+    });
+  });
+
+  it("opens the deck for a row with posts, and the 词条卡 for a row with neither", async () => {
+    const [withPosts, without] = renderCounted();
+    click(withPosts);
+    expect(deck()?.getAttribute("data-timeline-deck")).toBe("row-post");
+    expect(openedDialog()?.querySelector("[data-timeline-card]")).toBeNull();
+    await flushPosts();
+    expect(
+      [...(deck()?.querySelectorAll("button[data-deck-card]") ?? [])].map(
+        (card) => card.getAttribute("data-deck-card"),
+      ),
+    ).toEqual(["post", "post"]);
+    expect(
+      deck()?.querySelector("[data-timeline-deck-position]")?.textContent,
+    ).toBe("1 / 2");
+    window.history.back();
+    await settlePop();
+    await waitForHistory(() => expect(openedDialog()).toBeNull());
+    // The focus is back on the row.
+    await waitForHistory(() => expect(document.activeElement).toBe(withPosts));
+
+    // Its count is unknown: its own read finds none, so the 词条卡 opens.
+    posts.readTimelinePosts.mockResolvedValue({ items: [], total: 0, page: 1 });
+    click(without);
+    expect(openedDialog()).toBeNull();
+    await flushPosts();
+    expect(deck()).toBeNull();
+    expect(
+      openedDialog()?.querySelector("[data-timeline-card]")?.textContent,
+    ).toContain("上传这件碑帖");
+  });
+
+  it("reads an unknown count first, and opens the deck when the row has posts", async () => {
+    const [, without] = renderCounted();
+    click(without);
+    expect(openedDialog()).toBeNull();
+    expect(posts.readTimelinePosts).toHaveBeenCalledWith(
+      "row-none",
+      1,
+      1,
+      expect.any(AbortSignal),
+    );
+    await flushPosts();
+    expect(deck()?.getAttribute("data-timeline-deck")).toBe("row-none");
+  });
+
+  it("opens the 词条卡 when the read of an unknown count fails", async () => {
+    posts.readTimelinePosts.mockRejectedValueOnce(new Error("offline"));
+    const [, without] = renderCounted();
+    click(without);
+    await flushPosts();
+    expect(deck()).toBeNull();
+    expect(
+      openedDialog()?.querySelector("[data-timeline-card]"),
+    ).not.toBeNull();
+  });
+
+  it("reads once for a double tap, and opens nothing once the feed has gone", async () => {
+    let answer: (value: unknown) => void = () => undefined;
+    posts.readTimelinePosts.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
       }),
-    ),
+    );
+    const [, without] = renderCounted();
+    click(without);
+    click(without);
+    expect(posts.readTimelinePosts).toHaveBeenCalledOnce();
+    answer({ items: [post(1)], total: 1, page: 1 });
+    await flushPosts();
+    expect(deck()?.getAttribute("data-timeline-deck")).toBe("row-none");
+    window.history.back();
+    await settlePop();
+    await waitForHistory(() => expect(openedDialog()).toBeNull());
+
+    // A read still on its way when the feed unmounts is dropped.
+    let late: (value: unknown) => void = () => undefined;
+    posts.readTimelinePosts.mockReturnValueOnce(
+      new Promise((resolve) => {
+        late = resolve;
+      }),
+    );
+    click(without);
+    const signal = posts.readTimelinePosts.mock.lastCall?.[3] as AbortSignal;
+    act(() => root.render(<div />));
+    expect(signal.aborted).toBe(true);
+    late({ items: [post(1)], total: 1, page: 1 });
+    await flushPosts();
+    expect(openedDialog()).toBeNull();
+  });
+
+  it("opens the 词条卡 at once for a row the loaded counts leave out, reading no count", () => {
+    act(() => {
+      root.render(
+        <TimelineFeed
+          active
+          postCounts={new Map([["row-post", 2]])}
+          postCountsLoaded
+          state={small([counted(), none()])}
+        />,
+      );
+    });
+    const [, without] = queryAll("[data-timeline-row='entry'] button");
+    click(without);
+    // The counts list only rows with posts: missing means none.
+    expect(posts.readTimelinePosts).not.toHaveBeenCalledWith(
+      "row-none",
+      1,
+      1,
+      expect.anything(),
+    );
+    expect(without!.hasAttribute("aria-busy")).toBe(false);
+    expect(deck()).toBeNull();
+    expect(
+      openedDialog()?.querySelector("[data-timeline-card]"),
+    ).not.toBeNull();
+  });
+
+  it("says the tapped row is busy while counts that are not loaded make it read", async () => {
+    let answer: (value: unknown) => void = () => undefined;
+    posts.readTimelinePosts.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const [withPosts, without] = renderCounted();
+    expect(
+      query("[data-timeline-feed]")?.getAttribute("data-timeline-counts"),
+    ).toBe("pending");
+    click(without);
+    expect(posts.readTimelinePosts).toHaveBeenCalledWith(
+      "row-none",
+      1,
+      1,
+      expect.any(AbortSignal),
+    );
+    expect(without!.getAttribute("aria-busy")).toBe("true");
+    expect(withPosts!.hasAttribute("aria-busy")).toBe(false);
+    expect(timelineCss).toMatch(
+      /\.entry\[aria-busy="true"\],\s*\.member\[aria-busy="true"\] \{[^}]*background: var\(--yoyi-color-background-muted\);/u,
+    );
+    // The double-tap guard holds while it reads.
+    click(without);
+    expect(posts.readTimelinePosts).toHaveBeenCalledOnce();
+    answer({ items: [], total: 0, page: 1 });
+    await flushPosts();
+    expect(without!.hasAttribute("aria-busy")).toBe(false);
+    expect(
+      openedDialog()?.querySelector("[data-timeline-card]"),
+    ).not.toBeNull();
+  });
+
+  it("closes the deck, then opens a post card's work from the row", async () => {
+    const [row] = renderCounted();
+    click(row);
+    await flushPosts();
+    const card = deck()?.querySelector("[data-deck-current]");
+    expect(card?.getAttribute("data-deck-post")).toBe(post(1).id);
+    click(card);
+    expect(shell.openContent).not.toHaveBeenCalled();
+    await waitForHistory(() => expect(openedDialog()).toBeNull());
+    expect(shell.openContent).toHaveBeenCalledWith(
+      { type: "work", id: post(1).id },
+      row,
+    );
+    // The upload button left with the deck.
+    expect(query("[data-timeline-deck-upload]")).toBeNull();
+  });
+
+  it("starts a new post on the entry from the deck's 上传, from the row", async () => {
+    authors.value = {
+      checking: false,
+      viewer: { id: `user-${"a".repeat(32)}` },
+    };
+    const [row] = renderCounted();
+    click(row);
+    click(deck()?.querySelector("[data-timeline-deck-upload]"));
+    click(deck()?.querySelector("[data-timeline-deck-new]"));
+    await waitForHistory(() => expect(openedDialog()).toBeNull());
+    expect(shell.openEditor).toHaveBeenCalledWith(
+      { type: "new", timelineEntryId: "row-post" },
+      row,
+    );
+  });
+
+  it("sends a guest's 上传新帖子 and 关联我发过的帖子 to sign-in", async () => {
+    const [row] = renderCounted();
+    click(row);
+    click(deck()?.querySelector("[data-timeline-deck-upload]"));
+    click(deck()?.querySelector("[data-timeline-deck-new]"));
+    await waitForHistory(() => expect(openedDialog()).toBeNull());
+    expect(shell.openEditor).not.toHaveBeenCalled();
+    expect(shell.openProfile).toHaveBeenCalledWith(null, row);
+
+    shell.openProfile.mockClear();
+    click(row);
+    click(deck()?.querySelector("[data-timeline-deck-upload]"));
+    click(deck()?.querySelector("[data-timeline-deck-attach]"));
+    await waitForHistory(() => expect(openedDialog()).toBeNull());
+    expect(shell.openProfile).toHaveBeenCalledWith(null, row);
+  });
+
+  it("has no upload button when browse-only", async () => {
+    shell.browseOnly = true;
+    const [row] = renderCounted();
+    click(row);
+    await flushPosts();
+    expect(deck()?.querySelector("[data-timeline-deck-upload]")).toBeNull();
+    expect(deck()?.querySelectorAll("button[data-deck-card]")).toHaveLength(2);
+  });
+
+  it("keeps source and absence words off the deck", async () => {
+    posts.readTimelinePosts.mockResolvedValue({ items: [], total: 0, page: 1 });
+    const [row] = renderCounted();
+    click(row);
+    await flushPosts();
+    expect(deck()?.textContent).toContain("发布后会出现在这个词条下。");
+    expect(deck()?.textContent).not.toMatch(
+      /来源|出处|未收|暂无|还没有|尚未|没有|无法/u,
+    );
+  });
+});
+
+describe("年代不详", () => {
+  const offAxis = (overrides: Partial<TimelineEntry>) =>
     entry({
       onAxis: false,
       precision: "dynasty",
       dateLabel: null,
-      province: "虚构东州",
-      polity: "南唐",
-      fullTitle: "南唐虚构东碑",
+      startYear: 618,
+      endYear: 907,
+      ...overrides,
+    });
+  const undated = [
+    entry({ startYear: 700, endYear: 700, title: "虚构有年碑" }),
+    offAxis({
+      id: "row-undated",
+      title: "虚构无年碑",
+      fullTitle: "唐虚构无年碑",
     }),
-    entry({
-      onAxis: false,
-      precision: "dynasty",
-      dateLabel: null,
-      province: "虚构东州",
+    offAxis({
+      title: "虚构链接碑",
       fullTitle: "唐虚构链接碑",
-      catalogId: "catalog-shelf" as never,
+      catalogId: "catalog-undated" as never,
     }),
     ...Array.from({ length: 3 }, (_, at) =>
-      entry({
-        onAxis: false,
-        precision: "dynasty",
-        dateLabel: null,
-        province: "虚构中州",
+      offAxis({
+        title: `虚构组碑${at}`,
         fullTitle: `唐虚构组碑${at}`,
         groupId: "caves",
         groupTitle: "虚构石窟诸题记",
       }),
     ),
+    ...Array.from({ length: 2 }, (_, at) =>
+      offAxis({
+        title: `虚构双阙${at}`,
+        fullTitle: `唐虚构双阙${at}`,
+        groupId: "pair",
+        groupTitle: "虚构双阙",
+      }),
+    ),
   ];
-  const openShelf = () => {
-    render(true, small(shelf));
-    const pill = query("[data-timeline-row='shelf'] button");
-    expect(pill?.textContent).toContain("唐 · 其他 8");
-    click(pill);
-    return openedDialog() as HTMLElement;
-  };
+  const chapterRows = () =>
+    rows().filter(
+      (row) =>
+        row.dataset.timelineRow !== "empty" &&
+        row.dataset.timelineRow !== "marker",
+    );
+  const undatedRow = (title: string) =>
+    queryAll("[data-timeline-row='entry'] button").find((button) =>
+      button.textContent?.includes(title),
+    );
 
-  it("lists raw full titles by place, name and polity", () => {
-    const dialog = openShelf();
-    expect(dialog.textContent).toContain("唐 · 其他 8");
-    const tabs = [...dialog.querySelectorAll("[role='tab']")];
-    expect(tabs.map((tab) => tab.textContent)).toEqual([
-      "按地",
-      "按名",
-      "按政权",
+  it("closes the chapter under its heading, one row each, with no 其他", () => {
+    render(true, small(undated));
+    expect(chapterRows().map((row) => row.dataset.timelineRow)).toEqual([
+      "head",
+      "entry",
+      "undated",
+      "entry",
+      "entry",
+      "group",
+      "entry",
+      "entry",
     ]);
-    expect(tabs[0]?.getAttribute("aria-selected")).toBe("true");
-    expect(dialog.textContent).toContain("虚构西州");
-    expect(dialog.textContent).toContain("唐虚构西碑0");
-    click(tabs[1]);
-    expect(tabs[1]?.getAttribute("aria-selected")).toBe("true");
-    expect(dialog.textContent).not.toContain("虚构西州3");
-    click(tabs[2]);
-    expect(dialog.textContent).toContain("南唐");
+    expect(query("[data-timeline-row='undated']")?.textContent).toBe(
+      "年代不详",
+    );
+    expect(text()).not.toContain("其他");
+    // Each names its entry as the axis does, by the short title.
+    expect(text()).not.toMatch(/唐虚构(?:无年碑|链接碑|双阙)/u);
+    for (const title of ["虚构无年碑", "虚构双阙0", "虚构双阙1"]) {
+      const row = undatedRow(title);
+      // No year, no mark, and the spine dotted off the axis.
+      expect(row?.querySelector("[data-mark]")).toBeNull();
+      expect(row?.firstElementChild?.textContent).toBe("");
+      expect(row?.querySelector("[data-spine='dotted']")).not.toBeNull();
+    }
+    expect(
+      undatedRow("虚构有年碑")?.querySelector("[data-mark='dot']"),
+    ).not.toBeNull();
   });
 
-  it("folds a group on the shelf and opens it in place", () => {
-    const dialog = openShelf();
-    expect(dialog.textContent).toContain("虚构石窟诸题记");
-    expect(dialog.textContent).toContain("3 件");
-    expect(dialog.textContent).not.toContain("唐虚构组碑0");
-    const toggle = [...dialog.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("虚构石窟诸题记"),
-    );
+  it("folds a same-kind group of three in place and opens it", () => {
+    render(true, small(undated));
+    const toggle = query("[data-timeline-group]") as HTMLElement;
+    expect(toggle.getAttribute("data-timeline-group")).toBe("undated:唐:caves");
+    expect(toggle.textContent).toContain("虚构石窟诸题记");
+    expect(toggle.textContent).toContain("3 件");
+    expect(toggle.querySelector("[data-mark]")).toBeNull();
+    expect(text()).not.toContain("唐虚构组碑0");
     click(toggle);
-    expect(dialog.textContent).toContain("唐虚构组碑0");
-    expect(dialog.textContent).toContain("收起");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      [...container.querySelectorAll("li button")].map(
+        (button) => button.textContent,
+      ),
+    ).toEqual(["虚构组碑0", "虚构组碑1", "虚构组碑2"]);
   });
 
-  it("opens an unlinked row's card as a child view with its own Back", async () => {
-    const dialog = openShelf();
-    const row = [...dialog.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("唐虚构西碑0"),
-    );
-    click(row);
-    expect(dialog.querySelector("[data-timeline-card]")).not.toBeNull();
-    expect(dialog.querySelector("[role='tab']")).toBeNull();
+  it("opens an unlinked row's 词条卡 and a linked row's deck, as any row", async () => {
+    render(true, small(undated));
+    const linked = undatedRow("虚构链接碑");
+    expect(linked?.getAttribute("data-catalog-id")).toBe("catalog-undated");
+    click(linked);
+    expect(
+      openedDialog()?.querySelector("[data-timeline-deck]"),
+    ).not.toBeNull();
     window.history.back();
     await settlePop();
-    await waitForHistory(() =>
-      expect(dialog.querySelector("[role='tab']")).not.toBeNull(),
-    );
-    // Back lands on the entry the reader opened, not the top of the list.
-    expect(document.activeElement?.textContent).toContain("唐虚构西碑0");
-  });
+    await waitForHistory(() => expect(openedDialog()).toBeNull());
 
-  it("closes the shelf, then opens the editor from its pill for a card's upload", async () => {
     authors.value = {
       checking: false,
       viewer: { id: `user-${"a".repeat(32)}` },
     };
-    const dialog = openShelf();
-    const pill = query("[data-timeline-row='shelf'] button");
-    click(
-      [...dialog.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("唐虚构西碑0"),
-      ),
-    );
+    const row = undatedRow("虚构无年碑")!;
+    click(row);
+    await settleReads();
+    // The 词条卡 names it in full.
+    const dialog = openedDialog() as HTMLElement;
+    expect(dialog.textContent).toContain("唐虚构无年碑");
+    expect(dialog.textContent).toContain("上传这件碑帖");
     click(dialog.querySelector("[data-timeline-upload]"));
     await waitForHistory(() => expect(openedDialog()).toBeNull());
     expect(shell.openEditor).toHaveBeenCalledWith(
-      { type: "new", timelineEntryId: expect.any(String) },
-      pill,
+      { type: "new", timelineEntryId: "row-undated" },
+      row,
     );
   });
 
-  it("closes first, then opens Detail for a linked row", async () => {
-    const dialog = openShelf();
-    const pill = query("[data-timeline-row='shelf'] button");
-    const row = dialog.querySelector("[data-open-catalog]");
-    expect(row?.getAttribute("data-catalog-id")).toBe("catalog-shelf");
-    click(row);
-    expect(shell.openCatalog).not.toHaveBeenCalled();
-    await waitForHistory(() => expect(openedDialog()).toBeNull());
-    expect(shell.openCatalog).toHaveBeenCalledWith("catalog-shelf", pill);
+  it("counts an undated row's posts as any row's", () => {
+    act(() => {
+      root.render(
+        <TimelineFeed
+          active
+          postCounts={new Map([["row-undated", 2]])}
+          state={small(undated)}
+        />,
+      );
+    });
+    expect(undatedRow("虚构无年碑")?.textContent).toContain(
+      "虚构西州 · 2 篇帖子",
+    );
+  });
+
+  it("reads 「晚商 · 年代不详」 in the bar and writes no year for it", () => {
+    vi.useFakeTimers();
+    window.history.replaceState({ shell: 1 }, "", "/?keep=1");
+    const original = HTMLElement.prototype.getBoundingClientRect;
+    // Head 55, then the heading: 30 scrolled plus the 36 bar is inside it.
+    HTMLElement.prototype.getBoundingClientRect = function stub() {
+      return this.hasAttribute("data-timeline-list")
+        ? ({ top: -30, width: 390 } as DOMRect)
+        : original.call(this);
+    };
+    try {
+      render(
+        true,
+        small([
+          offAxis({ chapter: "商", polity: "商", startYear: -1250 }),
+          offAxis({ chapter: "商", polity: "商", startYear: -1250 }),
+        ]),
+      );
+      act(() => {
+        window.dispatchEvent(new Event("scroll"));
+      });
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(query("[data-timeline-position]")?.textContent).toBe(
+        "晚商 · 年代不详",
+      );
+      expect(window.location.search).toBe("?keep=1");
+      // The 纪年 sheet's marker stays at the chapter's end (it has no axis
+      // row), not back at its start.
+      click(query("[data-timeline-position]"));
+      const marker = openedDialog()?.querySelector<HTMLElement>(
+        "[class*='scaleCurrent']",
+      );
+      const { endYear } = timelineChapterInfo("商");
+      expect(marker?.style.left).toBe(
+        formatPercent(timelineYearFraction(endYear!)),
+      );
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = original;
+    }
   });
 });
 
@@ -808,6 +1187,11 @@ describe("the 纪年 sheet", () => {
     click(legend);
     expect(dialog.querySelector("[data-timeline-legend]")).not.toBeNull();
     expect(dialog.textContent).toContain("空心红圈");
+    // Issue #422: no 其他 shelf; the off-axis rows close each chapter.
+    expect(dialog.textContent).toContain(
+      "「年代不详」下是不落在轴上的条目，放在各朝代末尾。",
+    );
+    expect(dialog.textContent).not.toContain("「其他」");
     expect(dialog.querySelectorAll("[data-mark]")).toHaveLength(4);
     window.history.back();
     await settlePop();
@@ -823,7 +1207,8 @@ describe("what the timeline says", () => {
   const list = [
     entry({ startYear: 700, endYear: 700 }),
     entry({
-      fullTitle: "虚构无年之碑",
+      title: "虚构无年之碑",
+      fullTitle: "唐虚构无年之碑",
       onAxis: false,
       precision: "dynasty",
       startYear: 618,
@@ -846,18 +1231,18 @@ describe("what the timeline says", () => {
     expect(openedDialog()?.textContent).not.toMatch(forbidden);
   });
 
-  it("keeps them off the shelf and the entry card", () => {
+  it("keeps them off 年代不详 and its entry card", async () => {
     render(true, small(list));
-    click(query("[data-timeline-row='shelf'] button"));
-    const shelf = openedDialog();
-    expect(shelf?.textContent).not.toMatch(forbidden);
+    expect(query("[data-timeline-row='undated']")).not.toBeNull();
     click(
-      [...(shelf?.querySelectorAll("button") ?? [])].find((button) =>
+      queryAll("[data-timeline-row='entry'] button").find((button) =>
         button.textContent?.includes("虚构无年之碑"),
       ),
     );
-    expect(shelf?.querySelector("[data-timeline-card]")).not.toBeNull();
-    expect(shelf?.textContent).not.toMatch(forbidden);
+    await settleReads();
+    const card = openedDialog();
+    expect(card?.querySelector("[data-timeline-card]")).not.toBeNull();
+    expect(card?.textContent).not.toMatch(forbidden);
   });
 
   it("leaves a failed image's box empty, with no failure text", () => {
@@ -894,7 +1279,7 @@ describe("a sheet over the pager", () => {
     click(query("[data-timeline-position]"));
     const onWheel = vi.fn();
     const dialog = openedDialog();
-    const panel = dialog?.querySelector("[data-sheet-variant]");
+    const panel = dialog?.querySelector("[data-timeline-sheet-panel]");
     expect(panel).toBeTruthy();
     container.addEventListener("wheel", onWheel);
     const wheel = new WheelEvent("wheel", { bubbles: true, deltaX: 40 });

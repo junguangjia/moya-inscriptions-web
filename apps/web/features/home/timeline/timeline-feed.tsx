@@ -13,10 +13,15 @@ import { Icon } from "@moya/ui";
 
 import { useProductShell } from "../../product-shell/product-shell";
 import { isWideLayout } from "../../shell/device-platform";
+import { TimelineCardDeck, timelineDeckOpens } from "./timeline-card-deck";
 import { useOpenPostEditor } from "./timeline-detail";
 import { TimelineEntryCard } from "./timeline-entry-card";
 import { TimelineEraSheet, TimelineLegendSheet } from "./timeline-era-sheet";
 import { parseYearParam } from "./timeline-format";
+import {
+  TIMELINE_POSTS_COUNT_PAGE,
+  readTimelinePosts,
+} from "./timeline-posts-data";
 import {
   TIMELINE_TEXT_SIZES,
   buildRailCells,
@@ -28,14 +33,13 @@ import {
   railRowAt,
   rowIndexForChapter,
   rowIndexForYear,
-  timelineChapterInfo,
   timelineColumns,
+  timelineMarkerYear,
   timelinePositionAt,
 } from "./timeline-model";
 import { TimelineRail } from "./timeline-rail";
 import { TimelineRowView } from "./timeline-rows";
 import { TimelineSheet } from "./timeline-sheet";
-import { TimelineShelfSheet } from "./timeline-shelf-sheet";
 import {
   TimelineWideChrome,
   WIDE_CHROME_HEIGHT,
@@ -45,10 +49,11 @@ import { useTimelineWindow } from "./use-timeline-window";
 import styles from "./timeline.module.css";
 
 import type { CSSProperties } from "react";
-import type { TimelineChapter, TimelineEntry } from "@moya/contracts";
+import type { TimelineEntry } from "@moya/contracts";
 import type { AuthorDialogNavigationHandle } from "../../authors/author-dialog";
 import type { PresentationPlatform } from "../../shell/device-platform";
 import type { HomeFeedState } from "../home-feed";
+import type { TimelineDeckActions } from "./timeline-card-deck";
 import type {
   TimelineGroupRow,
   TimelineRow,
@@ -73,6 +78,23 @@ const RAIL_CELL_MIN = 18;
 const EMPTY_ENTRIES: readonly TimelineEntry[] = [];
 const EMPTY_ROWS: readonly TimelineRow[] = [];
 const NO_POST_COUNTS: ReadonlyMap<string, number> = new Map();
+
+/**
+ * The entry a row should show as opening: its own, or one of an opened
+ * group's members; null for every other row, so only they redraw.
+ */
+const rowOpening = (row: TimelineRow, openingId: string | null) =>
+  openingId === null
+    ? null
+    : row.kind === "entry"
+      ? row.entry.id === openingId
+        ? openingId
+        : null
+      : row.kind === "group" &&
+          row.expanded &&
+          row.entries.some((entry) => entry.id === openingId)
+        ? openingId
+        : null;
 
 /** PC, and a tablet that crossed the shell's wide width, use the wide layout. */
 export const resolveTimelineLayout = (
@@ -123,12 +145,7 @@ type TimelineSheetState =
   | { readonly kind: "era"; readonly opener: HTMLElement }
   | { readonly kind: "legend"; readonly opener: HTMLElement }
   | {
-      readonly kind: "shelf";
-      readonly chapter: TimelineChapter;
-      readonly opener: HTMLElement;
-    }
-  | {
-      readonly kind: "card";
+      readonly kind: "card" | "deck";
       readonly entry: TimelineEntry;
       readonly opener: HTMLElement;
     };
@@ -168,20 +185,31 @@ export const TimelineFeed = ({
   onMediaFailed,
   onPostsChanged,
   postCounts = NO_POST_COUNTS,
+  postCountsLoaded = false,
   state,
 }: {
   readonly active: boolean;
   /** A row's image failed; its URL may have expired. */
   readonly onMediaFailed?: (() => void) | undefined;
-  /** timeline-posts-v1: an attachment from a 词条卡 changed an entry's posts. */
+  /**
+   * timeline-posts-v1: an attachment from the card deck or a 词条卡 changed
+   * an entry's posts.
+   */
   readonly onPostsChanged?: (() => void) | undefined;
-  /** timeline-posts-v1: the viewer's post count per entry id, read after the list. */
+  /**
+   * timeline-posts-v1: the viewer's post count per entry id, read after the
+   * list. Only rows with posts are listed.
+   */
   readonly postCounts?: ReadonlyMap<string, number>;
+  /**
+   * Issue #422: the counts were read for this account since the last change
+   * of posts, so a row missing from them has none.
+   */
+  readonly postCountsLoaded?: boolean;
   readonly state: HomeFeedState<TimelineEntry>;
 }) => {
   const {
     browseOnly,
-    openCatalog,
     openContent,
     openProfile,
     platform,
@@ -349,29 +377,103 @@ export const TimelineFeed = ({
   };
 
   /*
-   * timeline-posts-v1: a 词条卡's actions close its sheet first and act from
-   * the row that opened it, because the sheet's controls leave with it.
+   * timeline-posts-v1: a 词条卡's and a deck's actions close their sheet
+   * first and act from the row that opened it, because the sheet's controls
+   * leave with it. A card the deck opens takes the deck's upload button away.
    */
   const cardActions = useCallback(
-    (entry: TimelineEntry, opener: HTMLElement): TimelineEntryPostsActions => ({
+    (entry: TimelineEntry, opener: HTMLElement): TimelineDeckActions => ({
       upload: () => closeSheetThen(() => openPostEditor(entry.id, opener)),
       openWork: (workId) =>
         closeSheetThen(() => openContent({ type: "work", id: workId }, opener)),
+      openCatalog: (catalogId) =>
+        closeSheetThen(() =>
+          openContent({ type: "catalog", id: catalogId }, opener),
+        ),
       signIn: () => closeSheetThen(() => openProfile(null, opener)),
       postsChanged: () => onPostsChanged?.(),
     }),
     [closeSheetThen, onPostsChanged, openContent, openPostEditor, openProfile],
   );
 
+  // Read at the tap, so the counts' arrival does not redraw every row.
+  const countsRef = useRef({ counts: postCounts, loaded: postCountsLoaded });
+  countsRef.current = { counts: postCounts, loaded: postCountsLoaded };
+  /*
+   * Issue #422: a Catalog page or posts open the deck, else the 词条卡. The
+   * counts list only rows with posts: once they are loaded, a row missing
+   * from them has none and its 词条卡 opens at once. Only while they are
+   * pending, failed or stale does a row without a Catalog page and without
+   * a count read its own total first (one post's page); a failed read opens
+   * the 词条卡. Meanwhile the row says it is busy, a second tap on it does
+   * nothing, a tap on another row takes over, and an answer that comes after
+   * the feed has gone, or after another layer has opened, opens nothing.
+   */
+  const pendingOpen = useRef<{
+    readonly entryId: string;
+    readonly controller: AbortController;
+  } | null>(null);
+  const [openingId, setOpeningId] = useState<string | null>(null);
+  useEffect(
+    () => () => {
+      pendingOpen.current?.controller.abort();
+      pendingOpen.current = null;
+    },
+    [],
+  );
+  const openEntry = useCallback(
+    (entry: TimelineEntry, opener: HTMLElement) => {
+      const { counts, loaded } = countsRef.current;
+      const known = counts.get(entry.id);
+      if (entry.catalogId !== null || known !== undefined || loaded) {
+        pendingOpen.current?.controller.abort();
+        pendingOpen.current = null;
+        setOpeningId(null);
+        openSheet({
+          kind: timelineDeckOpens(entry, known ?? 0) ? "deck" : "card",
+          entry,
+          opener,
+        });
+        return;
+      }
+      if (pendingOpen.current?.entryId === entry.id) return;
+      pendingOpen.current?.controller.abort();
+      const controller = new AbortController();
+      pendingOpen.current = { entryId: entry.id, controller };
+      setOpeningId(entry.id);
+      readTimelinePosts(
+        entry.id,
+        1,
+        TIMELINE_POSTS_COUNT_PAGE,
+        controller.signal,
+      )
+        .then(
+          (page) => page.total,
+          () => 0,
+        )
+        .then((total) => {
+          if (controller.signal.aborted) return;
+          pendingOpen.current = null;
+          setOpeningId(null);
+          const gone =
+            !latest.current.active ||
+            !opener.isConnected ||
+            (rootRef.current?.closest("[inert]") ?? null) !== null ||
+            document.querySelector("dialog[open]") !== null;
+          if (gone) return;
+          openSheet({
+            kind: timelineDeckOpens(entry, total) ? "deck" : "card",
+            entry,
+            opener,
+          });
+        });
+    },
+    [openSheet],
+  );
   const actions = useMemo<TimelineRowActions>(
     () => ({
       mediaFailed: () => onMediaFailed?.(),
-      openEntry: (entry, opener) => {
-        if (entry.catalogId !== null) openCatalog(entry.catalogId, opener);
-        else openSheet({ kind: "card", entry, opener });
-      },
-      openShelf: (chapter, opener) =>
-        openSheet({ kind: "shelf", chapter, opener }),
+      openEntry,
       toggleGroup: (row: TimelineGroupRow) => {
         if (row.expanded) collapseAnchor.current = row.key;
         setExpanded((current) => {
@@ -381,7 +483,7 @@ export const TimelineFeed = ({
         });
       },
     }),
-    [onMediaFailed, openCatalog, openSheet],
+    [onMediaFailed, openEntry],
   );
 
   const [drag, setDrag] = useState<{
@@ -464,10 +566,7 @@ export const TimelineFeed = ({
     ),
   );
 
-  const currentYear =
-    position === null
-      ? null
-      : (position.year ?? timelineChapterInfo(position.chapter).startYear);
+  const currentYear = timelineMarkerYear(rows, view.topIndex, position);
   // A PC's panel cannot keep the opened group's head sticky; the chrome does.
   const topRow = rows[view.topIndex];
   const pinnedGroup =
@@ -495,6 +594,7 @@ export const TimelineFeed = ({
         listWidth={view.width}
         mediaHeld={mediaHeld}
         observeRow={view.observeRow}
+        openingId={rowOpening(row, openingId)}
         postCount={
           row.kind === "entry" ? (postCounts.get(row.entry.id) ?? 0) : 0
         }
@@ -533,6 +633,7 @@ export const TimelineFeed = ({
   return (
     <div
       className={styles.root}
+      data-timeline-counts={postCountsLoaded ? "loaded" : "pending"}
       data-timeline-feed=""
       data-timeline-layout={layout}
       data-timeline-platform={platform}
@@ -655,25 +756,22 @@ export const TimelineFeed = ({
           onClose={handleSheetClosed}
         />
       ) : null}
-      {sheet?.kind === "shelf" ? (
-        <TimelineShelfSheet
-          browseOnly={browseOnly}
-          cardActions={(entry) => cardActions(entry, sheet.opener)}
-          chapter={sheet.chapter}
-          closeRequested={sheetClosing}
-          entries={index.shelf.get(sheet.chapter) ?? EMPTY_ENTRIES}
-          onClose={handleSheetClosed}
-          onOpenCatalog={(catalogId) =>
-            closeSheetThen(() => openCatalog(catalogId, sheet.opener))
-          }
-        />
-      ) : null}
       {sheet?.kind === "card" ? (
         <CardSheet
           actions={cardActions(sheet.entry, sheet.opener)}
           browseOnly={browseOnly}
           closeRequested={sheetClosing}
           entry={sheet.entry}
+          onClose={handleSheetClosed}
+        />
+      ) : null}
+      {sheet?.kind === "deck" ? (
+        <TimelineCardDeck
+          actions={cardActions(sheet.entry, sheet.opener)}
+          browseOnly={browseOnly}
+          closeRequested={sheetClosing}
+          entry={sheet.entry}
+          layout={layout}
           onClose={handleSheetClosed}
         />
       ) : null}

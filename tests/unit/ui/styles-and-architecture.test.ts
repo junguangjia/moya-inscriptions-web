@@ -65,6 +65,85 @@ describe("UI styles and architecture", () => {
     expect(css).not.toMatch(/#[0-9a-f]{3,8}\b/i);
   });
 
+  it("offers a blur scrim whose tint, blur and fallbacks stay in the shared UI", async () => {
+    const css = await readFile(new URL("styles.css", uiRoot), "utf8");
+    expect(css).toMatch(/\.yoyi-blur-scrim \{\s*isolation: isolate;\s*\}/u);
+    // Its own tint layer, so a host's base background never undoes it;
+    // doubled until the browser is known to blur backdrops.
+    expect(css).toMatch(
+      /\.yoyi-blur-scrim::before \{[^}]*position: absolute;[^}]*z-index: -1;[^}]*inset: 0;[^}]*background-color: var\(--yoyi-color-overlay\);[^}]*background-image: linear-gradient\(\s*var\(--yoyi-color-overlay\),\s*var\(--yoyi-color-overlay\)\s*\);/u,
+    );
+    // Where backdrops blur: the prominent blur, prefixed, over one tint.
+    const blurred =
+      /@supports \(\s*\(-webkit-backdrop-filter: blur\(1px\)\) or \(backdrop-filter: blur\(1px\)\)\s*\) \{\s*\.yoyi-blur-scrim \{([^}]*)\}\s*\.yoyi-blur-scrim::before \{([^}]*)\}/u.exec(
+        css,
+      );
+    expect(blurred).not.toBeNull();
+    expect(blurred![1]).toContain(
+      "-webkit-backdrop-filter: blur(var(--yoyi-blur-glass-prominent));",
+    );
+    expect(blurred![1]).toMatch(
+      /[^-]backdrop-filter: blur\(var\(--yoyi-blur-glass-prominent\)\);/u,
+    );
+    expect(blurred![2]).toContain("background-image: none;");
+    // Reduced transparency and more contrast: no blur, the doubled dim, as
+    // Functional Glass falls back.
+    const plain =
+      /@media \(prefers-reduced-transparency: reduce\), \(prefers-contrast: more\) \{([\s\S]*)\}\s*$/u.exec(
+        css,
+      )![1]!;
+    expect(plain).toMatch(
+      /\.yoyi-blur-scrim \{\s*-webkit-backdrop-filter: none;\s*backdrop-filter: none;\s*\}/u,
+    );
+    expect(plain).toMatch(
+      /\.yoyi-blur-scrim::before \{\s*background-image: linear-gradient\(\s*var\(--yoyi-color-overlay\),\s*var\(--yoyi-color-overlay\)\s*\);/u,
+    );
+  });
+
+  it("offers a frosted-paper veil for the scrim, with the same fallbacks", async () => {
+    const css = await readFile(new URL("styles.css", uiRoot), "utf8");
+    // Whitespace as the formatter breaks it does not matter.
+    const flat = (text: string) =>
+      text
+        .replace(/\s+/gu, " ")
+        .replace(/\(\s+/gu, "(")
+        .replace(/\s+\)/gu, ")");
+    const veil =
+      "color-mix(in srgb, var(--yoyi-color-background-page) 76%, transparent)";
+    const paper =
+      /\n\.yoyi-blur-scrim\.yoyi-blur-scrim-paper::before \{([^}]*)\}/u.exec(
+        css,
+      );
+    expect(paper).not.toBeNull();
+    // The page's own paper, light or dark with the theme, doubled until the
+    // browser is known to blur backdrops.
+    expect(flat(paper![1]!)).toContain(`background-color: ${veil};`);
+    expect(flat(paper![1]!)).toContain(
+      `background-image: linear-gradient(${veil}, ${veil});`,
+    );
+    // Its base rule comes before the blur's, which leaves one veil.
+    const blurred = css.search(
+      /@supports \(\s*\(-webkit-backdrop-filter: blur\(1px\)\) or \(backdrop-filter: blur\(1px\)\)\s*\) \{\s*\.yoyi-blur-scrim \{/u,
+    );
+    expect(blurred).toBeGreaterThan(0);
+    expect(css.indexOf(paper![0])).toBeLessThan(blurred);
+    // Inside that @supports block, not after it.
+    const supports =
+      /@supports \(\s*\(-webkit-backdrop-filter: blur\(1px\)\) or \(backdrop-filter: blur\(1px\)\)\s*\) \{\s*\.yoyi-blur-scrim \{[^}]*\}\s*\.yoyi-blur-scrim::before \{[^}]*\}\s*\.yoyi-blur-scrim\.yoyi-blur-scrim-paper::before \{([^}]*)\}\s*\}/u.exec(
+        css,
+      );
+    expect(supports).not.toBeNull();
+    expect(supports![1]!.trim()).toBe("background-image: none;");
+    // Reduced transparency and more contrast: the doubled paper.
+    const plain =
+      /@media \(prefers-reduced-transparency: reduce\), \(prefers-contrast: more\) \{([\s\S]*)\}\s*$/u.exec(
+        css,
+      )![1]!;
+    expect(flat(plain)).toContain(
+      `.yoyi-blur-scrim.yoyi-blur-scrim-paper::before { background-image: linear-gradient(${veil}, ${veil}); }`,
+    );
+  });
+
   it("has no API, database, or formal contract dependency", async () => {
     const source = await collectSource(uiRoot);
     expect(source).not.toMatch(
