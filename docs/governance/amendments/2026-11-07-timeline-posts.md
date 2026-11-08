@@ -14,6 +14,8 @@
   amendment.
 - Record: `docs/development/home-timeline-v1.md`, section "Timeline posts".
   Scope and the frozen Behavior Matrix are in the `timeline-posts-v1` Issue.
+- Changed by the Owner on 2026-11-08: Catalog Detail shows no upload at any
+  entry point (section 8).
 
 ## 1. Owner decisions
 
@@ -218,3 +220,30 @@ holds both statements.
 in `infra/development/work-publishing/grant-runtime.sql`, in the migration and
 in `scripts/import-timeline.mjs`; root `AGENTS.md` active list, with its line
 cap in `scripts/agent-workflow.test.mjs`.
+
+## 8. Owner change of 2026-11-08: no upload in Catalog Detail
+
+For the timeline card deck (Issue #422) the Owner asked on 2026-11-07 that a
+card the deck opens show no upload:
+
+> 点开某一个卡片后不要再显示上传
+
+Asked on 2026-11-08 whether that removes the upload from Catalog Detail at every
+entry point, which section 1, D1 = A, and the Catalog Detail row of section 3
+had included, the Owner answered:
+
+> 去掉
+
+So, from the merge of the `timeline-deck-v1` PR:
+
+- Catalog Detail of a record a row links keeps its 帖子 section (heading, the
+  posts grid and 「全部 N 篇」, loaded after the Detail has painted, in every
+  Detail layout), with no 「上传这件碑帖」, caption or 「关联我发过的帖子」, at
+  every entry point. With no posts it shows nothing; a failed read still says
+  so, with 重试.
+- A post for an entry starts from the
+  deck's 「上传」 (上传新帖子 or 关联我发过的帖子) or from the 词条卡 of a row
+  with neither a Catalog page nor posts. The 词条卡 rows of section 3 are
+  unchanged.
+- Nothing else in this amendment changes: routes, the migration, grants, the
+  operator ops and the counts stay as signed.
