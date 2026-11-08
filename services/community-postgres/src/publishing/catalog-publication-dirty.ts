@@ -41,7 +41,14 @@ import { nowParam, writeTransaction, type PublishingDb } from "./db.js";
  * - the block sets of display masters ('rendition'): a recorded block set,
  *   which releases any other master's blocks (catalog-zoom-blocks.ts), and a
  *   master ended by a detach, a re-attach or a new limit, whose blocks leave
- *   the plan (catalog-masters.ts);
+ *   the plan (catalog-masters.ts). A self-master (a published `editorial/`
+ *   original that is its own master, catalog-deep-zoom-self-master-v1)
+ *   changes its set only through these same writes. The other
+ *   catalog-master writes change no plan and mark nothing: an attach that
+ *   ends no master (its new master lists no block until a set is recorded),
+ *   an attach or limit the storage bounds refuse or a dry run (both write
+ *   nothing), requeue (block jobs only) and erase (only a master blob that no
+ *   active master holds, whose blocks no plan lists);
  * - the scoped reconcile itself (publication.ts, W7), for the assets a pass
  *   leaves for the next one ('publication').
  * This module is the one writer of marks: markCatalogPublicationDirty and
@@ -107,7 +114,15 @@ import { nowParam, writeTransaction, type PublishingDb } from "./db.js";
  *    several (new rows included); every later dirty-row write of the
  *    transaction is on rows that statement already holds.
  * No transaction takes the state row or an asset row after a dirty row, and
- * none takes the state row after an asset row. Each step waits only for
+ * none takes the state row after an asset row. An advisory lock such a
+ * transaction takes comes before its dirty statement: the sync's
+ * ('catalog-delivery-sync') before its asset rows; catalog-master's storage
+ * lock ('catalog-master-storage', taken by attach and limit only, the
+ * self-master's bounded check included) after their asset, master and blob
+ * rows and before their first write, so their mark stays their last
+ * statement and nothing waits for that lock while holding a dirty row. The
+ * block-set lock ('catalog-block-sets') is taken only by writes that mark
+ * nothing (requeue, the block step's enqueue). Each step waits only for
  * rows above the ones it holds, so two such transactions never wait for
  * each other in turn (40P01): a pass that held the state row would wait for
  * a dirty row the membership step marked before taking the row, and a
