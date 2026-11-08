@@ -7,6 +7,7 @@ import { authorClient } from "../../authors/author-data";
 import { TimelineFeed } from "./timeline-feed";
 import {
   cachedTimelinePostCounts,
+  timelinePostCountsFresh,
   emptyTimelinePostCounts,
   invalidateTimelinePostCounts,
   loadTimelinePostCounts,
@@ -44,6 +45,8 @@ const populated = (
 
 interface CountsState {
   readonly epoch: number;
+  /** The change of posts it was read after (countsRevision). */
+  readonly revision: number;
   readonly counts: ReadonlyMap<string, number>;
 }
 
@@ -101,9 +104,15 @@ export const LiveTimeline = ({ active }: { readonly active: boolean }) => {
 
   const [counts, setCounts] = useState<CountsState | null>(() => {
     const cached = cachedTimelinePostCounts();
+    // Stale counts still draw the rows, but are not "loaded" (revision -1)
+    // until the refresh answers, so a missing id is not taken for 0.
     return cached === null
       ? null
-      : { epoch: authorClient.accountEpoch(), counts: cached };
+      : {
+          epoch: authorClient.accountEpoch(),
+          revision: timelinePostCountsFresh() ? 0 : -1,
+          counts: cached,
+        };
   });
   const [countsRevision, setCountsRevision] = useState(0);
   const listShown = state.state === "populated";
@@ -111,11 +120,12 @@ export const LiveTimeline = ({ active }: { readonly active: boolean }) => {
     if (!active || checking || !listShown) return undefined;
     let stale = false;
     const epoch = authorClient.accountEpoch();
+    const revision = countsRevision;
     // A failed read keeps the rows as they are: a count is never required.
     loadTimelinePostCounts().then(
       (next) => {
         if (!stale && authorClient.accountEpoch() === epoch)
-          setCounts({ epoch, counts: next });
+          setCounts({ epoch, revision, counts: next });
       },
       () => undefined,
     );
@@ -123,8 +133,9 @@ export const LiveTimeline = ({ active }: { readonly active: boolean }) => {
       stale = true;
     };
   }, [active, checking, countsRevision, listShown, viewerId]);
-  // Any change of posts (here, on a work page, Catalog Detail or a published
-  // post) reads the counts again while the feed is shown.
+  // Any change of posts (an attachment from the card deck or a 词条卡, a
+  // move on a work page, a published post) reads the counts again while the
+  // feed is shown.
   useEffect(
     () =>
       subscribeTimelinePostCounts(() =>
@@ -133,10 +144,13 @@ export const LiveTimeline = ({ active }: { readonly active: boolean }) => {
     [],
   );
   const postsChanged = useCallback(() => invalidateTimelinePostCounts(), []);
-  const shownCounts =
-    counts !== null && counts.epoch === authorClient.accountEpoch()
-      ? counts.counts
-      : emptyTimelinePostCounts();
+  const current =
+    counts !== null && counts.epoch === authorClient.accountEpoch();
+  const shownCounts = current ? counts.counts : emptyTimelinePostCounts();
+  // Issue #422: loaded means read for this account since the last change of
+  // posts; pending, failed or stale counts are not, and a row tap then reads
+  // its own total before choosing the deck or the 词条卡.
+  const countsLoaded = current && counts.revision === countsRevision;
 
   return (
     <TimelineFeed
@@ -144,6 +158,7 @@ export const LiveTimeline = ({ active }: { readonly active: boolean }) => {
       onMediaFailed={refreshAfterImageFailure}
       onPostsChanged={postsChanged}
       postCounts={shownCounts}
+      postCountsLoaded={countsLoaded}
       state={state}
     />
   );

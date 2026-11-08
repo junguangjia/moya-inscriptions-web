@@ -376,6 +376,73 @@ describe("LiveTimeline", () => {
     expect(client.timelinePostCounts).toHaveBeenCalledTimes(2);
   });
 
+  it("tells the feed its counts are loaded only once read since the last change", async () => {
+    client.timeline.mockResolvedValue({ entries });
+    client.timelinePostCounts.mockResolvedValue({ counts: {} });
+    const LiveTimeline = await load();
+    const { invalidateTimelinePostCounts } =
+      await import("./timeline-posts-data");
+    const counts = () =>
+      container
+        .querySelector("[data-timeline-feed]")
+        ?.getAttribute("data-timeline-counts");
+    act(() => root.render(<LiveTimeline active />));
+    await flush();
+    // An empty answer is loaded: no row has posts.
+    expect(counts()).toBe("loaded");
+    // A change is read again; until then the counts are stale.
+    let answer: (value: { counts: Record<string, number> }) => void = () => {};
+    client.timelinePostCounts.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    act(() => invalidateTimelinePostCounts());
+    await flush();
+    expect(counts()).toBe("pending");
+    answer({ counts: { "row-1": 1 } });
+    await flush();
+    expect(counts()).toBe("loaded");
+    // A failed read leaves them stale.
+    client.timelinePostCounts.mockRejectedValueOnce(new Error("offline"));
+    act(() => invalidateTimelinePostCounts());
+    await flush();
+    expect(counts()).toBe("pending");
+    expect(container.textContent).toContain("1 篇帖子");
+  });
+
+  it("draws cached counts at once but takes them for loaded only while fresh", async () => {
+    client.timeline.mockResolvedValue({ entries });
+    client.timelinePostCounts.mockResolvedValue({ counts: { "row-1": 2 } });
+    const LiveTimeline = await load();
+    const counts = () =>
+      container
+        .querySelector("[data-timeline-feed]")
+        ?.getAttribute("data-timeline-counts");
+    act(() => root.render(<LiveTimeline active />));
+    await flush();
+    expect(counts()).toBe("loaded");
+    act(() => root.render(<></>));
+    // Over a minute later the cache still draws the rows, but a missing id
+    // is not taken for 0 until the refresh answers.
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 61_000);
+    let answer: (value: { counts: Record<string, number> }) => void = () => {};
+    client.timelinePostCounts.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    act(() => root.render(<LiveTimeline active />));
+    expect(counts()).toBe("pending");
+    await flush();
+    expect(container.textContent).toContain("2 篇帖子");
+    answer({ counts: { "row-1": 2 } });
+    await flush();
+    expect(counts()).toBe("loaded");
+    clock.mockRestore();
+  });
+
   it("reads the counts again when posts change during a read, and never keeps that older answer", async () => {
     client.timeline.mockResolvedValue({ entries });
     type Counts = { counts: Record<string, number> };

@@ -7,9 +7,9 @@ import { useOptionalAuthors } from "../../authors/author-context";
 import { DetailBand, useInDetailBand } from "../../detail/detail-band";
 import { useProductShell } from "../../product-shell/product-shell";
 import { isWideLayout } from "../../shell/device-platform";
-import { TimelineEntryCard } from "./timeline-entry-card";
+import { TimelineCardDeck } from "./timeline-card-deck";
 import { TimelineEntryPicker } from "./timeline-entry-picker";
-import { TimelineEntryPosts } from "./timeline-entry-posts";
+import { TimelineEntryPosts, useTimelinePosts } from "./timeline-entry-posts";
 import {
   readContentTimelineEntry,
   invalidateTimelinePostCounts,
@@ -30,7 +30,7 @@ import type {
   TimelineEntry,
 } from "@moya/contracts";
 import type { AuthorDialogNavigationHandle } from "../../authors/author-dialog";
-import type { TimelineEntryPostsActions } from "./timeline-entry-posts";
+import type { TimelineRowLayout } from "./timeline-model";
 
 export type ContentTimelineEntryValue = ContentTimelineEntry["entry"];
 
@@ -88,8 +88,8 @@ export const useContentTimelineEntry = (
 
 /**
  * Opens the editor for a new post on an entry for a signed-in author, or
- * sign-in for a guest, as the publishing entry does (the 词条卡 on the
- * timeline, Catalog Detail and a work's 收录于 share it).
+ * sign-in for a guest, as the publishing entry does (the 词条卡 and the card
+ * deck share it, on the timeline and from a work's 收录于).
  */
 export const useOpenPostEditor = () => {
   const authors = useOptionalAuthors();
@@ -106,33 +106,42 @@ export const useOpenPostEditor = () => {
 };
 
 /**
- * Catalog Detail's 帖子 section (timeline-posts-v1, Owner D1-A): the 60
- * entries that open Detail instead of a 词条卡 show their posts and
- * 「上传这件碑帖」 here, with the 词条卡's own components. Nothing at all
- * while the record has no entry or the answer is pending. On the desktop
- * Detail it renders in the band under the first screen, so the image keeps
- * its place; elsewhere it follows the actions.
+ * Catalog Detail's 帖子 section (timeline-posts-v1, Owner D1-A): the posts of
+ * the row that links this record, as the 词条卡's grid shows them. Since
+ * Issue #422 a post starts from the card deck's 「上传」 button (and the
+ * 词条卡), never from a card the deck opened (Owner: 「点开某一个卡片后不要再
+ * 显示上传」), so this section has no 「上传这件碑帖」 and no 「关联我发过的
+ * 帖子」, and with nothing to offer it is not there at all, heading and band
+ * included, while the record has no entry, the answers are pending or the
+ * entry has no posts. A failed read of the posts still says so, with 重试.
+ * On the desktop Detail it renders in the band under the first screen, so
+ * the image keeps its place; elsewhere it follows the actions.
  */
 export const CatalogTimelinePosts = ({
   catalogId,
 }: {
   readonly catalogId: string;
 }) => {
-  const { browseOnly, openContent, openProfile } = useProductShell();
-  const openPostEditor = useOpenPostEditor();
   const { entry } = useContentTimelineEntry({
     type: "catalog",
     id: catalogId,
   });
-  const inBand = useInDetailBand();
   if (entry === undefined || entry === null) return null;
-  const actions: TimelineEntryPostsActions = {
-    upload: (opener) => openPostEditor(entry.id, opener),
-    openWork: (workId, opener) =>
-      openContent({ type: "work", id: workId }, opener),
-    signIn: (opener) => openProfile(null, opener),
-    postsChanged: invalidateTimelinePostCounts,
-  };
+  return <CatalogEntryPosts entry={entry} key={entry.id} />;
+};
+
+const CatalogEntryPosts = ({
+  entry,
+}: {
+  readonly entry: NonNullable<ContentTimelineEntryValue>;
+}) => {
+  const { openContent } = useProductShell();
+  const posts = useTimelinePosts(entry.id);
+  const inBand = useInDetailBand();
+  const { state } = posts;
+  if (state.state === "loading") return null;
+  if (state.state === "ready" && state.total === 0 && state.items.length === 0)
+    return null;
   return (
     <DetailBand>
       <div
@@ -141,15 +150,56 @@ export const CatalogTimelinePosts = ({
         data-detail-timeline-posts=""
       >
         <TimelineEntryPosts
-          actions={actions}
-          browseOnly={browseOnly}
+          actions={{
+            openWork: (workId, opener) =>
+              openContent({ type: "work", id: workId }, opener),
+          }}
           entryId={entry.id}
           entryTitle={entry.fullTitle}
           heading="帖子"
+          posts={posts}
+          uploads={false}
         />
       </div>
     </DetailBand>
   );
+};
+
+/** The timeline's layout outside the timeline, from the shell's platform. */
+const useTimelineSheetLayout = (): TimelineRowLayout => {
+  const { platform } = useProductShell();
+  const [wide, setWide] = useState(() =>
+    typeof window === "undefined"
+      ? platform === "pc"
+      : isWideLayout(platform, window.innerWidth),
+  );
+  useEffect(() => {
+    const read = () => setWide(isWideLayout(platform, window.innerWidth));
+    read();
+    window.addEventListener("resize", read);
+    return () => window.removeEventListener("resize", read);
+  }, [platform]);
+  return wide ? "wide" : platform === "phone" ? "phone" : "tablet";
+};
+
+/**
+ * Plays a sheet's closing transition, calls `onClose`, then runs the action
+ * (`closeThen`); a close without one (Back, the scrim, ×) only calls `onClose`.
+ */
+const useCloseThen = (onClose: () => void) => {
+  const [closing, setClosing] = useState(false);
+  const after = useRef<(() => void) | null>(null);
+  const closeThen = (action: () => void) => {
+    after.current = action;
+    setClosing(true);
+  };
+  const closed = () => {
+    const action = after.current;
+    after.current = null;
+    onClose();
+    action?.();
+  };
+  return { closing, closeThen, closed };
 };
 
 /**
@@ -167,26 +217,9 @@ const TimelineSheetHost = ({
   readonly onClose: () => void;
   readonly title: string;
 }) => {
-  const { platform } = useProductShell();
   const navigationRef = useRef<AuthorDialogNavigationHandle>(null);
-  const [closing, setClosing] = useState(false);
-  const after = useRef<(() => void) | null>(null);
-  const [wide, setWide] = useState(() =>
-    typeof window === "undefined"
-      ? platform === "pc"
-      : isWideLayout(platform, window.innerWidth),
-  );
-  useEffect(() => {
-    const read = () => setWide(isWideLayout(platform, window.innerWidth));
-    read();
-    window.addEventListener("resize", read);
-    return () => window.removeEventListener("resize", read);
-  }, [platform]);
-  const layout = wide ? "wide" : platform === "phone" ? "phone" : "tablet";
-  const closeThen = (action: () => void) => {
-    after.current = action;
-    setClosing(true);
-  };
+  const layout = useTimelineSheetLayout();
+  const { closing, closeThen, closed } = useCloseThen(onClose);
   return (
     // The timeline's sheet geometry is keyed on its root and layout; this
     // host draws no box of its own.
@@ -203,12 +236,7 @@ const TimelineSheetHost = ({
       <TimelineSheet
         closeRequested={closing}
         navigationRef={navigationRef}
-        onClose={() => {
-          const action = after.current;
-          after.current = null;
-          onClose();
-          action?.();
-        }}
+        onClose={closed}
         title={title}
       >
         {children(closeThen)}
@@ -217,37 +245,43 @@ const TimelineSheetHost = ({
   );
 };
 
-/** The 词条卡 opened outside the timeline, from a work's 收录于. */
-export const TimelineEntryCardSheet = ({
+/**
+ * The card deck opened outside the timeline, from a work's 收录于 (Issue
+ * #422). Its cards and its upload close it first and act from the line.
+ */
+export const TimelineCardDeckSheet = ({
   entry,
   onClose,
   opener,
 }: {
   readonly entry: TimelineEntry;
   readonly onClose: () => void;
-  /** The control the card returns to; its actions act from it. */
+  /** The control the deck returns to; its actions act from it. */
   readonly opener: HTMLElement;
 }) => {
   const { browseOnly, openContent, openProfile } = useProductShell();
   const openPostEditor = useOpenPostEditor();
+  const layout = useTimelineSheetLayout();
+  const { closing, closeThen, closed } = useCloseThen(onClose);
   return (
-    <TimelineSheetHost onClose={onClose} title={entry.fullTitle}>
-      {(closeThen) => (
-        <TimelineEntryCard
-          actions={{
-            upload: () => closeThen(() => openPostEditor(entry.id, opener)),
-            openWork: (workId) =>
-              closeThen(() =>
-                openContent({ type: "work", id: workId }, opener),
-              ),
-            signIn: () => closeThen(() => openProfile(null, opener)),
-            postsChanged: invalidateTimelinePostCounts,
-          }}
-          browseOnly={browseOnly}
-          entry={entry}
-        />
-      )}
-    </TimelineSheetHost>
+    <TimelineCardDeck
+      actions={{
+        upload: () => closeThen(() => openPostEditor(entry.id, opener)),
+        openWork: (workId) =>
+          closeThen(() => openContent({ type: "work", id: workId }, opener)),
+        openCatalog: (catalogId) =>
+          closeThen(() =>
+            openContent({ type: "catalog", id: catalogId }, opener),
+          ),
+        signIn: () => closeThen(() => openProfile(null, opener)),
+        postsChanged: invalidateTimelinePostCounts,
+      }}
+      browseOnly={browseOnly}
+      closeRequested={closing}
+      entry={entry}
+      layout={layout}
+      onClose={closed}
+    />
   );
 };
 
@@ -284,8 +318,11 @@ export const TimelineEntryPickerSheet = ({
 
 /**
  * 收录于 · 题名 (timeline-posts-v1 §2.4): above a work's author for everyone
- * once its entry is known. It opens the same 词条卡, reading the session's
- * timeline only then, because the card needs the entry's facts.
+ * once its entry is known. It opens the entry's card deck (Issue #422),
+ * reading the session's timeline only then, because the deck needs the
+ * entry's facts. The line is only shown for a work its viewer can read, and
+ * the entry's posts follow the same read rule, so the entry always holds at
+ * least this post: the deck's open rule needs no count here.
  */
 export const WorkTimelineEntryLine = ({
   entry,
@@ -316,7 +353,7 @@ export const WorkTimelineEntryLine = ({
     setBusy(true);
     try {
       const found = find(await loadTimeline());
-      // A late answer never stacks the card on a modal opened meanwhile
+      // A late answer never stacks the deck on a modal opened meanwhile
       // (the author's 关联词条, for one): the reader has moved on.
       const moved = document.querySelector("dialog[open]") !== null;
       if (mounted.current && found !== null && !moved)
@@ -346,7 +383,7 @@ export const WorkTimelineEntryLine = ({
         />
       </button>
       {card === null ? null : (
-        <TimelineEntryCardSheet
+        <TimelineCardDeckSheet
           entry={card.entry}
           onClose={() => setCard(null)}
           opener={card.opener}

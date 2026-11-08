@@ -87,7 +87,8 @@ export type EditorTarget =
       readonly threadId?: string;
       /**
        * timeline-posts-v1: 关联词条 starts on this Home timeline entry (the
-       * 词条卡's 「上传这件碑帖」); the author may change or clear it.
+       * 词条卡's 「上传这件碑帖」 or the card deck's 「上传新帖子」); the
+       * author may change or clear it.
        */
       readonly timelineEntryId?: string;
     }
@@ -570,9 +571,10 @@ export const parseProductEditorTarget = (
 };
 /**
  * The same editor: its type and id, and for a new work the Thread it posts
- * into and the entry a tap of 「上传这件碑帖」 brought (timeline-posts-v1),
- * so the editor can replace its entry with one that no longer carries a
- * spent tap, and return to a Thread post from a tapped entry.
+ * into and the entry a tap of 「上传这件碑帖」 or 「上传新帖子」 brought
+ * (timeline-posts-v1), so the editor can replace its entry with one that no
+ * longer carries a spent tap, and return to a Thread post from a tapped
+ * entry.
  */
 export const sameEditorTarget = (
   left: ProductEditorTarget,

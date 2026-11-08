@@ -16,6 +16,7 @@ import {
 import { formatGap, formatYear, formatYearRange } from "./timeline-format";
 import {
   TIMELINE_NOW_YEAR,
+  TIMELINE_UNDATED_TEXT,
   timelineChapterInfo,
   timelineEntryMeta,
   timelineEntryTag,
@@ -36,9 +37,8 @@ import type {
 
 export interface TimelineRowActions {
   readonly mediaFailed: () => void;
-  /** Detail for a linked entry, otherwise its 词条卡. */
+  /** The card deck for an entry with a Catalog page or posts, else its 词条卡. */
   readonly openEntry: (entry: TimelineEntry, opener: HTMLElement) => void;
-  readonly openShelf: (chapter: TimelineChapter, opener: HTMLElement) => void;
   readonly toggleGroup: (row: TimelineGroupRow) => void;
 }
 
@@ -55,11 +55,18 @@ export const TimelineMarkGlyph = ({ mark }: { readonly mark: TimelineMark }) =>
     </span>
   );
 
-/** The attributes the shell needs to return focus to a Detail opener. */
+/**
+ * The attributes the shell needs to return focus to a Detail opener: the
+ * deck's Catalog card opens Detail from the row.
+ */
 const catalogAttributes = (entry: TimelineEntry) =>
   entry.catalogId === null
     ? {}
     : { "data-open-catalog": "", "data-catalog-id": entry.catalogId };
+
+/** 年代不详 rows sit off the axis: their spine is dotted, as an empty chapter's. */
+const spineOf = (row: TimelineEntryRow | TimelineGroupRow) =>
+  row.year === null ? "dotted" : undefined;
 
 const YearGutter = ({
   lines,
@@ -147,6 +154,7 @@ const EntryRow = ({
   layout,
   listWidth,
   mediaHeld,
+  opening,
   postCount,
   row,
 }: {
@@ -154,6 +162,8 @@ const EntryRow = ({
   readonly layout: TimelineRowLayout;
   readonly listWidth: number;
   readonly mediaHeld: boolean;
+  /** Its tap is reading the entry's post count before it opens. */
+  readonly opening: boolean;
   readonly postCount: number;
   readonly row: TimelineEntryRow;
 }) => {
@@ -165,19 +175,21 @@ const EntryRow = ({
   const tag = timelineEntryTag(entry);
   return (
     <button
+      aria-busy={opening || undefined}
       className={styles.entry}
       onClick={(event) => actions.openEntry(entry, event.currentTarget)}
       type="button"
       {...catalogAttributes(entry)}
     >
       <YearGutter lines={row.yearLines} />
-      <span className={styles.slot}>
+      <span className={styles.slot} data-spine={spineOf(row)}>
         <TimelineMarkGlyph mark={row.mark} />
       </span>
       <span className={styles.content}>
         <span className={styles.text}>
+          {/* 年代不详 rows name an entry as the axis does: its short title. */}
           <span className={styles.title}>
-            {entry.onAxis ? entry.title : entry.fullTitle}
+            {entry.title}
             {titleCount === null ? null : (
               <span className={styles.titleCount} data-timeline-post-count="">
                 {titleCount}
@@ -242,7 +254,7 @@ export const TimelineGroupToggle = ({
     {...(pinned ? {} : { "data-timeline-group": row.groupKey })}
   >
     <YearGutter lines={row.yearLines} />
-    <span className={styles.slot}>
+    <span className={styles.slot} data-spine={spineOf(row)}>
       <TimelineMarkGlyph mark={row.mark} />
     </span>
     <span className={styles.groupBody}>
@@ -276,24 +288,31 @@ export const TimelineGroupToggle = ({
 
 const GroupRow = ({
   actions,
+  openingId,
   row,
 }: {
   readonly actions: TimelineRowActions;
+  readonly openingId: string | null;
   readonly row: TimelineGroupRow;
 }) => (
-  <div className={styles.group} data-expanded={row.expanded ? "" : undefined}>
+  <div
+    className={styles.group}
+    data-expanded={row.expanded ? "" : undefined}
+    data-spine={spineOf(row)}
+  >
     <TimelineGroupToggle actions={actions} row={row} />
     {row.expanded ? (
       <ul className={styles.members}>
         {row.entries.map((entry) => (
           <li key={entry.id}>
             <button
+              aria-busy={entry.id === openingId || undefined}
               className={styles.member}
               onClick={(event) => actions.openEntry(entry, event.currentTarget)}
               type="button"
               {...catalogAttributes(entry)}
             >
-              {entry.onAxis ? entry.title : entry.fullTitle}
+              {entry.title}
             </button>
           </li>
         ))}
@@ -342,6 +361,7 @@ const TimelineRowBody = ({
   layout,
   listWidth,
   mediaHeld,
+  openingId,
   postCount,
   row,
 }: {
@@ -349,6 +369,7 @@ const TimelineRowBody = ({
   readonly layout: TimelineRowLayout;
   readonly listWidth: number;
   readonly mediaHeld: boolean;
+  readonly openingId: string | null;
   readonly postCount: number;
   readonly row: TimelineRow;
 }) => {
@@ -376,12 +397,13 @@ const TimelineRowBody = ({
           layout={layout}
           listWidth={listWidth}
           mediaHeld={mediaHeld}
+          opening={openingId === row.entry.id}
           postCount={postCount}
           row={row}
         />
       );
     case "group":
-      return <GroupRow actions={actions} row={row} />;
+      return <GroupRow actions={actions} openingId={openingId} row={row} />;
     case "gap":
       return (
         <div className={styles.gap}>
@@ -390,25 +412,12 @@ const TimelineRowBody = ({
           <span className={styles.gapText}>{formatGap(row.years)}</span>
         </div>
       );
-    case "shelf":
+    case "undated":
       return (
-        <div className={styles.shelf}>
-          <button
-            className={styles.shelfPill}
-            onClick={(event) =>
-              actions.openShelf(row.chapter, event.currentTarget)
-            }
-            type="button"
-          >
-            <span>
-              {timelineChapterInfo(row.chapter).shortName} · 其他 {row.count}
-            </span>
-            <Icon
-              aria-hidden="true"
-              className={styles.chevronRight}
-              name="next"
-            />
-          </button>
+        <div className={styles.undated}>
+          <span className={styles.gutter} />
+          <span className={styles.slot} data-spine="dotted" />
+          <span className={styles.undatedText}>{TIMELINE_UNDATED_TEXT}</span>
         </div>
       );
   }
@@ -421,6 +430,7 @@ export const TimelineRowView = memo(function TimelineRowView({
   listWidth,
   mediaHeld,
   observeRow,
+  openingId = null,
   postCount = 0,
   row,
   rowCount,
@@ -432,6 +442,11 @@ export const TimelineRowView = memo(function TimelineRowView({
   readonly listWidth: number;
   readonly mediaHeld: boolean;
   readonly observeRow: RefCallback<HTMLElement>;
+  /**
+   * Issue #422: the entry whose tap is reading its post count, when it is
+   * this row's or one of its opened group's; the button says it is busy.
+   */
+  readonly openingId?: string | null;
   /** timeline-posts-v1: the viewer's posts on an entry row (0 for none). */
   readonly postCount?: number;
   readonly row: TimelineRow;
@@ -455,6 +470,7 @@ export const TimelineRowView = memo(function TimelineRowView({
         layout={layout}
         listWidth={listWidth}
         mediaHeld={mediaHeld}
+        openingId={openingId}
         postCount={postCount}
         row={row}
       />

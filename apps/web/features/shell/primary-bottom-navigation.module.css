@@ -301,3 +301,14 @@
     transition-duration: 1ms;
   }
 }
+
+/*
+ * Issue #422: a full-window layer that draws its own floating action (the
+ * timeline's card deck) sets this on html while it is open. The floating
+ * dock and the desktop create action would show through its blur as a
+ * second 「+」, so they are hidden until it closes.
+ */
+:global(html[data-floating-actions-hidden]) .dock,
+:global(html[data-floating-actions-hidden]) .desktopAction {
+  visibility: hidden;
+}

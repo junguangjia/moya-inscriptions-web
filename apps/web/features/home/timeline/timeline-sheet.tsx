@@ -29,7 +29,6 @@ export const TimelineSheet = ({
   onBack,
   onClose,
   title,
-  variant = "bottom",
 }: {
   readonly children: ReactNode;
   /** Finish the Back transition first, then `onClose` runs. */
@@ -39,7 +38,6 @@ export const TimelineSheet = ({
   readonly onBack?: (depth: number) => void;
   readonly onClose: () => void;
   readonly title: string;
-  readonly variant?: "bottom" | "full";
 }) => {
   const panelRef = useRef<HTMLDivElement>(null);
   const swipe = useRef<{ start: number; distance: number } | null>(null);
@@ -81,34 +79,30 @@ export const TimelineSheet = ({
       <div
         className={styles.sheetPanel}
         data-local-horizontal=""
-        data-sheet-variant={variant}
+        data-timeline-sheet-panel=""
         onWheel={stopWheel}
         ref={panelRef}
       >
-        {variant === "bottom" ? (
-          <div
-            aria-hidden="true"
-            className={styles.sheetGrip}
-            onPointerCancel={endSwipe}
-            onPointerDown={startSwipe}
-            onPointerMove={moveSwipe}
-            onPointerUp={endSwipe}
-          >
-            <span />
-          </div>
-        ) : null}
+        <div
+          aria-hidden="true"
+          className={styles.sheetGrip}
+          onPointerCancel={endSwipe}
+          onPointerDown={startSwipe}
+          onPointerMove={moveSwipe}
+          onPointerUp={endSwipe}
+        >
+          <span />
+        </div>
         {children}
         {/* The drawer has no grip to pull; the stylesheet shows this only there. */}
-        {variant === "bottom" ? (
-          <button
-            aria-label="关闭"
-            className={`${styles.sheetIconButton} ${styles.sheetClose}`}
-            onClick={() => navigationRef.current?.back()}
-            type="button"
-          >
-            <Icon aria-hidden="true" name="close" />
-          </button>
-        ) : null}
+        <button
+          aria-label="关闭"
+          className={`${styles.sheetIconButton} ${styles.sheetClose}`}
+          onClick={() => navigationRef.current?.back()}
+          type="button"
+        >
+          <Icon aria-hidden="true" name="close" />
+        </button>
       </div>
       <button
         aria-label="关闭"

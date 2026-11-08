@@ -10,7 +10,9 @@ import type { TimelineEntryPostsActions } from "./timeline-entry-posts";
 /**
  * 词条卡 of an entry with no Catalog page: absent values leave no row.
  * timeline-posts-v1: under the facts, 「上传这件碑帖」, its line and the
- * entry's posts (Figma B5); browse-only keeps the posts alone.
+ * entry's posts (Figma B5); browse-only keeps the posts alone. Since Issue
+ * #422 a timeline row opens it only while the entry has no posts either;
+ * otherwise the row opens the card deck.
  */
 export const TimelineEntryCard = ({
   actions,

@@ -388,8 +388,9 @@ const EditorSessionHost = ({
     };
   }, [deps, registry, shown]);
 
-  // timeline-posts-v1: 「上传这件碑帖」 (the 词条卡, Catalog Detail, 收录于)
-  // opens a new work on its entry. When that reaches an unfinished new-work
+  // timeline-posts-v1: the 词条卡's 「上传这件碑帖」 and the card deck's
+  // 「上传新帖子」 (on the timeline, or from a work's 收录于; Issue #422)
+  // open a new work on their entry. When that reaches an unfinished new-work
   // session, the tapped entry wins: it becomes the session's 关联词条 through
   // the store's edit path, saved like any choice, and the rest of the draft
   // stays. Once per tap, for the target this host opened with, after a local

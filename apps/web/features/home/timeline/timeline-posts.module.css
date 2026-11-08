@@ -227,7 +227,7 @@
  * results arrive: it takes its full height at once, the search stays put.
  * (Tablet and wide sheets already have a height; theirs wins.)
  */
-[data-sheet-variant="bottom"]:has(> .sheetPicker) {
+[data-timeline-sheet-panel]:has(> .sheetPicker) {
   height: calc(100% - var(--yoyi-space-10));
 }
 
@@ -370,7 +370,7 @@
   white-space: nowrap;
 }
 
-/* It opens the 词条卡, so it carries the row chevron. */
+/* It opens the entry's card deck, so it carries the row chevron. */
 .collected .collectedChevron {
   flex: none;
   color: var(--yoyi-color-text-tertiary);
@@ -383,8 +383,7 @@
 
 /*
  * On the desktop Detail the section is the band under the first screen: a
- * reading-width column, six thumbnails a row, and 「上传这件碑帖」 at its
- * own width instead of the whole column.
+ * reading-width column and six thumbnails a row.
  */
 .detailSection[data-detail-band-section] {
   max-width: var(--yoyi-desktop-reader-media-max);
@@ -393,15 +392,4 @@
 
 .detailSection[data-detail-band-section] .grid {
   grid-template-columns: repeat(6, minmax(0, 1fr));
-}
-
-.detailSection[data-detail-band-section] .upload {
-  width: auto;
-  min-width: 240px;
-  align-self: flex-start;
-}
-
-/* The 词条卡 opened outside the timeline keeps its own geometry. */
-.sheetHost {
-  display: contents;
 }

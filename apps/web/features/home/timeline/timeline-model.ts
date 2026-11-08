@@ -17,7 +17,7 @@ export interface TimelineChapterInfo {
   readonly chapter: TimelineChapter;
   /** The chapter head and empty row: 晚商, 西汉 · 新莽. */
   readonly name: string;
-  /** The 纪年 grid and the shelf row: 晚商, 西汉. */
+  /** The 纪年 grid and the 年代不详 position: 晚商, 西汉. */
   readonly shortName: string;
   readonly startYear: number;
   /** Open-ended only for 当代. */
@@ -119,7 +119,8 @@ interface RowBase {
 export type TimelineEntryRow = RowBase & {
   readonly kind: "entry";
   readonly entry: TimelineEntry;
-  readonly year: number;
+  /** Null under 年代不详, where a row has no place on the axis. */
+  readonly year: number | null;
   /** Null when an earlier row of this year already printed the same text. */
   readonly yearLines: readonly string[] | null;
   readonly mark: TimelineMark;
@@ -131,8 +132,9 @@ export type TimelineGroupRow = RowBase & {
   readonly title: string;
   readonly summary: string;
   readonly entries: readonly TimelineEntry[];
-  readonly year: number;
-  readonly endYear: number;
+  /** Both null under 年代不详. */
+  readonly year: number | null;
+  readonly endYear: number | null;
   readonly yearLines: readonly string[] | null;
   readonly mark: TimelineMark;
   readonly expanded: boolean;
@@ -147,11 +149,13 @@ export type TimelineRow =
   | TimelineEntryRow
   | TimelineGroupRow
   | (RowBase & { readonly kind: "gap"; readonly years: number })
-  | (RowBase & { readonly kind: "shelf"; readonly count: number });
+  /** The small 年代不详 heading over a chapter's off-axis rows. */
+  | (RowBase & { readonly kind: "undated" });
 
 export interface TimelineIndex {
   readonly onAxis: ReadonlyMap<TimelineChapter, readonly TimelineEntry[]>;
-  readonly shelf: ReadonlyMap<TimelineChapter, readonly TimelineEntry[]>;
+  /** Rows dated only by their dynasty or polity. */
+  readonly offAxis: ReadonlyMap<TimelineChapter, readonly TimelineEntry[]>;
   readonly counts: ReadonlyMap<TimelineChapter, number>;
 }
 
@@ -159,17 +163,17 @@ export const buildTimelineIndex = (
   entries: readonly TimelineEntry[],
 ): TimelineIndex => {
   const onAxis = new Map<TimelineChapter, TimelineEntry[]>();
-  const shelf = new Map<TimelineChapter, TimelineEntry[]>();
+  const offAxis = new Map<TimelineChapter, TimelineEntry[]>();
   const counts = new Map<TimelineChapter, number>();
   // The API orders by (startYear, position, id); a stable sort keeps that.
   for (const entry of [...entries].sort((a, b) => a.startYear - b.startYear)) {
-    const list = entry.onAxis ? onAxis : shelf;
+    const list = entry.onAxis ? onAxis : offAxis;
     const bucket = list.get(entry.chapter);
     if (bucket) bucket.push(entry);
     else list.set(entry.chapter, [entry]);
     counts.set(entry.chapter, (counts.get(entry.chapter) ?? 0) + 1);
   }
-  return { onAxis, shelf, counts };
+  return { onAxis, offAxis, counts };
 };
 
 const entryMark = (entry: TimelineEntry): TimelineMark => {
@@ -178,7 +182,7 @@ const entryMark = (entry: TimelineEntry): TimelineMark => {
   return entry.precision === "multi" ? "multi" : "bar";
 };
 
-export type TimelineFoldItem =
+type TimelineFoldItem =
   | { readonly type: "entry"; readonly entry: TimelineEntry }
   | {
       readonly type: "group";
@@ -300,6 +304,52 @@ const pushYearCluster = (
 };
 
 /**
+ * 年代不详: every off-axis row shows, in the index's order, with no year and
+ * no mark; a group folds exactly as on the axis (Owner, 2026-11-07). Entry
+ * keys name the entry, which sits in one bucket only, and group keys carry
+ * their own scope, so neither meets an axis key.
+ */
+const pushUndated = (
+  rows: TimelineRow[],
+  chapter: TimelineChapter,
+  entries: readonly TimelineEntry[],
+  expanded: ReadonlySet<string>,
+) => {
+  rows.push({ kind: "undated", key: `undated:${chapter}`, chapter });
+  for (const item of foldTimelineGroups(entries, `undated:${chapter}`)) {
+    if (item.type === "entry") {
+      rows.push({
+        kind: "entry",
+        key: `entry:${item.entry.id}`,
+        chapter,
+        entry: item.entry,
+        year: null,
+        yearLines: null,
+        mark: "none",
+      });
+      continue;
+    }
+    const isExpanded = expanded.has(item.groupKey);
+    const key = `group:${item.groupKey}`;
+    rows.push({
+      kind: "group",
+      key,
+      sizeKey: isExpanded ? `${key}:open` : key,
+      chapter,
+      groupKey: item.groupKey,
+      title: item.title,
+      summary: groupSummary(item.entries),
+      entries: item.entries,
+      year: null,
+      endYear: null,
+      yearLines: null,
+      mark: "none",
+      expanded: isExpanded,
+    });
+  }
+};
+
+/**
  * Every row in display order. `expanded` holds the opened group keys; a row's
  * position only ever depends on earlier rows.
  */
@@ -310,8 +360,8 @@ export const buildTimelineRows = (
   const rows: TimelineRow[] = [];
   for (const { chapter } of TIMELINE_CHAPTERS) {
     const axis = index.onAxis.get(chapter) ?? [];
-    const shelf = index.shelf.get(chapter) ?? [];
-    if (axis.length === 0 && shelf.length === 0)
+    const offAxis = index.offAxis.get(chapter) ?? [];
+    if (axis.length === 0 && offAxis.length === 0)
       rows.push({ kind: "empty", key: `empty:${chapter}`, chapter });
     else {
       rows.push({ kind: "head", key: `head:${chapter}`, chapter });
@@ -337,13 +387,7 @@ export const buildTimelineRows = (
         pushYearCluster(rows, chapter, year, cluster, expanded);
         previousYear = year;
       }
-      if (shelf.length > 0)
-        rows.push({
-          kind: "shelf",
-          key: `shelf:${chapter}`,
-          chapter,
-          count: shelf.length,
-        });
+      if (offAxis.length > 0) pushUndated(rows, chapter, offAxis, expanded);
     }
     if (chapter === "当代")
       rows.push({ kind: "marker", key: "marker:now", chapter });
@@ -412,6 +456,21 @@ export interface TimelinePosition {
   readonly year: number | null;
 }
 
+/** The heading over a chapter's off-axis rows, and what they read as. */
+export const TIMELINE_UNDATED_TEXT = "年代不详";
+
+/** A 年代不详 row has no year to write: the URL keeps the last one. */
+const undatedPosition = (chapter: TimelineChapter): TimelinePosition => {
+  const { shortName } = timelineChapterInfo(chapter);
+  return {
+    chapter,
+    name: shortName,
+    yearText: TIMELINE_UNDATED_TEXT,
+    label: `${shortName} · ${TIMELINE_UNDATED_TEXT}`,
+    year: null,
+  };
+};
+
 const positionOf = (row: TimelineRow): TimelinePosition | null => {
   const info = timelineChapterInfo(row.chapter);
   const at = (name: string, year: number, urlYear: number | null) => ({
@@ -423,21 +482,19 @@ const positionOf = (row: TimelineRow): TimelinePosition | null => {
   });
   switch (row.kind) {
     case "entry":
-      return at(row.entry.polity ?? info.shortName, row.year, row.year);
+      return row.year === null
+        ? undatedPosition(row.chapter)
+        : at(row.entry.polity ?? info.shortName, row.year, row.year);
     case "group":
-      return at(row.entries[0]!.polity ?? info.shortName, row.year, row.year);
+      return row.year === null
+        ? undatedPosition(row.chapter)
+        : at(row.entries[0]!.polity ?? info.shortName, row.year, row.year);
     case "empty":
       return at(info.name, info.startYear, null);
     case "marker":
       return at("今", TIMELINE_NOW_YEAR, null);
-    case "shelf":
-      return {
-        chapter: row.chapter,
-        name: info.shortName,
-        yearText: "其他",
-        label: `${info.shortName} · 其他`,
-        year: null,
-      };
+    case "undated":
+      return undatedPosition(row.chapter);
     default:
       return null;
   }
@@ -452,13 +509,14 @@ export const timelinePositionAt = (
   if (row === undefined) return null;
   const own = positionOf(row);
   if (own !== null) return own;
-  // A head or a gap reads as the row it introduces.
+  // A head or a gap reads as the row it introduces; a head over 年代不详
+  // alone reads as its chapter.
   for (let at = index + 1; at < rows.length; at += 1) {
     const candidate = rows[at]!;
-    if (candidate.chapter !== row.chapter) break;
+    if (candidate.chapter !== row.chapter || candidate.kind === "undated")
+      break;
     const position = positionOf(candidate);
-    if (position !== null && candidate.kind !== "shelf") return position;
-    if (candidate.kind === "shelf") break;
+    if (position !== null) return position;
   }
   const info = timelineChapterInfo(row.chapter);
   return {
@@ -518,10 +576,37 @@ export const railRowAt = (cell: TimelineRailCell, fraction: number): number => {
   );
 };
 
-const isYearRow = (
-  row: TimelineRow,
-): row is TimelineEntryRow | TimelineGroupRow =>
-  row.kind === "entry" || row.kind === "group";
+type TimelineDatedRow = (TimelineEntryRow | TimelineGroupRow) & {
+  readonly year: number;
+};
+
+/** A row on the axis; 年代不详 rows have no year to land on. */
+const isYearRow = (row: TimelineRow): row is TimelineDatedRow =>
+  (row.kind === "entry" || row.kind === "group") && row.year !== null;
+
+/**
+ * The year the 时代尺 and 纪年 markers stand at while `position` (the row at
+ * `index`) is at the top: its own year, a chapter's start for a row that
+ * writes none, and under 年代不详 the chapter's last on-axis year (its end
+ * when it has none), so the marker does not jump back to the chapter's start
+ * while the URL keeps the last year it wrote.
+ */
+export const timelineMarkerYear = (
+  rows: readonly TimelineRow[],
+  index: number,
+  position: TimelinePosition | null,
+): number | null => {
+  if (position === null) return null;
+  if (position.year !== null) return position.year;
+  const info = timelineChapterInfo(position.chapter);
+  if (position.yearText !== TIMELINE_UNDATED_TEXT) return info.startYear;
+  for (let at = Math.min(index, rows.length - 1); at >= 0; at -= 1) {
+    const row = rows[at]!;
+    if (row.chapter !== position.chapter) break;
+    if (isYearRow(row)) return row.year;
+  }
+  return info.endYear ?? TIMELINE_NOW_YEAR;
+};
 
 /**
  * The row of `year`, or of the next year that has one. Chapters overlap (三国
@@ -594,71 +679,6 @@ export const lookupReign = (
       });
   }
   return matches;
-};
-
-export type TimelineShelfMode = "place" | "name" | "polity";
-
-export interface TimelineShelfSection {
-  readonly key: string;
-  /** Null for the one flat 按名 list. */
-  readonly label: string | null;
-  readonly count: number;
-  readonly items: readonly TimelineFoldItem[];
-}
-
-const compareNames = (a: string, b: string) => a.localeCompare(b, "zh-Hans-CN");
-
-export const buildShelfSections = (
-  entries: readonly TimelineEntry[],
-  mode: TimelineShelfMode,
-): readonly TimelineShelfSection[] => {
-  if (mode === "name")
-    return [
-      {
-        key: "name",
-        label: null,
-        count: entries.length,
-        items: foldTimelineGroups(
-          [...entries].sort((a, b) => compareNames(a.fullTitle, b.fullTitle)),
-          "shelf:name",
-        ),
-      },
-    ];
-  const buckets = new Map<string | null, TimelineEntry[]>();
-  for (const entry of entries) {
-    const key = mode === "place" ? entry.province : entry.polity;
-    const bucket = buckets.get(key);
-    if (bucket) bucket.push(entry);
-    else buckets.set(key, [entry]);
-  }
-  return [...buckets]
-    .sort(([aKey, a], [bKey, b]) => {
-      // Entries with no value close the list under 其他.
-      if ((aKey === null) !== (bKey === null)) return aKey === null ? 1 : -1;
-      return b.length - a.length || compareNames(aKey ?? "", bKey ?? "");
-    })
-    .map(([key, list]) => ({
-      key: `${mode}:${key ?? ""}`,
-      label: key ?? "其他",
-      count: list.length,
-      items: foldTimelineGroups(list, `shelf:${mode}:${key ?? ""}`),
-    }));
-};
-
-/** The second line of a shelf row: 按地 already says the place. */
-export const timelineShelfMeta = (
-  entry: TimelineEntry,
-  mode: TimelineShelfMode,
-): string => {
-  const date =
-    entry.precision === "dynasty"
-      ? entry.dateLabel
-      : [entry.dateLabel, formatYearRange(entry.startYear, entry.endYear)]
-          .filter((part) => part !== null)
-          .join(" ");
-  return [date, mode === "place" ? null : entry.province, entry.holder]
-    .filter((part) => part !== null && part !== "")
-    .join(" · ");
 };
 
 const SCALE_SPAN_YEARS = TIMELINE_NOW_YEAR - SCALE_START_YEAR;
@@ -840,10 +860,10 @@ export const timelineTitleWidth = (
   measure: TimelineTextMeasure,
   postCount = 0,
 ): number => {
-  const title = entry.onAxis ? entry.title : entry.fullTitle;
+  // Issue #422: 年代不详 rows print the short title too, as the axis does.
   const count = layout === "phone" ? null : timelinePostCountText(postCount);
   return (
-    measure(title, "title") +
+    measure(entry.title, "title") +
     (count === null ? 0 : TIMELINE_TITLE_COUNT_GAP + measure(count, "meta"))
   );
 };
@@ -927,8 +947,8 @@ export const estimateRowHeight = (
       return 46;
     case "gap":
       return 24;
-    case "shelf":
-      return 54;
+    case "undated":
+      return 34;
     case "entry":
       return entryRowHeight(row, metrics);
     case "group":

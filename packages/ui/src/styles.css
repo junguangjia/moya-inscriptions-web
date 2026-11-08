@@ -1182,6 +1182,46 @@ html[data-platform="pc"]
   display: none;
 }
 
+/*
+ * Internal scrim primitive: a full-bleed modal layer that dims and blurs the
+ * page behind it, so floating content reads over it. The host is positioned,
+ * does not scroll and leaves its own background transparent; the overlay
+ * tints a layer of the primitive's own, so a host's base background rules
+ * never undo it. Where backdrops cannot blur, the tint doubles, dark enough
+ * for paper text over it; reduced transparency and more contrast keep that
+ * plain, doubled dim. Like Functional Glass, it never dresses content.
+ */
+.yoyi-blur-scrim {
+  isolation: isolate;
+}
+
+.yoyi-blur-scrim::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background-color: var(--yoyi-color-overlay);
+  background-image: linear-gradient(
+    var(--yoyi-color-overlay),
+    var(--yoyi-color-overlay)
+  );
+  border-radius: inherit;
+  content: "";
+  pointer-events: none;
+}
+
+@supports (
+  (-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))
+) {
+  .yoyi-blur-scrim {
+    -webkit-backdrop-filter: blur(var(--yoyi-blur-glass-prominent));
+    backdrop-filter: blur(var(--yoyi-blur-glass-prominent));
+  }
+
+  .yoyi-blur-scrim::before {
+    background-image: none;
+  }
+}
+
 .yoyi-mobile-bottom-navigation {
   position: fixed;
   z-index: var(--yoyi-z-index-navigation);
@@ -1686,5 +1726,17 @@ html[data-theme="dark"]
 
   .yoyi-functional-glass::before {
     display: none;
+  }
+
+  .yoyi-blur-scrim {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  .yoyi-blur-scrim::before {
+    background-image: linear-gradient(
+      var(--yoyi-color-overlay),
+      var(--yoyi-color-overlay)
+    );
   }
 }

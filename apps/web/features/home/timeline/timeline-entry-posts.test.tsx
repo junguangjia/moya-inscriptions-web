@@ -244,6 +244,57 @@ describe("an entry's posts", () => {
   });
 });
 
+describe("posts without their actions (Catalog Detail, Issue #422)", () => {
+  it("shows the heading, the grid and 「全部 N 篇」, and neither action", async () => {
+    const openWork = vi.fn();
+    data.readTimelinePosts.mockResolvedValue(
+      page(
+        Array.from({ length: 6 }, (_, at) => work(at + 1)),
+        8,
+      ),
+    );
+    act(() =>
+      root.render(
+        <TimelineEntryPosts
+          actions={{ openWork }}
+          entryId="row-yongping"
+          entryTitle="北魏虚构永平碑"
+          heading="帖子"
+          uploads={false}
+        />,
+      ),
+    );
+    await flush();
+    expect(query("h2")?.textContent).toBe("帖子");
+    expect(query("[data-timeline-upload]")).toBeNull();
+    expect(query("[data-timeline-attach]")).toBeNull();
+    expect(container.textContent).not.toMatch(
+      /上传这件碑帖|发布后会出现在这个词条下|关联我发过的帖子/u,
+    );
+    expect(container.querySelectorAll("[data-timeline-post]")).toHaveLength(6);
+    expect(query("[data-timeline-posts-more]")?.textContent).toBe("全部 8 篇");
+    const cell = query("[data-timeline-post]");
+    click(cell);
+    expect(openWork).toHaveBeenCalledWith(workId(1), cell);
+  });
+
+  it("says nothing at all for an entry with no posts", async () => {
+    data.readTimelinePosts.mockResolvedValue(page([], 0));
+    act(() =>
+      root.render(
+        <TimelineEntryPosts
+          actions={{ openWork: vi.fn() }}
+          entryId="row-yongping"
+          entryTitle="北魏虚构永平碑"
+          uploads={false}
+        />,
+      ),
+    );
+    await flush();
+    expect(container.textContent).toBe("");
+  });
+});
+
 describe("「关联我发过的帖子」", () => {
   beforeEach(() => {
     data.readTimelinePosts.mockResolvedValue(page([], 0));

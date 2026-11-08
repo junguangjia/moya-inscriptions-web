@@ -258,7 +258,7 @@ the table's checks list the same values and the operator read parses them.
   other way. The Owner routes exist, and the Owner sees the result on the public
   timeline.
 
-## Axis, shelf and folds
+## Axis, undated rows and folds
 
 Owner direction (2026-11-07), after seeing the live timeline:
 
@@ -266,22 +266,35 @@ Owner direction (2026-11-07), after seeing the live timeline:
 
 > 同一年太多的只有确定是同一处且同一类别再折叠，比如石鼓文这样。其他还是要展开显示
 
+And after seeing the rows that were still behind 「其他」 (Issue #422):
+
+> 你误解了我的意思，同类的可以折叠，但不同类的都要显示出来，即使不确定时间
+
 **On the axis.** A row goes on the axis when its date is narrower than its
 dynasty or polity: a year, a reign, or a period such as 「玄宗朝（约712后）」. A
-row dated only by its dynasty or polity stays on its chapter's 其他 shelf. A
-row's `onAxis` carries the choice and the Web draws what it says, so moving a
-row is an `update-timeline-entry`, not a Web change. Following the first
-sentence, the rows with an approximate period were moved onto the axis through
-the Admin MCP on 2026-11-07; only dynasty- or polity-level rows stay on a shelf.
+row dated only by its dynasty or polity stays off the axis. A row's `onAxis`
+carries the choice and the Web draws what it says, so moving a row is an
+`update-timeline-entry`, not a Web change. Following the first sentence, the
+rows with an approximate period were moved onto the axis through the Admin MCP
+on 2026-11-07; only dynasty- or polity-level rows stay off it.
+
+**年代不详.** Nothing is hidden behind a 「其他」 shelf any more. A chapter's
+off-axis rows close it under a small heading 「年代不详」, one row each, in the
+public read's order, and each opens like any row. They print no year and no
+mark, on a dotted spine, and name their entry by its short title, as the axis
+rows do (the 词条卡 and the deck give the full title). The position bar
+reads 「唐 · 年代不详」 and writes no year to the URL, and a year or reign jump
+never lands on them. A chapter with only off-axis rows shows its head, then the
+heading, with no empty row.
 
 **Folds.** No year folds: every row of a year shows, however many share it, and
 there is no 「另 N 条」 row. Only a group folds, following the second sentence.
 A group is the rows that share a `groupId`, a curated set of one place and one
 kind such as 石鼓, 熹平石经 or 云峰山摩崖. Three or more members fold into one
-row where the first member stands, and a pair stays two plain rows. On-axis and
-shelf members of one id fold apart, and the shelf sheet folds groups the same
-way. Within a year the order stays: rows with an image, then groups, then
-text-only rows, each in position order.
+row where the first member stands, and a pair stays two plain rows;
+under 年代不详 a group folds the same way. On-axis and off-axis members of one
+id fold apart. Within a year the order stays: rows with an image, then groups,
+then text-only rows, each in position order.
 
 ## Behavior Matrix
 
@@ -292,7 +305,34 @@ links, scroll and Detail return, viewer identity and the QA scenarios
 `nearby-unavailable`. r3 adds rows for the five ops, the import guard, hidden
 rows, command text the store cannot hold, and a stored row that fails the
 contract. The amendment carries the same rows. The rows for posts are in the
-`timeline-posts-v1` Issue and the 2026-11-07 amendment; no row of #384 changes.
+`timeline-posts-v1` Issue and the 2026-11-07 amendment, which changed no row of
+#384.
+
+Issue #422 (the Owner's direction of 2026-11-07, quoted under
+[Axis, undated rows and folds](#axis-undated-rows-and-folds) and
+[What a user sees](#what-a-user-sees)) replaces these rows; every other row
+stands:
+
+- **#384 「Row linked to a published Catalog record」 and 「Published record
+  with no deliverable image」.** A tap no longer opens Detail. It opens the
+  entry's card deck, whose first card, the Catalog card, opens Detail from the
+  row, so Detail identity and the return position are kept. See **Card deck**.
+- **#384 「Row without Catalog record」.** It opens the 词条卡 only while the
+  entry has no posts; with posts it opens the deck, and a row whose count is not
+  known reads its total first. See **Card deck** and **词条卡**.
+- **The 其他 shelf** (step one's 「唐 · 其他 N」 row and its sheet). Gone: a
+  chapter's off-axis rows close it under 年代不详, one row each, and open like
+  any row. See **年代不详**.
+- **The amendment's 「收录于 on Work Detail」** (a tap opens that entry's card).
+  The tap opens the entry's deck. See **Work Detail**.
+- **The amendment's 「Catalog Detail of a record a row links (D1-A)」, and the
+  clause of 「Upload from a 词条卡」 that gives Catalog Detail and the
+  card 收录于 opens the same upload.** Catalog Detail shows its heading, the
+  posts and 「全部 N 篇」 with no upload or attach action; a post starts from
+  the deck's 「上传」 or the 词条卡. See **Catalog Detail** and **Upload**.
+- **The amendment's 「Post counts on group members and on shelf entries」(not
+  built).** A 年代不详 row shows its count like any row; group members still
+  show none.
 
 ## Delivery
 
@@ -310,10 +350,10 @@ the import, to drop one entry that duplicates a live Catalog record, and to have
 the AI re-check those rows through the Admin MCP after launch, putting each back
 on the axis once its date is confirmed. After launch the Owner widened the axis
 to every row with a date narrower than its dynasty or polity (see
-[Axis, shelf and folds](#axis-shelf-and-folds)). The import file stays in the
-private task directory, never in Git, the Web bundle or the Issue. Development
-and tests use synthetic rows, so the private dataset never goes through MCP
-before the Production import.
+[Axis, undated rows and folds](#axis-undated-rows-and-folds)). The import file
+stays in the private task directory, never in Git, the Web bundle or the Issue.
+Development and tests use synthetic rows, so the private dataset never goes
+through MCP before the Production import.
 
 The contract change means Web, Backend and Admin ship together; a Web-only
 release cannot carry it. `main` is ahead of the last Production tag, so the
@@ -424,26 +464,92 @@ comes from new routes, so no existing strict response gains a field.
 
 ### What a user sees
 
-- **词条卡.** Under the facts, 「上传这件碑帖」 and the
-  caption「发布后会出现在这个词条下。」, which is also the empty state. Below
-  it, the entry's posts as a 3-column grid of square covers, newest attachment
-  first: 6, then 「全部 N 篇」, then pages of 18 in the same sheet. A tap opens
-  Work Detail. The author's own posts that others cannot see carry the profile
-  works grid's mark on their cover: 仅自己可见 for a self-only
-  work, 暂不公开 for a pending, hidden or removed one. A failed read
-  shows 「帖子载入失败」and 重试. Under the grid,「关联我发过的帖子」 lists the
-  reader's own works to pick one. Each pick is checked on its own when it is
-  chosen, through `content/work/{id}/timeline-entry`: a work already on another
-  entry asks「已在：X。改为关联到「Y」？」 before it moves, and a work already
-  on this entry writes nothing. There is no batch route, so the list itself
-  shows no「已在」 mark.
-- **Upload.** 「上传这件碑帖」 closes the card and opens a new-work editor
-  with 关联词条 set to that entry. 作品性质 is not chosen for the author. A
-  guest reaches sign-in, and a browse-only layout shows no upload or attach
-  button. When an unfinished new-work session exists, the editor opens that
-  session and the tapped entry wins: it becomes the session's 关联词条 as an
-  author edit, saved like any other choice, and the rest of the draft stays as
-  it was. The same holds for 「上传这件碑帖」 in Catalog Detail and in the card
+Owner direction (2026-11-07, Issue #422), after seeing the 词条卡:
+
+> 点开一个词条后应该悬浮展示卡片，背景做高斯模糊。如果有多个用户上传的卡片就做成左右滑动可以切换卡片，做成扇形切换的动画。右下角放上传按钮来让用户上传词条。点开某一个卡片后不要再显示上传
+
+- **Card deck.** A row whose entry has a Catalog page, or posts, opens a deck of
+  cards floating over the page, at every width; any other row opens
+  the 词条卡 as before. The feed's counts list only rows with posts: once they
+  are read for this reader since the last change of posts, a row missing from
+  them has none and opens its 词条卡 at once. Only while they are pending, have
+  failed or are stale does a row with no Catalog page and no count read its own
+  total first (a page of one post), then open the deck or the 词条卡; meanwhile
+  the row stays pressed and gently breathing (`aria-busy`), a second tap does
+  nothing, and a failed read opens the 词条卡. The page behind reads as blurred
+  under one light dim through the shared `.yoyi-blur-scrim` primitive in
+  `packages/ui` (the dim doubles where the browser has no backdrop blur, and
+  with reduced transparency or more contrast); the deck covers the whole window,
+  a desktop's scrollbar gutter included, and the shell's dock and its create
+  action are hidden while it is open, so no second 「+」 shows through the blur.
+  The header's and the cue's words sit on a local scrim of the overlay, solid
+  under the letters and soft at its edge, which keeps them at 4.5:1 over the
+  lightest page in the light theme. Over the cards stand the entry's full title
+  (two lines at most, on the close button's row), its 年代 line,
+  and 地点 · 保管, absent values left out, as on the 词条卡. The Catalog card
+  comes first (the row's image and title, else its title as the cover,
+  and 查看详情), then the posts in the list's order: cover or the grid's text
+  cover, title (未命名作品 when untitled; a title already on the cover is not
+  repeated), author, and the grid's 仅自己可见 or 暂不公开 mark on the reader's
+  own hidden posts. With no Catalog page the posts come first, and a placeholder
+  card holds their place while they load. A swipe, the arrows beside the 「2 /
+  8」 cue or ←/→ from anywhere in the deck switch cards; an arrow at its end
+  stays, dimmed, with the focus on it. The arrows stand in the cue's own row
+  under the cards at every width, not beside the card: there they stood on the
+  fanned neighbours, and on phone a screen reader needs them to reach every
+  card. The neighbours fan out around a pivot below the deck, smaller and dimmer
+  under a layer inside each card, never by the card's opacity, so no words of a
+  card behind show through the one in front, at rest or in a drag; each turned
+  card rises until its lowest corner is on the front card's bottom line, so no
+  card ever reaches the cue's row. The card coming to the front passes over the
+  one leaving, the cards follow the finger and settle, and a short swipe springs
+  back. With reduced motion a switch is a quick cross-fade, the new front card
+  fading in over the old one. The front card and two on each side show; one more
+  on each side waits hidden under the outermost, and after a switch the cards of
+  the window it left stay drawn until the move settles, so no card pops in or
+  out, a jump of two included. 「2 / 8」 under them counts the cards, and each
+  card's name says 「第 2 张，共 8 张」. The cue's row is held from the first
+  frame, and a failure or a notice shows on a surface of its own out of the
+  column's flow (over the cards' lower edge on phone, under the cue on tablet
+  and wide), so the cards never move when the posts arrive; on a short viewport
+  the title stays in view, and the deck never scrolls sideways. The header keeps
+  room for a two-line title; on phone the column rests on the bottom edge and
+  the 「上传」 button stands in the cue's row instead of a band of its own, so a
+  card is 80% of a 390 × 664 viewport and at least 70% of a 375 × 548 one, at
+  3:4. The posts page in as the reader nears the end: 6, then pages of 18. A tap
+  on the Catalog card closes the deck and opens Catalog Detail; on a post card,
+  that work's Detail. Back, Escape, × or a tap beside the cards fades the deck
+  out briefly and gives the focus back to the row; a card or an upload that
+  hands over to another view closes it at once. A round seal-red 「上传」 button
+  stays in the bottom-right corner, clear of the cards and of the cue; it
+  opens「上传新帖子」 (the upload below) and「关联我发过的帖子」 (the list
+  below, in a sheet over the deck, which Back closes alone; the deck's ×
+  and 「上传」 are not drawn beside it meanwhile). The menu opens above the
+  button and is a Back step of its own: Back, Escape, Tab or a tap outside
+  closes only the menu. A guest reaches sign-in from either, and browse-only
+  shows no button. The button belongs to the deck: a card that opens takes it
+  away.
+- **词条卡.** Opened by a row with neither a Catalog page nor posts. Under the
+  facts, 「上传这件碑帖」 and the caption「发布后会出现在这个词条下。」, which
+  is also the empty state. Below it, the entry's posts as a 3-column grid of
+  square covers, newest attachment first: 6, then 「全部 N 篇」, then pages of
+  18 in the same sheet. A tap opens Work Detail. The author's own posts that
+  others cannot see carry the profile works grid's mark on their
+  cover: 仅自己可见 for a self-only work, 暂不公开 for a pending, hidden or
+  removed one. A failed read shows 「帖子载入失败」and 重试. Under the
+  grid,「关联我发过的帖子」 lists the reader's own works to pick one. Each pick
+  is checked on its own when it is chosen, through
+  `content/work/{id}/timeline-entry`: a work already on another entry
+  asks「已在：X。改为关联到「Y」？」 before it moves, and a work already on this
+  entry writes nothing. There is no batch route, so the list itself shows
+  no「已在」 mark.
+- **Upload.** 「上传这件碑帖」, and the deck's 「上传新帖子」, close the card or
+  deck and open a new-work editor with 关联词条 set to that entry. 作品性质 is
+  not chosen for the author. A guest reaches sign-in, and a browse-only layout
+  shows no upload or attach button. When an unfinished new-work session exists,
+  the editor opens that session and the tapped entry wins: it becomes the
+  session's 关联词条 as an author edit, saved like any other choice, and the
+  rest of the draft stays as it was. The same holds for the deck
   that 收录于 opens. The tap is spent once it is applied: the editor's history
   entry and the session's own target drop the entry, so a reload (a phone tab
   the browser restored included), Back then Forward, or 返回正在编辑的作品 never
@@ -452,9 +558,16 @@ comes from new routes, so no existing strict response gains a field.
   shows「还有一项编辑没有结束」, as any other open edit does: the author returns
   to that post as it was, or saves and ends it first. The entry is never dropped
   unseen.
-- **Catalog Detail.** A record that a visible row links shows a 帖子 section
-  built from the same parts, in every Detail layout, loaded after the Detail has
-  painted. A record with no such row shows nothing.
+- **Catalog Detail.** A row that links a record opens its deck, whose first card
+  opens Detail. A record that a visible row links shows a 帖子 section in every
+  Detail layout, loaded after the Detail has painted: its heading, the posts
+  grid and 「全部 N 篇」, with no 「上传这件碑帖」, caption
+  or「关联我发过的帖子」, because a card the deck opened shows no upload (Owner,
+  Issue #422: 「点开某一个卡片后不要再显示上传」). A post starts from the
+  deck's「上传」 or the 词条卡. A record with no such row shows nothing, and
+  with nothing left to offer, neither does an entry with no posts: the section,
+  its heading and the desktop band are drawn only once posts are known (a failed
+  read still says so, with 重试).
 - **Publishing.** New works and their drafts get a 关联词条 row after 可见范围:
   on phone in the publish screen, on desktop in the text settings. Its picker
   searches the cached timeline locally (every word must match, 50 results at
@@ -465,16 +578,19 @@ comes from new routes, so no existing strict response gains a field.
 - **Work Detail.** The author's management menu gains 关联词条, the same picker,
   which takes effect at once. A work on a visible entry
   shows 「收录于 · 题名」under its title for everyone, read after the Detail has
-  painted; a tap opens that entry's card, and only that tap reads the whole
-  timeline. The picker opens with the focus on its search; closing it without a
-  change gives the focus back to 关联词条, and a change to the result line. The
-  same holds for the desktop text settings' picker (back to 选择词条 or 更改)
-  and for 「关联我发过的帖子」, whose list takes the focus on its title.
+  painted; a tap opens that entry's deck, and only that tap reads the whole
+  timeline. The line shows only for a work its reader can read, which the
+  entry's posts hold by the same rule, so it always opens the deck. The picker
+  opens with the focus on its search; closing it without a change gives the
+  focus back to 关联词条, and a change to the result line. The same holds for
+  the desktop text settings' picker (back to 选择词条 or 更改) and
+  for 「关联我发过的帖子」, whose list takes the focus on its title.
 - **Rows.** On phone, 「N 篇帖子」 takes the place of 保管 at the end of the
   meta line. On tablet and wide, a small count follows the name inside its
   two-line clamp, and the row-height estimate includes it. 0 shows nothing.
   Counts are read after the list, for each viewer, and the reader keeps its row
-  when they arrive. Group members and shelf entries show no count.
+  when they arrive. A 年代不详 row shows its count like any row; group members
+  show none.
 
 Who sees which posts follows the shared Work read rule (`workVisibleTo` in
 `services/community-postgres/src/work-dto.ts`): public works for everyone, and
@@ -744,7 +860,10 @@ WHERE w.id = p.work_id AND p.state = 'attached' AND w.deleted_at IS NOT NULL;
 - **A batch route for an 「已在：某词条」 mark in the list of my works.** Not
   built, by decision: the picker checks each pick when it is chosen and asks
   before a move.
-- **Counts on group members and shelf entries.** The design did not draw them.
+- **Counts on group members.** The design did not draw them.
+- **The deck reopening at its card.** Back from a Detail the deck opened returns
+  to where the deck was opened, the timeline row or the work's 收录于 line, with
+  the deck closed; reopening it at the same card was left optional.
 - **Every withheld entry.** The row keeps only the latest.
 - **A `timeline_post` record type for `admin_find` and `admin_get`.** After the
   S10 record descriptors; `read-timeline-posts` filters by work, entry and
