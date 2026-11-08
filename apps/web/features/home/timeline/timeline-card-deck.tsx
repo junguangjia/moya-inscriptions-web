@@ -72,12 +72,19 @@ export const DECK_EDGE = DECK_WINDOW + 1;
 const SETTLE_MS = Number.parseFloat(motion.duration.slow) + 60;
 /** The deck's short fade on Back, Escape, × or a tap beside the cards. */
 const LEAVE_MS = Number.parseFloat(motion.duration.fast);
-/** A card's height over its width (3:4). */
-const CARD_ASPECT = 4 / 3;
+/**
+ * A card's height over its width: a 3:4 window in its mat over the caption
+ * is about 1.42 (tablet) to 1.51 (phone), 1.6 at the 160px floor. The lift
+ * below takes 1.4, under all of them, so a turned card rises a little more
+ * than it must, never less. Only a very short window, which hides the label
+ * (about 1.25), lets a turned corner dip up to 1.2% of a card (some 2px)
+ * into the gap above the cue's row, never into the row.
+ */
+const CARD_ASPECT = 1.4;
 /** The fan's pivot, in card heights from the top: transform-origin 50% 220%. */
 const PIVOT_DEPTH = 2.2;
 /** Per card from the front: the turn, the shrink and the travel along the fan. */
-const TURN_PER_CARD = 7;
+const TURN_PER_CARD = 9;
 const SHRINK_PER_CARD = 0.07;
 /** A share of the card's own width (%). */
 const TRAVEL_PER_CARD = 22;
@@ -92,8 +99,8 @@ const FLICK_MIN_PX = 24;
 const EDGE_RESISTANCE = 0.3;
 /** The width used before a card has been measured (a server or test render). */
 const FALLBACK_CARD_PX = 300;
-/** The phone card is ~80% of the viewport; tablet and wide keep 340. */
-const CARD_SIZES = "(min-width: 768px) 340px, 80vw";
+/** The phone card is ~76% of the viewport; tablet and wide 480 at most. */
+const CARD_SIZES = "(min-width: 768px) 480px, 76vw";
 
 /**
  * What the deck may do. The post actions are the 词条卡's; the host closes
@@ -301,7 +308,7 @@ const CatalogFace = ({ entry }: { readonly entry: TimelineEntry }) => {
             sizes={image.sizes}
             src={image.src}
             srcSet={image.srcSet}
-            style={placeholderStyle(media.placeholderColor)}
+            /* No placeholder colour: on a contain surface its letterbox would stay tinted. */
             width={media.width}
           />
         )}
@@ -708,7 +715,9 @@ export const TimelineCardDeck = ({
   useEffect(() => {
     const before = stepBefore.current;
     stepBefore.current = step;
-    if (step === "deck" && before !== "deck") uploadRef.current?.focus();
+    // No scroll: where clip is not known the deck only hides its overflow.
+    if (step === "deck" && before !== "deck")
+      uploadRef.current?.focus({ preventScroll: true });
   }, [step]);
 
   const openCard = (card: DeckCard, opener: HTMLElement) => {
@@ -821,7 +830,7 @@ export const TimelineCardDeck = ({
 
   return (
     <AuthorDialog
-      className={`${styles.dialog} yoyi-blur-scrim${leaving ? ` ${styles.leaving}` : ""}`}
+      className={`${styles.dialog} yoyi-blur-scrim yoyi-blur-scrim-paper${leaving ? ` ${styles.leaving}` : ""}`}
       closeRequested={closeRequested}
       headerHidden
       navigationDepth={step === "deck" ? 0 : 1}
@@ -867,10 +876,14 @@ export const TimelineCardDeck = ({
               >
                 {entry.fullTitle}
               </h2>
-              {date === null ? null : <p className={styles.date}>{date}</p>}
-              {place === "" ? null : (
-                <p className={styles.place} data-timeline-deck-place="">
-                  {place}
+              {/* 年代 · 地点 · 保管 on one line, one separator throughout. */}
+              {date === null && place === "" ? null : (
+                <p className={styles.meta} data-timeline-deck-meta="">
+                  {date}
+                  {date !== null && place !== "" ? " · " : null}
+                  {place === "" ? null : (
+                    <span data-timeline-deck-place="">{place}</span>
+                  )}
                 </p>
               )}
             </div>
@@ -973,7 +986,7 @@ export const TimelineCardDeck = ({
               <button
                 aria-disabled={at === 0 ? "true" : undefined}
                 aria-label="上一张"
-                className={`${styles.arrow} yoyi-functional-glass`}
+                className={styles.arrow}
                 data-direction="previous"
                 onClick={() => go(-1)}
                 type="button"
@@ -990,7 +1003,7 @@ export const TimelineCardDeck = ({
               <button
                 aria-disabled={at === last ? "true" : undefined}
                 aria-label="下一张"
-                className={`${styles.arrow} yoyi-functional-glass`}
+                className={styles.arrow}
                 data-direction="next"
                 onClick={() => go(1)}
                 type="button"
@@ -1020,29 +1033,33 @@ export const TimelineCardDeck = ({
                 )}
               </div>
             ) : null}
+            {/*
+             * In the cue's row: on phone at its end, level with the arrows
+             * whatever the title's length; on tablet and wide in the
+             * window's corner. The attach sheet takes the whole screen's
+             * attention: no 「上传」 and no × beside or under it.
+             */}
+            {browseOnly || attaching ? null : (
+              <DeckUpload
+                buttonRef={uploadRef}
+                onAttach={attach}
+                onDismiss={dismissMenu}
+                onOpen={openMenu}
+                onUpload={upload}
+                open={step === "menu" && !chosen}
+              />
+            )}
           </div>
-          {/* The attach sheet takes the whole screen's attention: no × and
-              no 「上传」 beside or under it. */}
           {attaching ? null : (
             <button
               aria-label="关闭"
-              className={`${styles.close} yoyi-functional-glass`}
+              className={styles.close}
               data-timeline-deck-close=""
               onClick={back}
               type="button"
             >
               <Icon aria-hidden="true" name="close" />
             </button>
-          )}
-          {browseOnly || attaching ? null : (
-            <DeckUpload
-              buttonRef={uploadRef}
-              onAttach={attach}
-              onDismiss={dismissMenu}
-              onOpen={openMenu}
-              onUpload={upload}
-              open={step === "menu" && !chosen}
-            />
           )}
         </div>
         {attaching && viewerId !== null && !browseOnly ? (

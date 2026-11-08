@@ -300,10 +300,13 @@ describe("the cards", () => {
     expect(front()?.textContent).toBe("永平碑查看详情");
     expect(front()?.querySelector("img")?.getAttribute("loading")).toBe("lazy");
     expect(position()).toBe("1 / 4");
-    // The header names the entry, its 年代, then 地点 · 保管 on a quieter
-    // line, as the 词条卡 does.
+    // The header names the entry, then 年代 · 地点 · 保管 on one quieter
+    // line, one separator throughout, as a museum label.
     expect(query("[data-timeline-deck-header]")?.textContent).toBe(
-      "北魏虚构永平碑511 · 永平四年虚构东州 · 虚构碑林",
+      "北魏虚构永平碑511 · 永平四年 · 虚构东州 · 虚构碑林",
+    );
+    expect(query("[data-timeline-deck-meta]")?.textContent).toBe(
+      "511 · 永平四年 · 虚构东州 · 虚构碑林",
     );
     expect(query("[data-timeline-deck-place]")?.textContent).toBe(
       "虚构东州 · 虚构碑林",
@@ -321,6 +324,74 @@ describe("the cards", () => {
     expect(query("[data-timeline-deck-place]")).toBeNull();
     expect(query("[data-timeline-deck-header]")?.textContent).toBe(
       "北魏虚构永平碑511 · 永平四年",
+    );
+    expect(query("[data-timeline-deck-meta]")?.textContent).toBe(
+      "511 · 永平四年",
+    );
+  });
+
+  it("leads the meta line with 地点 · 保管 when the entry has no 年代", async () => {
+    render({
+      value: entry({ precision: "dynasty", dateLabel: null, polity: null }),
+    });
+    await flush();
+    expect(query("[data-timeline-deck-meta]")?.textContent).toBe(
+      "虚构东州 · 虚构碑林",
+    );
+    act(() => root.unmount());
+    root = createRoot(container);
+    render({
+      value: entry({
+        precision: "dynasty",
+        dateLabel: null,
+        polity: null,
+        province: null,
+        holder: null,
+      }),
+    });
+    await flush();
+    expect(query("[data-timeline-deck-meta]")).toBeNull();
+  });
+
+  it("tints a post's cover until it paints, never the Catalog card's letterbox", async () => {
+    data.readTimelinePosts.mockResolvedValue(
+      page(
+        [
+          work(1, {
+            media: [
+              {
+                id: `user-media-${"1".padStart(32, "0")}`,
+                src: `/api/community/media/user-media-${"1".padStart(32, "0")}`,
+                width: 600,
+                height: 800,
+                placeholderColor: "#a0a0a0",
+              },
+            ] as never,
+          }),
+        ],
+        1,
+      ),
+    );
+    render({
+      value: linked({
+        media: {
+          alt: "虚构拓片",
+          height: 800,
+          id: "media-yongping" as never,
+          kind: "image",
+          src: "https://media.example.invalid/yongping.webp",
+          width: 600,
+          placeholderColor: "#808080",
+        } as never,
+      }),
+    });
+    await flush();
+    // The Catalog card's rubbing shows whole (contain): no tint stays round it.
+    expect(front()?.dataset.deckCard).toBe("catalog");
+    expect(front()?.querySelector("img")?.style.backgroundColor).toBe("");
+    const post = shownCards().find((card) => card.dataset.deckCard === "post");
+    expect(post?.querySelector("img")?.style.backgroundColor).toBe(
+      "rgb(160, 160, 160)",
     );
   });
 
@@ -565,7 +636,7 @@ describe("switching", () => {
     expect(style(first, "--deck-opacity")).toBe("1");
     expect(first.style.opacity).toBe("");
     expect(css()).toMatch(
-      /\.stage\[data-dragging\] \.card,\s*\.stage\[data-dragging\] \.card::after \{\s*transition: none;/u,
+      /\.stage\[data-dragging\] \.card,\s*\.stage\[data-dragging\] \.card::after,\s*\.stage\[data-dragging\] \.foot \{\s*transition: none;/u,
     );
     pointer("pointerup", 100, 1400);
     expect(stage().hasAttribute("data-dragging")).toBe(false);
@@ -622,9 +693,12 @@ describe("switching", () => {
         "上一张",
         "下一张",
       ]);
-      // The shared Functional Glass, no glass of its own.
+      // Round paper buttons on the paper veil, not glass.
       for (const arrow of arrows)
-        expect(arrow.classList.contains("yoyi-functional-glass")).toBe(true);
+        expect(arrow.classList.contains("yoyi-functional-glass")).toBe(false);
+      expect(css()).toMatch(
+        /\.arrow,\s*\.close \{[^}]*border: 1px solid var\(--yoyi-color-border-subtle\);[^}]*background: var\(--yoyi-color-background-elevated\);[^}]*box-shadow: var\(--yoyi-shadow-subtle\);/u,
+      );
       expect(previous.getAttribute("aria-disabled")).toBe("true");
       expect(previous.disabled).toBe(false);
       click(next);
@@ -757,8 +831,14 @@ describe("switching", () => {
     expect(card).toMatch(
       /background: var\(--yoyi-color-background-elevated\);/u,
     );
+    // A neighbour recedes under a layer of the page's paper.
     expect(css()).toMatch(
-      /\.card::after \{[^}]*background: var\(--yoyi-color-overlay\);[^}]*opacity: var\(--deck-dim, 0\);/u,
+      /\.card::after \{[^}]*background: color-mix\(\s*in srgb,\s*var\(--yoyi-color-background-page\) 82%,\s*transparent\s*\);[^}]*opacity: var\(--deck-dim, 0\);/u,
+    );
+    // Its label fades with the pose: the front card's reads, a neighbour's
+    // waits, and the coming card's arrives with the drag.
+    expect(css()).toMatch(
+      /\.foot \{[^}]*height: var\(--deck-caption\);[^}]*opacity: calc\(1 - var\(--deck-dim, 0\) \* 2\);/u,
     );
     // Only reduced motion fades whole cards: a cross-fade, the new front
     // card fading in over the old one, which fades after it.
@@ -771,44 +851,66 @@ describe("switching", () => {
     );
   });
 
-  it("lifts every turned card so that none reaches the cue's row under the stage", () => {
-    // In card heights: a 3:4 card, its pivot 220% down (transform-origin).
-    const width = 0.75;
-    const pivot = { x: width / 2, y: 2.2 };
-    const corners = (offset: number) => {
-      const pose = timelineDeckPose(offset, false);
-      const turn = (pose.rotate * Math.PI) / 180;
-      return [
-        [0, 0],
-        [width, 0],
-        [0, 1],
-        [width, 1],
-      ].map(([x, y]) => {
-        const dx = pose.scale * (x! - pivot.x);
-        const dy = pose.scale * (y! - pivot.y);
-        return {
-          x:
-            pivot.x +
-            (pose.x / 100) * width +
-            dx * Math.cos(turn) -
-            dy * Math.sin(turn),
-          y: pivot.y + pose.y / 100 + dx * Math.sin(turn) + dy * Math.cos(turn),
-        };
-      });
-    };
-    for (let offset = -DECK_EDGE; offset <= DECK_EDGE; offset += 0.125) {
-      const points = corners(offset);
-      // The stage is the front card's box: its bottom line is 1.
-      expect(Math.max(...points.map((point) => point.y))).toBeLessThanOrEqual(
-        1.0001,
+  it.each([
+    // In card heights over width: a 3:4 window in its mat over the caption
+    // is 1.42 (tablet) to 1.51 (phone), 1.6 at the 160px floor; none dips,
+    // and a turned top rises under 3% of a card (14px of a 480px tablet
+    // card under a 20px gap; 11px of a short phone's card under 12px).
+    ["tablet", 1 / 1.42, 1.0001, 0.03],
+    ["phone", 1 / 1.51, 1.0001, 0.03],
+    ["floor", 1 / 1.6, 1.0001, 0.03],
+    // A very short window hides the label (about 1.25) and its card is under
+    // 200px tall: a corner may dip 1.2% (some 2px) and a top rise 3.5%
+    // (some 7px), both inside the 8px gaps above the cue's row and under the
+    // header.
+    ["very short", 1 / 1.25, 1.012, 0.035],
+  ])(
+    "lifts every turned card so that none reaches the cue's row under the stage (%s card)",
+    (_, width, lowest, rise) => {
+      // The pivot is 220% down (transform-origin).
+      const pivot = { x: width / 2, y: 2.2 };
+      const corners = (offset: number) => {
+        const pose = timelineDeckPose(offset, false);
+        const turn = (pose.rotate * Math.PI) / 180;
+        return [
+          [0, 0],
+          [width, 0],
+          [0, 1],
+          [width, 1],
+        ].map(([x, y]) => {
+          const dx = pose.scale * (x! - pivot.x);
+          const dy = pose.scale * (y! - pivot.y);
+          return {
+            x:
+              pivot.x +
+              (pose.x / 100) * width +
+              dx * Math.cos(turn) -
+              dy * Math.sin(turn),
+            y:
+              pivot.y +
+              pose.y / 100 +
+              dx * Math.sin(turn) +
+              dy * Math.cos(turn),
+          };
+        });
+      };
+      for (let offset = -DECK_EDGE; offset <= DECK_EDGE; offset += 0.125) {
+        const points = corners(offset);
+        // The stage is the front card's box: its bottom line is 1.
+        expect(Math.max(...points.map((point) => point.y))).toBeLessThanOrEqual(
+          lowest,
+        );
+        // And a turned card's top stays near the stage's top, inside the gap
+        // under the header.
+        expect(Math.min(...points.map((point) => point.y))).toBeGreaterThan(
+          -rise,
+        );
+      }
+      expect(css()).toMatch(
+        /\.stage \{[^}]*height: var\(--deck-card-height\);/u,
       );
-      // And a turned card's top stays at the stage's top, within a hair.
-      expect(Math.min(...points.map((point) => point.y))).toBeGreaterThan(
-        -0.02,
-      );
-    }
-    expect(css()).toMatch(/\.stage \{[^}]*height: var\(--deck-card-height\);/u);
-  });
+    },
+  );
 
   it("brings the new front card over the old one", async () => {
     render();
@@ -977,6 +1079,29 @@ describe("the upload button", () => {
     expect(closed).not.toHaveBeenCalled();
   });
 
+  it("closes only the menu on a tap on its veil, × included, back to the button", async () => {
+    render();
+    await flush();
+    click(upload());
+    // The veil is the catcher in the cue's row: hidden from assistive
+    // technology, above the cards and ×, under the menu and the button.
+    const catcher = upload().parentElement?.querySelector(
+      "button[aria-hidden='true'][tabindex='-1']",
+    ) as HTMLElement;
+    expect(catcher).not.toBeNull();
+    expect(catcher.contains(query("[role='menu']"))).toBe(false);
+    expect(css()).toMatch(/\n\.menu \{[^}]*z-index: 3;/u);
+    expect(css()).toMatch(/\n\.upload \{[^}]*z-index: 3;/u);
+    click(catcher);
+    expect(query("[role='menu']")).toBeNull();
+    expect(query("[data-timeline-deck]")).not.toBeNull();
+    expect(closed).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(upload());
+    await waitForHistory(() =>
+      expect(window.history.state?.phase4DialogDepth).toBe(0),
+    );
+  });
+
   it("moves with Home and End, and closes on Tab back to the button", async () => {
     data.readTimelinePosts.mockResolvedValue(page(works(1, 4), 4));
     render();
@@ -1090,71 +1215,102 @@ describe("the upload button", () => {
     expect(shownCards()).toHaveLength(2);
   });
 
-  it("stands in the cue's row on phone, with no band of its own, and opens above it", () => {
-    // Centred on the cue's row, the column's last.
+  it("ends the cue's row on phone whatever the title's length, keeps the corner elsewhere, and opens above it", async () => {
+    render();
+    await flush();
+    // In the cue's own row, beside the arrows, so a two-line title moves
+    // them together.
+    const nav = query("[data-timeline-deck-nav]")!;
+    expect(nav.parentElement?.contains(upload())).toBe(true);
+    expect(nav.contains(upload())).toBe(false);
     expect(css()).toMatch(
-      /--deck-button-bottom: calc\(\s*var\(--deck-bottom\) \+ \(var\(--deck-cue\) - var\(--deck-button\)\) \/ 2\s*\);/u,
-    );
-    expect(css()).toMatch(
-      /\.deck \{[^}]*padding: var\(--deck-top\)\s*calc\([^;]*\) var\(--deck-bottom\)/u,
-    );
-    expect(css()).toMatch(/\.upload \{[^}]*right: var\(--deck-button-end\);/u);
-    expect(css()).toMatch(
-      /\.upload \{[^}]*bottom: var\(--deck-button-bottom\);/u,
+      /\.root\[data-deck-layout="phone"\] \.upload \{\s*position: absolute;\s*top: calc\(\(var\(--deck-cue\) - var\(--deck-button\)\) \/ 2\);\s*right: 0;\s*bottom: auto;/u,
     );
     // Its menu opens above the button, so above the cue's row.
     expect(css()).toMatch(
-      /\.menu \{[^}]*bottom: calc\(\s*var\(--deck-button-bottom\) \+ var\(--deck-button\) \+ var\(--yoyi-space-3\)\s*\);/u,
+      /\.root\[data-deck-layout="phone"\] \.menu \{\s*position: absolute;\s*right: 0;\s*bottom: calc\(\s*100% - \(var\(--deck-cue\) - var\(--deck-button\)\) \/ 2 \+ var\(--yoyi-space-3\)\s*\);/u,
     );
-    // Tablet and wide keep the corner.
+    // Tablet and wide keep the window's corner, fixed to the deck's layer.
     expect(css()).toMatch(
-      /\.root:not\(\[data-deck-layout="phone"\]\) \{[^}]*--deck-button-bottom: calc\(\s*var\(--yoyi-space-7\) \+ env\(safe-area-inset-bottom\)\s*\);/u,
+      /\.upload \{\s*position: fixed;[^}]*right: var\(--deck-button-end\);\s*bottom: var\(--deck-button-bottom\);/u,
     );
+    expect(css()).toMatch(
+      /\.menu \{\s*position: fixed;[^}]*bottom: calc\(\s*var\(--deck-button-bottom\) \+ var\(--deck-button\) \+ var\(--yoyi-space-3\)\s*\);/u,
+    );
+    expect(css()).toMatch(
+      /--deck-button-bottom: calc\(var\(--yoyi-space-7\) \+ env\(safe-area-inset-bottom\)\);/u,
+    );
+    // While it is open a light paper veil covers the deck, the close button
+    // included: a tap off the menu closes the menu first.
+    expect(css()).toMatch(
+      /\.menuCatcher \{\s*position: fixed;\s*z-index: 1;\s*inset: 0;[^}]*background: color-mix\(\s*in srgb,\s*var\(--yoyi-color-background-page\) 55%,/u,
+    );
+    expect(css()).toMatch(/\.below \{[^}]*z-index: 3;/u);
+    expect(css()).toMatch(/\n\.close \{[^}]*z-index: 2;/u);
   });
 });
 
 describe("the modal", () => {
-  it("blurs the page through the shared scrim, with its glass from the shared UI", async () => {
+  it("frosts the page to paper through the shared scrim, its veil from the shared UI", async () => {
     render();
     await flush();
     const dialog = query("dialog") as HTMLElement;
     expect(dialog.classList.contains("yoyi-blur-scrim")).toBe(true);
-    // The blur, its tint and their fallbacks live in packages/ui only.
+    expect(dialog.classList.contains("yoyi-blur-scrim-paper")).toBe(true);
+    // The blur, its tint and their fallbacks live in packages/ui only: the
+    // deck never redefines the overlay or draws a blur of its own.
     expect(deckCss as string).not.toMatch(/backdrop-filter\s*:/iu);
     expect(deckCss as string).not.toMatch(/--yoyi-(?:blur|material-glass)-/u);
-    // The dialog's own page color gives way to the scrim's tint.
+    expect(deckCss as string).not.toMatch(/--yoyi-color-overlay\s*:/u);
+    // The dialog's own page color gives way to the scrim's veil.
     expect(css()).toMatch(/\.dialog\.dialog \{[^}]*background: transparent;/u);
-    // The round buttons on the blur are the shared Functional Glass.
+    // The round buttons are paper, not glass; the words are ink, unshadowed.
     expect(
       query("[data-timeline-deck-close]")?.classList.contains(
         "yoyi-functional-glass",
       ),
-    ).toBe(true);
-    expect(css()).toMatch(
-      /\.header,\s*\.position \{\s*text-shadow:[^;]*var\(--yoyi-color-overlay\)/u,
-    );
+    ).toBe(false);
+    expect(css()).not.toMatch(/text-shadow/u);
   });
 
-  it("keeps the header and the cue at 4.5:1 over the lightest page in the light theme", () => {
-    // A local scrim of the overlay, solid under the words, soft at its edge.
+  it("keeps the header's and the cue's ink at 4.5:1 over the darkest and the lightest page, in both themes", () => {
+    // A soft halo of the page's paper behind the words.
     expect(css()).toMatch(
-      /\.headerText::before,\s*\.position::before \{[^}]*background: var\(--yoyi-color-overlay\);[^}]*box-shadow: 0 0 var\(--yoyi-space-6\) var\(--yoyi-space-3\)\s*var\(--yoyi-color-overlay\);/u,
+      /\.headerText::before,\s*\.position::before \{[^}]*background: color-mix\(\s*in srgb,\s*var\(--yoyi-color-background-page\) 70%,\s*transparent\s*\);[^}]*box-shadow: 0 0 var\(--yoyi-space-6\) var\(--yoyi-space-3\)\s*color-mix\(in srgb, var\(--yoyi-color-background-page\) 70%, transparent\);/u,
+    );
+    expect(css()).toMatch(
+      /\.title \{[^}]*color: var\(--yoyi-color-text-primary\);/u,
+    );
+    expect(css()).toMatch(
+      /\.meta \{[^}]*color: var\(--yoyi-color-text-secondary\);/u,
+    );
+    expect(css()).toMatch(
+      /\.position \{[^}]*color: var\(--yoyi-color-text-secondary\);/u,
     );
     expect(css()).not.toMatch(
-      /\.(?:date|place|title|header|position) \{[^}]*opacity/u,
+      /\.(?:meta|title|header|position) \{[^}]*opacity/u,
     );
-    // The light theme's values come first in the tokens.
-    const overlay =
-      /--yoyi-color-overlay: rgba\((\d+), (\d+), (\d+), ([\d.]+)\)/u.exec(
-        themeCss as string,
-      )!;
-    const paper = /--yoyi-color-paper-light: #([0-9a-f]{6})/iu.exec(
-      themeCss as string,
-    )![1]!;
-    const tint = [1, 2, 3].map((at) => Number(overlay[at]));
-    const alpha = Number(overlay[4]);
-    const over = (base: readonly number[]) =>
-      base.map((channel, at) => channel * (1 - alpha) + tint[at]! * alpha);
+    // The light theme's values come first in the tokens, the dark second.
+    const colors = (name: string) =>
+      [
+        ...(themeCss as string).matchAll(
+          new RegExp(`--yoyi-color-${name}: #([0-9a-f]{6});`, "giu"),
+        ),
+      ]
+        .slice(0, 2)
+        .map((match) =>
+          [0, 2, 4].map((at) =>
+            Number.parseInt(match[1]!.slice(at, at + 2), 16),
+          ),
+        );
+    const pages = colors("background-page");
+    const secondary = colors("text-secondary");
+    const primary = colors("text-primary");
+    const mix = (
+      top: readonly number[],
+      share: number,
+      base: readonly number[],
+    ) => top.map((channel, at) => channel * share + base[at]! * (1 - share));
     const luminance = (rgb: readonly number[]) => {
       const [r, g, b] = rgb.map((channel) => {
         const c = channel / 255;
@@ -1162,86 +1318,194 @@ describe("the modal", () => {
       });
       return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
     };
-    // The worst case under the words: a white page, the scrim's one tint
-    // (blurred, where the tint is single), then the local scrim's.
-    const under = over(over([255, 255, 255]));
-    const text = [0, 2, 4].map((at) =>
-      Number.parseInt(paper.slice(at, at + 2), 16),
-    );
-    const contrast = (luminance(text) + 0.05) / (luminance(under) + 0.05);
-    expect(contrast).toBeGreaterThanOrEqual(4.5);
+    const contrast = (a: readonly number[], b: readonly number[]) => {
+      const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+      return (hi! + 0.05) / (lo! + 0.05);
+    };
+    for (const theme of [0, 1]) {
+      const page = pages[theme]!;
+      // The worst page behind the words, black or white, under the
+      // scrim's paper veil (76%, packages/ui), then the halo (70%).
+      for (const behind of [
+        [0, 0, 0],
+        [255, 255, 255],
+      ]) {
+        const under = mix(page, 0.7, mix(page, 0.76, behind));
+        expect(contrast(secondary[theme]!, under)).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(primary[theme]!, under)).toBeGreaterThanOrEqual(4.5);
+      }
+    }
   });
 
-  it("holds two title lines and leaves a phone card at least 70% wide", () => {
-    // Safe centring: auto margins, never a centre that overflows upward;
-    // on phone the column rests on the bottom edge, so the cue's row is the
-    // upload button's.
+  it("holds two-line titles and metas, stands at the optical centre, fits every window, and keeps a phone card readable", () => {
+    // From the top edge: the lead above the header places the group.
     expect(css()).toMatch(/\.deck \{[^}]*justify-content: flex-start;/u);
-    expect(css()).toMatch(/\.header \{[^}]*margin-top: auto;/u);
+    expect(css()).toMatch(/\.header \{[^}]*margin-top: var\(--deck-lead\);/u);
+    // The header shares the close button's line, clear of it; the title and
+    // the meta take two lines at most; × sits on the title's first line, on
+    // tablet in the window's corner.
     expect(css()).toMatch(
-      /\.root:not\(\[data-deck-layout="phone"\]\) \.below \{\s*margin-bottom: auto;/u,
-    );
-    // The header shares the close button's row, clear of it, two lines at
-    // most.
-    expect(css()).toMatch(
-      /\.header \{[^}]*padding-inline: calc\(var\(--deck-close\) \+ var\(--yoyi-space-2\)\);/u,
+      /\.header \{[^}]*padding-inline: calc\(var\(--deck-close\) \+ var\(--yoyi-space-5\)\);/u,
     );
     expect(css()).toMatch(/\.title \{[^}]*-webkit-line-clamp: 2;/u);
+    expect(css()).toMatch(/\.meta \{[^}]*-webkit-line-clamp: 2;/u);
     expect(css()).toMatch(
-      /--deck-room: calc\(\s*var\(--deck-viewport\) - var\(--deck-top\) - var\(--deck-bottom\) -\s*var\(--deck-header\) - var\(--deck-cue\) - var\(--deck-gap\) -\s*var\(--deck-cue-gap\)\s*\);/u,
+      /\n\.close \{[^}]*top: calc\(\s*var\(--deck-top\) \+ var\(--deck-lead\) \+\s*\(var\(--deck-title-line\) - var\(--deck-close\)\) \/ 2\s*\);/u,
     );
     expect(css()).toMatch(
-      /--deck-card-width: max\(120px, min\(80vw, 360px, var\(--deck-fit\)\)\);/u,
+      /\.root\[data-deck-layout="tablet"\] \.close \{\s*top: calc\(var\(--deck-top\) \+ \(var\(--deck-title-line\) - var\(--deck-close\)\) \/ 2\);/u,
     );
-    expect(css()).toMatch(/--deck-fit: calc\(var\(--deck-room\) \* 0\.75\);/u);
+    // The room is kept for a second title line and a second meta line; the
+    // card is a 3:4 window in its mat over the caption; the lead never takes
+    // the reserve.
+    expect(css()).toMatch(
+      /--deck-header-line: calc\(\s*var\(--deck-title-line\) \+ var\(--yoyi-space-2\) \+ var\(--deck-meta-line\)\s*\);/u,
+    );
+    expect(css()).toMatch(
+      /--deck-header-reserve: calc\(var\(--deck-title-line\) \+ var\(--deck-meta-line\)\);/u,
+    );
+    expect(css()).toMatch(
+      /--deck-header: calc\(var\(--deck-header-line\) \+ var\(--deck-header-reserve\)\);/u,
+    );
+    expect(css()).toMatch(
+      /--deck-room: calc\(\s*var\(--deck-viewport\) - var\(--deck-top\) - var\(--deck-bottom\) -\s*var\(--deck-header\) - var\(--deck-gap\) - var\(--deck-cue-gap\) -\s*var\(--deck-cue\)\s*\);/u,
+    );
+    expect(css()).toMatch(
+      /--deck-fit: calc\(\s*\(var\(--deck-room\) - var\(--deck-mat\) - var\(--deck-caption\)\) \* 3 \/ 4 \+ 2 \*\s*var\(--deck-mat\)\s*\);/u,
+    );
+    expect(css()).toMatch(
+      /--deck-card-width: max\(\s*var\(--deck-card-min\),\s*min\(76vw, 340px, var\(--deck-fit\)\)\s*\);/u,
+    );
+    expect(css()).toMatch(
+      /--deck-card-height: calc\(\s*var\(--deck-mat\) \+ \(var\(--deck-card-width\) - 2 \* var\(--deck-mat\)\) \* 4 \/ 3 \+\s*var\(--deck-caption\)\s*\);/u,
+    );
+    expect(css()).toMatch(
+      /--deck-spare: max\(\s*0px,\s*var\(--deck-room\) \+ var\(--deck-header\) - var\(--deck-header-line\) -\s*var\(--deck-card-height\)\s*\);/u,
+    );
+    expect(css()).toMatch(
+      /--deck-lead: clamp\(\s*0px,\s*var\(--deck-spare\) \* var\(--deck-lead-share\),\s*var\(--deck-spare\) - var\(--deck-header-reserve\)\s*\);/u,
+    );
+    expect(css()).toMatch(/--deck-lead-share: 0\.25;/u);
+    // A failure or a notice stands over the cards' lower edge at every width.
+    expect(css()).toMatch(
+      /\n\.notes \{[^}]*bottom: calc\(100% \+ var\(--yoyi-space-3\)\);/u,
+    );
+    expect(css()).not.toMatch(
+      /\.root:not\(\[data-deck-layout="phone"\]\) \.notes/u,
+    );
     const token = (name: string) =>
       Number(
         new RegExp(`--yoyi-${name}: (\\d+)px;`, "u").exec(
           themeCss as string,
         )![1],
       );
+    // The deck's own values, read from its first (the base) declaration.
     const own = (name: string) =>
       Number(new RegExp(`--deck-${name}: (\\d+)px;`, "u").exec(css())![1]);
-    const tokenOf = (name: string) =>
+    const ownToken = (name: string) =>
       token(
         new RegExp(`--deck-${name}: var\\(--yoyi-([a-z0-9-]+)\\);`, "u").exec(
           css(),
         )![1]!,
       );
     expect(css()).toMatch(
-      /--deck-top: calc\(\s*max\(var\(--yoyi-space-4\), env\(safe-area-inset-top\)\) \+ var\(--yoyi-space-2\)\s*\);/u,
+      /--deck-top: calc\(\s*max\(var\(--yoyi-space-4\), env\(safe-area-inset-top\)\) \+ var\(--yoyi-space-4\)\s*\);/u,
     );
     expect(css()).toMatch(
       /--deck-bottom: calc\(var\(--yoyi-space-5\) \+ env\(safe-area-inset-bottom\)\);/u,
     );
-    const top = token("space-4") + token("space-2");
-    const bottom = token("space-5");
-    // The header's reserve holds a two-line title (28 a line), 年代 and
-    // 地点 (18 each) and their gaps.
-    const header = own("header");
-    expect(header).toBeGreaterThanOrEqual(
-      2 * 28 + 2 * 18 + 2 * token("space-1"),
+    // A short phone page tightens the top and the gaps.
+    expect(css()).toMatch(
+      /@media \(max-height: 40rem\) \{\s*\.root \{\s*--deck-top: calc\(\s*max\(var\(--yoyi-space-4\), env\(safe-area-inset-top\)\) \+ var\(--yoyi-space-2\)\s*\);\s*--deck-gap: var\(--yoyi-space-4\);\s*--deck-cue-gap: var\(--yoyi-space-4\);/u,
     );
-    const cue = own("cue");
-    const room = (height: number) =>
-      height -
-      top -
-      bottom -
-      header -
-      cue -
-      tokenOf("gap") -
-      tokenOf("cue-gap");
-    const cardWidth = (width: number, height: number) =>
-      Math.max(120, Math.min(0.8 * width, 360, room(height) * 0.75));
-    expect(cardWidth(390, 664) / 390).toBeGreaterThanOrEqual(0.7);
-    expect(cardWidth(375, 548) / 375).toBeGreaterThanOrEqual(0.7);
-    // The phone's button stays beside the cue's arrows and under the cards.
+    // A very short window (a phone held sideways) keeps the whole column.
+    expect(css()).toMatch(
+      /@media \(max-height: 28rem\) \{\s*\.root \{\s*--deck-top: calc\(\s*max\(var\(--yoyi-space-3\), env\(safe-area-inset-top\)\) \+ var\(--yoyi-space-2\)\s*\);\s*--deck-bottom: calc\(var\(--yoyi-space-3\) \+ env\(safe-area-inset-bottom\)\);\s*--deck-header-reserve: 0px;\s*--deck-gap: var\(--yoyi-space-3\);\s*--deck-cue-gap: var\(--yoyi-space-3\);\s*--deck-cue: 44px;\s*--deck-mat: var\(--yoyi-space-3\);\s*--deck-caption: 0px;\s*--deck-card-min: 80px;\s*\}\s*\.root \.title,\s*\.root \.meta \{\s*-webkit-line-clamp: 1;\s*\}\s*\.root \.foot \{\s*display: none;/u,
+    );
+    const titleLine = own("title-line");
+    const metaLine = own("meta-line");
+    const headerLine = titleLine + token("space-2") + metaLine;
+    const geometry = (width: number, height: number, lines: 1 | 2) => {
+      const veryShort = height <= 448;
+      const short = height <= 640;
+      const top =
+        token(veryShort ? "space-3" : "space-4") +
+        token(short ? "space-2" : "space-4");
+      // --deck-bottom is pinned above: space-5 (space-3 very short).
+      const bottom = token(veryShort ? "space-3" : "space-5");
+      const gap = veryShort
+        ? token("space-3")
+        : short
+          ? token("space-4")
+          : ownToken("gap");
+      const cue = veryShort ? 44 : own("cue");
+      const mat = veryShort ? token("space-3") : ownToken("mat");
+      const caption = veryShort ? 0 : own("caption");
+      const min = veryShort ? 80 : own("card-min");
+      const reserve = veryShort ? 0 : titleLine + metaLine;
+      const header = headerLine + reserve;
+      const room = height - top - bottom - header - 2 * gap - cue;
+      const fit = (room - mat - caption) * 0.75 + 2 * mat;
+      const card = Math.max(min, Math.min(0.76 * width, 340, fit));
+      const cardHeight = mat + ((card - 2 * mat) * 4) / 3 + caption;
+      const spare = Math.max(0, room + header - headerLine - cardHeight);
+      const lead = Math.max(0, Math.min(spare * 0.25, spare - reserve));
+      const extra = veryShort ? 0 : (lines - 1) * (titleLine + metaLine);
+      const cardTop = top + lead + headerLine + extra + gap;
+      const cueBottom = cardTop + cardHeight + gap + cue;
+      return {
+        bottom,
+        card,
+        share: card / width,
+        centre: (cardTop + cardHeight / 2) / height,
+        bottomGap: height - cueBottom,
+      };
+    };
+    // An iPhone 17 Pro page in Safari, an older 390 phone, SE-class pages.
+    for (const [width, height] of [
+      [402, 716],
+      [390, 664],
+      [375, 600],
+      [375, 548],
+    ] as const) {
+      const one = geometry(width, height, 1);
+      const two = geometry(width, height, 2);
+      expect(one.share).toBeGreaterThanOrEqual(height > 640 ? 0.74 : 0.6);
+      // The card's centre a little above the middle, never sunk.
+      expect(one.centre).toBeLessThanOrEqual(0.5);
+      // The cue's row clear of the bottom edge, with one line or two of
+      // title and meta.
+      expect(one.bottomGap).toBeGreaterThanOrEqual(one.bottom);
+      expect(two.bottomGap).toBeGreaterThanOrEqual(two.bottom);
+    }
+    expect(geometry(402, 716, 1).centre).toBeLessThanOrEqual(0.48);
+    // Phones held sideways under the browser's bars: the cue's row and
+    // 「上传」 (overhanging it by (56 - 44) / 2) stay inside the window.
     const button = own("button");
-    const cueContent = 2 * 44 + 48 + 2 * token("space-4");
-    const buttonEnd = token("space-6");
-    expect(375 - buttonEnd - button).toBeGreaterThan(375 / 2 + cueContent / 2);
-    const buttonTop = bottom + (cue - button) / 2 + button;
-    expect(buttonTop).toBeLessThanOrEqual(bottom + cue + tokenOf("cue-gap"));
+    for (const [width, height] of [
+      [667, 323],
+      [844, 350],
+      [932, 380],
+    ] as const) {
+      const sideways = geometry(width, height, 1);
+      expect(sideways.card).toBeGreaterThanOrEqual(80);
+      expect(sideways.bottomGap - (button - 44) / 2).toBeGreaterThanOrEqual(0);
+    }
+    // The phone's button ends the cue's row, clear of its arrows, a long
+    // count included (「100 / 120」 is about 70px); the arrows close in on a
+    // very narrow phone.
+    expect(css()).toMatch(
+      /@media \(max-width: 22\.5rem\) \{\s*\.root \.nav \{\s*gap: var\(--yoyi-space-3\);/u,
+    );
+    expect(css()).toMatch(/\n\.arrow \{[^}]*z-index: 1;/u);
+    const side = ownToken("side");
+    for (const width of [320, 360, 375, 402]) {
+      const gap = token(width <= 360 ? "space-3" : "space-5");
+      const cueContent = 2 * 44 + 70 + 2 * gap;
+      expect(width - side - button).toBeGreaterThanOrEqual(
+        width / 2 + cueContent / 2,
+      );
+    }
   });
 
   it("never scrolls sideways, whatever takes the focus", () => {

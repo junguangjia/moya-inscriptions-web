@@ -409,7 +409,7 @@ describe("a work's 收录于", () => {
     expect(deck?.getAttribute("data-timeline-deck")).toBe("row-yongping");
     expect(
       deck?.querySelector("[data-timeline-deck-header]")?.textContent,
-    ).toBe("北魏虚构永平碑511 · 永平四年虚构东州 · 虚构碑林");
+    ).toBe("北魏虚构永平碑511 · 永平四年 · 虚构东州 · 虚构碑林");
     expect(
       deck
         ?.querySelector("[data-deck-current]")

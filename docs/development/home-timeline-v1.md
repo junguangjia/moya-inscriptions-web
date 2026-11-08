@@ -476,59 +476,79 @@ Owner direction (2026-11-07, Issue #422), after seeing the 词条卡:
   failed or are stale does a row with no Catalog page and no count read its own
   total first (a page of one post), then open the deck or the 词条卡; meanwhile
   the row stays pressed and gently breathing (`aria-busy`), a second tap does
-  nothing, and a failed read opens the 词条卡. The page behind reads as blurred
-  under one light dim through the shared `.yoyi-blur-scrim` primitive in
-  `packages/ui` (the dim doubles where the browser has no backdrop blur, and
-  with reduced transparency or more contrast); the deck covers the whole window,
-  a desktop's scrollbar gutter included, and the shell's dock and its create
+  nothing, and a failed read opens the 词条卡. The look is the 装裱 (mounted)
+  design the Owner chose on 2026-11-08 from four explored directions, after
+  rejecting the first one as not beautiful, badly proportioned and sitting too
+  low. The page behind reads as frosted paper: the shared `.yoyi-blur-scrim`
+  primitive in `packages/ui` blurs it under its paper veil
+  (`.yoyi-blur-scrim-paper`, the page's own paper at 76%, light or dark with the
+  theme; the veil doubles where the browser has no backdrop blur, and with
+  reduced transparency or more contrast). The deck covers the whole window, a
+  desktop's scrollbar gutter included, and the shell's dock and its create
   action are hidden while it is open, so no second 「+」 shows through the blur.
-  The header's and the cue's words sit on a local scrim of the overlay, solid
-  under the letters and soft at its edge, which keeps them at 4.5:1 over the
-  lightest page in the light theme. Over the cards stand the entry's full title
-  (two lines at most, on the close button's row), its 年代 line,
-  and 地点 · 保管, absent values left out, as on the 词条卡. The Catalog card
-  comes first (the row's image and title, else its title as the cover,
-  and 查看详情), then the posts in the list's order: cover or the grid's text
-  cover, title (未命名作品 when untitled; a title already on the cover is not
-  repeated), author, and the grid's 仅自己可见 or 暂不公开 mark on the reader's
-  own hidden posts. With no Catalog page the posts come first, and a placeholder
-  card holds their place while they load. A swipe, the arrows beside the 「2 /
-  8」 cue or ←/→ from anywhere in the deck switch cards; an arrow at its end
-  stays, dimmed, with the focus on it. The arrows stand in the cue's own row
-  under the cards at every width, not beside the card: there they stood on the
-  fanned neighbours, and on phone a screen reader needs them to reach every
-  card. The neighbours fan out around a pivot below the deck, smaller and dimmer
-  under a layer inside each card, never by the card's opacity, so no words of a
-  card behind show through the one in front, at rest or in a drag; each turned
-  card rises until its lowest corner is on the front card's bottom line, so no
-  card ever reaches the cue's row. The card coming to the front passes over the
-  one leaving, the cards follow the finger and settle, and a short swipe springs
-  back. With reduced motion a switch is a quick cross-fade, the new front card
-  fading in over the old one. The front card and two on each side show; one more
-  on each side waits hidden under the outermost, and after a switch the cards of
-  the window it left stay drawn until the move settles, so no card pops in or
-  out, a jump of two included. 「2 / 8」 under them counts the cards, and each
-  card's name says 「第 2 张，共 8 张」. The cue's row is held from the first
-  frame, and a failure or a notice shows on a surface of its own out of the
-  column's flow (over the cards' lower edge on phone, under the cue on tablet
-  and wide), so the cards never move when the posts arrive; on a short viewport
-  the title stays in view, and the deck never scrolls sideways. The header keeps
-  room for a two-line title; on phone the column rests on the bottom edge and
-  the 「上传」 button stands in the cue's row instead of a band of its own, so a
-  card is 80% of a 390 × 664 viewport and at least 70% of a 375 × 548 one, at
-  3:4. The posts page in as the reader nears the end: 6, then pages of 18. A tap
-  on the Catalog card closes the deck and opens Catalog Detail; on a post card,
-  that work's Detail. Back, Escape, × or a tap beside the cards fades the deck
-  out briefly and gives the focus back to the row; a card or an upload that
-  hands over to another view closes it at once. A round seal-red 「上传」 button
-  stays in the bottom-right corner, clear of the cards and of the cue; it
-  opens「上传新帖子」 (the upload below) and「关联我发过的帖子」 (the list
-  below, in a sheet over the deck, which Back closes alone; the deck's ×
-  and 「上传」 are not drawn beside it meanwhile). The menu opens above the
-  button and is a Back step of its own: Back, Escape, Tab or a tap outside
-  closes only the menu. A guest reaches sign-in from either, and browse-only
-  shows no button. The button belongs to the deck: a card that opens takes it
-  away.
+  The header's and the cue's words are ink on that paper with a soft halo of the
+  page's paper behind them, which keeps the grey ink at 4.5:1 even over a dark
+  patch of the page behind, in both themes. Over the cards stand the entry's
+  full title (two lines at most, its first line level with the close button on
+  phone and wide; on tablet × keeps the window's corner) and one quiet line
+  of 年代 · 地点 · 保管, absent values left out, which a long holder's name may
+  wrap to a second. Each card is a mounted work: a paper mount with a hairline
+  ring and a layered soft shadow, the image in a 3:4 window cut into a 16 px
+  mat, and a label in the mount under it, one serif line and the author, centred
+  as a museum label. The Catalog card comes first (the row's image floating
+  whole in the mount, never cropped, and its title, else its title as the cover,
+  and 查看详情 after a small seal), then the posts in the list's order: cover or
+  the grid's text cover, title (未命名作品 when untitled; a title already on the
+  cover is not repeated), author, and the grid's 仅自己可见 or 暂不公开 mark on
+  the reader's own hidden posts. With no Catalog page the posts come first, and
+  a placeholder card holds their place while they load. A swipe, the round paper
+  arrows beside the 「2 / 8」 cue or ←/→ from anywhere in the deck switch cards;
+  an arrow at its end stays, dimmed, with the focus on it. The arrows stand in
+  the cue's own row under the cards at every width, not beside the card: there
+  they stood on the fanned neighbours, and on phone a screen reader needs them
+  to reach every card. The neighbours fan out around a pivot below the deck (9°
+  a card), smaller and receding under a layer of the page's paper inside each
+  card, never by the card's opacity, so no words of a card behind show through
+  the one in front, at rest or in a drag; a neighbour's label waits and fades in
+  with the drag as its card comes to the front. Each turned card rises until its
+  lowest corner is on the front card's bottom line, so no card ever reaches the
+  cue's row. The card coming to the front passes over the one leaving, the cards
+  follow the finger and settle, and a short swipe springs back. With reduced
+  motion a switch is a quick cross-fade, the new front card fading in over the
+  old one. The front card and two on each side show; one more on each side waits
+  hidden under the outermost, and after a switch the cards of the window it left
+  stay drawn until the move settles, so no card pops in or out, a jump of two
+  included. 「2 / 8」 under them counts the cards, and each card's name
+  says 「第 2 张，共 8 张」. The cue's row is held from the first frame, and a
+  failure or a notice shows on a surface of its own out of the column's flow,
+  over the cards' lower edge at every width, so the cards never move when the
+  posts arrive; on a short viewport the title stays in view, and the deck never
+  scrolls sideways. The group stands at the optical centre: the room is kept for
+  a second title line and a second meta line, and a quarter of what one line of
+  each leaves stands above the header (0.4 on tablet, 0.35 wide), never taking
+  that reserve, so the card's centre sits at about 47% of an iPhone 17 Pro's
+  Safari page (402 × 716), the cue's row in the thumb's reach and clear of the
+  bottom edge either way. A phone card is 76% of the width (at least 60% of a
+  375 × 548 page, where the gaps tighten), 340 at most; tablet 480, wide 420. A
+  very short window (under 28rem: a phone held sideways, a squat laptop window)
+  keeps the whole column, the cue's row and 「上传」 included: the title and the
+  meta keep one line each, the mat narrows, the card's label gives way (its name
+  stays the card's accessible name) and the card may shrink to 80 px. The posts
+  page in as the reader nears the end: 6, then pages of 18. A tap on the Catalog
+  card closes the deck and opens Catalog Detail; on a post card, that work's
+  Detail. Back, Escape, × or a tap beside the cards fades the deck out briefly
+  and gives the focus back to the row; a card or an upload that hands over to
+  another view closes it at once. A round seal-red 「上传」 button ends the
+  cue's row on phone, level with the arrows whatever the title's length, and
+  keeps the window's bottom-right corner on tablet and wide, clear of the cards
+  and of the cue; it opens「上传新帖子」(the upload below)
+  and「关联我发过的帖子」 (the list below, in a sheet over the deck, which Back
+  closes alone; the deck's × and 「上传」 are not drawn beside it meanwhile).
+  The menu opens above the button over a light paper veil on the deck, so it
+  reads as a layer above the card label it may cover, and is a Back step of its
+  own: Back, Escape, Tab or a tap outside closes only the menu. A guest reaches
+  sign-in from either, and browse-only shows no button. The button belongs to
+  the deck: a card that opens takes it away.
 - **词条卡.** Opened by a row with neither a Catalog page nor posts. Under the
   facts, 「上传这件碑帖」 and the caption「发布后会出现在这个词条下。」, which
   is also the empty state. Below it, the entry's posts as a 3-column grid of
@@ -864,6 +884,16 @@ WHERE w.id = p.work_id AND p.state = 'attached' AND w.deleted_at IS NOT NULL;
 - **The deck reopening at its card.** Back from a Detail the deck opened returns
   to where the deck was opened, the timeline row or the work's 收录于 line, with
   the deck closed; reopening it at the same card was left optional.
+- **A blur for Chromium's software compositor.** Where Chromium composites in
+  software at a device scale over 1 (a desktop Chrome or Edge whose GPU is
+  blocklisted or has crashed, some virtual machines and remote desktops), a
+  full-window backdrop blur leaves a band of about 30–60 px along the right and
+  bottom edges unblurred, so the page shows through there under the paper veil.
+  No CSS works round it, and Android Chrome, Android WebView, desktop Chrome on
+  a GPU and iOS Safari blur the whole window. Playwright's default headless
+  shell composites in software, so screenshots of the deck launch Chromium with
+  `--use-angle=swiftshader --enable-unsafe-swiftshader` (GPU compositing on
+  SwiftShader) or `channel: "chromium"`.
 - **Every withheld entry.** The row keeps only the latest.
 - **A `timeline_post` record type for `admin_find` and `admin_get`.** After the
   S10 record descriptors; `read-timeline-posts` filters by work, entry and

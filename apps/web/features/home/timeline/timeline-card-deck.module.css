@@ -1,10 +1,15 @@
 /*
- * Issue #422: the card deck of a Home timeline row. A floating layer over
- * the whole window at every width: the page behind it reads as blurred
- * (Owner: 背景做高斯模糊) through the shared .yoyi-blur-scrim, the cards fan
- * out around a pivot under the deck, and the cue and its arrows keep a row of
- * their own under the cards. Mobile first; colors, spacing, motion and type
- * come from --yoyi tokens, and raw px below are the deck's own geometry.
+ * Issue #422: the card deck of a Home timeline row, in the 装裱 (mounted)
+ * design the Owner chose on 2026-11-08. A floating layer over the whole
+ * window at every width: the page behind it reads as frosted paper (Owner:
+ * 背景做高斯模糊) through the shared .yoyi-blur-scrim with its paper veil; the
+ * entry's title is ink on that paper; each card is a mounted work, its image
+ * in a 3:4 window cut into a mat over a one-line caption; the cards fan out
+ * around a pivot under the deck. The group stands at the optical centre and
+ * the cue's row (the arrows, 「i / N」 and, on phone, 「上传」) sits in the
+ * thumb's reach (Owner: 比例好看、符合人体工学、不要过于靠下). Mobile first;
+ * colors, spacing, motion and type come from --yoyi tokens, and raw px below
+ * are the deck's own geometry.
  */
 
 /*
@@ -48,36 +53,78 @@
 .root {
   --deck-button: 56px;
   --deck-close: 44px;
-  --deck-button-end: calc(var(--yoyi-space-6) + env(safe-area-inset-right));
-  /* The column's edges. The header shares its row with the close button. */
+  /* Tablet and wide: the upload button's corner. */
+  --deck-button-end: calc(var(--yoyi-space-7) + env(safe-area-inset-right));
+  --deck-button-bottom: calc(var(--yoyi-space-7) + env(safe-area-inset-bottom));
+  /*
+   * The column's edges. On phone and wide the title's first line is level
+   * with the close button; on tablet × keeps the window's corner.
+   */
   --deck-top: calc(
-    max(var(--yoyi-space-4), env(safe-area-inset-top)) + var(--yoyi-space-2)
+    max(var(--yoyi-space-4), env(safe-area-inset-top)) + var(--yoyi-space-4)
   );
   --deck-bottom: calc(var(--yoyi-space-5) + env(safe-area-inset-bottom));
-  /* Two title lines (2 × 28), 年代 and 地点 (2 × 18) and their gaps (2 × 2). */
-  --deck-header: 96px;
+  --deck-side: var(--yoyi-space-5);
+  /* A title line, a meta line, and the header with one line of each. */
+  --deck-title-line: 28px;
+  --deck-meta-line: 18px;
+  --deck-header-line: calc(
+    var(--deck-title-line) + var(--yoyi-space-2) + var(--deck-meta-line)
+  );
+  /* The room is kept for a second title line and a second meta line. */
+  --deck-header-reserve: calc(var(--deck-title-line) + var(--deck-meta-line));
+  --deck-header: calc(var(--deck-header-line) + var(--deck-header-reserve));
   /* The cue's row under the cards: the arrows and 「i / N」. */
   --deck-cue: 48px;
-  --deck-gap: var(--yoyi-space-4);
-  --deck-cue-gap: var(--yoyi-space-3);
-  /* On phone the upload button is centred on the cue's row. */
-  --deck-button-bottom: calc(
-    var(--deck-bottom) + (var(--deck-cue) - var(--deck-button)) / 2
-  );
+  --deck-gap: var(--yoyi-space-6);
+  --deck-cue-gap: var(--yoyi-space-6);
+  /* The mat round the image window, and the caption strip under it. */
+  --deck-mat: var(--yoyi-space-5);
+  --deck-caption: 70px;
   --deck-viewport: 100vh;
-  /* The height left for a card, and the widest 3:4 card it holds. */
+  /* The height left for a card. */
   --deck-room: calc(
     var(--deck-viewport) - var(--deck-top) - var(--deck-bottom) -
-      var(--deck-header) - var(--deck-cue) - var(--deck-gap) -
-      var(--deck-cue-gap)
+      var(--deck-header) - var(--deck-gap) - var(--deck-cue-gap) -
+      var(--deck-cue)
   );
-  --deck-fit: calc(var(--deck-room) * 0.75);
-  /* ~80% of a phone's width, never below a card that still reads. */
-  --deck-card-width: max(120px, min(80vw, 360px, var(--deck-fit)));
-  --deck-card-height: calc(var(--deck-card-width) * 4 / 3);
+  /* The widest card whose 3:4 window and caption still fit the room. */
+  --deck-fit: calc(
+    (var(--deck-room) - var(--deck-mat) - var(--deck-caption)) * 3 / 4 + 2 *
+      var(--deck-mat)
+  );
+  /* ~76% of a phone's width: the neighbours still show on both sides. */
+  --deck-card-min: 160px;
+  --deck-card-width: max(
+    var(--deck-card-min),
+    min(76vw, 340px, var(--deck-fit))
+  );
+  /* A 3:4 window in its mat over the caption: about 2:3 overall. */
+  --deck-card-height: calc(
+    var(--deck-mat) + (var(--deck-card-width) - 2 * var(--deck-mat)) * 4 / 3 +
+      var(--deck-caption)
+  );
+  /*
+   * The height left over by a one-line header, the card and the cue. A
+   * share of it stands above the title (the lead), the rest under the cue:
+   * the group's optical centre, a little above the middle. The lead never
+   * takes the header's reserve, so a two-line title and a two-line meta
+   * still end above the bottom edge.
+   */
+  --deck-spare: max(
+    0px,
+    var(--deck-room) + var(--deck-header) - var(--deck-header-line) -
+      var(--deck-card-height)
+  );
+  --deck-lead-share: 0.25;
+  --deck-lead: clamp(
+    0px,
+    var(--deck-spare) * var(--deck-lead-share),
+    var(--deck-spare) - var(--deck-header-reserve)
+  );
   position: absolute;
   inset: 0;
-  color: var(--yoyi-color-paper-light);
+  color: var(--yoyi-color-text-primary);
   font-family: var(--yoyi-font-interface);
 }
 
@@ -87,20 +134,76 @@
   }
 }
 
-/* Tablet and wide: a fixed comfortable card; the button keeps its corner. */
+/* Tablet: a comfortable card in a tall window, the group lower. */
 .root:not([data-deck-layout="phone"]) {
   --deck-cue: 44px;
-  --deck-button-bottom: calc(var(--yoyi-space-7) + env(safe-area-inset-bottom));
-  --deck-card-width: max(120px, min(340px, var(--deck-fit)));
+  --deck-card-width: max(var(--deck-card-min), min(480px, var(--deck-fit)));
+  --deck-lead-share: 0.4;
+}
+
+/* Wide: a capped card, so the title keeps its air above. */
+.root[data-deck-layout="wide"] {
+  --deck-card-width: max(var(--deck-card-min), min(420px, var(--deck-fit)));
+  --deck-lead-share: 0.35;
+}
+
+/* A short phone (an SE-class page under the browser's bars): tighter gaps. */
+@media (max-height: 40rem) {
+  .root {
+    --deck-top: calc(
+      max(var(--yoyi-space-4), env(safe-area-inset-top)) + var(--yoyi-space-2)
+    );
+    --deck-gap: var(--yoyi-space-4);
+    --deck-cue-gap: var(--yoyi-space-4);
+  }
 }
 
 /*
- * The header, the cards and the cue stand in a column. On phone it rests on
- * the bottom edge, so the cue's row is the upload button's row and no band
- * is kept for the button; on tablet and wide it stands in the middle. The
- * centring is safe: auto margins keep the title in view on a viewport too
- * short for the column. The deck clips, never scrolls (hidden where clip is
- * not known).
+ * A very short window (a phone held sideways, a squat laptop window): the
+ * whole column still fits, the cue's row and 「上传」 included. The title and
+ * the meta keep one line each, the mat narrows, the label gives way (a
+ * card's name stays its accessible name) and the card may shrink further.
+ */
+@media (max-height: 28rem) {
+  .root {
+    --deck-top: calc(
+      max(var(--yoyi-space-3), env(safe-area-inset-top)) + var(--yoyi-space-2)
+    );
+    --deck-bottom: calc(var(--yoyi-space-3) + env(safe-area-inset-bottom));
+    --deck-header-reserve: 0px;
+    --deck-gap: var(--yoyi-space-3);
+    --deck-cue-gap: var(--yoyi-space-3);
+    --deck-cue: 44px;
+    --deck-mat: var(--yoyi-space-3);
+    --deck-caption: 0px;
+    --deck-card-min: 80px;
+  }
+
+  .root .title,
+  .root .meta {
+    -webkit-line-clamp: 1;
+  }
+
+  .root .foot {
+    display: none;
+  }
+}
+
+/* The type tokens grow from 56rem; the lines that hold them grow with them. */
+@media (min-width: 56rem) {
+  .root {
+    --deck-title-line: 34px;
+    --deck-meta-line: 20px;
+    --deck-caption: 73px;
+  }
+}
+
+/*
+ * The header, the cards and the cue stand in a column from the top edge,
+ * the lead above the header placing the group; the room is kept for a title
+ * of two lines, so a second line moves the cards and the cue down together
+ * and nothing passes the bottom edge. The deck clips, never scrolls (hidden
+ * where clip is not known).
  */
 .deck {
   position: absolute;
@@ -110,9 +213,8 @@
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  padding: var(--deck-top)
-    calc(var(--yoyi-space-5) + env(safe-area-inset-right)) var(--deck-bottom)
-    calc(var(--yoyi-space-5) + env(safe-area-inset-left));
+  padding: var(--deck-top) calc(var(--deck-side) + env(safe-area-inset-right))
+    var(--deck-bottom) calc(var(--deck-side) + env(safe-area-inset-left));
   overflow: hidden;
   overflow: clip;
 }
@@ -128,7 +230,11 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Its text keeps clear of the close button on the row they share. */
+/*
+ * Ink on the frosted paper: the paper veil keeps the page behind it pale in
+ * both themes, so the words need no dark local scrim, only the soft paper
+ * halo below. Its text keeps clear of the close button.
+ */
 .header {
   position: relative;
   z-index: 1;
@@ -138,8 +244,8 @@
   flex: none;
   flex-direction: column;
   align-items: center;
-  margin-top: auto;
-  padding-inline: calc(var(--deck-close) + var(--yoyi-space-2));
+  margin-top: var(--deck-lead);
+  padding-inline: calc(var(--deck-close) + var(--yoyi-space-5));
   text-align: center;
 }
 
@@ -149,15 +255,15 @@
   max-width: 100%;
   flex-direction: column;
   align-items: center;
-  gap: var(--yoyi-space-1);
+  gap: var(--yoyi-space-2);
   isolation: isolate;
 }
 
 /*
- * The paper text over the blurred page: a local scrim of the overlay behind
- * the header's and the cue's words, solid under the letters and soft at its
- * edges, so they reach 4.5:1 over the lightest page in the light theme
- * without darkening the page around them; a shadow of it under the letters.
+ * A soft halo of the page's paper behind the header's and the cue's words:
+ * over the pale frosted page it does not show, and over a dark patch of the
+ * page behind (a rubbing's thumbnail) it keeps the grey ink at 4.5:1, in
+ * both themes.
  */
 .headerText::before,
 .position::before {
@@ -165,21 +271,18 @@
   z-index: -1;
   inset: calc(-1 * var(--yoyi-space-2)) calc(-1 * var(--yoyi-space-4));
   border-radius: var(--yoyi-radius-lg);
-  background: var(--yoyi-color-overlay);
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-background-page) 70%,
+    transparent
+  );
   box-shadow: 0 0 var(--yoyi-space-6) var(--yoyi-space-3)
-    var(--yoyi-color-overlay);
+    color-mix(in srgb, var(--yoyi-color-background-page) 70%, transparent);
   content: "";
   pointer-events: none;
 }
 
-.header,
-.position {
-  text-shadow:
-    0 1px 2px var(--yoyi-color-overlay),
-    0 0 12px var(--yoyi-color-overlay);
-}
-
-/* Two lines at most, as the header's row is kept. */
+/* Two lines at most, as the header's room is kept. */
 .title {
   display: -webkit-box;
   max-width: 100%;
@@ -187,20 +290,30 @@
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
-  font: 500 var(--yoyi-type-section-title-size) / 28px
+  color: var(--yoyi-color-text-primary);
+  font: 500 var(--yoyi-type-section-title-size) / var(--deck-title-line)
     var(--yoyi-font-editorial);
+  letter-spacing: 0.06em;
   outline: none;
 }
 
-/* 年代, then 地点 · 保管, as the 词条卡; full paper color, for contrast. */
-.date,
-.place {
+/*
+ * 年代 · 地点 · 保管 on one quiet line, as a museum label; a long holder's
+ * name takes a second line (the header's reserve keeps it) rather than
+ * being cut.
+ */
+.meta {
+  display: -webkit-box;
+  max-width: 100%;
   margin: 0;
   overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--yoyi-color-text-secondary);
   font-size: var(--yoyi-type-metadata-size);
-  line-height: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  line-height: var(--deck-meta-line);
 }
 
 /*
@@ -220,9 +333,11 @@
 }
 
 /*
- * A card is opaque: a neighbour dims under a layer of its own (::after),
- * never by its opacity, so no words of a card behind show through the one
- * in front, at rest or in a drag.
+ * A card is a mounted work: a paper mount with a hairline ring and a
+ * layered soft shadow, the image window cut into its mat. It is opaque: a
+ * neighbour recedes under a layer of the page's paper (::after), never by
+ * its opacity, so no words of a card behind show through the one in front,
+ * at rest or in a drag.
  */
 .card {
   position: absolute;
@@ -234,11 +349,14 @@
   height: var(--deck-card-height);
   flex-direction: column;
   overflow: hidden;
-  padding: 0;
+  padding: var(--deck-mat) var(--deck-mat) 0;
   border: 0;
-  border-radius: var(--yoyi-radius-lg);
+  border-radius: var(--yoyi-radius-md);
   background: var(--yoyi-color-background-elevated);
-  box-shadow: var(--yoyi-shadow-dialog);
+  box-shadow:
+    0 0 0 1px var(--yoyi-color-border-subtle),
+    var(--yoyi-shadow-subtle),
+    var(--yoyi-shadow-dialog);
   color: var(--yoyi-color-text-primary);
   font: inherit;
   text-align: left;
@@ -260,7 +378,11 @@
   z-index: 1;
   inset: 0;
   border-radius: inherit;
-  background: var(--yoyi-color-overlay);
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-background-page) 82%,
+    transparent
+  );
   content: "";
   opacity: var(--deck-dim, 0);
   pointer-events: none;
@@ -302,10 +424,12 @@
 
 /* While the finger holds the cards they follow it, then settle. */
 .stage[data-dragging] .card,
-.stage[data-dragging] .card::after {
+.stage[data-dragging] .card::after,
+.stage[data-dragging] .foot {
   transition: none;
 }
 
+/* The window cut into the mat, with the bevel's hairline. */
 .cover {
   position: relative;
   display: flex;
@@ -314,8 +438,10 @@
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  border-radius: var(--yoyi-radius-xs);
   background: var(--yoyi-color-background-muted);
   color: var(--yoyi-color-text-secondary);
+  outline: 1px solid var(--yoyi-color-border-subtle);
 }
 
 .cover img {
@@ -326,9 +452,19 @@
   pointer-events: none;
 }
 
-/* A rubbing shows whole, never cropped to the card. */
+/*
+ * A rubbing shows whole, never cropped to the card: it floats in its mount
+ * with a soft lift, hung a little above the middle as a mat is cut.
+ */
+.cover[data-fit="contain"] {
+  background: transparent;
+  outline: none;
+}
+
 .cover[data-fit="contain"] img {
   object-fit: contain;
+  object-position: 50% 42%;
+  filter: drop-shadow(var(--yoyi-shadow-subtle));
 }
 
 /* A post without a presentable cover reads as its words, as in the grid. */
@@ -359,8 +495,8 @@
   max-width: calc(100% - var(--yoyi-space-5));
   overflow: hidden;
   padding: 0 var(--yoyi-space-2);
-  border-radius: var(--yoyi-radius-sm);
-  background: var(--yoyi-color-background-surface);
+  border-radius: var(--yoyi-radius-xs);
+  background: var(--yoyi-color-background-elevated);
   color: var(--yoyi-color-text-secondary);
   font-size: var(--yoyi-type-caption-size);
   line-height: 18px;
@@ -368,54 +504,81 @@
   white-space: nowrap;
 }
 
+/*
+ * The label inside the mount, under the window: one serif line, the author
+ * under it, centred as a museum label. Its height is the card's, so every
+ * window keeps 3:4. It fades with the card's pose: the front card's label
+ * reads, a neighbour's waits, and in a drag the coming card's label arrives
+ * with it.
+ */
 .foot {
   display: flex;
+  box-sizing: border-box;
+  height: var(--deck-caption);
   flex: none;
   flex-direction: column;
+  align-items: center;
+  justify-content: center;
   gap: var(--yoyi-space-1);
-  padding: var(--yoyi-space-4) var(--yoyi-space-5) var(--yoyi-space-5);
+  padding: var(--yoyi-space-4) 0 var(--yoyi-space-5);
+  opacity: calc(1 - var(--deck-dim, 0) * 2);
+  text-align: center;
+  transition: opacity var(--yoyi-duration-slow) var(--yoyi-easing-standard);
 }
 
 .cardTitle {
-  display: -webkit-box;
+  max-width: 100%;
   overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  color: var(--yoyi-color-text-primary);
   font: 500 var(--yoyi-type-card-title-size) / 1.4 var(--yoyi-font-editorial);
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cardMeta {
+  max-width: 100%;
   overflow: hidden;
-  color: var(--yoyi-color-text-tertiary);
+  color: var(--yoyi-color-text-secondary);
   font-size: var(--yoyi-type-caption-size);
+  letter-spacing: 0.04em;
   line-height: 18px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* The Catalog record carries a small seal before 查看详情. */
+.card[data-deck-card="catalog"] .cardMeta::before {
+  display: inline-block;
+  width: var(--yoyi-space-3);
+  height: var(--yoyi-space-3);
+  margin-inline-end: var(--yoyi-space-3);
+  border-radius: var(--yoyi-radius-xs);
+  background: var(--yoyi-color-seal-red);
+  content: "";
+  vertical-align: middle;
+}
+
 /*
  * Under the cards: the cue's row, held from the first frame and shown from
- * two cards on, so nothing moves when the posts arrive. On phone it is the
- * last row of the column, level with the upload button and clear of it; on
- * tablet and wide the column's lower auto margin centres it all.
+ * two cards on, so nothing moves when the posts arrive. On phone it also
+ * holds 「上传」 at its end, so the button and the arrows share one line
+ * whatever the title's length; on tablet and wide the button keeps the
+ * window's corner. It stands over the close button, so the upload menu's
+ * catcher covers everything else.
  */
 .below {
   position: relative;
-  z-index: 2;
+  z-index: 3;
   width: 100%;
   flex: none;
   margin-top: var(--deck-cue-gap);
 }
 
-.root:not([data-deck-layout="phone"]) .below {
-  margin-bottom: auto;
-}
-
 /*
  * The arrows stand beside the cue at every width, never on a card: a screen
  * reader and a keyboard reach every card from them. At an end an arrow
- * stays, dimmed, and keeps the focus. Their glass is the shared Functional
- * Glass.
+ * stays, dimmed, and keeps the focus.
  */
 .nav {
   position: relative;
@@ -423,7 +586,7 @@
   height: var(--deck-cue);
   align-items: center;
   justify-content: center;
-  gap: var(--yoyi-space-4);
+  gap: var(--yoyi-space-5);
   visibility: hidden;
 }
 
@@ -431,18 +594,34 @@
   visibility: visible;
 }
 
+/* Round paper buttons on the paper veil: a mount's surface and hairline. */
+.arrow,
+.close {
+  display: grid;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--yoyi-color-border-subtle);
+  border-radius: var(--yoyi-radius-full);
+  background: var(--yoyi-color-background-elevated);
+  box-shadow: var(--yoyi-shadow-subtle);
+  color: var(--yoyi-color-text-primary);
+  cursor: pointer;
+}
+
+/* Over the counter's halo, which would otherwise veil the near arrow. */
 .arrow {
   position: relative;
   z-index: 1;
-  display: grid;
   width: 44px;
   height: 44px;
   flex: none;
-  padding: 0;
-  place-items: center;
-  border-radius: var(--yoyi-radius-full);
-  color: var(--yoyi-color-text-primary);
-  cursor: pointer;
+}
+
+/* A very narrow phone: closer arrows keep 「上传」 clear of a long count. */
+@media (max-width: 22.5rem) {
+  .root .nav {
+    gap: var(--yoyi-space-3);
+  }
 }
 
 .arrow[aria-disabled="true"] {
@@ -454,17 +633,19 @@
   position: relative;
   min-width: 48px;
   margin: 0;
-  font-size: var(--yoyi-type-caption-size);
-  font-variant-numeric: tabular-nums;
-  line-height: 18px;
-  text-align: center;
   isolation: isolate;
+  color: var(--yoyi-color-text-secondary);
+  font: 500 var(--yoyi-type-label-size) / 18px var(--yoyi-font-interface);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+  text-align: center;
 }
 
 /*
- * A failure or a notice, out of the column's flow: over the cards' lower
- * edge on phone, where the cue's row is the last, and under the cue on
- * tablet and wide. Each reads on its own surface.
+ * A failure or a notice, out of the column's flow, over the cards' lower
+ * edge at every width: the space under the cue's row is the lead's, not
+ * kept, and a two-line title can take it all. Each reads on its own
+ * surface.
  */
 .notes {
   position: absolute;
@@ -476,11 +657,6 @@
   align-items: center;
   gap: var(--yoyi-space-2);
   pointer-events: none;
-}
-
-.root:not([data-deck-layout="phone"]) .notes {
-  top: calc(100% + var(--yoyi-space-2));
-  bottom: auto;
 }
 
 .status {
@@ -517,28 +693,35 @@
   cursor: pointer;
 }
 
+/*
+ * × on the title's first line, at the column's edge. On tablet the group
+ * stands low in a tall window, so × keeps the window's corner.
+ */
 .close {
   position: absolute;
   z-index: 2;
-  top: max(var(--yoyi-space-4), env(safe-area-inset-top));
-  right: calc(var(--yoyi-space-4) + env(safe-area-inset-right));
-  display: grid;
+  top: calc(
+    var(--deck-top) + var(--deck-lead) +
+      (var(--deck-title-line) - var(--deck-close)) / 2
+  );
+  right: calc(var(--deck-side) + env(safe-area-inset-right));
   width: var(--deck-close);
   height: var(--deck-close);
-  padding: 0;
-  place-items: center;
-  border-radius: var(--yoyi-radius-full);
-  color: var(--yoyi-color-text-primary);
-  cursor: pointer;
+}
+
+.root[data-deck-layout="tablet"] .close {
+  top: calc(var(--deck-top) + (var(--deck-title-line) - var(--deck-close)) / 2);
 }
 
 /*
- * 「上传」: a round seal-red button in the bottom-right corner; on phone in
- * the cue's row, whose arrows end well before it at every phone width. No
+ * 「上传」: a round seal-red button. On phone it ends the cue's row (the
+ * row's own box, the column's edge), whose arrows end well before it at
+ * every phone width; on tablet and wide it keeps the window's bottom-right
+ * corner, fixed to the deck's layer (the scrim is its containing block). No
  * card reaches it.
  */
 .upload {
-  position: absolute;
+  position: fixed;
   z-index: 3;
   right: var(--deck-button-end);
   bottom: var(--deck-button-bottom);
@@ -554,6 +737,17 @@
   color: var(--yoyi-color-text-inverse);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+}
+
+.root[data-deck-layout="phone"] .upload {
+  position: absolute;
+  top: calc((var(--deck-cue) - var(--deck-button)) / 2);
+  right: 0;
+  bottom: auto;
+}
+
+.upload {
+  box-shadow: var(--yoyi-shadow-subtle), var(--yoyi-shadow-dialog);
 }
 
 .upload:hover {
@@ -573,19 +767,29 @@
   stroke-linecap: round;
 }
 
+/*
+ * While the menu is open a light paper veil lies over the whole deck: the
+ * menu reads as a layer above the cards (whose label it may cover), and a
+ * tap anywhere off it closes it.
+ */
 .menuCatcher {
-  position: absolute;
-  z-index: 3;
+  position: fixed;
+  z-index: 1;
   inset: 0;
   padding: 0;
   border: 0;
-  background: transparent;
+  background: color-mix(
+    in srgb,
+    var(--yoyi-color-background-page) 55%,
+    transparent
+  );
   cursor: default;
+  animation: catcherIn var(--yoyi-duration-fast) var(--yoyi-easing-standard);
 }
 
-/* Above the button, so clear of the cue's row the button stands in. */
+/* Above the button: in the cue's row on phone, else over its corner. */
 .menu {
-  position: absolute;
+  position: fixed;
   z-index: 3;
   right: var(--deck-button-end);
   bottom: calc(
@@ -596,10 +800,20 @@
   flex-direction: column;
   overflow: hidden;
   padding: var(--yoyi-space-2) 0;
-  border-radius: var(--yoyi-radius-lg);
+  border-radius: var(--yoyi-radius-md);
   background: var(--yoyi-color-background-elevated);
-  box-shadow: var(--yoyi-shadow-dialog);
+  box-shadow:
+    0 0 0 1px var(--yoyi-color-border-subtle),
+    var(--yoyi-shadow-dialog);
   animation: menuIn var(--yoyi-duration-fast) var(--yoyi-easing-standard);
+}
+
+.root[data-deck-layout="phone"] .menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(
+    100% - (var(--deck-cue) - var(--deck-button)) / 2 + var(--yoyi-space-3)
+  );
 }
 
 .menuItem {
@@ -729,6 +943,12 @@
   }
 }
 
+@keyframes catcherIn {
+  from {
+    opacity: 0;
+  }
+}
+
 @keyframes attachRise {
   from {
     transform: translateY(100%);
@@ -745,6 +965,7 @@
   .dialog.dialog,
   .stage,
   .menu,
+  .menuCatcher,
   .attachPanel {
     animation: none;
   }
