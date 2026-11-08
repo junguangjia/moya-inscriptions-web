@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { Icon } from "@moya/ui";
 
 import { useAuthors } from "../../../authors/author-context";
 import { authorClient } from "../../../../lib/public-api/author-community-client";
@@ -240,6 +241,17 @@ export const DraftsCard = ({
   const text = countText(state);
   const label = articleEnabled ? "草稿箱" : "草稿";
   const detail = articleEnabled ? "作品与专题草稿，长按卡片可多选管理" : text;
+  // The count comes from Work drafts only. A zero never means that the
+  // unified box is empty: it can still contain Article drafts.
+  const toolDetail = articleEnabled
+    ? state.status === "ready"
+      ? state.total > 0
+        ? `${state.total} 份作品草稿 · 专题草稿`
+        : "作品与专题草稿"
+      : state.status === "loading"
+        ? "正在读取作品草稿…"
+        : "暂时无法读取作品草稿"
+    : text;
 
   return (
     <div
@@ -255,14 +267,20 @@ export const DraftsCard = ({
           data-drafts-tool=""
           data-drafts-count={state.status === "ready" ? state.total : undefined}
           aria-haspopup="dialog"
-          aria-label={`${label}，${text}`}
-          title={text}
+          aria-label={`草稿箱，${toolDetail}`}
           onClick={() => setPicker(true)}
         >
-          <span>{label}</span>
-          {state.status === "ready" && state.total > 0 ? (
-            <span>{state.total}</span>
-          ) : null}
+          <span className={styles.toolIcon} aria-hidden="true">
+            <Icon name="edit" />
+          </span>
+          <span className={styles.toolCopy}>
+            <span className={styles.toolTitle}>草稿箱</span>
+            <span className={styles.toolDetail}>{toolDetail}</span>
+          </span>
+          <span className={styles.toolAction} aria-hidden="true">
+            继续编辑
+            <Icon name="next" />
+          </span>
         </button>
       ) : (
         <>
@@ -331,7 +349,32 @@ export const DraftsCard = ({
                 onChanged={(total, first) =>
                   show({ status: "ready", total, newest: first })
                 }
-                onClose={() => setPicker(false)}
+                onClose={() => {
+                  setPicker(false);
+                  if (presentation !== "tool") return;
+                  // Let the native modal finish closing before restoring the
+                  // reading entrance. Never steal focus after an account or
+                  // visible-panel change, or while handing off to an editor.
+                  window.requestAnimationFrame(() => {
+                    window.requestAnimationFrame(() => {
+                      const opener = openerRef.current;
+                      const focused = document.activeElement;
+                      if (
+                        opener?.isConnected &&
+                        !latest.current.checking &&
+                        latest.current.ownerId === accountId &&
+                        (focused === opener ||
+                          focused === document.body ||
+                          focused === document.documentElement ||
+                          !focused?.isConnected) &&
+                        opener.closest(
+                          '[inert], [hidden], [aria-hidden="true"]',
+                        ) === null
+                      )
+                        opener.focus({ preventScroll: true });
+                    });
+                  });
+                }}
                 onOpenDraft={(draftId) => {
                   pendingTarget.current = { type: "draft", id: draftId };
                   setPicker(false);
