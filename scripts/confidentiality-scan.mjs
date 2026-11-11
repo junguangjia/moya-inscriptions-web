@@ -397,6 +397,55 @@ function placeholderCookie(value) {
     })
   );
 }
+// An ENV assignment can end a source string before a runtime value is joined.
+// Prove that quote boundary; never treat a literal credential fragment as a
+// runtime reference. Each later assignment and every token detector still runs.
+function runtimeConfigConcatenation(text, match, filename) {
+  if (syntax(filename) !== "code" || match[3] !== "=" || !match[4])
+    return false;
+  const quoteAt =
+    match.index +
+    match[0].indexOf("=") +
+    1 +
+    /^[ \t]*/.exec(match[0].slice(match[0].indexOf("=") + 1))[0].length;
+  const start = text.lastIndexOf("\n", match.index - 1) + 1;
+  let quote = null,
+    opened = -1,
+    closing = false;
+  for (let i = start; i <= quoteAt; i++) {
+    const c = text[i];
+    if (quote) {
+      if (c === "\\") i++;
+      else if (c === quote) {
+        closing = i === quoteAt && opened < match.index;
+        quote = null;
+      }
+    } else if (
+      c === "`" ||
+      c === "#" ||
+      text.startsWith("//", i) ||
+      text.startsWith("/*", i)
+    )
+      return false;
+    else if (c === "'" || c === '"') {
+      if (text.startsWith(c.repeat(3), i)) return false;
+      quote = c;
+      opened = i;
+    }
+  }
+  if (!closing) return false;
+  const tail = text.slice(quoteAt + 1);
+  const placeholderTail =
+    /^[ \t]*\+[ \t]*(["'])([^"'\\\r\n]*)\1[ \t]*(?:;[ \t]*)?(?:\r?\n|$)/.exec(
+      tail,
+    );
+  if (placeholderTail && placeholder(placeholderTail[2])) return true;
+  // Only a bare runtime identifier/member chain, followed by a literal line
+  // separator, can supply the value. Extra literal prefixes/suffixes decline.
+  return /^[ \t]*\+[ \t]*[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*|\[(?:"[A-Za-z_$][\w$]*"|'[A-Za-z_$][\w$]*')\])*[ \t]*\+[ \t]*["'](?:\\r\\n|\\n|\\r)/.test(
+    tail,
+  );
+}
 function literalFindings(text, filename) {
   const hits = [];
   const add = (at, category) =>
@@ -500,8 +549,7 @@ function literalFindings(text, filename) {
       sourcePosition(text, m.index)
     )
       continue;
-    // A closing source string followed by concatenation is not a literal value.
-    if (syntax(filename) === "code" && /^\s*\+\s*$/.test(value)) continue;
+    if (runtimeConfigConcatenation(text, m, filename)) continue;
     // Package versions and auth field declarations are not auth material.
     if (
       /^authorization$/i.test(name) &&
